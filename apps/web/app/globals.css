@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Shadow CSS custom properties (tangerine-style subtle multi-layer) ── */
+:root {
+  --shadow-2xs: 0px 1px 2px 0px rgba(0, 0, 0, 0.04);
+  --shadow-xs:  0px 1px 3px 0px rgba(0, 0, 0, 0.06);
+  --shadow-sm:  0px 1px 3px 0px rgba(0, 0, 0, 0.08), 0px 1px 2px -1px rgba(0, 0, 0, 0.06);
+  --shadow-md:  0px 4px 6px -1px rgba(0, 0, 0, 0.07), 0px 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --shadow-lg:  0px 10px 15px -3px rgba(0, 0, 0, 0.08), 0px 4px 6px -4px rgba(0, 0, 0, 0.04);
+  --shadow-xl:  0px 20px 25px -5px rgba(0, 0, 0, 0.08), 0px 8px 10px -6px rgba(0, 0, 0, 0.04);
+  --shadow-2xl: 0px 25px 50px -12px rgba(0, 0, 0, 0.22);
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  overscroll-behavior: none;
+}
+
+body {
+  @apply bg-gray-50 text-gray-900;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Card depth (component-layer — overridden by any explicit shadow utility) ── */
+@layer components {
+  /* White cards get a subtle ring + depth shadow matching the dashboard's ring-1 + shadow-xs */
+  .bg-white.rounded-xl {
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 4px rgba(0, 0, 0, 0.05);
+  }
+}
+
+/* ── Shadow utility overrides (refined multi-layer shadows) ─────────────── */
+@layer utilities {
+  .shadow-sm  { box-shadow: var(--shadow-sm); }
+  .shadow     { box-shadow: var(--shadow-md); }
+  .shadow-md  { box-shadow: var(--shadow-md); }
+  .shadow-lg  { box-shadow: var(--shadow-lg); }
+  .shadow-xl  { box-shadow: var(--shadow-xl); }
+  .shadow-2xl { box-shadow: var(--shadow-2xl); }
+}
+
+/* ── Interactive refinements ──────────────────────────────────────────── */
+/* Press-down effect on buttons matching the dashboard's active:translate-y-px */
+button:not(:disabled):active,
+[role="button"]:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+/* Better focus ring using brand color */
+:focus-visible {
+  outline: 2px solid rgba(61, 141, 226, 0.45);
+  outline-offset: 2px;
+}
+
+/* ── Custom scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: rgb(209 213 219); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background-color: rgb(156 163 175); }

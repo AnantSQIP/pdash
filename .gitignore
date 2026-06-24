@@ -1,0 +1,51 @@
+# ── Dependencies ──────────────────────────────────────────
+node_modules/
+packages/db/node_modules/
+
+# ── Build outputs ─────────────────────────────────────────
+dist/
+build/
+.next/
+out/
+
+# ── Environment / secrets ─────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Logs ──────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Test coverage ─────────────────────────────────────────
+coverage/
+
+# ── Prisma generated client ───────────────────────────────
+**/generated/
+
+# ── Local dev DB ──────────────────────────────────────────
+.pglite-data/
+
+# ── Claude Code workspace (never commit) ──────────────────
+**/.claude/
+
+# ── Backup files (created during dev) ────────────────────
+*.bak
+
+# ── Reference / unrelated projects ───────────────────────
+dashboard/
+
+# ── Binary documents ──────────────────────────────────────
+*.docx
+*.doc
+
+# ── OS / editor ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+.cache/

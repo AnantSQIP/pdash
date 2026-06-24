@@ -1,0 +1,22 @@
+{
+  "name": "pdash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zoho-Projects-style project management system",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "db:generate": "npm run -w @pdash/db generate",
+    "db:migrate": "npm run -w @pdash/db migrate",
+    "db:seed": "npm run -w @pdash/db seed",
+    "api:dev": "npm run -w @pdash/api start:dev",
+    "api:build": "npm run -w @pdash/api build",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

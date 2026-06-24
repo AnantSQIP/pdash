@@ -1,0 +1,1008 @@
+// pdash data model — aligned with Core Entity & ERD Design v2.0 (FROZEN)
+// Also incorporates: Architecture_Specification_v1, Permission_Matrix_Specification_v1,
+// Workflow_Engine_Specification_v2, Event_Catalog_v3, Non-Functional Requirements v1.0
+//
+// prompt.md additions not in frozen ERD: Milestone, TaskList (required by UI hierarchy)
+//
+// Design decisions:
+//   D1 — Milestone auto-complete → AutomationRule (not hardcoded service)
+//   D3 — Status colors on WorkflowStatus.colorHex (status-only, no per-task picker)
+//   D6 — Waterfall WBS only
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 1. ORGANIZATION DOMAIN (single-org root — NOT multi-tenant)
+// ═══════════════════════════════════════════════════════════════
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users            User[]
+  departments      Department[]
+  teams            Team[]
+  roles            Role[]
+  permissionGroups PermissionGroup[]
+  dashboards       Dashboard[]
+  integrations     Integration[]
+
+  @@map("organization")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 2. IDENTITY DOMAIN
+// ═══════════════════════════════════════════════════════════════
+
+model User {
+  id             String    @id @default(cuid())
+  organizationId String
+  employeeCode   String?
+  firstName      String
+  lastName       String
+  email          String
+  phone          String?
+  designation    String?
+  profilePhoto   String?
+  joiningDate    DateTime?
+  status         String    @default("ACTIVE")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  managedBy              UserManager[]           @relation("UserManagers")
+  manages                UserManager[]           @relation("ManagerUsers")
+  departmentMemberships  DepartmentMember[]
+  teamMemberships        TeamMember[]
+  projectMemberships     ProjectMember[]
+  taskAssignments        TaskAssignee[]
+  subtaskAssignments     SubtaskAssignee[]
+  userRoles              UserRole[]
+  userPermissions        UserPermission[]
+  permissionGroupMembers PermissionGroupMember[]
+  permissionOverrides    PermissionOverride[]
+  comments               Comment[]
+  activities             Activity[]              @relation("ActivityActor")
+  auditLogs              AuditLog[]
+  notifications          Notification[]
+  timesheets             Timesheet[]
+  attendance             Attendance[]
+  leaveRequests          LeaveRequest[]
+  ownedMilestones        Milestone[]             @relation("MilestoneOwner")
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("user")
+}
+
+model UserManager {
+  id        String   @id @default(cuid())
+  userId    String
+  managerId String
+  createdAt DateTime @default(now())
+
+  user    User @relation("UserManagers", fields: [userId], references: [id], onDelete: Cascade)
+  manager User @relation("ManagerUsers", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, managerId])
+  @@map("user_manager")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 3. ORGANIZATION STRUCTURE DOMAIN
+// ═══════════════════════════════════════════════════════════════
+
+model Department {
+  id             String @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  status         String @default("ACTIVE")
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members            DepartmentMember[]
+  projectDepartments ProjectDepartment[]
+
+  @@index([organizationId])
+  @@map("department")
+}
+
+model DepartmentMember {
+  id               String   @id @default(cuid())
+  departmentId     String
+  userId           String
+  roleInDepartment String?
+  joinedAt         DateTime @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, userId])
+  @@map("department_member")
+}
+
+model Team {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  status         String  @default("ACTIVE")
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members      TeamMember[]
+  projectTeams ProjectTeam[]
+
+  @@index([organizationId])
+  @@map("team")
+}
+
+model TeamMember {
+  id         String   @id @default(cuid())
+  teamId     String
+  userId     String
+  roleInTeam String?
+  joinedAt   DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@map("team_member")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 4. SECURITY DOMAIN
+// Permission code format: resource.action.scope
+//   e.g. project.create  task.edit  analytics.view.department
+// Resolution order (Permission_Matrix_Specification_v1 §6):
+//   1. DENY override  2. ALLOW override  3. Direct user
+//   4. Permission group  5. Role  6. Default → DENY
+// ═══════════════════════════════════════════════════════════════
+
+model Role {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@index([organizationId])
+  @@map("role")
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@map("user_role")
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String
+  description String?
+
+  rolePermissions            RolePermission[]
+  userPermissions            UserPermission[]
+  permissionGroupPermissions PermissionGroupPermission[]
+  permissionOverrides        PermissionOverride[]
+
+  @@map("permission")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permission")
+}
+
+model UserPermission {
+  id           String   @id @default(cuid())
+  userId       String
+  permissionId String
+  grantedBy    String
+  grantedAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permission")
+}
+
+model PermissionGroup {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  isSystemGroup  Boolean @default(false)
+
+  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members                    PermissionGroupMember[]
+  permissionGroupPermissions PermissionGroupPermission[]
+
+  @@index([organizationId])
+  @@map("permission_group")
+}
+
+model PermissionGroupMember {
+  id      String @id @default(cuid())
+  groupId String
+  userId  String
+
+  group PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@map("permission_group_member")
+}
+
+model PermissionGroupPermission {
+  id           String @id @default(cuid())
+  groupId      String
+  permissionId String
+
+  group      PermissionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  permission Permission      @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, permissionId])
+  @@map("permission_group_permission")
+}
+
+// effect: ALLOW | DENY
+model PermissionOverride {
+  id           String   @id @default(cuid())
+  userId       String
+  permissionId String
+  effect       String
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@map("permission_override")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 5. WORKFLOW DOMAIN
+// Config-driven — no hardcoded transitions (Workflow_Engine_Specification_v2).
+// WorkflowStatus.colorHex carries the display color (D3: status-only colors).
+// type: GLOBAL | PROJECT_SPECIFIC
+// WorkflowStatus.type: OPEN | CLOSED
+// ═══════════════════════════════════════════════════════════════
+
+model Workflow {
+  id   String @id @default(cuid())
+  name String
+  type String @default("GLOBAL")
+
+  statuses    WorkflowStatus[]
+  transitions WorkflowTransition[]
+  projects    Project[]
+  tasks       Task[]
+  milestones  Milestone[]
+
+  @@map("workflow")
+}
+
+model WorkflowStatus {
+  id         String @id @default(cuid())
+  workflowId String
+  name       String
+  colorHex   String @default("#9aa0a6")
+  sequence   Int    @default(0)
+  type       String @default("OPEN")
+
+  workflow               Workflow             @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  transitionsFrom        WorkflowTransition[] @relation("TransitionFrom")
+  transitionsTo          WorkflowTransition[] @relation("TransitionTo")
+  projectsAtStatus       Project[]            @relation("ProjectCurrentStatus")
+  tasksAtStatus          Task[]               @relation("TaskCurrentStatus")
+  milestonesAtStatus     Milestone[]          @relation("MilestoneCurrentStatus")
+
+  @@index([workflowId])
+  @@map("workflow_status")
+}
+
+model WorkflowTransition {
+  id           String  @id @default(cuid())
+  workflowId   String
+  fromStatusId String?
+  toStatusId   String
+  conditions   Json?
+  allowedRoles Json?
+
+  workflow   Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  fromStatus WorkflowStatus? @relation("TransitionFrom", fields: [fromStatusId], references: [id], onDelete: SetNull)
+  toStatus   WorkflowStatus  @relation("TransitionTo", fields: [toStatusId], references: [id], onDelete: Cascade)
+
+  @@map("workflow_transition")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 6. PROJECT DOMAIN
+// projectPhase: Idea | Planning | Active | On Hold | Completed | Archived | Cancelled
+// D2: approval handled via generic Approval + ApprovalAction entities.
+// ═══════════════════════════════════════════════════════════════
+
+model Project {
+  id                      String    @id @default(cuid())
+  code                    String?
+  title                   String
+  description             String?
+  projectPhase            String    @default("PLANNING")
+  priority                String    @default("MEDIUM")
+  startDate               DateTime?
+  dueDate                 DateTime?
+  completionPercentage    Int       @default(0)
+  workflowId              String?
+  currentWorkflowStatusId String?
+  createdBy               String
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  deletedAt               DateTime?
+
+  workflow           Workflow?           @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  currentStatus      WorkflowStatus?     @relation("ProjectCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
+  members            ProjectMember[]
+  projectDepartments ProjectDepartment[]
+  projectTeams       ProjectTeam[]
+  projectTasks       ProjectTask[]
+  milestones         Milestone[]
+  taskLists          TaskList[]
+  projectDocuments   ProjectDocument[]
+
+  @@map("project")
+}
+
+model ProjectMember {
+  id          String   @id @default(cuid())
+  projectId   String
+  userId      String
+  projectRole String?
+  joinedAt    DateTime @default(now())
+  isActive    Boolean  @default(true)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("project_member")
+}
+
+model ProjectDepartment {
+  id           String @id @default(cuid())
+  projectId    String
+  departmentId String
+
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, departmentId])
+  @@map("project_department")
+}
+
+model ProjectTeam {
+  id        String @id @default(cuid())
+  projectId String
+  teamId    String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  team    Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, teamId])
+  @@map("project_team")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 7. TASK DOMAIN
+// Task has NO projectId — linked to projects via ProjectTask (M2M).
+// This allows a task to belong to multiple projects (DRS v1).
+// ProjectTask also stores the task's position within a project:
+//   taskListId (which task list in this project)
+//   milestoneId (which milestone in this project)
+// ═══════════════════════════════════════════════════════════════
+
+model Task {
+  id                      String    @id @default(cuid())
+  title                   String
+  description             String?
+  priority                String    @default("MEDIUM")
+  startDate               DateTime?
+  dueDate                 DateTime?
+  estimatedHours          Float?
+  actualHours             Float?
+  completionPercentage    Int       @default(0)
+  workflowId              String?
+  currentWorkflowStatusId String?
+  createdBy               String
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  deletedAt               DateTime?
+
+  workflow      Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  currentStatus WorkflowStatus?  @relation("TaskCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
+  projectTasks  ProjectTask[]
+  assignees     TaskAssignee[]
+  subtasks      Subtask[]
+  successors    TaskDependency[] @relation("DependencyPredecessor")
+  predecessors  TaskDependency[] @relation("DependencySuccessor")
+  checklists    Checklist[]
+  timesheets    Timesheet[]
+  taskDocuments TaskDocument[]
+
+  @@map("task")
+}
+
+// Join table: task ↔ project (M2M).
+// Also captures the task's position within this specific project.
+model ProjectTask {
+  id          String @id @default(cuid())
+  projectId   String
+  taskId      String
+  taskListId  String?
+  milestoneId String?
+  sequence    Int    @default(0)
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task      Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskList  TaskList?  @relation(fields: [taskListId], references: [id], onDelete: SetNull)
+  milestone Milestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, taskId])
+  @@index([projectId])
+  @@index([milestoneId])
+  @@map("project_task")
+}
+
+model TaskAssignee {
+  id     String @id @default(cuid())
+  taskId String
+  userId String
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@map("task_assignee")
+}
+
+// Flat subtask table — one level only per ERD v2.0.
+model Subtask {
+  id          String    @id @default(cuid())
+  taskId      String
+  title       String
+  description String?
+  priority    String    @default("MEDIUM")
+  dueDate     DateTime?
+  status      String    @default("OPEN")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  task      Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  assignees SubtaskAssignee[]
+
+  @@index([taskId])
+  @@map("subtask")
+}
+
+model SubtaskAssignee {
+  id        String @id @default(cuid())
+  subtaskId String
+  userId    String
+
+  subtask Subtask @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([subtaskId, userId])
+  @@map("subtask_assignee")
+}
+
+// dependencyType: FS (Finish-to-Start) | SS | SF | FF
+model TaskDependency {
+  id                String @id @default(cuid())
+  predecessorTaskId String
+  successorTaskId   String
+  dependencyType    String @default("FS")
+
+  predecessor Task @relation("DependencyPredecessor", fields: [predecessorTaskId], references: [id], onDelete: Cascade)
+  successor   Task @relation("DependencySuccessor", fields: [successorTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([predecessorTaskId, successorTaskId])
+  @@map("task_dependency")
+}
+
+model Checklist {
+  id        String  @id @default(cuid())
+  taskId    String
+  title     String
+  completed Boolean @default(false)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@map("checklist")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Milestone — prompt.md requirement (Project→Milestones→TaskLists→Tasks hierarchy)
+// Not in frozen ERD v2.0 but required by UI spec.
+// D1: auto-complete is an AutomationRule, not a hardcoded service.
+// ─────────────────────────────────────────────────────────────
+
+model Milestone {
+  id                      String    @id @default(cuid())
+  projectId               String
+  name                    String
+  description             String?
+  ownerId                 String?
+  startDate               DateTime?
+  endDate                 DateTime?
+  workflowId              String?
+  currentWorkflowStatusId String?
+  completionPercentage    Int       @default(0)
+  sequence                Int       @default(0)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  deletedAt               DateTime?
+
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  owner         User?           @relation("MilestoneOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  workflow      Workflow?       @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  currentStatus WorkflowStatus? @relation("MilestoneCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
+  taskLists     TaskList[]
+  projectTasks  ProjectTask[]
+
+  @@index([projectId])
+  @@map("milestone")
+}
+
+// ─────────────────────────────────────────────────────────────
+// TaskList — prompt.md requirement.
+// "General" list (isDefault=true) is created automatically on project creation
+// and cannot be deleted (enforced in TaskListsService).
+// ─────────────────────────────────────────────────────────────
+
+model TaskList {
+  id          String    @id @default(cuid())
+  projectId   String
+  milestoneId String?
+  name        String
+  isDefault   Boolean   @default(false)
+  sequence    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone    Milestone?    @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  projectTasks ProjectTask[]
+
+  @@index([projectId])
+  @@map("task_list")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 8. GENERIC COMMENT DOMAIN (polymorphic)
+// entityType: PROJECT | TASK | DOCUMENT | APPROVAL | MILESTONE | WORKFLOW
+// ═══════════════════════════════════════════════════════════════
+
+model Comment {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  userId     String
+  content    String
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@map("comment")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 9. APPROVAL DOMAIN (polymorphic)
+// entityType: PROJECT | TASK | DOCUMENT | LEAVE | TIMESHEET | etc.
+// action: APPROVE | REJECT | COMMENT | DELEGATE
+// ═══════════════════════════════════════════════════════════════
+
+model Approval {
+  id          String   @id @default(cuid())
+  entityType  String
+  entityId    String
+  status      String   @default("PENDING")
+  requestedBy String
+  createdAt   DateTime @default(now())
+
+  actions ApprovalAction[]
+
+  @@index([entityType, entityId])
+  @@map("approval")
+}
+
+model ApprovalAction {
+  id         String   @id @default(cuid())
+  approvalId String
+  userId     String
+  action     String
+  comments   String?
+  timestamp  DateTime @default(now())
+
+  approval Approval @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+
+  @@index([approvalId])
+  @@map("approval_action")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 10. ATTENDANCE DOMAIN
+// ═══════════════════════════════════════════════════════════════
+
+model Attendance {
+  id         String    @id @default(cuid())
+  userId     String
+  date       DateTime
+  checkIn    DateTime?
+  checkOut   DateTime?
+  totalHours Float?
+  status     String    @default("PRESENT")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("attendance")
+}
+
+model LeaveRequest {
+  id        String   @id @default(cuid())
+  userId    String
+  leaveType String
+  startDate DateTime
+  endDate   DateTime
+  reason    String?
+  status    String   @default("DRAFT")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("leave_request")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 11. TIME TRACKING DOMAIN
+// ═══════════════════════════════════════════════════════════════
+
+model Timesheet {
+  id          String   @id @default(cuid())
+  userId      String
+  taskId      String
+  date        DateTime
+  hoursLogged Float
+  notes       String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([taskId])
+  @@map("timesheet")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 12. DOCUMENT DOMAIN
+// No permanent deletion without approval (NFR §14).
+// ═══════════════════════════════════════════════════════════════
+
+model Folder {
+  id             String  @id @default(cuid())
+  parentFolderId String?
+  name           String
+
+  parent   Folder?  @relation("FolderTree", fields: [parentFolderId], references: [id], onDelete: SetNull)
+  children Folder[] @relation("FolderTree")
+
+  @@map("folder")
+}
+
+model Document {
+  id                   String    @id @default(cuid())
+  folderId             String?
+  name                 String
+  fileUrl              String
+  fileSize             Int?
+  uploadedBy           String
+  version              Int       @default(1)
+  confidentialityLevel String    @default("INTERNAL")
+  createdAt            DateTime  @default(now())
+  deletedAt            DateTime?
+
+  versions         DocumentVersion[]
+  projectDocuments ProjectDocument[]
+  taskDocuments    TaskDocument[]
+
+  @@map("document")
+}
+
+model DocumentVersion {
+  id            String @id @default(cuid())
+  documentId    String
+  versionNumber Int
+  fileUrl       String
+  uploadedBy    String
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_version")
+}
+
+model ProjectDocument {
+  id         String @id @default(cuid())
+  projectId  String
+  documentId String
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, documentId])
+  @@map("project_document")
+}
+
+model TaskDocument {
+  id         String @id @default(cuid())
+  taskId     String
+  documentId String
+
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, documentId])
+  @@map("task_document")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 13. SEARCH DOMAIN
+// Permission checks at query time (not stored here).
+// ═══════════════════════════════════════════════════════════════
+
+model SearchIndex {
+  id                String   @id @default(cuid())
+  entityType        String
+  entityId          String
+  searchableContent String
+  updatedAt         DateTime @updatedAt
+
+  @@unique([entityType, entityId])
+  @@map("search_index")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 14. ANALYTICS DOMAIN
+// Event-driven: domain actions emit AnalyticsEvent.
+// AnalyticsSnapshot caches metrics to avoid transactional perf impact (NFR §16).
+// scopeType: USER | TEAM | DEPARTMENT | ORGANIZATION
+// ═══════════════════════════════════════════════════════════════
+
+model AnalyticsEvent {
+  id           String   @id @default(cuid())
+  eventType    String
+  eventVersion String   @default("v1")
+  entityType   String
+  entityId     String
+  userId       String
+  payload      Json
+  createdAt    DateTime @default(now())
+
+  @@index([eventType])
+  @@index([entityType, entityId])
+  @@map("analytics_event")
+}
+
+model AnalyticsSnapshot {
+  id           String   @id @default(cuid())
+  scopeType    String
+  scopeId      String
+  metricName   String
+  metricValue  Float
+  calculatedAt DateTime @default(now())
+
+  @@index([scopeType, scopeId])
+  @@map("analytics_snapshot")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 15. DASHBOARD DOMAIN
+// visibility: PERSONAL | TEAM | DEPARTMENT | ORGANIZATION
+// ═══════════════════════════════════════════════════════════════
+
+model Dashboard {
+  id             String @id @default(cuid())
+  organizationId String
+  ownerId        String
+  name           String
+  visibility     String @default("PERSONAL")
+  layout         Json?
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  widgets      DashboardWidget[]
+
+  @@index([organizationId])
+  @@map("dashboard")
+}
+
+model DashboardWidget {
+  id            String @id @default(cuid())
+  dashboardId   String
+  widgetType    String
+  configuration Json?
+
+  dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+
+  @@map("dashboard_widget")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 16. METADATA DOMAIN
+// CustomField.entityType: PROJECT | TASK | USER | MILESTONE | ...
+// ═══════════════════════════════════════════════════════════════
+
+model Tag {
+  id       String  @id @default(cuid())
+  name     String
+  color    String  @default("#9aa0a6")
+  category String?
+
+  @@map("tag")
+}
+
+model CustomField {
+  id              String @id @default(cuid())
+  name            String
+  fieldType       String
+  entityType      String
+  departmentId    String?
+  validationRules Json?
+
+  values CustomFieldValue[]
+
+  @@map("custom_field")
+}
+
+model CustomFieldValue {
+  id            String @id @default(cuid())
+  customFieldId String
+  entityType    String
+  entityId      String
+  value         Json
+
+  field CustomField @relation(fields: [customFieldId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@map("custom_field_value")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 17. AUTOMATION DOMAIN
+// trigger-condition-action model.
+// D1: milestone auto-complete is an AutomationRule seeded at org creation:
+//   trigger: { event: "task.status_changed" }
+//   condition: { all_milestone_tasks_closed: true }
+//   action: { set_milestone_status: "CLOSED" }
+// ═══════════════════════════════════════════════════════════════
+
+model AutomationRule {
+  id        String  @id @default(cuid())
+  name      String
+  trigger   Json
+  condition Json?
+  action    Json
+  isEnabled Boolean @default(true)
+
+  @@map("automation_rule")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 18. ACTIVITY DOMAIN
+// ═══════════════════════════════════════════════════════════════
+
+model Activity {
+  id         String   @id @default(cuid())
+  actorId    String
+  entityType String
+  entityId   String
+  action     String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  actor User @relation("ActivityActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@map("activity")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 19. NOTIFICATION DOMAIN (v1: in-app only)
+// ═══════════════════════════════════════════════════════════════
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notification")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 20. AUDIT DOMAIN
+// Immutable — AuditLog records are NEVER deleted (NFR §9).
+// onDelete: Restrict prevents user deletion from cascading to audit logs.
+// ═══════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  entityType String
+  entityId   String
+  action     String
+  oldValue   Json?
+  newValue   Json?
+  ipAddress  String?
+  timestamp  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId])
+  @@map("audit_log")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 21. INTEGRATION DOMAIN
+// provider: GOOGLE_WORKSPACE | MICROSOFT_365 | SLACK | TEAMS | WEBHOOK
+// ═══════════════════════════════════════════════════════════════
+
+model Integration {
+  id             String @id @default(cuid())
+  organizationId String
+  provider       String
+  status         String @default("ACTIVE")
+  configuration  Json?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("integration")
+}
