@@ -37,6 +37,8 @@ model Organization {
   permissionGroups PermissionGroup[]
   dashboards       Dashboard[]
   integrations     Integration[]
+  calendarEvents   CalendarEvent[]
+  channels         Channel[]
 
   @@map("organization")
 }
@@ -81,6 +83,11 @@ model User {
   attendance             Attendance[]
   leaveRequests          LeaveRequest[]
   ownedMilestones        Milestone[]             @relation("MilestoneOwner")
+  calendarEventAttendees CalendarEventAttendee[]
+  channelMemberships     ChannelMember[]
+  messages               Message[]
+  reportedIssues         Issue[]                 @relation("IssueReporter")
+  assignedIssues         Issue[]                 @relation("IssueAssignee")
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -379,6 +386,7 @@ model Project {
   milestones         Milestone[]
   taskLists          TaskList[]
   projectDocuments   ProjectDocument[]
+  issues             Issue[]
 
   @@map("project")
 }
@@ -702,12 +710,14 @@ model LeaveRequest {
 // ═══════════════════════════════════════════════════════════════
 
 model Timesheet {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
   taskId      String
   date        DateTime
   hoursLogged Float
+  billable    Boolean   @default(true)
   notes       String?
+  deletedAt   DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -1005,4 +1015,124 @@ model Integration {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("integration")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 22. CALENDAR DOMAIN
+// type: EVENT | TASK_DUE | MILESTONE | MEETING | REMINDER
+// ═══════════════════════════════════════════════════════════════
+
+model CalendarEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  type           String    @default("EVENT")
+  startDate      DateTime
+  endDate        DateTime?
+  allDay         Boolean   @default(false)
+  color          String    @default("#3d8de2")
+  createdBy      String
+  projectId      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  attendees    CalendarEventAttendee[]
+
+  @@index([organizationId])
+  @@map("calendar_event")
+}
+
+model CalendarEventAttendee {
+  id      String @id @default(cuid())
+  eventId String
+  userId  String
+
+  event CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("calendar_event_attendee")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 23. DISCUSS DOMAIN
+// type: PUBLIC | PRIVATE | DIRECT
+// ═══════════════════════════════════════════════════════════════
+
+model Channel {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  type           String    @default("PUBLIC")
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages     Message[]
+  members      ChannelMember[]
+
+  @@index([organizationId])
+  @@map("channel")
+}
+
+model ChannelMember {
+  id        String   @id @default(cuid())
+  channelId String
+  userId    String
+  joinedAt  DateTime @default(now())
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@map("channel_member")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  channelId String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([channelId])
+  @@map("message")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 24. ISSUES DOMAIN
+// severity: CRITICAL | MAJOR | MINOR | TRIVIAL
+// status: OPEN | IN_PROGRESS | RESOLVED | CLOSED
+// ═══════════════════════════════════════════════════════════════
+
+model Issue {
+  id          String    @id @default(cuid())
+  projectId   String
+  title       String
+  description String?
+  severity    String    @default("MINOR")
+  status      String    @default("OPEN")
+  reportedBy  String
+  assigneeId  String?
+  dueDate     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reporter User    @relation("IssueReporter", fields: [reportedBy], references: [id], onDelete: Cascade)
+  assignee User?   @relation("IssueAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@map("issue")
 }

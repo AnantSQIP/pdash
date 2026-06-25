@@ -5,9 +5,22 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class StatusesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  listForWorkflow(workflowId: string) {
+  private async resolveWorkflowId(workflowId: string): Promise<string> {
+    if (workflowId === 'default' || workflowId === 'workflow-default') {
+      const workflow = await this.prisma.workflow.findFirst({
+        where: { type: 'GLOBAL' },
+        orderBy: { name: 'asc' },
+      });
+      if (!workflow) throw new NotFoundException('No GLOBAL workflow found. Run seed first.');
+      return workflow.id;
+    }
+    return workflowId;
+  }
+
+  async listForWorkflow(workflowId: string) {
+    const id = await this.resolveWorkflowId(workflowId);
     return this.prisma.workflowStatus.findMany({
-      where: { workflowId },
+      where: { workflowId: id },
       orderBy: { sequence: 'asc' },
     });
   }
@@ -20,8 +33,9 @@ export class StatusesService {
 
   /** First OPEN status in a workflow, used as default for new tasks. */
   async defaultOpenStatus(workflowId: string) {
+    const id = await this.resolveWorkflowId(workflowId);
     const status = await this.prisma.workflowStatus.findFirst({
-      where: { workflowId, type: 'OPEN' },
+      where: { workflowId: id, type: 'OPEN' },
       orderBy: { sequence: 'asc' },
     });
     if (!status) throw new NotFoundException(`No OPEN status in workflow ${workflowId}. Seed default workflow first.`);

@@ -8,11 +8,12 @@
     "apps/*"
   ],
   "scripts": {
-    "db:generate": "npm run -w @pdash/db generate",
-    "db:migrate": "npm run -w @pdash/db migrate",
-    "db:seed": "npm run -w @pdash/db seed",
-    "api:dev": "npm run -w @pdash/api start:dev",
-    "api:build": "npm run -w @pdash/api build",
+    "db:generate": "prisma generate --schema=packages/db/prisma/schema.prisma",
+    "db:push": "prisma db push --schema=packages/db/prisma/schema.prisma --accept-data-loss",
+    "db:seed": "npx ts-node packages/db/prisma/seed.ts",
+    "api:start": "bash scripts/start-api.sh",
+    "api:restart": "bash scripts/restart-api.sh",
+    "web:dev": "npm run dev --workspace=apps/web",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down"
   },

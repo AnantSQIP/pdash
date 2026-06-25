@@ -65,8 +65,23 @@ export class ProjectsService {
         projectPhase: opts.phase,
       },
       orderBy: { createdAt: 'desc' },
-      include: {
-        _count: { select: { projectTasks: true, members: true } },
+      select: {
+        id: true,
+        title: true,
+        projectPhase: true,
+        priority: true,
+        completionPercentage: true,
+        startDate: true,
+        dueDate: true,
+        currentStatus: { select: { id: true, name: true, colorHex: true } },
+        members: {
+          where: { isActive: true },
+          take: 5,
+          select: {
+            user: { select: { id: true, firstName: true, lastName: true } },
+          },
+        },
+        _count: { select: { projectTasks: true } },
       },
     });
   }
@@ -76,6 +91,12 @@ export class ProjectsService {
       where: { id, deletedAt: null },
       include: {
         currentStatus: true,
+        members: {
+          where: { isActive: true },
+          include: {
+            user: { select: { id: true, firstName: true, lastName: true, email: true, profilePhoto: true } },
+          },
+        },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
         milestones: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
         _count: { select: { projectTasks: true, members: true } },
@@ -96,6 +117,7 @@ export class ProjectsService {
         projectPhase: dto.projectPhase,
         startDate: dto.startDate ? new Date(dto.startDate) : undefined,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        completionPercentage: dto.completionPercentage,
       },
     });
   }

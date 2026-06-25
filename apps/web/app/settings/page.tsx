@@ -186,7 +186,7 @@ type Member = {
 const INITIAL_MEMBERS: Member[] = [
   { name: 'Anant Gupta', initials: 'AN', color: 'bg-brand-600', email: 'anant@acme.com',  role: 'Admin',   status: 'ACTIVE'   },
   { name: 'Alice Kim',   initials: 'AK', color: 'bg-purple-500', email: 'alice@acme.com',  role: 'Manager', status: 'ACTIVE'   },
-  { name: 'Bob Taylor',  initials: 'BT', color: 'bg-blue-500',   email: 'bob@acme.com',    role: 'Member',  status: 'ACTIVE'   },
+  { name: 'Bob Taylor',  initials: 'BT', color: 'bg-slate-600',   email: 'bob@acme.com',    role: 'Member',  status: 'ACTIVE'   },
   { name: 'Carol Patel', initials: 'CP', color: 'bg-pink-500',   email: 'carol@acme.com',  role: 'Member',  status: 'ACTIVE'   },
   { name: 'Dan Voss',    initials: 'DV', color: 'bg-red-500',    email: 'dan@acme.com',    role: 'Member',  status: 'ACTIVE'   },
   { name: 'Frank Ito',   initials: 'FI', color: 'bg-indigo-500', email: 'frank@acme.com',  role: 'Member',  status: 'ON_LEAVE' },
@@ -651,7 +651,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('general');
 
   return (
-    <div className="bg-gray-50 min-h-full">
+    <div className="min-h-full">
       {/* Header */}
       <div className="bg-white border-b px-6 py-4">
         <h1 className="text-xl font-bold text-gray-900">Settings</h1>

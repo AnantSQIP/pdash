@@ -3,11 +3,15 @@
 import { useState } from 'react';
 import { X, Plus } from 'lucide-react';
 
+import { api } from '@/lib/api';
+
 interface NewProjectModalProps {
   onClose: () => void;
+  onSuccess?: () => void;
+  createdBy?: string;
 }
 
-export function NewProjectModal({ onClose }: NewProjectModalProps) {
+export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: NewProjectModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
@@ -20,20 +24,14 @@ export function NewProjectModal({ onClose }: NewProjectModalProps) {
     setLoading(true);
     setError('');
     try {
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
-      const res = await fetch(`${API_BASE}/projects`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          description,
-          priority,
-          dueDate: dueDate || undefined,
-          createdBy: 'demo-user',
-          organizationId: 'org-demo',
-        }),
+      await api.projects.create({
+        title,
+        description: description || undefined,
+        priority,
+        dueDate: dueDate || undefined,
+        createdBy,
       });
-      if (!res.ok) throw new Error(await res.text());
+      onSuccess?.();
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');

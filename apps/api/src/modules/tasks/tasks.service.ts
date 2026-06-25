@@ -72,10 +72,33 @@ export class TasksService {
     });
   }
 
+  listForUser(userId: string) {
+    return this.prisma.task.findMany({
+      where: {
+        deletedAt: null,
+        assignees: { some: { userId } },
+      },
+      orderBy: { dueDate: 'asc' },
+      include: {
+        ...this.taskInclude(),
+        // Override projectTasks from taskInclude() to also bring the project name
+        projectTasks: {
+          select: {
+            projectId: true,
+            taskListId: true,
+            milestoneId: true,
+            sequence: true,
+            project: { select: { id: true, title: true } },
+          },
+        },
+      },
+    });
+  }
+
   async get(id: string) {
     const task = await this.prisma.task.findFirst({
       where: { id, deletedAt: null },
-      include: this.taskInclude(),
+      include: this.taskIncludeFull(),
     });
     if (!task) throw new NotFoundException(`Task ${id} not found`);
     return task;
@@ -192,11 +215,35 @@ export class TasksService {
 
   private taskInclude() {
     return {
-      currentStatus: true,
-      assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } },
+      currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
+      assignees: {
+        select: { user: { select: { id: true, firstName: true, lastName: true } } },
+      },
       subtasks: {
         where: { deletedAt: null },
         orderBy: { createdAt: 'asc' as const },
+        select: { id: true, title: true, status: true, priority: true, dueDate: true },
+      },
+      projectTasks: {
+        select: { projectId: true, taskListId: true, milestoneId: true, sequence: true },
+      },
+      _count: { select: { subtasks: true, checklists: true } },
+    };
+  }
+
+  /** Full subtask rows needed for the single-task detail view. */
+  private taskIncludeFull() {
+    return {
+      currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
+      assignees: {
+        select: { user: { select: { id: true, firstName: true, lastName: true } } },
+      },
+      subtasks: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'asc' as const },
+        include: {
+          assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } },
+        },
       },
       projectTasks: {
         select: { projectId: true, taskListId: true, milestoneId: true, sequence: true },

@@ -1,8 +1,11 @@
 import {
   IsDateString,
+  IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -57,6 +60,12 @@ export class UpdateProjectDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  completionPercentage?: number;
 }
 
 export class ApprovalDto {

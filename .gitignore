@@ -7,6 +7,7 @@ dist/
 build/
 .next/
 out/
+*.tsbuildinfo
 
 # ── Environment / secrets ─────────────────────────────────
 .env
@@ -28,13 +29,14 @@ coverage/
 # ── Local dev DB ──────────────────────────────────────────
 .pglite-data/
 
-# ── Claude Code workspace (never commit) ──────────────────
-**/.claude/
+# ── Local tooling / agent workspaces (never commit) ───────
+.cursor/
+.windsurf/
 
 # ── Backup files (created during dev) ────────────────────
 *.bak
 
-# ── Reference / unrelated projects ───────────────────────
+# ── Reference / unrelated projects (not part of this app) ─
 dashboard/
 
 # ── Binary documents ──────────────────────────────────────

@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import localFont from 'next/font/local';
 import './globals.css';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { QueryProvider } from '@/providers/query-provider';
+import { OrgProvider } from '@/lib/org-context';
 
 const geistSans = localFont({
   src: '../public/fonts/GeistVariable.woff2',
@@ -19,10 +21,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={geistSans.variable}>
       <body className="flex h-screen overflow-hidden bg-gray-50">
-        <Sidebar />
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {children}
-        </div>
+        <QueryProvider>
+          <OrgProvider>
+            <Sidebar />
+            <div className="flex flex-col flex-1 overflow-hidden">
+              {children}
+            </div>
+          </OrgProvider>
+        </QueryProvider>
       </body>
     </html>
   );

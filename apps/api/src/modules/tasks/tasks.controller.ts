@@ -13,11 +13,14 @@ export class TasksController {
 
   @Get()
   list(
-    @Query('projectId') projectId: string,
+    @Query('projectId') projectId?: string,
+    @Query('userId') userId?: string,
     @Query('taskListId') taskListId?: string,
     @Query('milestoneId') milestoneId?: string,
   ) {
-    return this.tasks.list(projectId, { taskListId, milestoneId });
+    if (userId) return this.tasks.listForUser(userId);
+    if (projectId) return this.tasks.list(projectId, { taskListId, milestoneId });
+    return [];
   }
 
   @Get(':id')

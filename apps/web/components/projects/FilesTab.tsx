@@ -32,7 +32,7 @@ const TYPE_CONFIG: Record<MockFile['type'], { label: string; bgColor: string; te
 const UPLOADER_COLORS: Record<string, string> = {
   SA: 'bg-orange-500',
   CP: 'bg-pink-500',
-  BT: 'bg-blue-500',
+  BT: 'bg-slate-600',
   AK: 'bg-green-500',
 };
 

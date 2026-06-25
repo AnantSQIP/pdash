@@ -1,52 +1,94 @@
 'use client';
 
 import { useState } from 'react';
-import { UserPlus, Search } from 'lucide-react';
+import { UserPlus, Search, Loader } from 'lucide-react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { api, type UserSummary, type ApiProject } from '@/lib/api';
+import { useOrg } from '@/lib/org-context';
 
-const USERS = [
-  { id: 'u1', name: 'Anant Gupta',  initials: 'AN', color: 'bg-brand-600', role: 'Admin',           dept: 'Leadership',  email: 'anant@acme.com',  status: 'ACTIVE',   projects: 4 },
-  { id: 'u2', name: 'Alice Kim',    initials: 'AK', color: 'bg-purple-500', role: 'Manager',          dept: 'Product',     email: 'alice@acme.com',  status: 'ACTIVE',   projects: 3 },
-  { id: 'u3', name: 'Bob Taylor',   initials: 'BT', color: 'bg-blue-500',   role: 'Engineer',         dept: 'Engineering', email: 'bob@acme.com',    status: 'ACTIVE',   projects: 5 },
-  { id: 'u4', name: 'Carol Patel',  initials: 'CP', color: 'bg-pink-500',   role: 'Designer',         dept: 'Design',      email: 'carol@acme.com',  status: 'ACTIVE',   projects: 3 },
-  { id: 'u5', name: 'Dan Voss',     initials: 'DV', color: 'bg-red-500',    role: 'Engineer',         dept: 'Engineering', email: 'dan@acme.com',    status: 'ACTIVE',   projects: 2 },
-  { id: 'u6', name: 'Emma Stone',   initials: 'ES', color: 'bg-teal-500',   role: 'QA Engineer',      dept: 'Engineering', email: 'emma@acme.com',   status: 'ACTIVE',   projects: 2 },
-  { id: 'u7', name: 'Frank Ito',    initials: 'FI', color: 'bg-brand-500', role: 'Product Manager',  dept: 'Product',     email: 'frank@acme.com',  status: 'ON_LEAVE', projects: 1 },
-  { id: 'u8', name: 'Grace Lee',    initials: 'GL', color: 'bg-cyan-500',   role: 'Designer',         dept: 'Design',      email: 'grace@acme.com',  status: 'ACTIVE',   projects: 2 },
-];
+const AVATAR_COLORS = ['bg-brand-600', 'bg-purple-500', 'bg-pink-500', 'bg-slate-600', 'bg-green-500', 'bg-amber-500', 'bg-teal-500', 'bg-red-500', 'bg-cyan-500', 'bg-indigo-500'];
+function avatarColor(seed: string) {
+  let h = 0;
+  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
+}
+function initials(u: UserSummary) {
+  const a = u.firstName?.[0] ?? '';
+  const b = u.lastName?.[0] ?? u.firstName?.[1] ?? '';
+  return (a + b).toUpperCase();
+}
+function fullName(u: UserSummary) {
+  return `${u.firstName} ${u.lastName ?? ''}`.trim();
+}
 
-const DEPARTMENTS = [
-  { name: 'Leadership',  members: ['u1'],             head: 'Anant Gupta' },
-  { name: 'Product',     members: ['u2', 'u7'],       head: 'Alice Kim' },
-  { name: 'Engineering', members: ['u3', 'u5', 'u6'], head: 'Bob Taylor' },
-  { name: 'Design',      members: ['u4', 'u8'],       head: 'Carol Patel' },
-];
+// Map a designation to a department bucket for the Departments tab.
+function departmentOf(designation?: string): string {
+  switch (designation) {
+    case 'VP': return 'Leadership';
+    case 'Manager': return 'Management';
+    case 'Product Development': return 'Product';
+    case 'Research Associate':
+    case 'Senior Research Associate': return 'Search & Analytics';
+    case 'Consultant': return 'Consulting';
+    case 'Testing and QA': return 'QA';
+    case 'HR': return 'Human Resources';
+    default: return 'Other';
+  }
+}
 
-const TEAMS = [
-  { name: 'Frontend Team',  members: ['u4', 'u8', 'u3'], projects: 3 },
-  { name: 'Backend Team',   members: ['u3', 'u5', 'u6'], projects: 2 },
-];
+type Tab = 'All Members' | 'Departments';
 
-type Tab = 'All Members' | 'Departments' | 'Teams';
-
-function Avatar({ user, size = 'md' }: { user: { initials: string; color: string }; size?: 'sm' | 'md' }) {
+function Avatar({ seed, label, size = 'md' }: { seed: string; label: string; size?: 'sm' | 'md' }) {
   return (
     <span className={`inline-flex items-center justify-center rounded-full font-semibold text-white shrink-0
-      ${size === 'sm' ? 'w-7 h-7 text-[10px]' : 'w-9 h-9 text-xs'}
-      ${user.color}`}>
-      {user.initials}
+      ${size === 'sm' ? 'w-7 h-7 text-[10px]' : 'w-9 h-9 text-xs'} ${avatarColor(seed)}`}>
+      {label}
     </span>
   );
 }
 
 export default function UsersPage() {
+  const { org, loading: orgLoading } = useOrg();
   const [tab, setTab] = useState<Tab>('All Members');
   const [search, setSearch] = useState('');
 
-  const filtered = USERS.filter(u =>
-    u.name.toLowerCase().includes(search.toLowerCase())
+  const { data: users = [], isLoading: usersLoading } = useQuery<UserSummary[]>({
+    queryKey: ['users', org?.id],
+    queryFn: () => api.users.list(org!.id),
+    enabled: !!org?.id,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+
+  const { data: projects = [] } = useQuery<ApiProject[]>({
+    queryKey: ['projects', org?.id],
+    queryFn: () => api.projects.list(org!.id),
+    enabled: !!org?.id,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+
+  // Count how many projects each user is a member of.
+  const projectCount: Record<string, number> = {};
+  for (const p of projects) {
+    for (const m of p.members ?? []) {
+      projectCount[m.user?.id ?? m.userId] = (projectCount[m.user?.id ?? m.userId] ?? 0) + 1;
+    }
+  }
+
+  const isLoading = orgLoading || usersLoading;
+
+  const filtered = users.filter(u =>
+    fullName(u).toLowerCase().includes(search.toLowerCase()) ||
+    u.email.toLowerCase().includes(search.toLowerCase()),
   );
 
-  const userById = Object.fromEntries(USERS.map(u => [u.id, u]));
+  // Group users by department for the Departments tab.
+  const byDept: Record<string, UserSummary[]> = {};
+  for (const u of users) {
+    const d = departmentOf(u.designation);
+    (byDept[d] ??= []).push(u);
+  }
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -54,7 +96,7 @@ export default function UsersPage() {
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">People</h1>
-          <p className="text-sm text-gray-500 mt-0.5">8 members</p>
+          <p className="text-sm text-gray-500 mt-0.5">{isLoading ? 'Loading…' : `${users.length} members`}</p>
         </div>
         <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 transition-colors">
           <UserPlus size={15} />
@@ -64,14 +106,12 @@ export default function UsersPage() {
 
       {/* Tab bar */}
       <div className="bg-white border-b border-gray-200 px-6 flex items-center gap-1">
-        {(['All Members', 'Departments', 'Teams'] as Tab[]).map(t => (
+        {(['All Members', 'Departments'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-              tab === t
-                ? 'border-brand-600 text-brand-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+              tab === t ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
             {t}
@@ -80,9 +120,12 @@ export default function UsersPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6">
-
-        {/* --- All Members Tab --- */}
-        {tab === 'All Members' && (
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16 text-gray-400">
+            <Loader size={18} className="animate-spin mr-2" />
+            <span className="text-sm">Loading members…</span>
+          </div>
+        ) : tab === 'All Members' ? (
           <div className="space-y-4">
             {/* Search */}
             <div className="relative max-w-sm">
@@ -113,25 +156,23 @@ export default function UsersPage() {
                     <tr key={u.id} className={`${idx < filtered.length - 1 ? 'border-b border-gray-50' : ''} hover:bg-gray-50 transition-colors`}>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">
-                          <Avatar user={u} />
+                          <Avatar seed={u.id} label={initials(u)} />
                           <div>
-                            <p className="font-medium text-gray-900">{u.name}</p>
+                            <p className="font-medium text-gray-900">{fullName(u)}</p>
                             <p className="text-xs text-gray-400">{u.email}</p>
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-3 text-gray-600">{u.role}</td>
-                      <td className="px-3 py-3 text-gray-500">{u.dept}</td>
+                      <td className="px-3 py-3 text-gray-600">{u.designation ?? '—'}</td>
+                      <td className="px-3 py-3 text-gray-500">{departmentOf(u.designation)}</td>
                       <td className="px-3 py-3">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                          u.status === 'ACTIVE'
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-yellow-100 text-yellow-700'
+                          u.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
                         }`}>
-                          {u.status === 'ACTIVE' ? 'Active' : 'On Leave'}
+                          {u.status === 'ACTIVE' ? 'Active' : u.status}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-gray-500">{u.projects}</td>
+                      <td className="px-3 py-3 text-gray-500">{projectCount[u.id] ?? 0}</td>
                       <td className="px-3 py-3">
                         <button className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
                           View
@@ -148,70 +189,32 @@ export default function UsersPage() {
               </table>
             </div>
           </div>
-        )}
-
-        {/* --- Departments Tab --- */}
-        {tab === 'Departments' && (
+        ) : (
+          /* Departments Tab */
           <div className="grid grid-cols-2 gap-4">
-            {DEPARTMENTS.map(dept => {
-              const members = dept.members.map(id => userById[id]).filter(Boolean);
-              return (
-                <div key={dept.name} className="bg-white rounded-xl border border-gray-200 p-5">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{dept.name}</h3>
-                      <p className="text-xs text-gray-500 mt-0.5">{members.length} member{members.length !== 1 ? 's' : ''}</p>
-                    </div>
+            {Object.entries(byDept).map(([dept, members]) => (
+              <div key={dept} className="bg-white rounded-xl border border-gray-200 p-5">
+                <div className="flex items-start justify-between mb-4">
+                  <div>
+                    <h3 className="font-semibold text-gray-900">{dept}</h3>
+                    <p className="text-xs text-gray-500 mt-0.5">{members.length} member{members.length !== 1 ? 's' : ''}</p>
                   </div>
-
-                  {/* Stacked avatars */}
-                  <div className="flex -space-x-2 mb-3">
-                    {members.slice(0, 5).map(u => (
-                      <Avatar key={u.id} user={u} size="sm" />
-                    ))}
-                  </div>
-
-                  <p className="text-xs text-gray-500 mb-4">Head: <span className="font-medium text-gray-700">{dept.head}</span></p>
-
-                  <button className="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
-                    + Add Member
-                  </button>
                 </div>
-              );
-            })}
+                <div className="flex -space-x-2 mb-3">
+                  {members.slice(0, 6).map(u => (
+                    <Avatar key={u.id} seed={u.id} label={initials(u)} size="sm" />
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mb-4">
+                  Head: <span className="font-medium text-gray-700">{fullName(members[0])}</span>
+                </p>
+                <button className="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                  + Add Member
+                </button>
+              </div>
+            ))}
           </div>
         )}
-
-        {/* --- Teams Tab --- */}
-        {tab === 'Teams' && (
-          <div className="grid grid-cols-2 gap-4">
-            {TEAMS.map(team => {
-              const members = team.members.map(id => userById[id]).filter(Boolean);
-              return (
-                <div key={team.name} className="bg-white rounded-xl border border-gray-200 p-5">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{team.name}</h3>
-                      <p className="text-xs text-gray-500 mt-0.5">{members.length} members &middot; {team.projects} projects</p>
-                    </div>
-                  </div>
-
-                  {/* Stacked avatars */}
-                  <div className="flex -space-x-2 mb-4">
-                    {members.slice(0, 5).map(u => (
-                      <Avatar key={u.id} user={u} size="sm" />
-                    ))}
-                  </div>
-
-                  <button className="w-full px-3 py-2 rounded-lg bg-brand-50 border border-brand-100 text-xs font-medium text-brand-600 hover:bg-brand-100 transition-colors">
-                    Manage
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
       </div>
     </div>
   );

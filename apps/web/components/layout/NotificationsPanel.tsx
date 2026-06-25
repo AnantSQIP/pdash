@@ -1,57 +1,100 @@
 'use client';
 
-import { useState } from 'react';
-import { X, Bell } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { X } from 'lucide-react';
+import { RiNotification3Line, RiAlarmWarningLine, RiCalendarEventLine, RiFlag2Line, RiCheckboxCircleLine, RiTimeLine } from '@remixicon/react';
+import { useQuery } from '@tanstack/react-query';
+import { api, type ApiTask, type CalendarEvent } from '@/lib/api';
+import { useOrg } from '@/lib/org-context';
 
-interface Notification {
+type Notif = {
   id: string;
-  type: string;
-  read: boolean;
-  time: string;
+  kind: 'overdue' | 'due' | 'event' | 'milestone' | 'done';
   text: string;
-  avatar: string;
-  color: string;
+  time: string;
+  ts: number;
+};
+
+function relative(ts: number, now: number): string {
+  const diff = ts - now;
+  const absDays = Math.round(Math.abs(diff) / 86400000);
+  if (diff < 0) {
+    if (absDays === 0) return 'today';
+    if (absDays === 1) return 'yesterday';
+    return `${absDays}d ago`;
+  }
+  if (absDays === 0) return 'today';
+  if (absDays === 1) return 'tomorrow';
+  return `in ${absDays}d`;
 }
 
-const INITIAL_NOTIFICATIONS: Notification[] = [
-  { id: 'n1', type: 'task',      read: false, time: '5m ago',  text: 'Bob Taylor assigned you "Implement responsive navbar"', avatar: 'BT', color: 'bg-blue-500' },
-  { id: 'n2', type: 'comment',   read: false, time: '1h ago',  text: 'Alice Kim commented on "Design component library"',     avatar: 'AK', color: 'bg-purple-500' },
-  { id: 'n3', type: 'milestone', read: false, time: '2h ago',  text: 'Milestone "Phase 1" is due in 3 days',                  avatar: '🎯', color: '' },
-  { id: 'n4', type: 'approval',  read: true,  time: '1d ago',  text: 'Your project "Mobile App v2" was approved',             avatar: '✅', color: '' },
-  { id: 'n5', type: 'mention',   read: true,  time: '1d ago',  text: 'Carol Patel mentioned you in Apollo discussion',        avatar: 'CP', color: 'bg-pink-500' },
-  { id: 'n6', type: 'task',      read: true,  time: '2d ago',  text: '"SEO audit" status changed to In Review',               avatar: 'SA', color: 'bg-orange-500' },
-];
-
-function isEmoji(str: string) {
-  return /\p{Emoji}/u.test(str) && str.length <= 2;
-}
+const KIND_META: Record<Notif['kind'], { Icon: typeof RiAlarmWarningLine; color: string; bg: string }> = {
+  overdue:   { Icon: RiAlarmWarningLine,   color: 'text-red-600',    bg: 'bg-red-50' },
+  due:       { Icon: RiTimeLine,           color: 'text-amber-600',  bg: 'bg-amber-50' },
+  event:     { Icon: RiCalendarEventLine,  color: 'text-brand-600',  bg: 'bg-brand-50' },
+  milestone: { Icon: RiFlag2Line,          color: 'text-purple-600', bg: 'bg-purple-50' },
+  done:      { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
+};
 
 export function NotificationsPanel({ onClose }: { onClose: () => void }) {
-  const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
+  const { org, currentUser } = useOrg();
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
 
-  const unreadCount = notifications.filter(n => !n.read).length;
+  const { data: tasks = [] } = useQuery<ApiTask[]>({
+    queryKey: ['tasks-me', currentUser?.id],
+    queryFn: () => api.tasks.listForUser(currentUser!.id),
+    enabled: !!currentUser?.id,
+    staleTime: 30_000,
+  });
 
-  function markAllRead() {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  }
+  const { data: events = [] } = useQuery<CalendarEvent[]>({
+    queryKey: ['events', org?.id, 'notif'],
+    queryFn: () => api.events.list(org!.id),
+    enabled: !!org?.id,
+    staleTime: 30_000,
+  });
 
-  function markRead(id: string) {
-    setNotifications(prev =>
-      prev.map(n => n.id === id ? { ...n, read: true } : n)
-    );
-  }
+  const notifications = useMemo<Notif[]>(() => {
+    const now = Date.now();
+    const soon = now + 3 * 86400000; // next 3 days
+    const items: Notif[] = [];
+
+    for (const t of tasks) {
+      const closed = t.currentStatus?.type === 'CLOSED' || t.completionPercentage === 100;
+      if (!t.dueDate) continue;
+      const due = new Date(t.dueDate).getTime();
+      if (closed) continue;
+      if (due < now) {
+        items.push({ id: `t-${t.id}`, kind: 'overdue', text: `"${t.title}" is overdue`, time: relative(due, now), ts: due });
+      } else if (due <= soon) {
+        items.push({ id: `t-${t.id}`, kind: 'due', text: `"${t.title}" is due ${relative(due, now)}`, time: relative(due, now), ts: due });
+      }
+    }
+
+    for (const e of events) {
+      const start = new Date(e.startDate).getTime();
+      if (start < now || start > soon) continue;
+      const kind: Notif['kind'] = e.type === 'MILESTONE' ? 'milestone' : 'event';
+      const verb = e.type === 'MILESTONE' ? 'Milestone' : 'Upcoming';
+      items.push({ id: `e-${e.id}`, kind, text: `${verb}: "${e.title}" ${relative(start, now)}`, time: relative(start, now), ts: start });
+    }
+
+    // Soonest / most-overdue first
+    return items.sort((a, b) => Math.abs(a.ts - now) - Math.abs(b.ts - now)).slice(0, 12);
+  }, [tasks, events]);
+
+  const unreadCount = notifications.filter(n => !readIds.has(n.id)).length;
+  const markAllRead = () => setReadIds(new Set(notifications.map(n => n.id)));
+  const markRead = (id: string) => setReadIds(prev => new Set(prev).add(id));
 
   return (
     <>
-      {/* Backdrop */}
       <div className="fixed inset-0 z-40" onClick={onClose} />
-
-      {/* Panel */}
-      <div className="fixed left-64 bottom-4 z-50 w-96 max-h-[500px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col">
+      <div className="fixed left-20 bottom-4 z-50 w-96 max-h-[500px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
           <div className="flex items-center gap-2">
-            <Bell size={16} className="text-gray-600" />
+            <RiNotification3Line size={16} className="text-gray-600" />
             <span className="font-semibold text-gray-900 text-sm">Notifications</span>
             {unreadCount > 0 && (
               <span className="px-1.5 py-0.5 bg-brand-600 text-white text-[10px] font-bold rounded-full leading-none">
@@ -61,17 +104,11 @@ export function NotificationsPanel({ onClose }: { onClose: () => void }) {
           </div>
           <div className="flex items-center gap-2">
             {unreadCount > 0 && (
-              <button
-                onClick={markAllRead}
-                className="text-xs text-brand-600 hover:text-brand-700 font-medium transition-colors"
-              >
+              <button onClick={markAllRead} className="text-xs text-brand-600 hover:text-brand-700 font-medium transition-colors">
                 Mark all read
               </button>
             )}
-            <button
-              onClick={onClose}
-              className="p-1 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-            >
+            <button onClick={onClose} className="p-1 rounded-md hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
               <X size={15} />
             </button>
           </div>
@@ -81,55 +118,41 @@ export function NotificationsPanel({ onClose }: { onClose: () => void }) {
         <div className="overflow-y-auto flex-1">
           {notifications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-              <Bell size={32} className="mb-2 opacity-40" />
-              <p className="text-sm">No notifications</p>
+              <RiNotification3Line size={32} className="mb-2 opacity-40" />
+              <p className="text-sm">You're all caught up</p>
+              <p className="text-xs mt-0.5">No overdue tasks or upcoming deadlines</p>
             </div>
           ) : (
             <ul>
-              {notifications.map(n => (
-                <li
-                  key={n.id}
-                  onClick={() => markRead(n.id)}
-                  className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50 relative ${
-                    n.read ? 'bg-white' : 'bg-blue-50'
-                  }`}
-                >
-                  {/* Unread left border */}
-                  {!n.read && (
-                    <span className="absolute left-0 top-0 bottom-0 w-1 bg-brand-600 rounded-r-sm" />
-                  )}
-
-                  {/* Avatar */}
-                  {isEmoji(n.avatar) ? (
-                    <div className="w-8 h-8 shrink-0 flex items-center justify-center text-lg">
-                      {n.avatar}
+              {notifications.map(n => {
+                const meta = KIND_META[n.kind];
+                const read = readIds.has(n.id);
+                return (
+                  <li
+                    key={n.id}
+                    onClick={() => markRead(n.id)}
+                    className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50 relative ${read ? 'bg-white' : 'bg-blue-50/50'}`}
+                  >
+                    {!read && <span className="absolute left-0 top-0 bottom-0 w-1 bg-brand-600 rounded-r-sm" />}
+                    <div className={`w-8 h-8 shrink-0 rounded-full ${meta.bg} flex items-center justify-center`}>
+                      <meta.Icon size={16} className={meta.color} />
                     </div>
-                  ) : (
-                    <div
-                      className={`w-8 h-8 shrink-0 rounded-full ${n.color} flex items-center justify-center text-white text-[10px] font-bold`}
-                    >
-                      {n.avatar}
+                    <div className="flex-1 min-w-0 pl-1">
+                      <p className={`text-sm leading-snug ${read ? 'text-gray-600' : 'text-gray-900 font-medium'}`}>{n.text}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{n.time}</p>
                     </div>
-                  )}
-
-                  {/* Text */}
-                  <div className="flex-1 min-w-0 pl-1">
-                    <p className={`text-sm leading-snug ${n.read ? 'text-gray-600' : 'text-gray-900 font-medium'}`}>
-                      {n.text}
-                    </p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{n.time}</p>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
 
         {/* Footer */}
         <div className="border-t border-gray-100 shrink-0">
-          <button className="w-full py-3 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors font-medium">
-            View all notifications
-          </button>
+          <a href="/tasks" className="block w-full py-3 text-center text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors font-medium">
+            View my tasks
+          </a>
         </div>
       </div>
     </>

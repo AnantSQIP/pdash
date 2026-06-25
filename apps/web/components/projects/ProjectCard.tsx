@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { CheckSquare, Users, Calendar, ArrowUpRight } from 'lucide-react';
 import clsx from 'clsx';
 import { MockProject, PHASE_META, PRIORITY_META } from '@/lib/mock-data';
+import { progressColor, progressTrack } from '@/lib/progress';
 
 interface ProjectCardProps {
   project: MockProject;
@@ -10,14 +11,22 @@ interface ProjectCardProps {
 export function ProjectCard({ project }: ProjectCardProps) {
   const phase = PHASE_META[project.projectPhase];
   const priority = PRIORITY_META[project.priority];
+  const barColor = progressColor(project.completionPercentage, project.priority);
+  const trackColor = progressTrack(project.completionPercentage, project.priority);
 
   return (
     <Link
       href={`/projects/${project.id}`}
       className="group flex flex-col bg-white rounded-xl border border-gray-200 hover:border-brand-500 hover:shadow-md transition-all duration-200 overflow-hidden"
     >
-      {/* Color bar based on status */}
-      <div className="h-1" style={{ backgroundColor: project.statusColor }} />
+      {/* Top progress bar — width tracks completion %, color goes red → green by progress (+priority) */}
+      <div className="h-1.5 w-full" style={{ backgroundColor: trackColor }}>
+        <div
+          className="h-full transition-all duration-500"
+          style={{ width: `${project.completionPercentage}%`, backgroundColor: barColor }}
+          title={`${project.completionPercentage}% complete`}
+        />
+      </div>
 
       <div className="flex flex-col flex-1 p-5">
         {/* Header row */}
@@ -52,7 +61,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
               className="h-full rounded-full transition-all duration-500"
               style={{
                 width: `${project.completionPercentage}%`,
-                backgroundColor: project.statusColor,
+                backgroundColor: barColor,
               }}
             />
           </div>

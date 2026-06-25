@@ -31,11 +31,11 @@ export const MOCK_PROJECTS: MockProject[] = [
     dueDate: '2026-08-15',
     members: [
       { initials: 'SA', color: 'bg-purple-500' },
-      { initials: 'MK', color: 'bg-blue-500' },
+      { initials: 'MK', color: 'bg-slate-600' },
       { initials: 'RJ', color: 'bg-green-500' },
       { initials: 'LP', color: 'bg-orange-500' },
     ],
-    statusColor: '#3d8de2',
+    statusColor: '#E8533A',
     createdAt: '2026-03-10',
   },
   {
@@ -70,7 +70,7 @@ export const MOCK_PROJECTS: MockProject[] = [
       { initials: 'NK', color: 'bg-indigo-500' },
       { initials: 'PR', color: 'bg-teal-500' },
     ],
-    statusColor: '#3d8de2',
+    statusColor: '#E8533A',
     createdAt: '2026-05-15',
   },
   {
@@ -122,7 +122,7 @@ export const MOCK_PROJECTS: MockProject[] = [
       { initials: 'TS', color: 'bg-slate-500' },
       { initials: 'KM', color: 'bg-blue-600' },
     ],
-    statusColor: '#fe841f',
+    statusColor: '#E8533A',
     createdAt: '2026-02-10',
   },
 ];
@@ -131,7 +131,7 @@ export const PHASE_META: Record<Phase, { label: string; bg: string; text: string
   IDEA:      { label: 'Idea',      bg: 'bg-gray-100',   text: 'text-gray-600' },
   PLANNING:  { label: 'Planning',  bg: 'bg-yellow-100', text: 'text-yellow-700' },
   ACTIVE:    { label: 'Active',    bg: 'bg-brand-100',  text: 'text-brand-700' },
-  ON_HOLD:   { label: 'On Hold',   bg: 'bg-accent-100', text: 'text-accent-700' },
+  ON_HOLD:   { label: 'On Hold',   bg: 'bg-amber-100',  text: 'text-amber-700'  },
   COMPLETED: { label: 'Completed', bg: 'bg-green-100',  text: 'text-green-700' },
   ARCHIVED:  { label: 'Archived',  bg: 'bg-gray-100',   text: 'text-gray-500' },
   CANCELLED: { label: 'Cancelled', bg: 'bg-red-100',    text: 'text-red-600' },
@@ -139,7 +139,7 @@ export const PHASE_META: Record<Phase, { label: string; bg: string; text: string
 
 export const PRIORITY_META: Record<Priority, { label: string; color: string }> = {
   LOW:      { label: 'Low',      color: 'text-gray-400' },
-  MEDIUM:   { label: 'Medium',   color: 'text-brand-500' },
-  HIGH:     { label: 'High',     color: 'text-accent-600' },
+  MEDIUM:   { label: 'Medium',   color: 'text-amber-600'  },
+  HIGH:     { label: 'High',     color: 'text-brand-500'  },
   CRITICAL: { label: 'Critical', color: 'text-red-500' },
 };

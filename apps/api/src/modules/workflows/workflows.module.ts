@@ -56,9 +56,23 @@ export class WorkflowsService {
     });
   }
 
+  /** Resolve the 'default' / 'workflow-default' alias to the GLOBAL workflow id. */
+  private async resolveId(id: string): Promise<string> {
+    if (id === 'default' || id === 'workflow-default') {
+      const wf = await this.prisma.workflow.findFirst({
+        where: { type: 'GLOBAL' },
+        orderBy: { name: 'asc' },
+      });
+      if (!wf) throw new NotFoundException('No GLOBAL workflow found. Run seed first.');
+      return wf.id;
+    }
+    return id;
+  }
+
   async get(id: string) {
+    const resolvedId = await this.resolveId(id);
     const workflow = await this.prisma.workflow.findUnique({
-      where: { id },
+      where: { id: resolvedId },
       include: {
         statuses: { orderBy: { sequence: 'asc' } },
         transitions: {
@@ -83,9 +97,10 @@ export class WorkflowsService {
   }
 
   async listStatuses(workflowId: string) {
-    await this.get(workflowId);
+    const resolvedId = await this.resolveId(workflowId);
+    await this.get(resolvedId);
     return this.prisma.workflowStatus.findMany({
-      where: { workflowId },
+      where: { workflowId: resolvedId },
       orderBy: { sequence: 'asc' },
     });
   }

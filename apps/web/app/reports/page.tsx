@@ -1,185 +1,352 @@
-import { Download, TrendingUp, FolderOpen, CheckSquare, Users } from 'lucide-react';
-import { MOCK_PROJECTS, PHASE_META, PRIORITY_META, type Priority } from '@/lib/mock-data';
+'use client';
 
-export default function ReportsPage() {
-  // --- Derived stats ---
-  const totalProjects = MOCK_PROJECTS.length;
-  const activeProjects = MOCK_PROJECTS.filter(p => p.projectPhase === 'ACTIVE').length;
-  const avgCompletion = Math.round(
-    MOCK_PROJECTS.reduce((sum, p) => sum + p.completionPercentage, 0) / MOCK_PROJECTS.length
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Download, TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, Edit3, Check, X } from 'lucide-react';
+import clsx from 'clsx';
+import { api, type ApiProject, type DashboardStats } from '@/lib/api';
+import { useOrg } from '@/lib/org-context';
+
+const PHASE_COLORS: Record<string, { color: string; label: string }> = {
+  ACTIVE:    { color: '#34a853', label: 'Active'    },
+  COMPLETED: { color: '#1a73e8', label: 'Completed' },
+  ON_HOLD:   { color: '#fbbc04', label: 'On Hold'   },
+  PLANNING:  { color: '#fe841f', label: 'Planning'  },
+  IDEA:      { color: '#9aa0a6', label: 'Idea'      },
+  ARCHIVED:  { color: '#bdc1c6', label: 'Archived'  },
+};
+
+const PRIORITY_COLORS: Record<string, string> = {
+  CRITICAL: '#ea4335', HIGH: '#fa7b17', MEDIUM: '#fbbc04', LOW: '#34a853',
+};
+
+function ExportCsvButton({ projects }: { projects: ApiProject[] }) {
+  function exportCsv() {
+    const headers = ['Title', 'Phase', 'Priority', 'Completion %', 'Tasks', 'Members', 'Due Date'];
+    const rows = projects.map(p => [
+      `"${p.title}"`,
+      p.projectPhase,
+      p.priority,
+      p.completionPercentage,
+      p._count?.projectTasks ?? 0,
+      p._count?.members ?? 0,
+      p.dueDate ? new Date(p.dueDate).toLocaleDateString() : '',
+    ]);
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `projects-report-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  return (
+    <button
+      onClick={exportCsv}
+      className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+    >
+      <Download size={14} />
+      Export CSV
+    </button>
   );
-  const totalTasks = MOCK_PROJECTS.reduce((sum, p) => sum + p.taskCount, 0);
+}
 
-  // --- Status distribution ---
-  const statusDist = [
-    { label: 'Active',    count: MOCK_PROJECTS.filter(p => p.projectPhase === 'ACTIVE').length,    color: '#3d8de2' },
-    { label: 'Completed', count: MOCK_PROJECTS.filter(p => p.projectPhase === 'COMPLETED').length, color: '#16a34a' },
-    { label: 'On Hold',   count: MOCK_PROJECTS.filter(p => p.projectPhase === 'ON_HOLD').length,   color: '#fe841f' },
-    { label: 'Planning',  count: MOCK_PROJECTS.filter(p => p.projectPhase === 'PLANNING').length,  color: '#eab308' },
-    { label: 'Idea',      count: MOCK_PROJECTS.filter(p => p.projectPhase === 'IDEA').length,      color: '#9aa0a6' },
-  ];
+function ProgressEditor({ project, onUpdated }: { project: ApiProject; onUpdated: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(project.completionPercentage);
+  const [saving, setSaving] = useState(false);
 
-  // --- Priority bar chart ---
-  const priorities: Priority[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-  const priorityData = priorities.map(pr => {
-    const group = MOCK_PROJECTS.filter(p => p.priority === pr);
-    const avg = group.length > 0
-      ? Math.round(group.reduce((s, p) => s + p.completionPercentage, 0) / group.length)
-      : 0;
-    return { label: PRIORITY_META[pr].label, avg, count: group.length };
-  });
-  const maxAvg = Math.max(...priorityData.map(d => d.avg), 1);
+  async function save() {
+    setSaving(true);
+    try {
+      await api.projects.update(project.id, { completionPercentage: value });
+      onUpdated();
+      setEditing(false);
+    } catch {} finally { setSaving(false); }
+  }
 
-  // --- Project health ---
-  const healthDot = (phase: string, pct: number) => {
-    if (phase === 'ON_HOLD') return 'bg-red-400';
-    if (phase === 'ACTIVE' && pct >= 50) return 'bg-green-400';
-    if (phase === 'ACTIVE' && pct < 50) return 'bg-yellow-400';
-    if (phase === 'COMPLETED') return 'bg-green-400';
-    return 'bg-gray-300';
-  };
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+        <input
+          type="number" min={0} max={100} value={value}
+          onChange={e => setValue(Number(e.target.value))}
+          className="w-14 px-1.5 py-0.5 text-xs border border-brand-400 rounded focus:outline-none"
+          autoFocus
+        />
+        <span className="text-xs text-gray-500">%</span>
+        <button onClick={save} disabled={saving} className="p-0.5 text-green-600 hover:bg-green-50 rounded">
+          {saving ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
+        </button>
+        <button onClick={() => setEditing(false)} className="p-0.5 text-gray-400 hover:bg-gray-100 rounded">
+          <X size={12} />
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex items-center gap-2 group">
+      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden w-24">
+        <div className="h-full rounded-full bg-brand-500" style={{ width: `${project.completionPercentage}%` }} />
+      </div>
+      <span className="text-xs text-gray-600 w-8 text-right">{project.completionPercentage}%</span>
+      <button
+        onClick={() => { setValue(project.completionPercentage); setEditing(true); }}
+        className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-brand-600 transition-opacity"
+        title="Edit progress"
+      >
+        <Edit3 size={12} />
+      </button>
+    </div>
+  );
+}
+
+export default function ReportsPage() {
+  const { org } = useOrg();
+  const qc = useQueryClient();
+  const [sortField, setSortField] = useState<'title' | 'completionPercentage' | 'projectPhase' | 'priority'>('completionPercentage');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
+    queryKey: ['analytics-dashboard', org?.id],
+    queryFn: () => api.analytics.dashboard(org!.id),
+    enabled: !!org?.id,
+  });
+
+  const { data: projects = [], isLoading: projectsLoading } = useQuery<ApiProject[]>({
+    queryKey: ['analytics-projects', org?.id],
+    queryFn: () => api.analytics.projects(org!.id),
+    enabled: !!org?.id,
+  });
+
+  function invalidate() {
+    qc.invalidateQueries({ queryKey: ['analytics-projects', org?.id] });
+    qc.invalidateQueries({ queryKey: ['analytics-dashboard', org?.id] });
+  }
+
+  function toggleSort(field: typeof sortField) {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('desc'); }
+  }
+
+  const sorted = [...projects].sort((a, b) => {
+    const av = a[sortField]; const bv = b[sortField];
+    if (typeof av === 'number' && typeof bv === 'number') return sortDir === 'asc' ? av - bv : bv - av;
+    return sortDir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const statusDist = Object.entries(PHASE_COLORS).map(([phase, { color, label }]) => ({
+    label, count: projects.filter(p => p.projectPhase === phase).length, color,
+  })).filter(d => d.count > 0);
+
+  const maxCount = Math.max(...statusDist.map(d => d.count), 1);
+
+  const loading = statsLoading || projectsLoading;
+
+  function SortIcon({ field }: { field: typeof sortField }) {
+    if (sortField !== field) return null;
+    return sortDir === 'asc' ? <ChevronUp size={12} className="inline ml-1" /> : <ChevronDown size={12} className="inline ml-1" />;
+  }
+
+  return (
+    <div className="min-h-full">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Reports &amp; Analytics</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Project performance overview</p>
+          <h1 className="text-xl font-bold text-gray-900">Reports</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Project analytics and progress tracking</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-          <Download size={15} />
-          Export CSV
-        </button>
+        <div className="flex items-center gap-2">
+          {loading && <Loader size={16} className="animate-spin text-gray-400" />}
+          <ExportCsvButton projects={projects} />
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
-
-        {/* Card 1 — Summary Stats */}
-        <div className="grid grid-cols-4 gap-4">
+      <div className="p-6 space-y-6">
+        {/* Stats row */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: 'Total Projects',    value: totalProjects,   icon: <FolderOpen size={20} />, iconBg: 'bg-brand-100', iconColor: 'text-brand-600' },
-            { label: 'Active Projects',   value: activeProjects,  icon: <TrendingUp size={20} />, iconBg: 'bg-blue-100',   iconColor: 'text-blue-600' },
-            { label: 'Avg Completion',    value: `${avgCompletion}%`, icon: <CheckSquare size={20} />, iconBg: 'bg-green-100', iconColor: 'text-green-600' },
-            { label: 'Total Tasks',       value: totalTasks,      icon: <Users size={20} />,     iconBg: 'bg-orange-100', iconColor: 'text-orange-600' },
-          ].map(stat => (
-            <div key={stat.label} className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-4">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${stat.iconBg} ${stat.iconColor}`}>
-                {stat.icon}
+            { label: 'Total Projects',   value: stats?.totalProjects   ?? 0,       Icon: FolderOpen, iconBg: 'bg-brand-50',  iconColor: 'text-brand-500'  },
+            { label: 'Active Projects',  value: stats?.activeProjects  ?? 0,       Icon: TrendingUp, iconBg: 'bg-green-50',  iconColor: 'text-green-600'  },
+            { label: 'Avg Completion',   value: `${stats?.avgCompletion ?? 0}%`,   Icon: BarChart2,  iconBg: 'bg-amber-50',  iconColor: 'text-amber-600'  },
+            { label: 'Total Tasks',      value: stats?.totalTasks      ?? 0,       Icon: CheckSquare,iconBg: 'bg-purple-50', iconColor: 'text-purple-600' },
+          ].map(({ label, value, Icon, iconBg, iconColor }) => (
+            <div key={label} className="bg-white rounded-xl border border-gray-200 px-5 py-4 flex items-center gap-4">
+              <div className={clsx('w-11 h-11 rounded-full flex items-center justify-center shrink-0', iconBg)}>
+                <Icon size={20} className={iconColor} />
               </div>
               <div>
-                <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-                <p className="text-xs text-gray-500 mt-0.5">{stat.label}</p>
+                {loading
+                  ? <div className="h-7 w-12 bg-gray-100 animate-pulse rounded" />
+                  : <p className="text-2xl font-bold text-gray-900 leading-none">{value}</p>}
+                <p className="text-xs text-gray-500 mt-1">{label}</p>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Card 2 — Status Distribution */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="text-sm font-semibold text-gray-800 mb-4">Project Status Distribution</h2>
-          {/* Stacked bar */}
-          <div className="flex h-8 rounded-lg overflow-hidden mb-4">
-            {statusDist.map(s => (
-              <div
-                key={s.label}
-                style={{ width: `${(s.count / totalProjects) * 100}%`, backgroundColor: s.color }}
-                title={`${s.label}: ${s.count}`}
-              />
-            ))}
-          </div>
-          {/* Legend */}
-          <div className="flex flex-wrap gap-4">
-            {statusDist.map(s => (
-              <div key={s.label} className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
-                <span className="text-xs text-gray-600">{s.label}</span>
-                <span className="text-xs font-semibold text-gray-800">{s.count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Card 3 — Project Progress Table */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-800">Project Progress</h2>
-          </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Project</th>
-                <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Phase</th>
-                <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Priority</th>
-                <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-40">Progress</th>
-                <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Due Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_PROJECTS.map((p, idx) => {
-                const phase = PHASE_META[p.projectPhase];
-                const pri = PRIORITY_META[p.priority];
-                return (
-                  <tr key={p.id} className={`${idx < MOCK_PROJECTS.length - 1 ? 'border-b border-gray-50' : ''} hover:bg-gray-50 transition-colors`}>
-                    <td className="px-5 py-3 font-medium text-gray-900">{p.title}</td>
-                    <td className="px-3 py-3">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${phase.bg} ${phase.text}`}>
-                        {phase.label}
-                      </span>
-                    </td>
-                    <td className={`px-3 py-3 text-xs font-semibold ${pri.color}`}>{pri.label}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-brand-600 transition-all"
-                            style={{ width: `${p.completionPercentage}%` }}
-                          />
-                        </div>
-                        <span className="text-xs text-gray-500 w-8 text-right">{p.completionPercentage}%</span>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-gray-500 text-xs">
-                      {new Date(p.dueDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Card 4 — Completion by Priority + Project Health */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Left: Bar chart */}
+        <div className="grid grid-cols-3 gap-6">
+          {/* Status distribution chart */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-sm font-semibold text-gray-800 mb-4">Completion by Priority</h2>
-            <div className="flex items-end gap-4 h-36">
-              {priorityData.map(d => (
-                <div key={d.label} className="flex flex-col items-center flex-1 gap-1">
-                  <span className="text-xs font-semibold text-gray-700">{d.avg}%</span>
-                  <div className="w-full rounded-t-md bg-brand-600 transition-all" style={{ height: `${(d.avg / maxAvg) * 100}px` }} />
-                  <span className="text-xs text-gray-500">{d.label}</span>
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Projects by Phase</h3>
+            {loading ? (
+              <div className="space-y-3">
+                {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {statusDist.map(({ label, count, color }) => (
+                  <div key={label}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-gray-600">{label}</span>
+                      <span className="text-xs font-semibold text-gray-800">{count}</span>
+                    </div>
+                    <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{ width: `${(count / maxCount) * 100}%`, backgroundColor: color }} />
+                    </div>
+                  </div>
+                ))}
+                {statusDist.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No project data yet.</p>}
+              </div>
+            )}
+          </div>
+
+          {/* Priority breakdown */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Projects by Priority</h3>
+            {loading ? (
+              <div className="space-y-3">
+                {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(pr => {
+                  const group = projects.filter(p => p.priority === pr);
+                  const avg = group.length > 0 ? Math.round(group.reduce((s, p) => s + p.completionPercentage, 0) / group.length) : 0;
+                  return (
+                    <div key={pr}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-medium" style={{ color: PRIORITY_COLORS[pr] }}>{pr.charAt(0) + pr.slice(1).toLowerCase()}</span>
+                        <span className="text-xs text-gray-500">{group.length} projects · avg {avg}%</span>
+                      </div>
+                      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${avg}%`, backgroundColor: PRIORITY_COLORS[pr] }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Weekly hours */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Time Tracking Summary</h3>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center shrink-0">
+                  <Clock size={18} className="text-brand-600" />
                 </div>
-              ))}
+                <div>
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-xl font-bold text-gray-900">{Math.round(stats?.hoursLoggedThisWeek ?? 0)}h</p>}
+                  <p className="text-xs text-gray-500">Hours logged this week</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center shrink-0">
+                  <CheckSquare size={18} className="text-red-500" />
+                </div>
+                <div>
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-xl font-bold text-gray-900">{stats?.overdueCount ?? 0}</p>}
+                  <p className="text-xs text-gray-500">Overdue tasks</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center shrink-0">
+                  <Users size={18} className="text-orange-500" />
+                </div>
+                <div>
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-xl font-bold text-gray-900">{stats?.tasksDueToday ?? 0}</p>}
+                  <p className="text-xs text-gray-500">Tasks due today</p>
+                </div>
+              </div>
             </div>
           </div>
-
-          {/* Right: Project Health */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-sm font-semibold text-gray-800 mb-4">Project Health</h2>
-            <ul className="space-y-3">
-              {MOCK_PROJECTS.map(p => (
-                <li key={p.id} className="flex items-center gap-3">
-                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${healthDot(p.projectPhase, p.completionPercentage)}`} />
-                  <span className="flex-1 text-sm text-gray-800 truncate">{p.title}</span>
-                  <span className="text-xs text-gray-400">{p.completionPercentage}%</span>
-                </li>
-              ))}
-            </ul>
-          </div>
         </div>
 
+        {/* Projects table */}
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <h3 className="text-sm font-semibold text-gray-900">All Projects</h3>
+            <ExportCsvButton projects={projects} />
+          </div>
+
+          {projectsLoading ? (
+            <div className="flex items-center justify-center py-12 text-gray-400">
+              <Loader size={20} className="animate-spin mr-2" />
+              <span className="text-sm">Loading…</span>
+            </div>
+          ) : (
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  {[
+                    ['title', 'Project'],
+                    ['projectPhase', 'Phase'],
+                    ['priority', 'Priority'],
+                    ['completionPercentage', 'Progress'],
+                  ].map(([field, label]) => (
+                    <th
+                      key={field}
+                      className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-700 select-none"
+                      onClick={() => toggleSort(field as typeof sortField)}
+                    >
+                      {label}
+                      <SortIcon field={field as typeof sortField} />
+                    </th>
+                  ))}
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tasks</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Due Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {sorted.length === 0 && (
+                  <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">No projects found.</td></tr>
+                )}
+                {sorted.map(project => {
+                  const phase = PHASE_COLORS[project.projectPhase];
+                  const priorityColor = PRIORITY_COLORS[project.priority] ?? '#9aa0a6';
+                  return (
+                    <tr key={project.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3">
+                        <a href={`/projects/${project.id}`} className="text-sm font-medium text-gray-900 hover:text-brand-600">
+                          {project.title}
+                        </a>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: (phase?.color ?? '#9aa0a6') + '22', color: phase?.color ?? '#9aa0a6' }}>
+                          {phase?.label ?? project.projectPhase}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-xs font-semibold" style={{ color: priorityColor }}>{project.priority}</span>
+                      </td>
+                      <td className="px-4 py-3 min-w-[160px]">
+                        <ProgressEditor project={project} onUpdated={invalidate} />
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">{project._count?.projectTasks ?? 0}</td>
+                      <td className="px-4 py-3 text-xs text-gray-400">
+                        {project.dueDate ? new Date(project.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
     </div>
   );
