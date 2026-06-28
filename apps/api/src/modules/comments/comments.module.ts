@@ -2,6 +2,8 @@ import { Body, Controller, Delete, Get, Injectable, Module, Param, Post, Query }
 import { NotFoundException } from '@nestjs/common';
 import { IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EventService } from '../audit-events/event.service';
+import { EVENTS } from '../../common/events/canonical-events';
 
 class CreateCommentDto {
   @IsString()
@@ -20,7 +22,10 @@ class CreateCommentDto {
 
 @Injectable()
 export class CommentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventService,
+  ) {}
 
   list(entityType: string, entityId: string) {
     return this.prisma.comment.findMany({
@@ -32,8 +37,8 @@ export class CommentsService {
     });
   }
 
-  create(dto: CreateCommentDto) {
-    return this.prisma.comment.create({
+  async create(dto: CreateCommentDto) {
+    const comment = await this.prisma.comment.create({
       data: {
         entityType: dto.entityType,
         entityId: dto.entityId,
@@ -44,6 +49,18 @@ export class CommentsService {
         user: { select: { id: true, firstName: true, lastName: true } },
       },
     });
+    await this.events.emit({
+      action: EVENTS.COMMENT_CREATED,
+      entityType: dto.entityType,
+      entityId: dto.entityId,
+      actorId: dto.userId,
+      metadata: {
+        projectId: dto.entityType === 'PROJECT' ? dto.entityId : undefined,
+        commentId: comment.id,
+        snippet: dto.content.slice(0, 140),
+      },
+    });
+    return comment;
   }
 
   async softDelete(id: string) {

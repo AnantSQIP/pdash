@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { api, type ApiTask, type ApiProject, type DashboardStats } from '@/lib/api';
+import { api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { progressColor } from '@/lib/progress';
 
@@ -90,6 +90,14 @@ export default function HomeDashboardPage() {
     placeholderData: keepPreviousData,
   });
 
+  const { data: myPerf, isLoading: perfLoading } = useQuery<UserPerformance>({
+    queryKey: ['perf-me', currentUser?.id],
+    queryFn: () => api.performance.me(),
+    enabled: !!currentUser?.id,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+
   const visibleTasks = filterTasks(myTasks, activeTab, today);
   const myProjects = [...projects].slice(0, 4);
   // Show stat-card skeletons immediately — don't gate on org; use statsLoading directly
@@ -121,6 +129,36 @@ export default function HomeDashboardPage() {
         <StatCard label="Active Projects" value={stats?.activeProjects  ?? 0}  Icon={Activity}     iconBg="bg-green-100" iconColor="text-green-600"  loading={statsSkeletonVisible} />
         <StatCard label="Avg Completion"  value={`${stats?.avgCompletion ?? 0}%`} Icon={TrendingUp} iconBg="bg-amber-50"  iconColor="text-amber-600"  loading={statsSkeletonVisible} />
         <StatCard label="Total Tasks"     value={stats?.totalTasks     ?? 0}  Icon={CheckSquare}  iconBg="bg-brand-50"  iconColor="text-brand-600"  loading={statsSkeletonVisible} />
+      </div>
+
+      {/* My Performance snapshot */}
+      <div className="px-6 pt-6">
+        <div className="bg-white rounded-xl border border-gray-200">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
+            <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <TrendingUp size={16} className="text-brand-600" /> My Performance
+            </h2>
+            <Link href="/performance" className="text-sm text-brand-600 hover:underline">View details →</Link>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-gray-100">
+            {[
+              { label: 'Completion rate',  value: `${myPerf?.kpis.completionRate ?? 0}%`,          Icon: CheckCircle,   color: 'text-green-600' },
+              { label: 'On-time rate',     value: `${myPerf?.kpis.onTimeCompletionRate ?? 0}%`,    Icon: Clock,         color: 'text-amber-600' },
+              { label: 'Hours logged',     value: `${myPerf?.kpis.hoursLogged ?? 0}h`,             Icon: TrendingUp,    color: 'text-brand-600' },
+              { label: 'Tasks overdue',    value: myPerf?.kpis.tasksOverdue ?? 0,                  Icon: AlertTriangle, color: 'text-red-500'   },
+            ].map(({ label, value, Icon, color }) => (
+              <div key={label} className="px-5 py-4 flex items-center gap-3">
+                <Icon size={18} className={clsx(color, 'shrink-0')} />
+                <div>
+                  {(orgLoading || perfLoading) && !myPerf
+                    ? <div className="h-6 w-12 bg-gray-100 animate-pulse rounded" />
+                    : <p className="text-xl font-bold text-gray-900 leading-none">{value}</p>}
+                  <p className="text-xs text-gray-500 mt-1">{label}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Main grid */}

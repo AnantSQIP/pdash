@@ -1,10 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EventService } from '../audit-events/event.service';
+import { EVENTS } from '../../common/events/canonical-events';
 import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateTaskDto } from './dto';
 
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventService,
+  ) {}
 
   /**
    * Create a task and link it to a project via ProjectTask.
@@ -23,8 +28,8 @@ export class TasksService {
       where: { taskListId: dto.taskListId },
     });
 
-    return this.prisma.$transaction(async (tx) => {
-      const task = await tx.task.create({
+    const task = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.task.create({
         data: {
           title: dto.title,
           description: dto.description,
@@ -44,15 +49,23 @@ export class TasksService {
       await tx.projectTask.create({
         data: {
           projectId: dto.projectId,
-          taskId: task.id,
+          taskId: created.id,
           taskListId: dto.taskListId,
           milestoneId: dto.milestoneId,
           sequence,
         },
       });
 
-      return task;
+      return created;
     });
+
+    await this.events.emit({
+      action: EVENTS.TASK_CREATED,
+      entityType: 'TASK',
+      entityId: task.id,
+      metadata: { projectId: dto.projectId, title: task.title },
+    });
+    return task;
   }
 
   list(projectId: string, opts: { taskListId?: string; milestoneId?: string } = {}) {
@@ -133,8 +146,8 @@ export class TasksService {
     });
     if (!status) throw new NotFoundException(`WorkflowStatus ${dto.statusId} not found`);
 
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.task.update({
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.task.update({
         where: { id },
         data: {
           currentWorkflowStatusId: status.id,
@@ -150,8 +163,19 @@ export class TasksService {
         });
       }
 
-      return updated;
+      return u;
     });
+
+    const projectId = (task as any).projectTasks?.[0]?.projectId;
+    await this.events.emit({
+      action: EVENTS.TASK_STATUS_CHANGED,
+      entityType: 'TASK',
+      entityId: id,
+      oldValue: { status: (task as any).currentStatus?.name ?? null },
+      newValue: { status: status.name, type: status.type },
+      metadata: { projectId, title: task.title },
+    });
+    return updated;
   }
 
   async setAssignees(id: string, dto: SetAssigneesDto) {
@@ -167,11 +191,18 @@ export class TasksService {
   }
 
   async softDelete(id: string) {
-    await this.get(id);
-    return this.prisma.task.update({
+    const task = await this.get(id);
+    const result = await this.prisma.task.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
+    await this.events.emit({
+      action: EVENTS.TASK_DELETED,
+      entityType: 'TASK',
+      entityId: id,
+      metadata: { projectId: (task as any).projectTasks?.[0]?.projectId, title: task.title },
+    });
+    return result;
   }
 
   // ── Subtask methods (flat, one level only) ──────────────────

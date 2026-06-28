@@ -1,13 +1,26 @@
 // Typed API client for the pdash NestJS backend.
-// Base URL is configurable via NEXT_PUBLIC_API_URL (defaults to localhost:4000).
+// Requests go to the same origin under /api/v1 (Next.js rewrites proxy them to the
+// API) so the httpOnly auth cookies are first-party. Identity is carried by the
+// cookie — no x-actor-id header. Override the base with NEXT_PUBLIC_API_URL.
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api/v1';
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api/v1';
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+async function req<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...init?.headers,
+    },
     ...init,
   });
+
+  // Access token expired → attempt one silent refresh, then retry the request once.
+  if (res.status === 401 && !retried && !path.startsWith('/auth/')) {
+    const r = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' });
+    if (r.ok) return req<T>(path, init, true);
+  }
+
   if (!res.ok) {
     let message = res.statusText;
     try { message = (await res.json()).message ?? message; } catch { /* swallow */ }
@@ -23,6 +36,11 @@ export type OrgSummary = { id: string; name: string; code: string; status: strin
 export type UserSummary = {
   id: string; firstName: string; lastName: string; email: string;
   designation?: string; status: string; profilePhoto?: string;
+};
+
+export type AuthUser = {
+  id: string; firstName: string; lastName: string; email: string;
+  designation?: string | null; status: string; organizationId: string; mustResetPassword: boolean;
 };
 
 export type WorkflowStatus = {
@@ -98,21 +116,157 @@ export type Issue = {
   assignee?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> | null;
 };
 
+export type ActivityItem = {
+  id: string;
+  actorId: string;
+  entityType: string;
+  entityId: string;
+  action: string;
+  metadata?: Record<string, any> | null;
+  createdAt: string;
+  actor?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> | null;
+};
+
 export type DashboardStats = {
   totalProjects: number; activeProjects: number; avgCompletion: number;
   totalTasks: number; overdueCount: number; tasksDueToday: number;
   hoursLoggedThisWeek: number;
 };
 
+// ─── RBAC types ─────────────────────────────────────────────────────────────
+export type EffectivePermissions = {
+  userId: string; isSuperAdmin: boolean; codes: string[]; sources: Record<string, string>;
+};
+export type PermissionDef = { id: string; code: string; name: string; description?: string };
+export type RoleSummary = {
+  id: string; name: string; description?: string;
+  memberCount: number; permissionIds: string[]; permissionCodes: string[];
+};
+export type GroupSummary = {
+  id: string; name: string; description?: string; isSystemGroup: boolean;
+  memberCount: number; permissionIds: string[];
+};
+export type AuditLogItem = {
+  id: string; userId: string; organizationId?: string | null; entityType: string; entityId: string;
+  action: string; oldValue?: any; newValue?: any; metadata?: any; ipAddress?: string | null; timestamp: string;
+  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> | null;
+};
+
+// ─── Performance types ───────────────────────────────────────────────────────
+export type PerformanceKpis = {
+  tasksAssigned: number; tasksCompleted: number; tasksOpen: number; tasksOverdue: number;
+  onTimeCompletionRate: number; completionRate: number;
+  hoursLogged: number; billableHours: number; billablePct: number;
+  issuesReported: number; issuesResolved: number;
+  commentsPosted: number; activityVolume: number;
+};
+export type PerformanceTrendPoint = { date: string; completed: number; hours: number; activity: number };
+export type PerformancePrevious = {
+  hoursLogged: number; billableHours: number; tasksCompleted: number;
+  activityVolume: number; issuesResolved: number; commentsPosted: number; onTimeCompletionRate: number;
+};
+export type UserPerformance = {
+  userId: string; name: string; designation?: string;
+  periodDays: number;
+  kpis: PerformanceKpis;
+  previous: PerformancePrevious;
+  cycleTimeDays: number | null;
+  periodTasksCompleted: number;
+  trend: PerformanceTrendPoint[];
+};
+export type HeatmapDay = { date: string; value: number; level: number };
+export type LeaderboardRow = {
+  userId: string; name: string; designation?: string; department?: string;
+  tasksCompleted: number; hoursLogged: number; onTimeRate: number; activityVolume: number; score: number;
+};
+export type OrgPerformance = {
+  periodDays: number;
+  totals: { users: number; tasksCompleted: number; hoursLogged: number; activeProjects: number; avgOnTimeRate: number };
+  previousTotals: { tasksCompleted: number; hoursLogged: number };
+  leaderboard: LeaderboardRow[];
+};
+
+export type NameValue = { name: string; value: number; color?: string };
+export type UserBreakdowns = {
+  userId: string;
+  tasksByStatus: NameValue[];
+  tasksByPriority: NameValue[];
+  issuesBySeverity: NameValue[];
+  hoursByProject: { projectId: string; name: string; hours: number; billable: number }[];
+  estimatedVsActual: { taskId: string; name: string; target: number; actual: number }[];
+};
+export type OrgBreakdowns = {
+  hoursByDesignation: NameValue[];
+  hoursByDepartment: NameValue[];
+  tasksByStatus: NameValue[];
+  issuesBySeverity: NameValue[];
+  projectProgress: { projectId: string; name: string; completionPercentage: number; phase: string }[];
+  capacityVsLogged: { name: string; actual: number; target: number }[];
+};
+export type OrgTrendPoint = { date: string; hours: number; billableHours: number; completed: number; activity: number };
+export type OrgTrend = {
+  totals: OrgTrendPoint[];
+  byDepartment: Record<string, number | string>[];
+  departments: string[];
+};
+export type DepartmentSummary = { id: string; name: string; description?: string; memberCount?: number };
+
+// ─── Attendance & Leave types ────────────────────────────────────────────────
+export type Attendance = {
+  id: string; userId: string; organizationId?: string; date: string;
+  checkIn?: string | null; checkOut?: string | null; totalHours?: number | null;
+  status: string; note?: string | null; isRegularized: boolean;
+};
+export type AttendanceDay = {
+  date: string; status: string; checkIn?: string | null; checkOut?: string | null;
+  totalHours?: number | null; isRegularized: boolean; note?: string | null;
+};
+export type AttendanceMonth = {
+  userId: string; year: number; month: number;
+  days: AttendanceDay[];
+  summary: { present: number; absent: number; onLeave: number; holiday: number; weekend: number; workingDays: number; attendanceRate: number; hoursLogged: number };
+};
+export type OrgAttendanceSummary = {
+  from: string; to: string;
+  rows: { userId: string; name: string; designation?: string; present: number; absent: number; onLeave: number; holiday: number; hoursLogged: number; attendanceRate: number }[];
+};
+export type LeaveRequestItem = {
+  id: string; userId: string; organizationId?: string; leaveType: string;
+  startDate: string; endDate: string; numDays: number; reason?: string | null;
+  status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
+  createdAt: string; user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
+};
+export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
+export type LeaveBalance = { code: string; name: string; quota: number; used: number; remaining: number; colorHex: string };
+export type Holiday = { id: string; organizationId: string; name: string; date: string; type: string; recurring: boolean };
+
 // ─── API Methods ──────────────────────────────────────────────────────────────
 
 export const api = {
+  auth: {
+    login: (email: string, password: string) =>
+      req<{ user: AuthUser }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    logout: () => req<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+    me: () => req<AuthUser>('/auth/me'),
+    changePassword: (currentPassword: string, newPassword: string) =>
+      req<{ ok: boolean }>('/auth/password/change', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+  },
+
   orgs: {
     list: () => req<OrgSummary[]>('/organizations'),
   },
 
   users: {
     list: (orgId: string) => req<UserSummary[]>(`/users?organizationId=${encodeURIComponent(orgId)}`),
+    create: (data: { organizationId: string; firstName: string; lastName?: string; email: string; designation?: string; phone?: string; roleIds?: string[] }) =>
+      req<UserSummary>('/users', { method: 'POST', body: JSON.stringify(data) }),
+    setRoles: (id: string, roleIds: string[]) =>
+      req<{ ok: boolean }>(`/users/${id}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds }) }),
+    setPermissions: (id: string, permissionIds: string[]) =>
+      req<{ ok: boolean }>(`/users/${id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissionIds }) }),
+    setOverrides: (id: string, overrides: { permissionId: string; effect: string }[]) =>
+      req<{ ok: boolean }>(`/users/${id}/overrides`, { method: 'PUT', body: JSON.stringify({ overrides }) }),
+    effectivePermissions: (id: string) => req<EffectivePermissions>(`/users/${id}/effective-permissions`),
     get: (id: string) => req<UserSummary>(`/users/${id}`),
     update: (id: string, data: Partial<Pick<UserSummary, 'firstName' | 'lastName' | 'designation' | 'status'>>) =>
       req<UserSummary>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -253,5 +407,109 @@ export const api = {
       if (to) params.set('to', to);
       return req<{ totalHours: number; billableHours: number; byUser: any[]; entries: Timesheet[] }>(`/analytics/timesheets?${params}`);
     },
+  },
+
+  activity: {
+    list: (params: { projectId?: string; entityType?: string; entityId?: string; organizationId?: string; limit?: number }) => {
+      const p = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => { if (v != null) p.set(k, String(v)); });
+      return req<ActivityItem[]>(`/activity?${p.toString()}`);
+    },
+  },
+
+  me: {
+    effectivePermissions: () => req<EffectivePermissions>('/me/effective-permissions'),
+  },
+
+  permissions: {
+    list: () => req<PermissionDef[]>('/permissions'),
+    create: (data: { code: string; name: string; description?: string }) =>
+      req<PermissionDef>('/permissions', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      req<PermissionDef>(`/permissions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => req<{ ok: boolean }>(`/permissions/${id}`, { method: 'DELETE' }),
+  },
+
+  roles: {
+    list: (orgId: string) => req<RoleSummary[]>(`/roles?organizationId=${encodeURIComponent(orgId)}`),
+    create: (data: { organizationId: string; name: string; description?: string; permissionIds?: string[] }) =>
+      req<{ id: string }>('/roles', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      req<{ id: string }>(`/roles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => req<{ ok: boolean }>(`/roles/${id}`, { method: 'DELETE' }),
+    setPermissions: (id: string, permissionIds: string[]) =>
+      req<{ ok: boolean }>(`/roles/${id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissionIds }) }),
+  },
+
+  groups: {
+    list: (orgId: string) => req<GroupSummary[]>(`/permission-groups?organizationId=${encodeURIComponent(orgId)}`),
+    create: (data: { organizationId: string; name: string; description?: string }) =>
+      req<{ id: string }>('/permission-groups', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      req<{ id: string }>(`/permission-groups/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => req<{ ok: boolean }>(`/permission-groups/${id}`, { method: 'DELETE' }),
+    setPermissions: (id: string, permissionIds: string[]) =>
+      req<{ ok: boolean }>(`/permission-groups/${id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissionIds }) }),
+    setMembers: (id: string, userIds: string[]) =>
+      req<{ ok: boolean }>(`/permission-groups/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
+  },
+
+  auditLogs: {
+    list: (params: { organizationId?: string; entityType?: string; action?: string; userId?: string; limit?: number; cursor?: string }) => {
+      const p = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => { if (v != null) p.set(k, String(v)); });
+      return req<{ items: AuditLogItem[]; nextCursor: string | null }>(`/audit-logs?${p.toString()}`);
+    },
+  },
+
+  performance: {
+    me: (days = 30) => req<UserPerformance>(`/performance/me?days=${days}`),
+    user: (userId: string, days = 30) => req<UserPerformance>(`/performance/users/${userId}?days=${days}`),
+    breakdowns: (userId: string, days = 30) => req<UserBreakdowns>(`/performance/users/${userId}/breakdowns?days=${days}`),
+    org: (orgId: string, days = 30) => req<OrgPerformance>(`/performance/org?organizationId=${encodeURIComponent(orgId)}&days=${days}`),
+    orgBreakdowns: (orgId: string, days = 30) => req<OrgBreakdowns>(`/performance/org/breakdowns?organizationId=${encodeURIComponent(orgId)}&days=${days}`),
+    orgTrend: (orgId: string, days = 30) => req<OrgTrend>(`/performance/org/trend?organizationId=${encodeURIComponent(orgId)}&days=${days}`),
+    heatmap: (userId: string, days = 365) => req<{ userId: string; days: HeatmapDay[] }>(`/performance/heatmap/${userId}?days=${days}`),
+    orgHeatmap: (orgId: string, days = 365) => req<{ organizationId: string; days: HeatmapDay[] }>(`/performance/org-heatmap?organizationId=${encodeURIComponent(orgId)}&days=${days}`),
+    rebuild: (orgId: string) => req<{ ok: boolean; days: number }>(`/performance/snapshots/rebuild?organizationId=${encodeURIComponent(orgId)}`, { method: 'POST' }),
+  },
+
+  departments: {
+    list: (orgId: string) => req<DepartmentSummary[]>(`/departments?organizationId=${encodeURIComponent(orgId)}`),
+  },
+
+  attendance: {
+    today: () => req<Attendance | null>('/attendance/me/today'),
+    myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
+    userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
+    punch: () => req<Attendance>('/attendance/punch', { method: 'POST' }),
+    regularize: (id: string, reason: string, newStatus?: string) =>
+      req<Attendance>(`/attendance/${id}/regularize`, { method: 'POST', body: JSON.stringify({ reason, newStatus }) }),
+    regularizeDay: (data: { date: string; reason: string; status?: string; checkIn?: string; checkOut?: string }) =>
+      req<Attendance>('/attendance/me/regularize', { method: 'POST', body: JSON.stringify(data) }),
+    mark: (data: { userId: string; date: string; status: string; note?: string }) =>
+      req<Attendance>('/attendance/mark', { method: 'POST', body: JSON.stringify(data) }),
+    orgSummary: (orgId: string, from: string, to: string) =>
+      req<OrgAttendanceSummary>(`/attendance/org/summary?organizationId=${encodeURIComponent(orgId)}&from=${from}&to=${to}`),
+  },
+
+  leave: {
+    myRequests: (status?: string) => req<LeaveRequestItem[]>(`/leave/requests/me${status ? `?status=${status}` : ''}`),
+    orgRequests: (orgId: string, status?: string) => {
+      const p = new URLSearchParams({ organizationId: orgId });
+      if (status) p.set('status', status);
+      return req<LeaveRequestItem[]>(`/leave/requests/org?${p}`);
+    },
+    create: (data: { leaveType: string; startDate: string; endDate: string; reason?: string }) =>
+      req<LeaveRequestItem>('/leave/requests', { method: 'POST', body: JSON.stringify(data) }),
+    approve: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    reject: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    cancel: (id: string) => req<LeaveRequestItem>(`/leave/requests/${id}/cancel`, { method: 'POST' }),
+    balances: () => req<LeaveBalance[]>('/leave/balance/me'),
+    types: (orgId: string) => req<LeaveType[]>(`/leave/types?organizationId=${encodeURIComponent(orgId)}`),
+    holidays: (orgId: string, year?: number) => req<Holiday[]>(`/leave/holidays?organizationId=${encodeURIComponent(orgId)}${year ? `&year=${year}` : ''}`),
+    createHoliday: (data: { organizationId: string; name: string; date: string; type?: string; recurring?: boolean }) =>
+      req<Holiday>('/leave/holidays', { method: 'POST', body: JSON.stringify(data) }),
+    removeHoliday: (id: string) => req<void>(`/leave/holidays/${id}`, { method: 'DELETE' }),
   },
 };

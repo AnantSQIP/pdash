@@ -39,6 +39,8 @@ model Organization {
   integrations     Integration[]
   calendarEvents   CalendarEvent[]
   channels         Channel[]
+  holidays         Holiday[]
+  leaveTypes       LeaveType[]
 
   @@map("organization")
 }
@@ -59,11 +61,21 @@ model User {
   profilePhoto   String?
   joiningDate    DateTime?
   status         String    @default("ACTIVE")
+  // ── Auth / credentials ──
+  passwordHash      String?
+  passwordChangedAt DateTime?
+  mustResetPassword Boolean   @default(false)
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?
+  securityVersion   Int       @default(1) // bump to invalidate all access tokens for this user
+  lastLoginAt       DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
   organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  refreshTokens          RefreshToken[]
+  authTokens             AuthToken[]
   managedBy              UserManager[]           @relation("UserManagers")
   manages                UserManager[]           @relation("ManagerUsers")
   departmentMemberships  DepartmentMember[]
@@ -88,10 +100,48 @@ model User {
   messages               Message[]
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
+  metricsDaily           UserMetricDaily[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
   @@map("user")
+}
+
+// One row per active login/device. Stores only the HASH of the refresh token.
+// Rotation chains via replacedById enable reuse-detection (stolen-token containment).
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String
+  tokenHash    String    @unique // sha-256 of the opaque refresh token
+  familyId     String // shared across one rotation chain
+  replacedById String?
+  userAgent    String?
+  ip           String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_token")
+}
+
+// Single-use, hashed tokens for password reset and user invites.
+model AuthToken {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // PASSWORD_RESET | INVITE
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_token")
 }
 
 model UserManager {
@@ -676,33 +726,87 @@ model ApprovalAction {
 // ═══════════════════════════════════════════════════════════════
 
 model Attendance {
-  id         String    @id @default(cuid())
-  userId     String
-  date       DateTime
-  checkIn    DateTime?
-  checkOut   DateTime?
-  totalHours Float?
-  status     String    @default("PRESENT")
+  id               String    @id @default(cuid())
+  userId           String
+  organizationId   String?
+  date             DateTime
+  checkIn          DateTime?
+  checkOut         DateTime?
+  totalHours       Float?
+  // PRESENT | ABSENT | HALF_DAY | ON_LEAVE | HOLIDAY | WEEKEND | LATE
+  status           String    @default("PRESENT")
+  note             String?
+  // Regularisation (correcting a missed / incorrect mark)
+  isRegularized    Boolean   @default(false)
+  regularizeReason String?
+  regularizedBy    String?
+  regularizedAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, date])
   @@index([userId])
+  @@index([organizationId, date])
   @@map("attendance")
 }
 
 model LeaveRequest {
-  id        String   @id @default(cuid())
-  userId    String
-  leaveType String
-  startDate DateTime
-  endDate   DateTime
-  reason    String?
-  status    String   @default("DRAFT")
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  leaveType      String // LeaveType.code
+  startDate      DateTime
+  endDate        DateTime
+  numDays        Float     @default(1)
+  reason         String?
+  // DRAFT | PENDING | APPROVED | REJECTED | CANCELLED
+  status         String    @default("PENDING")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([organizationId, status])
   @@map("leave_request")
+}
+
+model LeaveType {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  annualQuota    Int      @default(12)
+  colorHex       String   @default("#3d8de2")
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("leave_type")
+}
+
+model Holiday {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  date           DateTime
+  // PUBLIC | OPTIONAL | COMPANY
+  type           String   @default("PUBLIC")
+  recurring      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, date])
+  @@index([organizationId])
+  @@map("holiday")
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -822,17 +926,19 @@ model SearchIndex {
 // ═══════════════════════════════════════════════════════════════
 
 model AnalyticsEvent {
-  id           String   @id @default(cuid())
-  eventType    String
-  eventVersion String   @default("v1")
-  entityType   String
-  entityId     String
-  userId       String
-  payload      Json
-  createdAt    DateTime @default(now())
+  id             String   @id @default(cuid())
+  eventType      String
+  eventVersion   String   @default("v1")
+  entityType     String
+  entityId       String
+  userId         String
+  organizationId String?
+  payload        Json
+  createdAt      DateTime @default(now())
 
   @@index([eventType])
   @@index([entityType, entityId])
+  @@index([organizationId, eventType, createdAt])
   @@map("analytics_event")
 }
 
@@ -846,6 +952,33 @@ model AnalyticsSnapshot {
 
   @@index([scopeType, scopeId])
   @@map("analytics_snapshot")
+}
+
+// Per-user daily performance snapshot (powers heatmap, trends, leaderboards).
+model UserMetricDaily {
+  id                  String   @id @default(cuid())
+  userId              String
+  organizationId      String?
+  date                DateTime // UTC day boundary (00:00:00Z)
+  tasksCompleted      Int      @default(0)
+  tasksCompletedOnTime Int     @default(0)
+  tasksOverdue        Int      @default(0)
+  hoursLogged         Float    @default(0)
+  billableHours       Float    @default(0)
+  issuesResolved      Int      @default(0)
+  commentsPosted      Int      @default(0)
+  approvalActions     Int      @default(0)
+  activityVolume      Int      @default(0)
+  present             Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([organizationId, date])
+  @@index([userId, date])
+  @@map("user_metric_daily")
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -944,17 +1077,19 @@ model AutomationRule {
 // ═══════════════════════════════════════════════════════════════
 
 model Activity {
-  id         String   @id @default(cuid())
-  actorId    String
-  entityType String
-  entityId   String
-  action     String
-  metadata   Json?
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  actorId        String
+  organizationId String?
+  entityType     String
+  entityId       String
+  action         String
+  metadata       Json?
+  createdAt      DateTime @default(now())
 
   actor User @relation("ActivityActor", fields: [actorId], references: [id], onDelete: Cascade)
 
   @@index([entityType, entityId])
+  @@index([organizationId, createdAt])
   @@map("activity")
 }
 
@@ -984,19 +1119,23 @@ model Notification {
 // ═══════════════════════════════════════════════════════════════
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  userId     String
-  entityType String
-  entityId   String
-  action     String
-  oldValue   Json?
-  newValue   Json?
-  ipAddress  String?
-  timestamp  DateTime @default(now())
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String?
+  entityType     String
+  entityId       String
+  action         String
+  oldValue       Json?
+  newValue       Json?
+  metadata       Json?
+  ipAddress      String?
+  timestamp      DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([entityType, entityId])
+  @@index([organizationId, timestamp])
+  @@index([userId, timestamp])
   @@map("audit_log")
 }
 

@@ -1,10 +1,22 @@
 // SquarkIP seed — full reset. Wipes all data and rebuilds an IP/patent-services workspace.
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
+import { hash as argonHash } from '@node-rs/argon2';
+import { PERMISSIONS, ROLE_PRESETS, ALL_PERMISSION_CODES } from './permissions-catalog';
 
 const prisma = new PrismaClient();
 
 async function main() {
   console.log('Wiping existing data...');
+  // Event/audit + metrics first (AuditLog.user is onDelete: Restrict, so it MUST go before users)
+  await prisma.userMetricDaily.deleteMany();
+  await prisma.auditLog.deleteMany();
+  await prisma.activity.deleteMany();
+  await prisma.analyticsEvent.deleteMany();
+  await prisma.analyticsSnapshot.deleteMany();
+  await prisma.attendance.deleteMany();
+  await prisma.leaveRequest.deleteMany();
+  await prisma.holiday.deleteMany();
+  await prisma.leaveType.deleteMany();
   await prisma.calendarEventAttendee.deleteMany();
   await prisma.calendarEvent.deleteMany();
   await prisma.message.deleteMany();
@@ -27,8 +39,18 @@ async function main() {
   await prisma.workflow.deleteMany();
   await prisma.departmentMember.deleteMany();
   await prisma.department.deleteMany();
+  // RBAC join tables before roles/permissions/users
+  await prisma.permissionOverride.deleteMany();
+  await prisma.permissionGroupPermission.deleteMany();
+  await prisma.permissionGroupMember.deleteMany();
+  await prisma.permissionGroup.deleteMany();
+  await prisma.userPermission.deleteMany();
+  await prisma.rolePermission.deleteMany();
+  await prisma.permission.deleteMany();
   await prisma.userRole.deleteMany();
   await prisma.role.deleteMany();
+  await prisma.refreshToken.deleteMany();
+  await prisma.authToken.deleteMany();
   await prisma.user.deleteMany();
   await prisma.organization.deleteMany();
   console.log('Done. Building SquarkIP workspace...');
@@ -42,10 +64,45 @@ async function main() {
   const superAdminRole = await prisma.role.create({ data: { id: 'role-superadmin', organizationId: org.id, name: 'Super Admin', description: 'Full system access' } });
   const adminRole       = await prisma.role.create({ data: { id: 'role-admin',      organizationId: org.id, name: 'Admin',       description: 'Administrative access' } });
   const managerRole     = await prisma.role.create({ data: { id: 'role-manager',    organizationId: org.id, name: 'Manager',     description: 'Engagement manager' } });
+  const seniorConsultantRole = await prisma.role.create({ data: { id: 'role-senior-consultant', organizationId: org.id, name: 'Senior Consultant', description: 'Senior delivery lead — full project & task control, org-wide visibility' } });
+  const consultantRole  = await prisma.role.create({ data: { id: 'role-consultant', organizationId: org.id, name: 'Consultant',  description: 'Senior contributor — can assign tasks and shape milestones/issues' } });
+  const hrRole          = await prisma.role.create({ data: { id: 'role-hr',         organizationId: org.id, name: 'HR',          description: 'People operations — attendance, leave, holidays, user & department management' } });
   const employeeRole    = await prisma.role.create({ data: { id: 'role-employee',   organizationId: org.id, name: 'Employee',    description: 'Team member' } });
+
+  // ─── Permission catalog + Role→Permission presets ───────────────────────────
+  await prisma.permission.createMany({
+    data: PERMISSIONS.map(p => ({ code: p.code, name: p.name, description: p.description })),
+  });
+  const allPerms = await prisma.permission.findMany();
+  const permIdByCode = new Map(allPerms.map(p => [p.code, p.id]));
+
+  const roleByName: Record<string, string> = {
+    'Super Admin': superAdminRole.id,
+    Admin: adminRole.id,
+    Manager: managerRole.id,
+    'Senior Consultant': seniorConsultantRole.id,
+    Consultant: consultantRole.id,
+    HR: hrRole.id,
+    Employee: employeeRole.id,
+  };
+  const rolePermRows: { roleId: string; permissionId: string }[] = [];
+  for (const [roleName, roleId] of Object.entries(roleByName)) {
+    const preset = ROLE_PRESETS[roleName];
+    const codes = preset === '*' ? ALL_PERMISSION_CODES : preset;
+    for (const c of codes) {
+      const pid = permIdByCode.get(c);
+      if (pid) rolePermRows.push({ roleId, permissionId: pid });
+    }
+  }
+  await prisma.rolePermission.createMany({ data: rolePermRows, skipDuplicates: true });
+  console.log(`✓ Permissions: ${allPerms.length} codes, ${rolePermRows.length} role mappings`);
 
   // ─── Users (real SquarkIP team) ─────────────────────────────────────────────
   // Email is firstname@squarkip.com (first name only, lowercased).
+  // Every seeded user shares a dev password (argon2id-hashed) so you can sign in
+  // as anyone locally. Override via SEED_DEFAULT_PASSWORD; in prod, real users set
+  // their own password via the invite/reset flow.
+  const devHash = await argonHash(process.env.SEED_DEFAULT_PASSWORD ?? 'sqip@1234');
   async function makeUser(firstName: string, lastName: string, designation: string, roleId: string) {
     return prisma.user.create({
       data: {
@@ -55,6 +112,8 @@ async function main() {
         email: `${firstName.toLowerCase()}@squarkip.com`,
         designation,
         status: 'ACTIVE',
+        passwordHash: devHash,
+        passwordChangedAt: new Date(),
         userRoles: { create: { roleId } },
       },
     });
@@ -63,18 +122,18 @@ async function main() {
   const mohit     = await makeUser('Mohit',     'Kalra',        'VP',                        superAdminRole.id);
   const yash      = await makeUser('Yash',      'Bhargava',     'VP',                        superAdminRole.id);
   const arjun     = await makeUser('Arjun',     '',             'Research Associate',        employeeRole.id);
-  const vijay     = await makeUser('Vijay',     'Mishra',       'Consultant',                employeeRole.id);
-  const basant    = await makeUser('Basant',    'Goyal',        'Senior Research Associate', employeeRole.id);
+  const vijay     = await makeUser('Vijay',     'Mishra',       'Consultant',                consultantRole.id);
+  const basant    = await makeUser('Basant',    'Goyal',        'Senior Consultant',         seniorConsultantRole.id);
   const khushi    = await makeUser('Khushi',    'Gupta',        'Senior Research Associate', employeeRole.id);
-  const meetu     = await makeUser('Meetu',     'Singh',        'Consultant',                employeeRole.id);
-  const nehu      = await makeUser('Neha',      'Shukla',       'Consultant',                employeeRole.id);
-  const amrit     = await makeUser('Amritpal',  'Kaur',         'Senior Research Associate', employeeRole.id);
+  const meetu     = await makeUser('Meetu',     'Singh',        'Consultant',                consultantRole.id);
+  const nehu      = await makeUser('Neha',      'Shukla',       'Consultant',                consultantRole.id);
+  const amrit     = await makeUser('Amritpal',  'Kaur',         'Senior Consultant',         seniorConsultantRole.id);
   const nitin     = await makeUser('Nitin',     'Goel',         'Manager',                   managerRole.id);
   const divyanshu = await makeUser('Divyanshu', '',             'Testing and QA',            employeeRole.id);
   const ankit     = await makeUser('Ankit',     'Kumar Verma',  'Product Development',       managerRole.id);
   const anant     = await makeUser('Anant',     'Gupta',        'Product Development',       managerRole.id);
-  const riya      = await makeUser('Riya',      'Bhola',        'HR',                        employeeRole.id);
-  const shaveta   = await makeUser('Shaveta',   'Sharma',       'HR',                        employeeRole.id);
+  const riya      = await makeUser('Riya',      'Bhola',        'HR',                        hrRole.id);
+  const shaveta   = await makeUser('Shaveta',   'Sharma',       'HR',                        hrRole.id);
   const ketan     = await makeUser('Ketan',     'Dagar',        'Senior Research Associate', employeeRole.id);
 
   // Role aliases used throughout the data below.
@@ -477,6 +536,128 @@ async function main() {
     { organizationId: org.id, title: 'FTO Opinion Target',               type: 'MILESTONE', color: '#9334e6', startDate: new Date(Y,JUL,31),                                         allDay: true,  createdBy: bob.id   },
   ]});
   console.log('✓ 15 calendar events (June + July)');
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ATTENDANCE & LEAVE — leave types, holidays, requests, recent punch records
+  // ══════════════════════════════════════════════════════════════════════════
+  await prisma.leaveType.createMany({ data: [
+    { organizationId: org.id, name: 'Casual Leave',   code: 'CL',  annualQuota: 12, colorHex: '#3d8de2' },
+    { organizationId: org.id, name: 'Sick Leave',     code: 'SL',  annualQuota: 8,  colorHex: '#ef4444' },
+    { organizationId: org.id, name: 'Earned Leave',   code: 'EL',  annualQuota: 15, colorHex: '#22c55e' },
+    { organizationId: org.id, name: 'Work From Home', code: 'WFH', annualQuota: 24, colorHex: '#9334e6' },
+  ]});
+
+  await prisma.holiday.createMany({ data: [
+    { organizationId: org.id, name: "New Year's Day",      date: new Date('2026-01-01'), type: 'PUBLIC'  },
+    { organizationId: org.id, name: 'Republic Day',        date: new Date('2026-01-26'), type: 'PUBLIC'  },
+    { organizationId: org.id, name: 'Holi',                date: new Date('2026-03-04'), type: 'PUBLIC'  },
+    { organizationId: org.id, name: 'Good Friday',         date: new Date('2026-04-03'), type: 'OPTIONAL' },
+    { organizationId: org.id, name: 'Firm Foundation Day', date: new Date('2026-07-01'), type: 'COMPANY' },
+    { organizationId: org.id, name: 'Independence Day',    date: new Date('2026-08-15'), type: 'PUBLIC'  },
+    { organizationId: org.id, name: 'Gandhi Jayanti',      date: new Date('2026-10-02'), type: 'PUBLIC'  },
+    { organizationId: org.id, name: 'Diwali',              date: new Date('2026-11-08'), type: 'PUBLIC'  },
+    { organizationId: org.id, name: 'Christmas',           date: new Date('2026-12-25'), type: 'PUBLIC'  },
+  ]});
+
+  await prisma.leaveRequest.createMany({ data: [
+    { userId: anant.id,  organizationId: org.id, leaveType: 'EL',  startDate: new Date('2026-07-21'), endDate: new Date('2026-07-25'), numDays: 5, reason: 'Family vacation',  status: 'APPROVED', reviewedBy: mohit.id, reviewedAt: new Date('2026-06-20') },
+    { userId: khushi.id, organizationId: org.id, leaveType: 'SL',  startDate: new Date('2026-06-18'), endDate: new Date('2026-06-19'), numDays: 2, reason: 'Fever',            status: 'APPROVED', reviewedBy: yash.id,  reviewedAt: new Date('2026-06-17') },
+    { userId: vijay.id,  organizationId: org.id, leaveType: 'CL',  startDate: new Date('2026-07-02'), endDate: new Date('2026-07-03'), numDays: 2, reason: 'Personal work',    status: 'PENDING'  },
+    { userId: meetu.id,  organizationId: org.id, leaveType: 'WFH', startDate: new Date('2026-06-30'), endDate: new Date('2026-06-30'), numDays: 1, reason: 'Remote work day',  status: 'PENDING'  },
+    { userId: nehu.id,   organizationId: org.id, leaveType: 'CL',  startDate: new Date('2026-05-12'), endDate: new Date('2026-05-12'), numDays: 1, reason: 'Appointment',      status: 'REJECTED', reviewedBy: mohit.id, reviewedAt: new Date('2026-05-10'), reviewNote: 'Critical deadline week' },
+  ]});
+
+  // Recent explicit punch records for the leadership (so today/timer + grid show times)
+  const attnRows: Prisma.AttendanceCreateManyInput[] = [];
+  const baseNow = new Date();
+  for (const u of [mohit, yash, nitin]) {
+    for (let back = 1; back <= 8; back++) {
+      const d = new Date(baseNow.getTime() - back * 86400000);
+      const wd = d.getUTCDay();
+      if (wd === 0 || wd === 6) continue;
+      const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      const checkIn = new Date(date.getTime() + (9 * 60 + 28) * 60000);
+      const checkOut = new Date(date.getTime() + (18 * 60 + 12) * 60000);
+      const totalHours = Math.round(((checkOut.getTime() - checkIn.getTime()) / 3_600_000) * 100) / 100;
+      attnRows.push({ userId: u.id, organizationId: org.id, date, checkIn, checkOut, totalHours, status: 'PRESENT' });
+    }
+  }
+  await prisma.attendance.createMany({ data: attnRows, skipDuplicates: true });
+  console.log(`✓ Attendance & Leave: 4 leave types, 9 holidays, 5 leave requests, ${attnRows.length} punch records`);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // HISTORY BACKFILL — ~90 days of timesheets + activity events so the
+  // Performance dashboard's trends, heatmaps, sparklines and bullets show data.
+  // Deterministic (seeded PRNG), anchored to "now", tied to each user's real tasks.
+  // The PerformanceService live-fallback reads these directly, so charts populate
+  // even before "Rebuild snapshots" is run.
+  // ══════════════════════════════════════════════════════════════════════════
+  const allUsers = [mohit, yash, arjun, vijay, basant, khushi, meetu, nehu, amrit, nitin, divyanshu, ankit, anant, riya, shaveta, ketan];
+  // Give tasks an estimate so the "estimated vs actual" bullet chart has data.
+  const estByPriority: Record<string, number> = { CRITICAL: 20, HIGH: 14, MEDIUM: 8, LOW: 4 };
+  for (const [prio, est] of Object.entries(estByPriority)) {
+    await prisma.task.updateMany({ where: { priority: prio, estimatedHours: null, deletedAt: null }, data: { estimatedHours: est } });
+  }
+
+  const assignments = await prisma.taskAssignee.findMany({ select: { userId: true, taskId: true } });
+  const tasksByUser = new Map<string, string[]>();
+  for (const a of assignments) {
+    const arr = tasksByUser.get(a.userId) ?? [];
+    arr.push(a.taskId);
+    tasksByUser.set(a.userId, arr);
+  }
+
+  // mulberry32 — small deterministic PRNG so re-seeding produces stable history
+  function makeRng(seed: number) {
+    let s = seed >>> 0;
+    return () => {
+      s += 0x6d2b79f5;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const NOW = new Date();
+  const DAYS_BACK = 90;
+  const tsRows: Prisma.TimesheetCreateManyInput[] = [];
+  const evtRows: Prisma.AnalyticsEventCreateManyInput[] = [];
+
+  allUsers.forEach((u, ui) => {
+    const rand = makeRng(1000 + ui);
+    const myTasks = tasksByUser.get(u.id) ?? [];
+    if (!myTasks.length) return;
+    const pick = () => myTasks[Math.floor(rand() * myTasks.length)];
+    for (let dback = DAYS_BACK; dback >= 0; dback--) {
+      const day = new Date(NOW.getTime() - dback * 86400000);
+      const wd = day.getUTCDay();
+      if (wd === 0 || wd === 6) continue;       // weekends off
+      if (rand() < 0.18) continue;               // ~18% PTO / no-log days
+      const date = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate()));
+      // 1–2 timesheet entries
+      const entries = rand() < 0.5 ? 2 : 1;
+      for (let e = 0; e < entries; e++) {
+        const hours = Math.round((2 + rand() * 6) * 2) / 2;  // 2–8h in 0.5 steps
+        tsRows.push({ userId: u.id, taskId: pick(), date, hoursLogged: hours, billable: rand() > 0.12 });
+      }
+      // 0–5 activity events during the day
+      const nEvents = Math.floor(rand() * 6);
+      for (let e = 0; e < nEvents; e++) {
+        const roll = rand();
+        const eventType = roll < 0.4 ? 'task.status_changed' : roll < 0.7 ? 'comment.created' : roll < 0.85 ? 'task.updated' : 'issue.resolved';
+        const createdAt = new Date(date.getTime() + Math.floor(9 + rand() * 8) * 3600000);  // ~09:00–17:00
+        const payload: Prisma.InputJsonValue = eventType === 'task.status_changed'
+          ? { new: { status: rand() < 0.5 ? 'In Progress' : 'Closed', type: rand() < 0.4 ? 'CLOSED' : 'OPEN' } }
+          : {};
+        evtRows.push({ eventType, entityType: 'TASK', entityId: pick(), userId: u.id, organizationId: org.id, payload, createdAt });
+      }
+    }
+  });
+
+  for (let i = 0; i < tsRows.length; i += 500) await prisma.timesheet.createMany({ data: tsRows.slice(i, i + 500) });
+  for (let i = 0; i < evtRows.length; i += 500) await prisma.analyticsEvent.createMany({ data: evtRows.slice(i, i + 500) });
+  console.log(`✓ History backfill: ${tsRows.length} timesheets, ${evtRows.length} activity events (~${DAYS_BACK} days)`);
 
   console.log('\nSeed complete ✓');
   console.log('  Org:      Squark IP (code: pdash-demo)');

@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EventService } from '../audit-events/event.service';
+import { EVENTS } from '../../common/events/canonical-events';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true };
@@ -9,7 +11,10 @@ const INCLUDE = { user: { select: USER_SELECT }, task: { select: TASK_SELECT } }
 
 @Injectable()
 export class TimesheetsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventService,
+  ) {}
 
   async listForProject(projectId: string) {
     const projectTasks = await this.prisma.projectTask.findMany({
@@ -35,7 +40,7 @@ export class TimesheetsService {
   }
 
   async create(dto: CreateTimesheetDto) {
-    return this.prisma.timesheet.create({
+    const entry = await this.prisma.timesheet.create({
       data: {
         userId: dto.userId,
         taskId: dto.taskId,
@@ -46,6 +51,14 @@ export class TimesheetsService {
       },
       include: INCLUDE,
     });
+    await this.events.emit({
+      action: EVENTS.TIME_LOGGED,
+      entityType: 'TIMESHEET',
+      entityId: entry.id,
+      actorId: dto.userId,
+      metadata: { taskId: dto.taskId, hours: dto.hoursLogged, billable: entry.billable },
+    });
+    return entry;
   }
 
   async update(id: string, dto: UpdateTimesheetDto) {

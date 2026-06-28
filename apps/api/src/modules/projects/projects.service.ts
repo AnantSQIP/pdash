@@ -5,11 +5,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PermissionService } from '../permissions/permission.service';
+import { EventService } from '../audit-events/event.service';
+import { EVENTS } from '../../common/events/canonical-events';
 import { CreateProjectDto, UpdateProjectDto, ApprovalDto } from './dto';
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
+    private readonly events: EventService,
+  ) {}
 
   /**
    * D2: any user may request project creation. Project starts with no workflow
@@ -23,8 +30,8 @@ export class ProjectsService {
     });
     if (!creator) throw new BadRequestException(`User ${dto.createdBy} not in organization`);
 
-    return this.prisma.$transaction(async (tx) => {
-      const project = await tx.project.create({
+    const project = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.project.create({
         data: {
           title: dto.title,
           description: dto.description,
@@ -47,14 +54,24 @@ export class ProjectsService {
       await tx.approval.create({
         data: {
           entityType: 'PROJECT',
-          entityId: project.id,
+          entityId: created.id,
           status: 'PENDING',
           requestedBy: dto.createdBy,
         },
       });
 
-      return project;
+      return created;
     });
+
+    await this.events.emit({
+      action: EVENTS.PROJECT_CREATED,
+      entityType: 'PROJECT',
+      entityId: project.id,
+      organizationId,
+      actorId: dto.createdBy,
+      metadata: { projectId: project.id, title: project.title },
+    });
+    return project;
   }
 
   list(organizationId: string, opts: { phase?: string } = {}) {
@@ -139,7 +156,7 @@ export class ProjectsService {
 
     await this.assertHasProjectApprovePermission(dto.actingUserId);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const newStatus = approve ? 'APPROVED' : 'REJECTED';
 
       await tx.approvalAction.create({
@@ -162,6 +179,15 @@ export class ProjectsService {
         data: { projectPhase: approve ? 'ACTIVE' : 'PLANNING' },
       });
     });
+
+    await this.events.emit({
+      action: approve ? EVENTS.PROJECT_APPROVED : EVENTS.PROJECT_REJECTED,
+      entityType: 'PROJECT',
+      entityId: id,
+      actorId: dto.actingUserId,
+      metadata: { projectId: id, title: project.title, reason: dto.reason },
+    });
+    return result;
   }
 
   async softDelete(id: string) {
@@ -173,16 +199,8 @@ export class ProjectsService {
   }
 
   private async assertHasProjectApprovePermission(userId: string) {
-    // Temporary: check for Admin/Super Admin role until PermissionGuard lands in M5.
-    // Replace with PermissionService.check(userId, 'project.approve') in M5.
-    const adminRole = await this.prisma.userRole.findFirst({
-      where: {
-        userId,
-        role: { name: { in: ['Admin', 'Super Admin'] } },
-      },
-      include: { role: true },
-    });
-    if (!adminRole) {
+    const allowed = await this.permissions.check(userId, 'project.approve');
+    if (!allowed) {
       throw new ForbiddenException('project.approve permission required.');
     }
   }

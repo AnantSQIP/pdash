@@ -111,16 +111,23 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
             />
           </div>
 
-          <div>
-            <label className="flex items-center gap-3 cursor-pointer group">
-              <div
-                onClick={() => setBillable(prev => !prev)}
-                className={`w-10 h-5.5 rounded-full transition-colors relative ${billable ? 'bg-brand-600' : 'bg-gray-200'}`}
-              >
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${billable ? 'left-5' : 'left-0.5'}`} />
-              </div>
-              <span className="text-sm text-gray-700">Billable</span>
-            </label>
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sm font-medium text-gray-700">Billable</span>
+              <p className="text-xs text-gray-400">Counts toward client-billable hours</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={billable}
+              aria-label="Billable"
+              onClick={() => setBillable(prev => !prev)}
+              className={`relative h-5 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 ${billable ? 'bg-brand-600' : 'bg-gray-300'}`}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${billable ? 'left-[22px]' : 'left-0.5'}`}
+              />
+            </button>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-2">

@@ -5,24 +5,33 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard, FolderKanban, CheckSquare, BarChart2, Calendar,
-  MessageSquare, Users, Settings, Bell, ChevronDown,
-  PanelLeftClose, PanelLeftOpen,
+  LayoutDashboard, FolderKanban, CheckSquare, BarChart2, Calendar, Clock,
+  MessageSquare, Users, Settings, Bell, ChevronDown, TrendingUp,
+  Shield, ScrollText, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { NotificationsPanel } from './NotificationsPanel';
 import { UserMenu } from './UserMenu';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { userInitials, fullName } from '@/lib/avatar';
 
 const NAV = [
-  { href: '/home',      icon: LayoutDashboard, label: 'Home' },
-  { href: '/projects',  icon: FolderKanban,    label: 'Projects' },
-  { href: '/tasks',     icon: CheckSquare,     label: 'My Tasks' },
-  { href: '/calendar',  icon: Calendar,        label: 'Calendar' },
-  { href: '/reports',   icon: BarChart2,       label: 'Reports' },
-  { href: '/discuss',   icon: MessageSquare,   label: 'Discuss' },
-  { href: '/users',     icon: Users,           label: 'People' },
+  { href: '/home',        icon: LayoutDashboard, label: 'Home' },
+  { href: '/projects',    icon: FolderKanban,    label: 'Projects' },
+  { href: '/tasks',       icon: CheckSquare,     label: 'My Tasks' },
+  { href: '/performance', icon: TrendingUp,      label: 'Performance' },
+  { href: '/calendar',    icon: Calendar,        label: 'Calendar' },
+  { href: '/attendance',  icon: Clock,           label: 'Attendance' },
+  { href: '/reports',     icon: BarChart2,       label: 'Reports' },
+  { href: '/discuss',     icon: MessageSquare,   label: 'Discuss' },
+  { href: '/users',       icon: Users,           label: 'People' },
+];
+
+// Permission-gated admin entries (shown only when the actor can access them).
+const ADMIN_NAV = [
+  { href: '/admin',       icon: Shield,     label: 'Admin',     perm: ['permission.view', 'role.view', 'user.create'] },
+  { href: '/admin/audit', icon: ScrollText, label: 'Audit Log', perm: ['audit.view'] },
 ];
 
 const STORAGE_KEY = 'sidebar-collapsed';
@@ -30,6 +39,7 @@ const STORAGE_KEY = 'sidebar-collapsed';
 export function Sidebar() {
   const path = usePathname();
   const { currentUser } = useOrg();
+  const { can } = usePermissions();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -119,6 +129,31 @@ export function Sidebar() {
             </Link>
           );
         })}
+
+        {/* Permission-gated admin section */}
+        {ADMIN_NAV.some(n => can(n.perm)) && (
+          <div className={clsx('pt-3 mt-2 border-t border-white/10', collapsed && 'mx-1')}>
+            {!collapsed && <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">Administration</p>}
+            {ADMIN_NAV.filter(n => can(n.perm)).map(({ href, icon: Icon, label }) => {
+              const active = path.startsWith(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  title={collapsed ? label : undefined}
+                  className={clsx(
+                    'flex items-center rounded-lg text-sm font-medium transition-colors',
+                    collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
+                    active ? 'bg-sidebar-active text-white' : 'text-white/60 hover:bg-sidebar-hover hover:text-white',
+                  )}
+                >
+                  <Icon size={17} className="shrink-0" />
+                  {!collapsed && label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </nav>
 
       {/* Bottom: notifications + settings + user */}

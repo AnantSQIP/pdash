@@ -29,6 +29,7 @@ function departmentOf(designation?: string): string {
     case 'Product Development': return 'Product';
     case 'Research Associate':
     case 'Senior Research Associate': return 'Search & Analytics';
+    case 'Senior Consultant':
     case 'Consultant': return 'Consulting';
     case 'Testing and QA': return 'QA';
     case 'HR': return 'Human Resources';

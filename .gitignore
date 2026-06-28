@@ -9,11 +9,6 @@ build/
 out/
 *.tsbuildinfo
 
-# ── Environment / secrets ─────────────────────────────────
-.env
-.env.local
-.env.*.local
-
 # ── Logs ──────────────────────────────────────────────────
 *.log
 npm-debug.log*
@@ -26,14 +21,24 @@ coverage/
 # ── Prisma generated client ───────────────────────────────
 **/generated/
 
-# ── Local dev DB ──────────────────────────────────────────
+# ── Local dev database (PGlite fallback data) ─────────────
 .pglite-data/
 
-# ── Local tooling / agent workspaces (never commit) ───────
+# ── AI / agent tooling artifacts (Claude, Cursor, Windsurf, MCP) ─
+.claude/
 .cursor/
 .windsurf/
+.playwright-mcp/
 
-# ── Backup files (created during dev) ────────────────────
+# ── Session screenshots (local debug artifacts; fav.png is kept) ─
+/attendance-*.png
+/auth-home-*.png
+/drilldown-*.png
+/kpi-*.png
+/org-distributions*.png
+/perf-*.png
+
+# ── Backup files (created during dev) ─────────────────────
 *.bak
 
 # ── Reference / unrelated projects (not part of this app) ─
@@ -51,3 +56,7 @@ Thumbs.db
 *.swp
 *.swo
 .cache/
+
+# ── NOTE ──────────────────────────────────────────────────
+# .env is intentionally NOT ignored here — it is committed on purpose.
+# Rotate JWT_ACCESS_SECRET and the DB / MinIO passwords before any real deployment.

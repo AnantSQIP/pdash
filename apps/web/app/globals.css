@@ -57,9 +57,9 @@ button:not(:disabled):active,
   transform: translateY(1px);
 }
 
-/* Better focus ring using brand color */
+/* Better focus ring using brand color (blue #3d8de2) */
 :focus-visible {
-  outline: 2px solid rgba(232, 83, 58, 0.45);
+  outline: 2px solid rgba(61, 141, 226, 0.45);
   outline-offset: 2px;
 }
 
