@@ -93,7 +93,9 @@ else
   read -rs -p "    Set an initial password for ALL seeded users: " SEED_PW; echo
   # The api image doesn't ship the monorepo tsconfig.base.json, so run the seed self-contained:
   # --skip-project ignores tsconfig, --transpile-only skips type-checking.
-  $COMPOSE exec -T -e SEED_DEFAULT_PASSWORD="$SEED_PW" api npx ts-node --transpile-only --skip-project \
+  # ALLOW_PROD_SEED=true overrides the seed's prod safety guard; safe here because this only
+  # runs once on a fresh DB (gated by the .seeded marker + first-deploy HEALTHY check above).
+  $COMPOSE exec -T -e ALLOW_PROD_SEED=true -e SEED_DEFAULT_PASSWORD="$SEED_PW" api npx ts-node --transpile-only --skip-project \
     --compiler-options '{"module":"CommonJS","target":"ES2020","esModuleInterop":true,"skipLibCheck":true,"resolveJsonModule":true}' \
     packages/db/prisma/seed.ts
   touch .seeded
