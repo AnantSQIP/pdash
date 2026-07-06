@@ -88,10 +88,14 @@ if [ -f .seeded ]; then
   echo "    already seeded (.seeded present) — skipping"
 elif [ "$HEALTHY" != 1 ]; then
   echo "    SKIP: API not healthy; seed later with:"
-  echo "      $COMPOSE exec -e SEED_DEFAULT_PASSWORD='...' api npx ts-node packages/db/prisma/seed.ts"
+  echo "      $COMPOSE exec -e SEED_DEFAULT_PASSWORD='...' api npx ts-node --transpile-only --skip-project --compiler-options '{\"module\":\"CommonJS\",\"esModuleInterop\":true}' packages/db/prisma/seed.ts"
 else
   read -rs -p "    Set an initial password for ALL seeded users: " SEED_PW; echo
-  $COMPOSE exec -T -e SEED_DEFAULT_PASSWORD="$SEED_PW" api npx ts-node packages/db/prisma/seed.ts
+  # The api image doesn't ship the monorepo tsconfig.base.json, so run the seed self-contained:
+  # --skip-project ignores tsconfig, --transpile-only skips type-checking.
+  $COMPOSE exec -T -e SEED_DEFAULT_PASSWORD="$SEED_PW" api npx ts-node --transpile-only --skip-project \
+    --compiler-options '{"module":"CommonJS","target":"ES2020","esModuleInterop":true,"skipLibCheck":true,"resolveJsonModule":true}' \
+    packages/db/prisma/seed.ts
   touch .seeded
   echo "    seeded (users' initial password = the one you just typed)"
 fi
