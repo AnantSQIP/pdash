@@ -50,7 +50,10 @@ services:
       # Server-side proxy target — the api service on the compose network.
       API_ORIGIN: http://api:4000
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      # Bind to localhost by default so Docker's iptables rules don't bypass the host
+      # firewall and expose :3000 to the internet. A TLS reverse proxy (Caddy) fronts it.
+      # Set WEB_BIND=0.0.0.0 only if you intentionally want the raw port public.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
 
 volumes:
   pgdata:
