@@ -1,0 +1,16 @@
+{
+  "//": "Compiles the standalone DB scripts (seed + its catalog) to plain JS so production runs them with `node` — no ts-node/tsconfig needed in the container.",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "target": "ES2022",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "declaration": false,
+    "noEmitOnError": false,
+    "outDir": "prisma/dist",
+    "rootDir": "prisma"
+  },
+  "include": ["prisma/seed.ts", "prisma/permissions-catalog.ts"]
+}

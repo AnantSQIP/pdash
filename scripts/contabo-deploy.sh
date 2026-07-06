@@ -88,16 +88,14 @@ if [ -f .seeded ]; then
   echo "    already seeded (.seeded present) — skipping"
 elif [ "$HEALTHY" != 1 ]; then
   echo "    SKIP: API not healthy; seed later with:"
-  echo "      $COMPOSE exec -e SEED_DEFAULT_PASSWORD='...' api npx ts-node --transpile-only --skip-project --compiler-options '{\"module\":\"CommonJS\",\"esModuleInterop\":true}' packages/db/prisma/seed.ts"
+  echo "      $COMPOSE exec -e ALLOW_PROD_SEED=true -e SEED_DEFAULT_PASSWORD='...' api node packages/db/prisma/dist/seed.js"
 else
   read -rs -p "    Set an initial password for ALL seeded users: " SEED_PW; echo
   # The api image doesn't ship the monorepo tsconfig.base.json, so run the seed self-contained:
   # --skip-project ignores tsconfig, --transpile-only skips type-checking.
-  # ALLOW_PROD_SEED=true overrides the seed's prod safety guard; safe here because this only
-  # runs once on a fresh DB (gated by the .seeded marker + first-deploy HEALTHY check above).
-  $COMPOSE exec -T -e ALLOW_PROD_SEED=true -e SEED_DEFAULT_PASSWORD="$SEED_PW" api npx ts-node --transpile-only --skip-project \
-    --compiler-options '{"module":"CommonJS","target":"ES2020","esModuleInterop":true,"skipLibCheck":true,"resolveJsonModule":true}' \
-    packages/db/prisma/seed.ts
+  # Seed = precompiled JS run with plain node (built into the api image). ALLOW_PROD_SEED=true
+  # clears the seed's prod guard; safe here because it runs once on a fresh DB (gated by .seeded).
+  $COMPOSE exec -T -e ALLOW_PROD_SEED=true -e SEED_DEFAULT_PASSWORD="$SEED_PW" api node packages/db/prisma/dist/seed.js
   touch .seeded
   echo "    seeded (users' initial password = the one you just typed)"
 fi

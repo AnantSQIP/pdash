@@ -23,7 +23,7 @@ npm run prod:up
 #    (= docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build)
 
 # 3. (first deploy only) load the real org + users
-docker compose -f docker-compose.prod.yml exec api node -e "require('child_process').execSync('npx ts-node packages/db/prisma/seed.ts',{stdio:'inherit'})"
+docker compose -f docker-compose.prod.yml exec -e ALLOW_PROD_SEED=true api node packages/db/prisma/dist/seed.js
 #    …or run `npm run db:seed` against the prod DATABASE_URL from a machine that can reach it.
 ```
 
