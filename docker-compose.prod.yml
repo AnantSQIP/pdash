@@ -42,6 +42,9 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        # Baked into the Next standalone build so /api/* proxies to the api service (not localhost).
+        API_ORIGIN: http://api:4000
     restart: unless-stopped
     depends_on:
       - api

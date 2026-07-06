@@ -14,6 +14,11 @@ COPY apps/api/package.json apps/api/
 COPY packages/db/package.json packages/db/
 RUN npm ci
 COPY . .
+# next.config.js rewrites() bake their destination at BUILD time in Next standalone output, so
+# the API origin must be set now — not just at runtime — or /api/* proxies to localhost:4000
+# inside the web container and returns 500. Overridable via the compose build arg.
+ARG API_ORIGIN=http://api:4000
+ENV API_ORIGIN=${API_ORIGIN}
 # @pdash/db is transpiled into the web bundle, so its Prisma client must be generated/built.
 RUN npx prisma generate --schema=packages/db/prisma/schema.prisma \
  && npm run build --workspace=packages/db \
