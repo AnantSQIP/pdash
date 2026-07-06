@@ -34,8 +34,12 @@ if ! swapon --show 2>/dev/null | grep -q '/swapfile'; then
   grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 apt-get install -y ufw curl git openssl
-ufw allow 22/tcp; ufw allow 80/tcp; ufw allow 443/tcp
+# Keep the CURRENT SSH port open (from $SSH_CONNECTION, or override with SSH_PORT=)
+# so enabling the firewall never locks you out — SSH here is on 2222, not 22.
+SSH_PORT="${SSH_PORT:-$(awk '{print $4}' <<<"${SSH_CONNECTION:-}")}"; SSH_PORT="${SSH_PORT:-22}"
+ufw allow "${SSH_PORT}/tcp"; ufw allow 22/tcp; ufw allow 80/tcp; ufw allow 443/tcp
 ufw --force enable
+echo "    firewall: SSH allowed on ${SSH_PORT} (+22), web on 80/443"
 
 # ── [2/8] Docker ─────────────────────────────────────────────────────────────
 echo "==> [2/8] Docker"
@@ -107,7 +111,8 @@ ${PUBLIC_HOST} {
     reverse_proxy 127.0.0.1:3000
 }
 EOF
-systemctl reload caddy 2>/dev/null || systemctl restart caddy
+systemctl reload caddy 2>/dev/null || systemctl restart caddy || \
+  echo "    WARN: Caddy did not start — ports 80/443 may be taken. Check: ss -tlnp | grep -E ':80|:443'"
 
 # ── [8/8] nightly backup ─────────────────────────────────────────────────────
 echo "==> [8/8] Nightly Postgres backup (02:30, keep 14 days)"
