@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "nest build",
+    "build": "tsc -p tsconfig.json",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
@@ -16,11 +16,13 @@
     "@nestjs/core": "^10.4.4",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/platform-express": "^10.4.4",
+    "@nestjs/throttler": "^6.5.0",
     "@node-rs/argon2": "^2.0.2",
     "@pdash/db": "*",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "cookie-parser": "^1.4.7",
+    "helmet": "^8.2.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },

@@ -6,7 +6,7 @@ import { Plus, Bug, X, Loader, Trash2, Edit3, Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Issue, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
-import { userInitials } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 const SEVERITY_COLORS: Record<string, { bg: string; text: string }> = {
   CRITICAL: { bg: 'bg-red-100',    text: 'text-red-700'    },
@@ -20,13 +20,6 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   RESOLVED:    { bg: 'bg-green-100',  text: 'text-green-700'  },
   CLOSED:      { bg: 'bg-gray-100',   text: 'text-gray-500'   },
 };
-
-const AVATAR_COLORS = ['bg-brand-600','bg-purple-500','bg-pink-500','bg-slate-600','bg-green-500','bg-amber-500'];
-function avatarColor(name: string) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
 
 function AddIssueModal({ projectId, users, onClose, onSuccess }: {
   projectId: string; users: UserSummary[];
@@ -278,9 +271,7 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
                     <td className="px-4 py-3">
                       {assignee ? (
                         <div className="flex items-center gap-2">
-                          <div className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0', avatarColor(`${assignee.firstName}${assignee.lastName}`))}>
-                            {userInitials(assignee)}
-                          </div>
+                          <Avatar user={assignee} size={24} className="shrink-0" />
                           <span className="text-xs text-gray-600">{assignee.firstName} {assignee.lastName}</span>
                         </div>
                       ) : (
@@ -290,9 +281,7 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
                     <td className="px-4 py-3">
                       {reporter ? (
                         <div className="flex items-center gap-2">
-                          <div className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0', avatarColor(`${reporter.firstName}${reporter.lastName}`))}>
-                            {userInitials(reporter)}
-                          </div>
+                          <Avatar user={reporter} size={24} className="shrink-0" />
                           <span className="text-xs text-gray-600">{reporter.firstName} {reporter.lastName}</span>
                         </div>
                       ) : (

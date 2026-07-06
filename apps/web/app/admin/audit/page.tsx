@@ -7,7 +7,7 @@ import { Loader, ScrollText, Download, Shield, X } from 'lucide-react';
 import { api, type AuditLogItem, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { userInitials, avatarColor } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 const ACTION_COLOR: Record<string, string> = {
   created: 'bg-green-100 text-green-700', updated: 'bg-blue-100 text-blue-700',
@@ -98,7 +98,7 @@ export default function AuditPage() {
                       <td className="px-5 py-2.5 text-gray-500 whitespace-nowrap">{new Date(i.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2">
-                          {u ? <div className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white', avatarColor(u.id))}>{userInitials(u)}</div> : null}
+                          {u ? <Avatar user={u} size={24} /> : null}
                           <span className="text-gray-700">{u ? `${u.firstName} ${u.lastName}`.trim() : i.userId.slice(0, 8)}</span>
                         </div>
                       </td>

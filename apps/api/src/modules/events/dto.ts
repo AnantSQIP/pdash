@@ -41,8 +41,11 @@ export class CreateEventDto {
   @IsString()
   color?: string;
 
+  // Deprecated/ignored — the organizer is taken from the verified cookie actor,
+  // never trusted from the client (prevents spoofing who scheduled the event).
+  @IsOptional()
   @IsString()
-  createdBy!: string;
+  createdBy?: string;
 
   @IsOptional()
   @IsString()

@@ -1,7 +1,10 @@
-import { Body, Controller, Delete, Get, Param, Post, Patch, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Patch, Put, Query } from '@nestjs/common';
 import { ChannelsService } from './channels.service';
-import { CreateChannelDto, UpdateChannelDto, CreateMessageDto } from './dto';
+import { CreateChannelDto, UpdateChannelDto, CreateMessageDto, SetChannelMembersDto } from './dto';
 
+// Discussions are PRIVATE + member-gated. Authorization is enforced in the service by
+// CHANNEL MEMBERSHIP / OWNERSHIP — not by RBAC permissions — so a Super Admin who was
+// not invited cannot read or post here. Any authenticated user may create a discussion.
 @Controller('channels')
 export class ChannelsController {
   constructor(private readonly channels: ChannelsService) {}
@@ -33,7 +36,7 @@ export class ChannelsController {
 
   @Get(':id/messages')
   listMessages(@Param('id') id: string, @Query('limit') limit?: string) {
-    return this.channels.listMessages(id, limit ? parseInt(limit) : 50);
+    return this.channels.listMessages(id, limit ? parseInt(limit, 10) : 50);
   }
 
   @Post(':id/messages')
@@ -46,8 +49,19 @@ export class ChannelsController {
     return this.channels.deleteMessage(channelId, messageId);
   }
 
-  @Post(':id/join')
-  join(@Param('id') channelId: string, @Body('userId') userId: string) {
-    return this.channels.joinChannel(channelId, userId);
+  // ── Member management (owner-only, enforced in the service) ──────────────────
+  @Get(':id/members')
+  getMembers(@Param('id') id: string) {
+    return this.channels.getMembers(id);
+  }
+
+  @Put(':id/members')
+  addMembers(@Param('id') id: string, @Body() dto: SetChannelMembersDto) {
+    return this.channels.addMembers(id, dto.userIds);
+  }
+
+  @Delete(':id/members/:userId')
+  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
+    return this.channels.removeMember(id, userId);
   }
 }

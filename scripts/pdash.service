@@ -1,0 +1,15 @@
+[Unit]
+Description=pdash / SquarkIP always-on supervisor (API :4000 + web :3001 + Cloudflare tunnel)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env bash /home/sqip031/pdash/scripts/keep-alive.sh
+Restart=always
+RestartSec=5
+# Only kill the supervisor itself on stop/restart — leave the API/web/tunnel it
+# spawned running, so a supervisor restart never takes the public link down.
+KillMode=process
+
+[Install]
+WantedBy=default.target

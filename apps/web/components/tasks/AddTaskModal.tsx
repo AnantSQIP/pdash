@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { X, Plus } from 'lucide-react';
+import { X, Plus, Check } from 'lucide-react';
+import clsx from 'clsx';
 import { api } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 
@@ -13,12 +14,13 @@ interface AddTaskModalProps {
 }
 
 export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddTaskModalProps) {
-  const { currentUser } = useOrg();
+  const { currentUser, users } = useOrg();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
   const [dueDate, setDueDate] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -42,8 +44,9 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
         estimatedHours: estimatedHours ? parseFloat(estimatedHours) : undefined,
         projectId,
         taskListId,
-        createdBy: currentUser?.email ?? 'system',
+        createdBy: currentUser?.id ?? 'system', // server derives the real creator from the cookie actor
         currentWorkflowStatusId: defaultStatusId,
+        assigneeIds: assigneeIds.length ? assigneeIds : undefined,
       });
       onSuccess?.();
       onClose();
@@ -115,6 +118,31 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
               placeholder="e.g. 4"
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Assignees {assigneeIds.length > 0 && <span className="text-gray-400 font-normal">({assigneeIds.length})</span>}
+            </label>
+            <div className="max-h-32 overflow-y-auto border border-gray-300 rounded-lg p-1.5 space-y-0.5">
+              {users.length === 0 && <p className="text-xs text-gray-400 px-1.5 py-1">No team members available</p>}
+              {users.map(u => {
+                const on = assigneeIds.includes(u.id);
+                return (
+                  <button type="button" key={u.id}
+                    onClick={() => setAssigneeIds(prev => on ? prev.filter(x => x !== u.id) : [...prev, u.id])}
+                    className={clsx('w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left transition-colors',
+                      on ? 'bg-brand-50 text-brand-700' : 'hover:bg-gray-50 text-gray-700')}
+                  >
+                    <span className={clsx('w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                      on ? 'bg-brand-600 border-brand-600' : 'border-gray-300')}>
+                      {on && <Check size={11} className="text-white" />}
+                    </span>
+                    {u.firstName} {u.lastName}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-2">

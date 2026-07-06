@@ -1,17 +1,19 @@
 # pdash
 
-A Zoho-Projects-style project management system. See `ARCHITECTURE.md` for the
-full plan and `zoho-projects-complete-spec.md` for the researched feature dossier.
-
-**Status:** M0 (foundation) + M1 (core hierarchy) implemented and tested.
+A Zoho-Projects-style project management system (branded **SquarkIP**). See
+`docs/ARCHITECTURE.md` for the full plan and `docs/zoho-projects-complete-spec.md`
+for the researched feature dossier. **Running it fast: `docs/PERFORMANCE_SETUP.md`.**
 
 ## Stack
-TypeScript monorepo (npm workspaces): NestJS API · Prisma · PostgreSQL · Next.js (planned).
+TypeScript monorepo (npm workspaces): NestJS API · Prisma · PostgreSQL · Next.js 14.
 
 ```
 apps/api        NestJS REST API
+apps/web        Next.js 14 web app
 packages/db     Prisma schema + client (@pdash/db)
+scripts/        serve.mjs launcher + api start helpers
 tools/          dev helpers (PGlite fallback DB, smoke test)
+docs/           architecture, auth, deployment, performance + reference PDFs
 ```
 
 ## What works today (M1)

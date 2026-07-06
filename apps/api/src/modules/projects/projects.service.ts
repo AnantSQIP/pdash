@@ -9,6 +9,8 @@ import { PermissionService } from '../permissions/permission.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { CreateProjectDto, UpdateProjectDto, ApprovalDto } from './dto';
+import { getActorId } from '../../common/context/request-context';
+import { NotificationsService } from '../notifications/notifications.module';
 
 @Injectable()
 export class ProjectsService {
@@ -16,6 +18,7 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
     private readonly events: EventService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -24,11 +27,15 @@ export class ProjectsService {
    * admin action will resolve via ApprovalAction.
    * The mandatory "General" task list is also created in the same transaction.
    */
-  async create(organizationId: string, dto: CreateProjectDto) {
-    const creator = await this.prisma.user.findFirst({
-      where: { id: dto.createdBy, organizationId, deletedAt: null },
-    });
-    if (!creator) throw new BadRequestException(`User ${dto.createdBy} not in organization`);
+  async create(dto: CreateProjectDto) {
+    // Identity & org come from the verified cookie actor — never the client body
+    // (fixes spoofable createdBy and the email-vs-id create bug).
+    const actorId = getActorId();
+    const creator = actorId
+      ? await this.prisma.user.findFirst({ where: { id: actorId, deletedAt: null } })
+      : null;
+    if (!creator) throw new ForbiddenException('You must be signed in to create a project.');
+    const organizationId = creator.organizationId;
 
     const project = await this.prisma.$transaction(async (tx) => {
       const created = await tx.project.create({
@@ -39,9 +46,9 @@ export class ProjectsService {
           priority: dto.priority ?? 'MEDIUM',
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-          createdBy: dto.createdBy,
+          createdBy: creator.id,
           members: {
-            create: { userId: dto.createdBy, projectRole: 'MANAGER' },
+            create: { userId: creator.id, projectRole: 'MANAGER' },
           },
           taskLists: {
             create: { name: 'General', isDefault: true, sequence: 0 },
@@ -56,7 +63,7 @@ export class ProjectsService {
           entityType: 'PROJECT',
           entityId: created.id,
           status: 'PENDING',
-          requestedBy: dto.createdBy,
+          requestedBy: creator.id,
         },
       });
 
@@ -68,7 +75,7 @@ export class ProjectsService {
       entityType: 'PROJECT',
       entityId: project.id,
       organizationId,
-      actorId: dto.createdBy,
+      actorId: creator.id,
       metadata: { projectId: project.id, title: project.title },
     });
     return project;
@@ -98,7 +105,7 @@ export class ProjectsService {
             user: { select: { id: true, firstName: true, lastName: true } },
           },
         },
-        _count: { select: { projectTasks: true } },
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } },
       },
     });
   }
@@ -116,7 +123,7 @@ export class ProjectsService {
         },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
         milestones: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
-        _count: { select: { projectTasks: true, members: true } },
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: true } },
       },
     });
     if (!project) throw new NotFoundException(`Project ${id} not found`);
@@ -154,7 +161,10 @@ export class ProjectsService {
       throw new BadRequestException(`No pending approval for project ${id}.`);
     }
 
-    await this.assertHasProjectApprovePermission(dto.actingUserId);
+    // The approver is the verified cookie actor — never a client-supplied id.
+    const actorId = getActorId();
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    await this.assertHasProjectApprovePermission(actorId);
 
     const result = await this.prisma.$transaction(async (tx) => {
       const newStatus = approve ? 'APPROVED' : 'REJECTED';
@@ -162,7 +172,7 @@ export class ProjectsService {
       await tx.approvalAction.create({
         data: {
           approvalId: approval.id,
-          userId: dto.actingUserId,
+          userId: actorId,
           action: approve ? 'APPROVE' : 'REJECT',
           comments: dto.reason,
         },
@@ -184,17 +194,43 @@ export class ProjectsService {
       action: approve ? EVENTS.PROJECT_APPROVED : EVENTS.PROJECT_REJECTED,
       entityType: 'PROJECT',
       entityId: id,
-      actorId: dto.actingUserId,
+      actorId,
       metadata: { projectId: id, title: project.title, reason: dto.reason },
+    });
+    // Notify the requester (project creator) of the decision.
+    await this.notifications.notify(approval.requestedBy, {
+      type: approve ? 'project.approved' : 'project.rejected',
+      title: approve ? 'Project approved' : 'Project rejected',
+      message: `Your project "${project.title}" was ${approve ? 'approved' : 'rejected'}.`,
     });
     return result;
   }
 
   async softDelete(id: string) {
     await this.get(id);
-    return this.prisma.project.update({
-      where: { id },
-      data: { deletedAt: new Date(), projectPhase: 'ARCHIVED' },
+    const now = new Date();
+    return this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.update({
+        where: { id },
+        data: { deletedAt: now, projectPhase: 'ARCHIVED' },
+      });
+      // Cascade so children stop surfacing in cross-project reads (My Tasks, issues, perf).
+      await tx.issue.updateMany({ where: { projectId: id, deletedAt: null }, data: { deletedAt: now } });
+      const links = await tx.projectTask.findMany({ where: { projectId: id }, select: { taskId: true } });
+      const taskIds = [...new Set(links.map(l => l.taskId))];
+      if (taskIds.length) {
+        // Keep tasks that also live in another non-deleted project (M2M); archive the rest.
+        const shared = await tx.projectTask.findMany({
+          where: { taskId: { in: taskIds }, projectId: { not: id }, project: { deletedAt: null } },
+          select: { taskId: true },
+        });
+        const keep = new Set(shared.map(l => l.taskId));
+        const toArchive = taskIds.filter(t => !keep.has(t));
+        if (toArchive.length) {
+          await tx.task.updateMany({ where: { id: { in: toArchive }, deletedAt: null }, data: { deletedAt: now } });
+        }
+      }
+      return project;
     });
   }
 

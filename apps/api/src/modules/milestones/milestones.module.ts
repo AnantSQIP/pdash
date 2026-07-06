@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post }
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsDateString, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 class CreateMilestoneDto {
   @IsString()
@@ -84,7 +85,7 @@ export class MilestonesService {
       include: {
         owner: { select: { id: true, firstName: true, lastName: true } },
         currentStatus: true,
-        _count: { select: { projectTasks: true, taskLists: true } },
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, taskLists: true } },
       },
     });
   }
@@ -96,7 +97,7 @@ export class MilestonesService {
         owner: { select: { id: true, firstName: true, lastName: true } },
         currentStatus: true,
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
-        _count: { select: { projectTasks: true } },
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } },
       },
     });
     if (!milestone) throw new NotFoundException(`Milestone ${id} not found`);
@@ -144,7 +145,7 @@ export class MilestonesService {
 class MilestonesController {
   constructor(private readonly service: MilestonesService) {}
 
-  @Post()
+  @Post() @RequirePermission('milestone.create')
   create(@Param('projectId') projectId: string, @Body() dto: CreateMilestoneDto) {
     return this.service.create(projectId, dto);
   }
@@ -159,12 +160,12 @@ class MilestonesController {
     return this.service.get(projectId, id);
   }
 
-  @Patch(':id')
+  @Patch(':id') @RequirePermission('milestone.update')
   update(@Param('projectId') projectId: string, @Param('id') id: string, @Body() dto: UpdateMilestoneDto) {
     return this.service.update(projectId, id, dto);
   }
 
-  @Delete(':id')
+  @Delete(':id') @RequirePermission('milestone.delete')
   remove(@Param('projectId') projectId: string, @Param('id') id: string) {
     return this.service.softDelete(projectId, id);
   }

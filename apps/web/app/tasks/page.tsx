@@ -86,7 +86,7 @@ export default function TasksPage() {
   return (
     <div className="min-h-full">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">My Tasks</h1>
           <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
@@ -101,15 +101,15 @@ export default function TasksPage() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white border-b border-gray-100 px-6 py-3 flex items-center gap-4 flex-wrap">
+      <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 sm:gap-4 flex-wrap">
         {/* Status tabs */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 overflow-x-auto max-w-full">
           {STATUS_FILTERS.map(f => (
             <button
               key={f}
               onClick={() => setStatusFilter(f)}
               className={clsx(
-                'px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5',
+                'px-3 py-1.5 rounded-full text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0',
                 statusFilter === f ? 'bg-brand-600 text-white' : 'text-gray-500 hover:bg-gray-100',
               )}
             >
@@ -148,19 +148,20 @@ export default function TasksPage() {
       </div>
 
       {/* Content */}
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         {isLoading ? (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="w-8 px-4 py-2.5" />
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Task</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Project</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Priority</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Due</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Progress</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Task</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Project</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Priority</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Progress</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -177,6 +178,7 @@ export default function TasksPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -188,16 +190,17 @@ export default function TasksPage() {
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="w-8 px-4 py-2.5" />
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Task</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Project</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Priority</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Due</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Progress</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Task</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Project</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Priority</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Progress</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -269,6 +272,7 @@ export default function TasksPage() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

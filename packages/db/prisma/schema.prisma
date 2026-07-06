@@ -345,6 +345,7 @@ model PermissionOverride {
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, permissionId])
   @@map("permission_override")
 }
 
@@ -438,6 +439,7 @@ model Project {
   projectDocuments   ProjectDocument[]
   issues             Issue[]
 
+  @@index([deletedAt])
   @@map("project")
 }
 
@@ -453,6 +455,7 @@ model ProjectMember {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, userId])
+  @@index([userId])
   @@map("project_member")
 }
 
@@ -517,6 +520,7 @@ model Task {
   timesheets    Timesheet[]
   taskDocuments TaskDocument[]
 
+  @@index([deletedAt])
   @@map("task")
 }
 
@@ -550,6 +554,7 @@ model TaskAssignee {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, userId])
+  @@index([userId])
   @@map("task_assignee")
 }
 
@@ -684,6 +689,7 @@ model Comment {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([entityType, entityId])
+  @@index([userId])
   @@map("comment")
 }
 
@@ -826,8 +832,8 @@ model Timesheet {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
-  @@index([taskId])
+  @@index([userId, date])
+  @@index([taskId, date])
   @@map("timesheet")
 }
 
@@ -939,6 +945,7 @@ model AnalyticsEvent {
   @@index([eventType])
   @@index([entityType, entityId])
   @@index([organizationId, eventType, createdAt])
+  @@index([userId, createdAt])
   @@map("analytics_event")
 }
 
@@ -1273,5 +1280,7 @@ model Issue {
   assignee User?   @relation("IssueAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
+  @@index([assigneeId])
+  @@index([reportedBy])
   @@map("issue")
 }

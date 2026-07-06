@@ -6,17 +6,7 @@ import clsx from 'clsx';
 import { Plus, Clock, DollarSign, Users, Trash2, Loader } from 'lucide-react';
 import { api, type Timesheet, type ApiTask } from '@/lib/api';
 import { LogTimeModal } from './LogTimeModal';
-import { userInitials } from '@/lib/avatar';
-
-const AVATAR_COLORS = [
-  'bg-brand-600', 'bg-purple-500', 'bg-pink-500',
-  'bg-slate-600', 'bg-green-500', 'bg-amber-500', 'bg-blue-500',
-];
-function avatarColor(name: string) {
-  let hash = 0;
-  for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
+import { Avatar } from '@/components/Avatar';
 
 function fmtHours(h: number): string {
   const whole = Math.floor(h);
@@ -157,8 +147,6 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
               )}
               {filtered.map(entry => {
                 const fullName = `${entry.user.firstName} ${entry.user.lastName}`;
-                const initials = userInitials(entry.user);
-                const color = avatarColor(fullName);
                 const dateStr = new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                 return (
                   <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
@@ -167,9 +155,7 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0', color)}>
-                          {initials}
-                        </div>
+                        <Avatar user={entry.user} size={28} className="shrink-0" />
                         <span className="text-sm text-gray-700">{fullName}</span>
                       </div>
                     </td>

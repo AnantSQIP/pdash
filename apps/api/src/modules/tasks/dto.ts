@@ -1,7 +1,7 @@
 import {
   IsArray,
   IsDateString,
-  IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Max,
@@ -22,8 +22,10 @@ export class CreateTaskDto {
   @IsString()
   taskListId!: string;
 
+  // Deprecated/ignored — the creator is taken from the verified cookie actor.
+  @IsOptional()
   @IsString()
-  createdBy!: string;
+  createdBy?: string;
 
   @IsOptional()
   @IsString()
@@ -50,6 +52,9 @@ export class CreateTaskDto {
   dueDate?: string;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1000)
   estimatedHours?: number;
 
   @IsOptional()
@@ -73,7 +78,7 @@ export class UpdateTaskDto {
   priority?: string;
 
   @IsOptional()
-  @IsInt()
+  @IsNumber()
   @Min(0)
   @Max(100)
   completionPercentage?: number;
@@ -87,6 +92,9 @@ export class UpdateTaskDto {
   dueDate?: string;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1000)
   estimatedHours?: number;
 }
 

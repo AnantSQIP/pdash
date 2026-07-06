@@ -3,13 +3,15 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  X, Flag, Calendar, Maximize2, MessageCircle,
-  Clock, Plus, RefreshCw, User, ChevronDown, Loader,
+  X, Flag, Calendar, MessageCircle,
+  Clock, Plus, RefreshCw, User, ChevronDown, Loader, Check,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type ApiTask, type ApiComment, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { userInitials } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
+import { useToast } from '@/components/ui/Toast';
 
 type ChecklistItem = { id: string; text: string; done: boolean };
 type PanelTab = 'details' | 'subtasks' | 'comments' | 'activity';
@@ -20,12 +22,6 @@ const PRIORITY_FLAG_COLOR: Record<string, string> = {
   MEDIUM: 'text-amber-600',
   LOW: 'text-gray-400',
 };
-
-const AVATAR_COLORS = [
-  'bg-brand-600', 'bg-purple-500', 'bg-pink-500',
-  'bg-slate-600', 'bg-green-500', 'bg-amber-500', 'bg-blue-500',
-];
-function avatarColor(idx: number) { return AVATAR_COLORS[idx % AVATAR_COLORS.length]; }
 
 interface TaskDetailPanelProps {
   task: ApiTask | null;
@@ -61,8 +57,9 @@ function TaskDetailPanelInner({
   onUpdated?: (task: ApiTask) => void;
   onDeleted?: () => void;
 }) {
-  const { currentUser } = useOrg();
+  const { currentUser, users } = useOrg();
   const qc = useQueryClient();
+  const { toast } = useToast();
 
   const [panelTab, setPanelTab] = useState<PanelTab>('details');
   const [editingTitle, setEditingTitle] = useState(false);
@@ -70,11 +67,8 @@ function TaskDetailPanelInner({
   const [editDesc, setEditDesc] = useState(false);
   const [desc, setDesc] = useState(task.description ?? '');
   const [showStatusMenu, setShowStatusMenu] = useState(false);
-  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
-  const [newItem, setNewItem] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
-  const [showTagInput, setShowTagInput] = useState(false);
-  const [tagInput, setTagInput] = useState('');
+  const [assigneeIds, setAssigneeIds] = useState<string[]>((task.assignees ?? []).map(a => a.user?.id ?? a.userId).filter(Boolean) as string[]);
+  const [savingAssignees, setSavingAssignees] = useState(false);
   const [newSub, setNewSub] = useState('');
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
@@ -87,6 +81,7 @@ function TaskDetailPanelInner({
     setEditDesc(false);
     setShowStatusMenu(false);
     setPanelTab('details');
+    setAssigneeIds((task.assignees ?? []).map(a => a.user?.id ?? a.userId).filter(Boolean) as string[]);
   }, [task.id]);
 
   // Workflow statuses
@@ -123,8 +118,6 @@ function TaskDetailPanelInner({
     ? new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     : '—';
 
-  const doneCount = checklistItems.filter(i => i.done).length;
-  const donePercent = checklistItems.length > 0 ? (doneCount / checklistItems.length) * 100 : 0;
   const subDone = subtasks.filter(s => s.status === 'CLOSED').length;
   const subPercent = subtasks.length > 0 ? (subDone / subtasks.length) * 100 : 0;
 
@@ -137,7 +130,7 @@ function TaskDetailPanelInner({
     try {
       const updated = await api.tasks.update(task.id, { title: trimmed });
       onUpdated?.(updated);
-    } catch { setTitle(task.title); }
+    } catch (e) { setTitle(task.title); toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function saveDesc() {
@@ -146,7 +139,7 @@ function TaskDetailPanelInner({
     try {
       const updated = await api.tasks.update(task.id, { description: desc });
       onUpdated?.(updated);
-    } catch { setDesc(task.description ?? ''); }
+    } catch (e) { setDesc(task.description ?? ''); toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function changeStatus(statusId: string) {
@@ -154,7 +147,8 @@ function TaskDetailPanelInner({
     try {
       const updated = await api.tasks.setStatus(task.id, statusId);
       onUpdated?.(updated);
-    } catch {}
+      refetchSubtasks(); // moving to a CLOSED status closes subtasks server-side
+    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function markComplete() {
@@ -167,7 +161,8 @@ function TaskDetailPanelInner({
         updated = await api.tasks.update(task.id, { completionPercentage: 100 });
       }
       onUpdated?.(updated);
-    } catch {}
+      refetchSubtasks();
+    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function toggleSubtask(subtaskId: string, currentStatus: string) {
@@ -175,7 +170,7 @@ function TaskDetailPanelInner({
     try {
       await api.tasks.closeSubtask(task.id, subtaskId);
       refetchSubtasks();
-    } catch {}
+    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function addSubtask() {
@@ -185,7 +180,7 @@ function TaskDetailPanelInner({
       await api.tasks.createSubtask(task.id, { title: t });
       setNewSub('');
       refetchSubtasks();
-    } catch {}
+    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function postComment() {
@@ -209,28 +204,24 @@ function TaskDetailPanelInner({
     try {
       await api.tasks.delete(task.id);
       onDeleted?.();
-    } catch {}
+    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
-  // ── Local checklist helpers ───────────────────────────────────────────────────
+  // ── Assignees (persisted via the API) ─────────────────────────────────────────
 
-  function toggleChecklist(id: string) {
-    setChecklistItems(prev => prev.map(i => i.id === id ? { ...i, done: !i.done } : i));
-  }
-  function removeChecklist(id: string) {
-    setChecklistItems(prev => prev.filter(i => i.id !== id));
-  }
-  function addChecklistItem() {
-    const text = newItem.trim();
-    if (!text) return;
-    setChecklistItems(prev => [...prev, { id: `c${Date.now()}`, text, done: false }]);
-    setNewItem('');
-  }
-  function addTag() {
-    const t = tagInput.trim();
-    if (t && !tags.includes(t)) setTags(prev => [...prev, t]);
-    setTagInput('');
-    setShowTagInput(false);
+  async function saveAssignees(ids: string[]) {
+    setAssigneeIds(ids);
+    setSavingAssignees(true);
+    try {
+      const updated = await api.tasks.setAssignees(task.id, ids);
+      qc.invalidateQueries({ queryKey: ['tasks', projectId] });
+      onUpdated?.(updated);
+    } catch (e) {
+      setAssigneeIds((task.assignees ?? []).map(a => a.user?.id ?? a.userId).filter(Boolean) as string[]); // revert on failure
+      alert(e instanceof Error ? e.message : 'Failed to update assignees');
+    } finally {
+      setSavingAssignees(false);
+    }
   }
 
   const TABS: { key: PanelTab; label: string }[] = [
@@ -241,10 +232,10 @@ function TaskDetailPanelInner({
   ];
 
   return (
-    <div className="fixed inset-y-0 right-0 w-[480px] bg-white shadow-2xl border-l border-gray-200 z-50 flex flex-col">
+    <div className="fixed inset-y-0 right-0 w-full sm:w-[480px] bg-white shadow-2xl border-l border-gray-200 z-50 flex flex-col">
 
       {/* ── HEADER ──────────────────────────────────────────────── */}
-      <div className="shrink-0 border-b border-gray-200 px-6 py-4">
+      <div className="shrink-0 border-b border-gray-200 px-4 sm:px-6 py-4">
         {/* Row 1: status pill + actions */}
         <div className="flex items-center justify-between">
           <div className="relative">
@@ -277,9 +268,6 @@ function TaskDetailPanelInner({
           </div>
 
           <div className="flex items-center gap-1">
-            <button className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100 transition-colors">
-              <Maximize2 size={15} />
-            </button>
             <button onClick={onClose} className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100 transition-colors">
               <X size={15} />
             </button>
@@ -316,9 +304,7 @@ function TaskDetailPanelInner({
           </div>
           {firstAssignee ? (
             <div className="flex items-center gap-1.5">
-              <div className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0', avatarColor(0))}>
-                {userInitials(firstAssignee.user)}
-              </div>
+              <Avatar user={firstAssignee.user} size={24} className="shrink-0" />
               <span className="text-sm text-gray-600">{firstAssignee.user.firstName} {firstAssignee.user.lastName}</span>
             </div>
           ) : (
@@ -341,13 +327,13 @@ function TaskDetailPanelInner({
       <div className="flex-1 overflow-y-auto">
 
         {/* Tab bar */}
-        <div className="sticky top-0 bg-white border-b flex px-6 z-10">
+        <div className="sticky top-0 bg-white border-b flex px-4 sm:px-6 z-10 overflow-x-auto">
           {TABS.map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setPanelTab(key)}
               className={clsx(
-                'px-3 py-2.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors',
+                'px-3 py-2.5 text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors',
                 panelTab === key
                   ? 'border-brand-600 text-brand-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700',
@@ -360,7 +346,7 @@ function TaskDetailPanelInner({
 
         {/* ── DETAILS ─────────────────────────────────────────────── */}
         {panelTab === 'details' && (
-          <div className="px-6 py-5 space-y-5">
+          <div className="px-4 sm:px-6 py-5 space-y-5">
 
             {/* Description */}
             <div>
@@ -387,7 +373,7 @@ function TaskDetailPanelInner({
             </div>
 
             {/* Details grid */}
-            <div className="grid grid-cols-2 gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm">
               {[
                 { label: 'Status', value: statusName },
                 { label: 'Priority', value: priorityLabel },
@@ -403,74 +389,30 @@ function TaskDetailPanelInner({
               ))}
             </div>
 
-            {/* Checklist (local) */}
+            {/* Assignees (persisted) */}
             <div>
-              <div className="flex items-center gap-2 mb-2">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Checklist</p>
-                <span className="text-xs text-gray-400">{doneCount}/{checklistItems.length}</span>
-                <div className="w-20 h-1 bg-gray-200 rounded overflow-hidden ml-1">
-                  <div className="h-full bg-brand-600 rounded transition-all" style={{ width: `${donePercent}%` }} />
-                </div>
-              </div>
-              <div className="space-y-0.5">
-                {checklistItems.map(item => (
-                  <div key={item.id} className="flex items-center gap-2 py-1.5 group">
-                    <button
-                      onClick={() => toggleChecklist(item.id)}
-                      className={clsx(
-                        'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
-                        item.done ? 'bg-green-500 border-green-500' : 'border-gray-300 hover:border-gray-400',
-                      )}
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+                Assignees
+                {savingAssignees && <span className="normal-case text-gray-300 flex items-center gap-1"><Loader size={11} className="animate-spin" /> saving</span>}
+              </p>
+              <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-1.5 space-y-0.5 bg-gray-50">
+                {users.length === 0 && <p className="text-xs text-gray-400 px-1.5 py-1">No team members</p>}
+                {users.map(u => {
+                  const on = assigneeIds.includes(u.id);
+                  return (
+                    <button key={u.id} type="button" disabled={savingAssignees}
+                      onClick={() => saveAssignees(on ? assigneeIds.filter(x => x !== u.id) : [...assigneeIds, u.id])}
+                      className={clsx('w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left transition-colors disabled:opacity-60',
+                        on ? 'bg-brand-50 text-brand-700' : 'hover:bg-white text-gray-700')}
                     >
-                      {item.done && (
-                        <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 8" fill="none">
-                          <path d="M1 4l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      )}
+                      <span className={clsx('w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                        on ? 'bg-brand-600 border-brand-600' : 'border-gray-300 bg-white')}>
+                        {on && <Check size={11} className="text-white" />}
+                      </span>
+                      {u.firstName} {u.lastName}
                     </button>
-                    <span className={clsx('text-sm flex-1', item.done ? 'line-through text-gray-400' : 'text-gray-700')}>{item.text}</span>
-                    <button onClick={() => removeChecklist(item.id)} className="text-gray-300 hover:text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <input
-                className="mt-1 w-full text-sm border-0 border-b border-dashed border-gray-200 py-1.5 px-1 focus:outline-none focus:border-gray-400 placeholder:text-gray-300"
-                placeholder="Add item..."
-                value={newItem}
-                onChange={e => setNewItem(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') addChecklistItem(); }}
-              />
-            </div>
-
-            {/* Tags (local) */}
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Tags</p>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {tags.map(t => (
-                  <span key={t} className="bg-brand-50 text-brand-700 text-xs px-2.5 py-0.5 rounded-full flex items-center gap-1">
-                    {t}
-                    <button onClick={() => setTags(prev => prev.filter(x => x !== t))} className="hover:text-brand-900"><X size={11} /></button>
-                  </span>
-                ))}
-                {showTagInput ? (
-                  <input
-                    autoFocus
-                    className="text-xs border border-brand-200 rounded-full px-2.5 py-0.5 w-24 focus:outline-none focus:ring-1 focus:ring-brand-300"
-                    value={tagInput}
-                    onChange={e => setTagInput(e.target.value)}
-                    onBlur={() => { setShowTagInput(false); setTagInput(''); }}
-                    onKeyDown={e => { if (e.key === 'Enter') addTag(); }}
-                  />
-                ) : (
-                  <button
-                    onClick={() => setShowTagInput(true)}
-                    className="text-xs text-gray-400 hover:text-gray-600 border border-dashed border-gray-300 rounded-full px-2.5 py-0.5 transition-colors"
-                  >
-                    + Tag
-                  </button>
-                )}
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -478,7 +420,7 @@ function TaskDetailPanelInner({
 
         {/* ── SUBTASKS ─────────────────────────────────────────────── */}
         {panelTab === 'subtasks' && (
-          <div className="px-6 py-4">
+          <div className="px-4 sm:px-6 py-4">
             <div className="flex items-center gap-2 mb-4">
               <span className="text-xs text-gray-500">{subDone}/{subtasks.length} completed</span>
               <div className="flex-1 h-1 bg-gray-200 rounded overflow-hidden">
@@ -528,22 +470,19 @@ function TaskDetailPanelInner({
 
         {/* ── COMMENTS ─────────────────────────────────────────────── */}
         {panelTab === 'comments' && (
-          <div className="px-6 py-4">
+          <div className="px-4 sm:px-6 py-4">
             <div className="space-y-4 mb-4">
               {comments.length === 0 && (
                 <p className="text-sm text-gray-400 text-center py-6">No comments yet. Be the first to comment.</p>
               )}
-              {comments.map((c, idx) => {
-                const initials = c.user ? userInitials(c.user) : '?';
+              {comments.map((c) => {
                 const name = c.user ? `${c.user.firstName} ${c.user.lastName}` : 'Unknown';
                 const timeStr = new Date(c.createdAt).toLocaleString('en-US', {
                   month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                 });
                 return (
                   <div key={c.id} className="flex gap-3">
-                    <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0', avatarColor(idx))}>
-                      {initials}
-                    </div>
+                    <Avatar user={c.user} size={32} className="shrink-0" />
                     <div className="flex-1">
                       <div className="flex items-baseline gap-2">
                         <span className="text-sm font-medium text-gray-800">{name}</span>
@@ -558,9 +497,7 @@ function TaskDetailPanelInner({
 
             <div className="border-t pt-4">
               <div className="flex gap-3">
-                <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0', avatarColor(0))}>
-                  {currentUser ? userInitials(currentUser) : '?'}
-                </div>
+                <Avatar user={currentUser} size={32} className="shrink-0" />
                 <div className="flex-1">
                   <textarea
                     rows={2}
@@ -588,7 +525,7 @@ function TaskDetailPanelInner({
 
         {/* ── ACTIVITY ─────────────────────────────────────────────── */}
         {panelTab === 'activity' && (
-          <div className="px-6 py-4">
+          <div className="px-4 sm:px-6 py-4">
             <div className="relative">
               <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-200" />
               <div className="space-y-0">
@@ -619,7 +556,7 @@ function TaskDetailPanelInner({
       </div>
 
       {/* ── FOOTER ─────────────────────────────────────────────────── */}
-      <div className="shrink-0 border-t border-gray-100 px-6 py-4 flex items-center gap-3">
+      <div className="shrink-0 border-t border-gray-100 px-4 sm:px-6 py-4 flex items-center gap-3">
         <button
           onClick={isClosed ? undefined : markComplete}
           className={clsx(

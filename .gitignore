@@ -30,21 +30,14 @@ coverage/
 .windsurf/
 .playwright-mcp/
 
-# ── Session screenshots (local debug artifacts; fav.png is kept) ─
-/attendance-*.png
-/auth-home-*.png
-/drilldown-*.png
-/kpi-*.png
-/org-distributions*.png
-/perf-*.png
+# ── Local debug screenshots at repo root (keep fav.png; keep committed assets under docs/) ─
+/*.png
+!fav.png
 
 # ── Backup files (created during dev) ─────────────────────
 *.bak
 
-# ── Reference / unrelated projects (not part of this app) ─
-dashboard/
-
-# ── Binary documents ──────────────────────────────────────
+# ── Binary documents (source docs; committed reference PDFs live in docs/reference/) ─
 *.docx
 *.doc
 
@@ -57,6 +50,10 @@ Thumbs.db
 *.swo
 .cache/
 
-# ── NOTE ──────────────────────────────────────────────────
-# .env is intentionally NOT ignored here — it is committed on purpose.
-# Rotate JWT_ACCESS_SECRET and the DB / MinIO passwords before any real deployment.
+# ── Secrets — NEVER commit real env or credential files ───
+# (the *.example templates are safe placeholders and stay committed)
+.env
+.env.*
+!.env.example
+!.env.production.example
+SquarkIP-credentials.*

@@ -6,7 +6,11 @@ const SUPER_ADMIN_ROLE = 'Super Admin';
 export interface EffectivePermissions {
   userId: string;
   isSuperAdmin: boolean;
+  /** distinct role names assigned to the user (for persona labelling on the client) */
+  roles: string[];
   codes: string[];
+  /** explicit DENY-override codes — these beat any wildcard ALLOW (spec §6 precedence) */
+  deny: string[];
   /** code → where it was granted (role/group/direct/override) for the admin preview UI */
   sources: Record<string, string>;
 }
@@ -31,14 +35,15 @@ export class PermissionService {
       },
     });
 
-    if (!user) return { userId, isSuperAdmin: false, codes: [], sources: {} };
+    if (!user) return { userId, isSuperAdmin: false, roles: [], codes: [], deny: [], sources: {} };
 
-    const isSuperAdmin = user.userRoles.some(ur => ur.role.name === SUPER_ADMIN_ROLE);
+    const roles = [...new Set(user.userRoles.map(ur => ur.role.name))];
+    const isSuperAdmin = roles.includes(SUPER_ADMIN_ROLE);
     if (isSuperAdmin) {
       const all = await this.prisma.permission.findMany({ select: { code: true } });
       const sources: Record<string, string> = {};
       all.forEach(p => { sources[p.code] = 'super-admin'; });
-      return { userId, isSuperAdmin: true, codes: all.map(p => p.code), sources };
+      return { userId, isSuperAdmin: true, roles, codes: all.map(p => p.code), deny: [], sources };
     }
 
     const sources: Record<string, string> = {};
@@ -57,17 +62,20 @@ export class PermissionService {
     for (const ov of user.permissionOverrides) {
       if (ov.effect === 'ALLOW') { allow.add(ov.permission.code); sources[ov.permission.code] = 'override:ALLOW'; }
     }
+    const deny: string[] = [];
     for (const ov of user.permissionOverrides) {
-      if (ov.effect === 'DENY') { allow.delete(ov.permission.code); delete sources[ov.permission.code]; }
+      if (ov.effect === 'DENY') { allow.delete(ov.permission.code); delete sources[ov.permission.code]; deny.push(ov.permission.code); }
     }
 
-    return { userId, isSuperAdmin: false, codes: [...allow].sort(), sources };
+    return { userId, isSuperAdmin: false, roles, codes: [...allow].sort(), deny, sources };
   }
 
   /** True if the user is allowed the given permission code (any-of supported via check loop in the guard). */
   async check(userId: string, code: string): Promise<boolean> {
     const eff = await this.getEffectivePermissions(userId);
     if (eff.isSuperAdmin) return true;
+    // An explicit DENY override beats any wildcard ALLOW (spec §6 precedence).
+    if (eff.deny.includes(code)) return false;
     if (eff.codes.includes(code)) return true;
     // wildcard safety net (not seeded by default): '*' or 'module.*'
     if (eff.codes.includes('*')) return true;

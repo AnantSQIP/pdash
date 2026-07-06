@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Settings2,
   Users,
@@ -14,14 +14,20 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
+import Link from 'next/link';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useOrg } from '@/lib/org-context';
+import { Can } from '@/lib/permissions-context';
+import { api, type UserSummary } from '@/lib/api';
+import { Avatar } from '@/components/Avatar';
+import { fullName } from '@/lib/avatar';
+import { ProfilePhotoCard } from '@/components/ProfilePhotoCard';
 
+// Only tabs backed by real functionality are shown. Notifications / Workflows /
+// Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
 const TABS = [
   { id: 'general',       label: 'General',           icon: Settings2  },
   { id: 'members',       label: 'Members & Roles',   icon: Users      },
-  { id: 'notifications', label: 'Notifications',     icon: Bell       },
-  { id: 'workflows',     label: 'Workflows',         icon: GitBranch  },
-  { id: 'integrations',  label: 'Integrations',      icon: Plug       },
-  { id: 'billing',       label: 'Billing & Plan',    icon: CreditCard },
 ];
 
 // ── Toggle Switch ──────────────────────────────────────────────────────────────
@@ -46,9 +52,14 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 
 // ── General Tab ────────────────────────────────────────────────────────────────
 function GeneralTab() {
-  const [orgName, setOrgName] = useState('Acme Corp');
+  const { org } = useOrg();
+  const qc = useQueryClient();
+  const [orgName, setOrgName] = useState('');
+  useEffect(() => { if (org) setOrgName(org.name); }, [org]);
   const [orgTimezone, setOrgTimezone] = useState('UTC');
   const [showSaved, setShowSaved] = useState(false);
+  const [saveErr, setSaveErr] = useState('');
+  const [saving, setSaving] = useState(false);
   const [selectedColor, setSelectedColor] = useState('brand');
 
   const COLOR_SWATCHES = [
@@ -60,15 +71,24 @@ function GeneralTab() {
     { id: 'purple',  bg: 'bg-purple-600'  },
   ];
 
-  function handleSave() {
-    setShowSaved(true);
-    setTimeout(() => setShowSaved(false), 2000);
+  async function handleSave() {
+    if (!org || !orgName.trim() || saving) return;
+    setSaving(true); setSaveErr('');
+    try {
+      await api.orgs.update(org.id, { name: orgName.trim() });
+      await qc.invalidateQueries({ queryKey: ['orgs'] }); // reflect the new name app-wide
+      setShowSaved(true);
+      setTimeout(() => setShowSaved(false), 2000);
+    } catch (e) {
+      setSaveErr(e instanceof Error ? e.message : 'Could not save changes');
+    } finally { setSaving(false); }
   }
 
   return (
     <div className="space-y-6">
+      <ProfilePhotoCard />
       {/* Organization card */}
-      <div className="bg-white rounded-xl border p-6 space-y-4">
+      <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Organization</h2>
 
         <div>
@@ -85,7 +105,7 @@ function GeneralTab() {
           <label className="block text-sm font-medium text-gray-700 mb-1">Code</label>
           <input
             type="text"
-            value="pdash-001"
+            value={org?.code ?? ''}
             disabled
             className="w-full max-w-md px-3.5 py-2.5 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-400 cursor-not-allowed"
           />
@@ -116,16 +136,18 @@ function GeneralTab() {
         <div className="flex items-center gap-3 pt-2">
           <button
             onClick={handleSave}
-            className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
+            disabled={saving || !orgName.trim()}
+            className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50"
           >
-            Save Changes
+            {saving ? 'Saving…' : 'Save Changes'}
           </button>
           {showSaved && <span className="text-sm text-green-600 font-medium">✓ Saved!</span>}
+          {saveErr && <span className="text-sm text-red-600">{saveErr}</span>}
         </div>
       </div>
 
       {/* Branding card */}
-      <div className="bg-white rounded-xl border p-6 space-y-4">
+      <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Branding</h2>
 
         <div>
@@ -158,7 +180,7 @@ function GeneralTab() {
       </div>
 
       {/* Danger Zone */}
-      <div className="bg-white rounded-xl border border-red-200 p-6">
+      <div className="bg-white rounded-xl border border-red-200 p-4 sm:p-6">
         <h2 className="text-base font-semibold text-red-700 mb-4">Danger Zone</h2>
         <button
           onClick={() => {
@@ -174,162 +196,94 @@ function GeneralTab() {
 }
 
 // ── Members Tab ────────────────────────────────────────────────────────────────
-type Member = {
-  name: string;
-  initials: string;
-  color: string;
-  email: string;
-  role: string;
-  status: string;
-};
-
-const INITIAL_MEMBERS: Member[] = [
-  { name: 'Anant Gupta', initials: 'AN', color: 'bg-brand-600', email: 'anant@acme.com',  role: 'Admin',   status: 'ACTIVE'   },
-  { name: 'Alice Kim',   initials: 'AK', color: 'bg-purple-500', email: 'alice@acme.com',  role: 'Manager', status: 'ACTIVE'   },
-  { name: 'Bob Taylor',  initials: 'BT', color: 'bg-slate-600',   email: 'bob@acme.com',    role: 'Member',  status: 'ACTIVE'   },
-  { name: 'Carol Patel', initials: 'CP', color: 'bg-pink-500',   email: 'carol@acme.com',  role: 'Member',  status: 'ACTIVE'   },
-  { name: 'Dan Voss',    initials: 'DV', color: 'bg-red-500',    email: 'dan@acme.com',    role: 'Member',  status: 'ACTIVE'   },
-  { name: 'Frank Ito',   initials: 'FI', color: 'bg-indigo-500', email: 'frank@acme.com',  role: 'Member',  status: 'ON_LEAVE' },
-];
-
 function MembersTab() {
-  const [members, setMembers] = useState<Member[]>(INITIAL_MEMBERS);
-  const [showInvite, setShowInvite] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('Member');
+  const { org } = useOrg();
+  const { data: users = [], isLoading } = useQuery<UserSummary[]>({
+    queryKey: ['users', org?.id],
+    queryFn: () => api.users.list(org!.id),
+    enabled: !!org?.id,
+    staleTime: 30_000,
+  });
 
-  function updateRole(email: string, role: string) {
-    setMembers(prev => prev.map(m => m.email === email ? { ...m, role } : m));
-  }
-
-  function removeMember(email: string) {
-    if (window.confirm('Remove member?')) {
-      setMembers(prev => prev.filter(m => m.email !== email));
-    }
-  }
-
-  const adminCount   = members.filter(m => m.role === 'Admin').length;
-  const managerCount = members.filter(m => m.role === 'Manager').length;
-  const memberCount  = members.filter(m => m.role === 'Member').length;
+  // Real headcount per designation (replaces the old hardcoded role buckets).
+  const byDesignation = users.reduce<Record<string, number>>((acc, u) => {
+    const k = u.designation || 'Unassigned';
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-xl border p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-gray-900">Team Members</h2>
-          <button
-            onClick={() => setShowInvite(v => !v)}
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
-          >
-            <UserPlus className="w-4 h-4" />
-            Invite Member
-          </button>
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Team Members</h2>
+            <p className="text-xs text-gray-500 mt-0.5">{isLoading ? 'Loading…' : `${users.length} members`} · roles &amp; access are managed in Admin</p>
+          </div>
+          <Can perm="user.create">
+            <Link href="/admin" className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors">
+              <UserPlus className="w-4 h-4" />
+              Add Member
+            </Link>
+          </Can>
         </div>
 
-        {showInvite && (
-          <div className="bg-brand-50 border border-brand-200 rounded-lg p-4 flex items-center gap-3 mb-4">
-            <input
-              type="email"
-              placeholder="Email address"
-              value={inviteEmail}
-              onChange={e => setInviteEmail(e.target.value)}
-              className="flex-1 px-3.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
-            />
-            <select
-              value={inviteRole}
-              onChange={e => setInviteRole(e.target.value)}
-              className="px-3.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
-            >
-              <option>Admin</option>
-              <option>Manager</option>
-              <option>Member</option>
-            </select>
-            <button
-              onClick={() => { alert('Invite sent!'); setShowInvite(false); }}
-              className="px-3 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
-            >
-              Send Invite
-            </button>
-            <button
-              onClick={() => setShowInvite(false)}
-              className="px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
+        {isLoading ? (
+          <p className="text-sm text-gray-400 py-6">Loading members…</p>
+        ) : (
+          <div className="overflow-x-auto">
+          <table className="w-full whitespace-nowrap">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Member</th>
+                <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Designation</th>
+                <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Status</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {users.map(u => (
+                <tr key={u.id}>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2.5">
+                      <Avatar user={u} size={32} />
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">{fullName(u)}</div>
+                        <div className="text-xs text-gray-500">{u.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-sm text-gray-600">{u.designation || '—'}</td>
+                  <td className="px-3 py-3">
+                    <span className={clsx(
+                      'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+                      u.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700',
+                    )}>
+                      {u.status === 'ACTIVE' ? 'Active' : u.status}
+                    </span>
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <Link href={`/admin/users/${u.id}`} className="text-xs border border-gray-300 text-gray-600 px-2.5 py-1 rounded-lg hover:bg-gray-50 transition-colors">Manage</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           </div>
         )}
-
-        <table className="w-full">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Avatar</th>
-              <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Name</th>
-              <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Role</th>
-              <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Status</th>
-              <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {members.map(member => (
-              <tr key={member.email}>
-                <td className="px-3 py-3">
-                  <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-semibold', member.color)}>
-                    {member.initials}
-                  </div>
-                </td>
-                <td className="px-3 py-3">
-                  <div className="text-sm font-medium text-gray-900">{member.name}</div>
-                  <div className="text-xs text-gray-500">{member.email}</div>
-                </td>
-                <td className="px-3 py-3">
-                  <select
-                    value={member.role}
-                    onChange={e => updateRole(member.email, e.target.value)}
-                    className="text-sm border border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-500 transition"
-                  >
-                    <option>Admin</option>
-                    <option>Manager</option>
-                    <option>Member</option>
-                  </select>
-                </td>
-                <td className="px-3 py-3">
-                  <span className={clsx(
-                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
-                    member.status === 'ACTIVE'   ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700',
-                  )}>
-                    {member.status === 'ACTIVE' ? 'Active' : 'On Leave'}
-                  </span>
-                </td>
-                <td className="px-3 py-3">
-                  <button
-                    onClick={() => removeMember(member.email)}
-                    className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors text-base leading-none"
-                  >
-                    ×
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
 
-      {/* Permission Groups */}
-      <div className="bg-white rounded-xl border p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">Permission Groups</h2>
-        <div className="grid grid-cols-3 gap-4">
-          {[
-            { name: 'Admin',   desc: 'Full access to all features',                       count: adminCount   },
-            { name: 'Manager', desc: 'Create and manage projects',                        count: managerCount },
-            { name: 'Member',  desc: 'View and contribute to assigned projects',          count: memberCount  },
-          ].map(group => (
-            <div key={group.name} className="border rounded-xl p-4">
-              <div className="text-sm font-medium text-gray-900">{group.name}</div>
-              <div className="text-xs text-gray-500 mt-1">{group.desc}</div>
-              <div className="text-xs text-gray-400 mt-2">{group.count} member{group.count !== 1 ? 's' : ''}</div>
-              <button className="mt-3 text-xs border border-gray-300 text-gray-600 px-2 py-1 rounded hover:bg-gray-50 transition-colors">
-                Edit
-              </button>
+      {/* Headcount by designation → full role/permission management lives in Admin */}
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-900">Roles &amp; Permission Groups</h2>
+          <Link href="/admin" className="text-xs text-brand-600 hover:underline">Manage in Admin →</Link>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          {Object.entries(byDesignation).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
+            <div key={name} className="border rounded-xl p-4">
+              <div className="text-sm font-medium text-gray-900">{name}</div>
+              <div className="text-xs text-gray-400 mt-2">{count} member{count !== 1 ? 's' : ''}</div>
             </div>
           ))}
         </div>
@@ -374,7 +328,7 @@ function NotificationsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">Email Notifications</h2>
         <div>
           {EMAIL_TOGGLES.map(item => (
@@ -392,7 +346,7 @@ function NotificationsTab() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">In-App Notifications</h2>
         <div>
           {INAPP_TOGGLES.map(item => (
@@ -428,7 +382,7 @@ function WorkflowsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-semibold text-gray-900">Workflow Templates</h2>
           <button
@@ -471,7 +425,7 @@ function WorkflowsTab() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">Automation Rules</h2>
         <div className="space-y-3">
           {automations.map((auto, i) => (
@@ -509,7 +463,7 @@ function IntegrationsTab() {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {intState.map(int => (
         <div key={int.name} className="bg-white rounded-xl border p-4">
           <div className="text-3xl mb-2">{int.logo}</div>
@@ -564,7 +518,7 @@ function BillingTab() {
   return (
     <div className="space-y-6">
       {/* Current Plan */}
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <span className="bg-purple-100 text-purple-700 text-sm font-semibold px-3 py-1 rounded-full inline-block mb-3">
           Professional Plan
         </span>
@@ -578,7 +532,7 @@ function BillingTab() {
         </div>
         <div className="text-xs text-gray-500 mt-1 mb-3">8 / 10 seats used</div>
         <div className="text-lg font-medium text-gray-900 mb-4">Total: $232 / month</div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={() => alert('Upgrade coming soon')}
             className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
@@ -595,7 +549,7 @@ function BillingTab() {
       </div>
 
       {/* Plan Features */}
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">Plan Features</h2>
         <ul className="space-y-2">
           {PLAN_FEATURES.map(f => (
@@ -608,9 +562,10 @@ function BillingTab() {
       </div>
 
       {/* Billing History */}
-      <div className="bg-white rounded-xl border p-6">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-4">Billing History</h2>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm whitespace-nowrap">
           <thead className="bg-gray-50">
             <tr>
               <th className="text-left text-xs uppercase text-gray-500 font-medium px-3 py-2">Date</th>
@@ -641,6 +596,7 @@ function BillingTab() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -653,16 +609,16 @@ export default function SettingsPage() {
   return (
     <div className="min-h-full">
       {/* Header */}
-      <div className="bg-white border-b px-6 py-4">
+      <div className="bg-white border-b px-4 sm:px-6 py-4">
         <h1 className="text-xl font-bold text-gray-900">Settings</h1>
         <p className="text-sm text-gray-500 mt-0.5">Manage your organization preferences</p>
       </div>
 
       {/* Body */}
-      <div className="flex">
+      <div className="flex flex-col lg:flex-row">
         {/* Left nav */}
-        <aside className="w-56 shrink-0 bg-white border-r min-h-[calc(100vh-73px)] p-4">
-          <nav className="space-y-0.5">
+        <aside className="w-full lg:w-56 shrink-0 bg-white border-b lg:border-b-0 lg:border-r lg:min-h-[calc(100vh-73px)] p-4">
+          <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:gap-0 lg:space-y-0.5">
             {TABS.map(tab => {
               const Icon = tab.icon;
               return (
@@ -670,7 +626,7 @@ export default function SettingsPage() {
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={clsx(
-                    'flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer w-full rounded-lg transition-colors',
+                    'flex items-center gap-2.5 px-3 py-2 text-sm cursor-pointer whitespace-nowrap shrink-0 lg:w-full rounded-lg transition-colors',
                     activeTab === tab.id
                       ? 'bg-brand-600 text-white'
                       : 'text-gray-600 hover:bg-gray-100',
@@ -685,13 +641,9 @@ export default function SettingsPage() {
         </aside>
 
         {/* Content */}
-        <main className="flex-1 p-6 space-y-6">
+        <main className="flex-1 p-4 sm:p-6 space-y-6">
           {activeTab === 'general'       && <GeneralTab />}
           {activeTab === 'members'       && <MembersTab />}
-          {activeTab === 'notifications' && <NotificationsTab />}
-          {activeTab === 'workflows'     && <WorkflowsTab />}
-          {activeTab === 'integrations'  && <IntegrationsTab />}
-          {activeTab === 'billing'       && <BillingTab />}
         </main>
       </div>
     </div>

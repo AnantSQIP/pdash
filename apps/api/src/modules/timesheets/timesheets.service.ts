@@ -16,6 +16,15 @@ export class TimesheetsService {
     private readonly events: EventService,
   ) {}
 
+  /** Keep Task.actualHours in sync = SUM of its non-deleted timesheet hours. */
+  private async recomputeTaskActualHours(taskId: string): Promise<void> {
+    const agg = await this.prisma.timesheet.aggregate({
+      where: { taskId, deletedAt: null },
+      _sum: { hoursLogged: true },
+    });
+    await this.prisma.task.update({ where: { id: taskId }, data: { actualHours: agg._sum.hoursLogged ?? 0 } });
+  }
+
   async listForProject(projectId: string) {
     const projectTasks = await this.prisma.projectTask.findMany({
       where: { projectId },
@@ -58,6 +67,7 @@ export class TimesheetsService {
       actorId: dto.userId,
       metadata: { taskId: dto.taskId, hours: dto.hoursLogged, billable: entry.billable },
     });
+    await this.recomputeTaskActualHours(dto.taskId);
     return entry;
   }
 
@@ -65,7 +75,7 @@ export class TimesheetsService {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
 
-    return this.prisma.timesheet.update({
+    const updated = await this.prisma.timesheet.update({
       where: { id },
       data: {
         hoursLogged: dto.hoursLogged,
@@ -74,11 +84,15 @@ export class TimesheetsService {
       },
       include: INCLUDE,
     });
+    if (dto.hoursLogged !== undefined) await this.recomputeTaskActualHours(entry.taskId);
+    return updated;
   }
 
   async softDelete(id: string) {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
-    return this.prisma.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
+    const deleted = await this.prisma.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
+    await this.recomputeTaskActualHours(entry.taskId);
+    return deleted;
   }
 }

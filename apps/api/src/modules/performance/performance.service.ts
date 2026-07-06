@@ -122,6 +122,7 @@ export class PerformanceService {
     return {
       tasksCompleted: completed.length,
       onTimeRate: pct(onTime, withDue.length),
+      withDueCount: withDue.length,
       hoursLogged: Math.round((hoursAgg._sum.hoursLogged ?? 0) * 10) / 10,
       billableHours: Math.round((billableAgg._sum.hoursLogged ?? 0) * 10) / 10,
       issuesReported, issuesResolved, commentsPosted, activityVolume,
@@ -238,13 +239,14 @@ export class PerformanceService {
         userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
         department: u.departmentMemberships[0]?.department?.name ?? undefined,
         tasksCompleted: cur.tasksCompleted, hoursLogged: cur.hoursLogged, onTimeRate: cur.onTimeRate, activityVolume: cur.activityVolume,
+        withDueCount: cur.withDueCount,
         score: scoreOf(cur), prevScore: scoreOf(prev), prevHours: prev.hoursLogged, prevCompleted: prev.tasksCompleted,
       };
     }));
     rows.sort((a, b) => b.score - a.score);
 
     const sum = (f: (r: typeof rows[number]) => number) => Math.round(rows.reduce((s, r) => s + f(r), 0) * 10) / 10;
-    const rated = rows.filter(r => r.onTimeRate > 0);
+    const rated = rows.filter(r => r.withDueCount > 0);
     const avgOnTimeRate = rated.length ? Math.round(rated.reduce((s, r) => s + r.onTimeRate, 0) / rated.length) : 0;
     const activeProjects = await this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE', members: { some: { user: { organizationId } } } } });
 
@@ -258,7 +260,7 @@ export class PerformanceService {
         tasksCompleted: rows.reduce((s, r) => s + r.prevCompleted, 0),
         hoursLogged: Math.round(rows.reduce((s, r) => s + r.prevHours, 0) * 10) / 10,
       },
-      leaderboard: rows.map(({ prevScore, prevHours, prevCompleted, ...r }) => r),
+      leaderboard: rows.map(({ prevScore, prevHours, prevCompleted, withDueCount, ...r }) => r),
     };
   }
 
@@ -458,11 +460,13 @@ export class PerformanceService {
 
     // capacity vs logged per department.
     // Availability-fair denominator: target = Σ_member (businessDays − company holidays −
-    // that member's approved leave) × 8h. Excluding holidays/leave means people on approved
+    // that member's approved leave) × 9.6h. Excluding holidays/leave means people on approved
     // time off no longer drag utilization down. (ATTENDANCE_BILLABLE_PLAN.md, B2.)
     // Snap the window to UTC-day boundaries so the weekday set lines up with the
     // midnight-stamped holiday/leave rows (avoids a boundary-day mismatch).
-    const DAILY_HOURS = 8;
+    // Work week = 48h over 5 weekdays (Mon–Fri) → 9.6h/day. Weekends are already excluded
+    // by businessDays(); holidays + approved leave are subtracted from availableDays.
+    const DAILY_HOURS = 48 / 5; // 9.6h/day
     const fromDay = utcDay(from);
     const toDay = utcDay(to);
     const weekdaySet = new Set<string>();

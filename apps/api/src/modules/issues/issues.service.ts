@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { CreateIssueDto, UpdateIssueDto } from './dto';
+import { getActorId } from '../../common/context/request-context';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true };
 
@@ -14,6 +15,8 @@ export class IssuesService {
   ) {}
 
   list(projectId: string, status?: string) {
+    // Require an explicit project scope — never return every project's issues.
+    if (!projectId) return [];
     return this.prisma.issue.findMany({
       where: { projectId, deletedAt: null, status },
       include: {
@@ -37,13 +40,15 @@ export class IssuesService {
   }
 
   async create(dto: CreateIssueDto) {
+    // Reporter is the verified cookie actor — never a client-supplied id.
+    const reportedBy = getActorId() ?? dto.reportedBy ?? 'system';
     const issue = await this.prisma.issue.create({
       data: {
         projectId: dto.projectId,
         title: dto.title,
         description: dto.description,
         severity: dto.severity ?? 'MINOR',
-        reportedBy: dto.reportedBy,
+        reportedBy,
         assigneeId: dto.assigneeId,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
       },
@@ -56,7 +61,6 @@ export class IssuesService {
       action: EVENTS.ISSUE_CREATED,
       entityType: 'ISSUE',
       entityId: issue.id,
-      actorId: dto.reportedBy,
       metadata: { projectId: dto.projectId, title: issue.title, severity: issue.severity },
     });
     return issue;

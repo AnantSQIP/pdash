@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar,
-  LayoutList, Flag, MoreHorizontal,
+  LayoutList, Flag,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -19,10 +19,12 @@ import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { api, type ApiProject, type ApiTask } from '@/lib/api';
-import { userInitials, avatarColor as avatarColorFor } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
+import { useToast } from '@/components/ui/Toast';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
-const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Issues', 'Activity', 'Timesheets', 'Files', 'Discussions'];
+// 'Files' is hidden — it was an unbacked mock (no files API yet).
+const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -35,6 +37,7 @@ interface Props { projectId: string }
 
 export function ProjectDetailClient({ projectId }: Props) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<Tab>('Task List');
   const [showAddTask, setShowAddTask] = useState(false);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
@@ -69,15 +72,20 @@ export function ProjectDetailClient({ projectId }: Props) {
   }
 
   async function handleMove(taskId: string, statusId: string) {
+    const status = statuses.find(s => s.id === statusId);
+    const movedTask = tasks.find(t => t.id === taskId);
     // Optimistic: update cache immediately so the card stays in the new column
     qc.setQueryData<ApiTask[]>(['tasks', projectId], old =>
       (old ?? []).map(t => t.id === taskId
-        ? { ...t, currentStatus: statuses.find(s => s.id === statusId) ?? t.currentStatus }
+        ? { ...t, currentStatus: status ?? t.currentStatus }
         : t));
     try {
       await api.tasks.setStatus(taskId, statusId);
+      toast(`"${movedTask?.title ?? 'Task'}" moved to ${status?.name ?? 'new status'}`, 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not update the task status', 'error');
     } finally {
-      invalidateTasks();
+      invalidateTasks(); // refetches tasks + project → progress bar re-syncs
     }
   }
 
@@ -85,7 +93,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     return (
       <div className="flex flex-col h-full overflow-hidden animate-pulse">
         {/* Header skeleton */}
-        <div className="bg-white border-b border-gray-200 shrink-0 px-6 py-4">
+        <div className="bg-white border-b border-gray-200 shrink-0 px-4 sm:px-6 py-4">
           <div className="w-24 h-4 bg-gray-200 rounded mb-3" />
           <div className="flex items-start justify-between gap-4 mb-4">
             <div className="space-y-2">
@@ -113,13 +121,13 @@ export function ProjectDetailClient({ projectId }: Props) {
           </div>
         </div>
         {/* Tab bar skeleton */}
-        <div className="bg-white border-b border-gray-100 px-6 flex gap-1">
+        <div className="bg-white border-b border-gray-100 px-4 sm:px-6 flex gap-1 overflow-x-auto">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="w-20 h-10 bg-gray-100 rounded mt-1" />
           ))}
         </div>
         {/* Content skeleton */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-gray-50">
@@ -153,7 +161,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 shrink-0">
-        <div className="px-6 py-4">
+        <div className="px-4 sm:px-6 py-4">
           <Link href="/projects" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3 w-fit">
             <ArrowLeft size={14} /> All Projects
           </Link>
@@ -166,15 +174,12 @@ export function ProjectDetailClient({ projectId }: Props) {
                 </span>
                 <span className={clsx('text-xs font-semibold', priority.color)}>{priority.label} Priority</span>
               </div>
-              <h1 className="text-2xl font-bold text-gray-900">{project.title}</h1>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{project.title}</h1>
               {project.description && (
                 <p className="text-sm text-gray-500 mt-1 max-w-xl">{project.description}</p>
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors">
-                <MoreHorizontal size={18} />
-              </button>
               <button
                 onClick={() => setShowAddTask(true)}
                 className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
@@ -185,7 +190,7 @@ export function ProjectDetailClient({ projectId }: Props) {
           </div>
 
           {/* Stats row */}
-          <div className="flex items-center gap-6 mt-4 text-sm">
+          <div className="flex items-center flex-wrap gap-x-6 gap-y-2 mt-4 text-sm">
             <div className="flex items-center gap-1.5 text-gray-500">
               <CheckSquare size={14} />
               <span><span className="font-medium text-gray-900">{project._count?.projectTasks ?? tasks.length}</span> tasks</span>
@@ -221,7 +226,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={clsx(
-                'px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition-colors',
+                'px-4 py-2.5 text-sm font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors',
                 activeTab === tab
                   ? 'border-brand-600 text-brand-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700',
@@ -234,7 +239,7 @@ export function ProjectDetailClient({ projectId }: Props) {
       </header>
 
       {/* Tab content */}
-      <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-6')}>
+      <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-4 sm:p-6')}>
         {activeTab === 'Task List' && (
           <TaskListView
             tasks={tasks}
@@ -350,7 +355,6 @@ function TaskListView({
         const statusName = task.currentStatus?.name ?? 'Open';
         const statusColor = task.currentStatus?.colorHex ?? '#64748b';
         const firstAssignee = task.assignees?.[0];
-        const assigneeInitials = firstAssignee ? userInitials(firstAssignee.user) : null;
 
         return (
           <div
@@ -389,13 +393,8 @@ function TaskListView({
             </div>
 
             <div className="hidden sm:flex items-center gap-2 w-24 shrink-0">
-              {assigneeInitials ? (
-                <div
-                  title={`${firstAssignee!.user.firstName} ${firstAssignee!.user.lastName ?? ''}`.trim()}
-                  className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white', avatarColorFor(firstAssignee!.user.id))}
-                >
-                  {assigneeInitials}
-                </div>
+              {firstAssignee ? (
+                <Avatar user={firstAssignee.user} size={24} />
               ) : (
                 <div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />
               )}
@@ -432,9 +431,9 @@ function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[
   const members = project.members ?? [];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
       {/* Progress card */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Overall Progress</h3>
         <div className="flex items-center gap-4 mb-4">
           <div className="relative w-24 h-24 shrink-0">
@@ -465,16 +464,14 @@ function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[
       </div>
 
       {/* Team */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
         <h3 className="text-sm font-semibold text-gray-700 mb-4">Team Members</h3>
         <div className="space-y-3">
           {members.length === 0 ? (
             <p className="text-sm text-gray-400">No members assigned</p>
           ) : members.map((m, i) => (
             <div key={m.userId} className="flex items-center gap-3">
-              <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0', avatarColorFor(m.user.id))}>
-                {userInitials(m.user)}
-              </div>
+              <Avatar user={m.user} size={32} />
               <div>
                 <p className="text-sm font-medium text-gray-800">{`${m.user.firstName} ${m.user.lastName ?? ''}`.trim()}</p>
                 <p className="text-xs text-gray-500">{m.projectRole ?? (i === 0 ? 'Manager' : 'Member')}</p>

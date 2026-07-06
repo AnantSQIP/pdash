@@ -72,18 +72,33 @@ export class AuthService {
     if (!rawToken) throw new UnauthorizedException('No refresh token');
     const row = await this.prisma.refreshToken.findUnique({ where: { tokenHash: sha256(rawToken) } });
     if (!row) throw new UnauthorizedException('Invalid refresh token');
-    // Reuse of an already-rotated/revoked token ⇒ probable theft: kill the whole family.
+    // A token that was rotated/revoked is normally a theft signal → kill the whole family.
+    // BUT a token revoked just moments ago is almost always a benign concurrent refresh
+    // (two requests/tabs raced): reject only this request, don't revoke the session.
     if (row.revokedAt || row.replacedById) {
-      await this.prisma.refreshToken.updateMany({ where: { familyId: row.familyId, revokedAt: null }, data: { revokedAt: new Date() } });
-      throw new UnauthorizedException('Refresh token reuse detected — session revoked');
+      const ROTATION_GRACE_MS = 15_000;
+      const rotatedRecently = !!row.revokedAt && Date.now() - row.revokedAt.getTime() < ROTATION_GRACE_MS;
+      if (!rotatedRecently) {
+        await this.prisma.refreshToken.updateMany({ where: { familyId: row.familyId, revokedAt: null }, data: { revokedAt: new Date() } });
+        throw new UnauthorizedException('Refresh token reuse detected — session revoked');
+      }
+      throw new UnauthorizedException('Refresh token already rotated');
     }
     if (row.expiresAt < new Date()) throw new UnauthorizedException('Refresh token expired');
 
     const user = await this.prisma.user.findUnique({ where: { id: row.userId } });
     if (!user || user.status !== 'ACTIVE' || user.deletedAt) throw new UnauthorizedException('User not available');
 
+    // Atomically claim this token so two concurrent refreshes can't both rotate it
+    // (the loser gets count 0 → 401). Prevents a race that mints two live sessions.
+    const claimed = await this.prisma.refreshToken.updateMany({
+      where: { id: row.id, revokedAt: null, replacedById: null },
+      data: { revokedAt: new Date() },
+    });
+    if (claimed.count !== 1) throw new UnauthorizedException('Refresh token already rotated');
+
     const next = await this.issueRefresh(user.id, row.familyId, ctx);
-    await this.prisma.refreshToken.update({ where: { id: row.id }, data: { revokedAt: new Date(), replacedById: next.id } });
+    await this.prisma.refreshToken.update({ where: { id: row.id }, data: { replacedById: next.id } });
     const accessToken = this.signAccess(user);
     return { user: this.toAuthUser(user), accessToken, refreshToken: next.raw };
   }

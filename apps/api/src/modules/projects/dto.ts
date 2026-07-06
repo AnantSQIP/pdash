@@ -15,8 +15,11 @@ export class CreateProjectDto {
   @MaxLength(100)
   title!: string;
 
+  // Deprecated/ignored — the creator is taken from the verified cookie actor.
+  // Kept optional so legacy clients that still send it are not rejected.
+  @IsOptional()
   @IsString()
-  createdBy!: string;
+  createdBy?: string;
 
   @IsOptional()
   @IsString()
@@ -69,8 +72,10 @@ export class UpdateProjectDto {
 }
 
 export class ApprovalDto {
+  // Deprecated/ignored — the approver is the verified cookie actor.
+  @IsOptional()
   @IsString()
-  actingUserId!: string;
+  actingUserId?: string;
 
   @IsOptional()
   @IsString()

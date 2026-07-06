@@ -3,12 +3,15 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateTaskDto } from './dto';
+import { getActorId } from '../../common/context/request-context';
+import { NotificationsService } from '../notifications/notifications.module';
 
 @Injectable()
 export class TasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -24,6 +27,16 @@ export class TasksService {
       throw new BadRequestException(`TaskList ${dto.taskListId} not found in project ${dto.projectId}`);
     }
 
+    // A supplied milestone must belong to the same project (the FK only enforces existence).
+    if (dto.milestoneId) {
+      const milestone = await this.prisma.milestone.findFirst({
+        where: { id: dto.milestoneId, projectId: dto.projectId, deletedAt: null },
+      });
+      if (!milestone) {
+        throw new BadRequestException(`Milestone ${dto.milestoneId} not found in project ${dto.projectId}`);
+      }
+    }
+
     const sequence = await this.prisma.projectTask.count({
       where: { taskListId: dto.taskListId },
     });
@@ -37,7 +50,7 @@ export class TasksService {
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
           dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
           estimatedHours: dto.estimatedHours,
-          createdBy: dto.createdBy,
+          createdBy: getActorId() ?? dto.createdBy ?? 'system',
           currentWorkflowStatusId: dto.currentWorkflowStatusId,
           assignees: dto.assigneeIds?.length
             ? { create: dto.assigneeIds.map((userId) => ({ userId })) }
@@ -65,6 +78,13 @@ export class TasksService {
       entityId: task.id,
       metadata: { projectId: dto.projectId, title: task.title },
     });
+    await this.notifications.notify(dto.assigneeIds ?? [], {
+      type: 'task.assigned',
+      title: 'New task assigned',
+      message: `You were assigned to "${task.title}".`,
+    });
+    await this.recomputeProjectProgress(dto.projectId); // new task dilutes/updates progress
+    if (dto.milestoneId) await this.recomputeMilestoneProgress(dto.milestoneId);
     return task;
   }
 
@@ -119,7 +139,7 @@ export class TasksService {
 
   async update(id: string, dto: UpdateTaskDto) {
     await this.get(id);
-    return this.prisma.task.update({
+    const updated = await this.prisma.task.update({
       where: { id },
       data: {
         title: dto.title,
@@ -132,6 +152,8 @@ export class TasksService {
       },
       include: this.taskInclude(),
     });
+    if (dto.completionPercentage !== undefined) await this.recomputeForTask(id);
+    return updated;
   }
 
   /**
@@ -145,13 +167,21 @@ export class TasksService {
       where: { id: dto.statusId },
     });
     if (!status) throw new NotFoundException(`WorkflowStatus ${dto.statusId} not found`);
+    // The target status must belong to the task's own workflow.
+    if (task.workflowId && status.workflowId && status.workflowId !== task.workflowId) {
+      throw new BadRequestException(`Status ${dto.statusId} does not belong to this task's workflow`);
+    }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.task.update({
         where: { id },
         data: {
           currentWorkflowStatusId: status.id,
-          completionPercentage: status.type === 'CLOSED' ? 100 : task.completionPercentage,
+          // CLOSED ⇒ 100%. Moving back OUT of done resets a 100% to 0% (it's no longer
+          // complete) while preserving any manual partial progress (e.g. 50% stays 50%).
+          completionPercentage: status.type === 'CLOSED'
+            ? 100
+            : (task.completionPercentage >= 100 ? 0 : task.completionPercentage),
         },
         include: this.taskInclude(),
       });
@@ -175,11 +205,13 @@ export class TasksService {
       newValue: { status: status.name, type: status.type },
       metadata: { projectId, title: task.title },
     });
+    await this.recomputeForTask(id); // status change → progress bar re-syncs
     return updated;
   }
 
   async setAssignees(id: string, dto: SetAssigneesDto) {
-    await this.get(id);
+    const before = await this.get(id);
+    const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     await this.prisma.$transaction([
       this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
       this.prisma.taskAssignee.createMany({
@@ -187,6 +219,13 @@ export class TasksService {
         skipDuplicates: true,
       }),
     ]);
+    // Notify the NEWLY-added assignees only.
+    const added = dto.assigneeIds.filter(uid => !prev.has(uid));
+    await this.notifications.notify(added, {
+      type: 'task.assigned',
+      title: 'New task assigned',
+      message: `You were assigned to "${before.title}".`,
+    });
     return this.get(id);
   }
 
@@ -202,7 +241,51 @@ export class TasksService {
       entityId: id,
       metadata: { projectId: (task as any).projectTasks?.[0]?.projectId, title: task.title },
     });
+    await this.recomputeForTask(id); // deleted task excluded → progress recomputes
     return result;
+  }
+
+  /**
+   * Recompute a project's completionPercentage from its (non-deleted) tasks.
+   * A task counts as 100% when it is in a CLOSED-type workflow status, otherwise
+   * its own completionPercentage. Project progress = the average across all tasks
+   * (0 when the project has no tasks). This is the single source of truth for the
+   * progress bars — called after every task create / status change / edit / delete.
+   */
+  private async recomputeProjectProgress(projectId: string): Promise<void> {
+    const tasks = await this.prisma.task.findMany({
+      where: { deletedAt: null, projectTasks: { some: { projectId } } },
+      select: { completionPercentage: true, currentStatus: { select: { type: true } } },
+    });
+    const effective = tasks.map(t => (t.currentStatus?.type === 'CLOSED' ? 100 : (t.completionPercentage ?? 0)));
+    const pct = effective.length ? Math.round(effective.reduce((s, v) => s + v, 0) / effective.length) : 0;
+    await this.prisma.project.update({ where: { id: projectId }, data: { completionPercentage: pct } });
+  }
+
+  /** Recompute a milestone's completionPercentage from its tasks (same rule as projects). */
+  private async recomputeMilestoneProgress(milestoneId: string): Promise<void> {
+    const tasks = await this.prisma.task.findMany({
+      where: { deletedAt: null, projectTasks: { some: { milestoneId } } },
+      select: { completionPercentage: true, currentStatus: { select: { type: true } } },
+    });
+    const effective = tasks.map(t => (t.currentStatus?.type === 'CLOSED' ? 100 : (t.completionPercentage ?? 0)));
+    const pct = effective.length ? Math.round(effective.reduce((s, v) => s + v, 0) / effective.length) : 0;
+    await this.prisma.milestone.update({ where: { id: milestoneId }, data: { completionPercentage: pct } });
+  }
+
+  /**
+   * Recompute every PARENT a task rolls up into — its project(s) AND its milestone(s).
+   * Tasks are M2M with both via ProjectTask (projectId + optional milestoneId), so a
+   * single status change/edit/delete can move several progress bars.
+   */
+  private async recomputeForTask(taskId: string): Promise<void> {
+    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true, milestoneId: true } });
+    const projectIds = [...new Set(links.map(l => l.projectId))];
+    const milestoneIds = [...new Set(links.map(l => l.milestoneId).filter((m): m is string => !!m))];
+    await Promise.all([
+      ...projectIds.map(id => this.recomputeProjectProgress(id)),
+      ...milestoneIds.map(id => this.recomputeMilestoneProgress(id)),
+    ]);
   }
 
   // ── Subtask methods (flat, one level only) ──────────────────

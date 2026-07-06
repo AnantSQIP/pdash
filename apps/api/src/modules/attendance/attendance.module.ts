@@ -5,6 +5,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { NotificationsService } from '../notifications/notifications.module';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -29,7 +30,13 @@ export class AttendanceService {
     return this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
   }
 
-  /** Punch toggles: first call sets checkIn (PRESENT), next sets/updates checkOut + totalHours. */
+  /**
+   * Daily punch with exactly ONE check-in and ONE check-out:
+   *   1. no check-in yet        → clock in (PRESENT)
+   *   2. clocked in, not out    → clock out + compute totalHours
+   *   3. already clocked out    → REJECT — the day is locked so a stray third
+   *      punch can never overwrite/erase the real check-out time.
+   */
   async punch(userId: string) {
     const today = utcDay(new Date());
     const now = new Date();
@@ -42,6 +49,9 @@ export class AttendanceService {
         create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT' },
         update: { checkIn: now, status: 'PRESENT' },
       });
+    }
+    if (existing.checkOut) {
+      throw new BadRequestException('You have already clocked out for today. The day is complete.');
     }
     const totalHours = round((now.getTime() - existing.checkIn.getTime()) / 3_600_000, 2);
     return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours } });
@@ -138,12 +148,12 @@ export class AttendanceService {
       const ex = byDay.get(k);
       if (ex) {
         days.push({ date: k, status: ex.status, checkIn: ex.checkIn, checkOut: ex.checkOut, totalHours: ex.totalHours, isRegularized: ex.isRegularized, note: ex.note });
-      } else if (onLeave(k)) {
-        days.push({ date: k, status: 'ON_LEAVE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       } else if (holidayByDay.has(k)) {
         days.push({ date: k, status: 'HOLIDAY', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: holidayByDay.get(k)!.name });
       } else if (wd === 0 || wd === 6) {
         days.push({ date: k, status: 'WEEKEND', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
+      } else if (onLeave(k)) {
+        days.push({ date: k, status: 'ON_LEAVE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       } else if (tsDays.has(k)) {
         days.push({ date: k, status: 'PRESENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: 'from timesheet' });
       } else if (k < todayKey) {
@@ -203,9 +213,9 @@ export class AttendanceService {
           else if (ex.status === 'HOLIDAY') holiday++;
           continue;
         }
-        if ((leavesByUser.get(u.id) ?? []).some(l => l.start <= k && k <= l.end)) { onLeave++; continue; }
         if (holidaySet.has(k)) { holiday++; continue; }
         if (wd === 0 || wd === 6) continue;
+        if ((leavesByUser.get(u.id) ?? []).some(l => l.start <= k && k <= l.end)) { onLeave++; continue; }
         if (tsByUserDay.has(`${u.id}|${k}`)) { present++; continue; }
         if (k < todayKey) absent++;
       }
@@ -223,7 +233,10 @@ export class AttendanceService {
 // ════════════════════════════════════════════════════════════════════════════════
 @Injectable()
 export class LeaveService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   private async orgOf(userId: string): Promise<string | null> {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
@@ -245,12 +258,31 @@ export class LeaveService {
     });
   }
 
+  /** Working days within [start,end], excluding weekends and org holidays. */
+  private async businessDays(organizationId: string | null, start: Date, end: Date): Promise<Date[]> {
+    const holidays = await this.prisma.holiday.findMany({
+      where: { organizationId: organizationId ?? undefined, date: { gte: utcDay(start), lte: utcDay(end) } },
+      select: { date: true },
+    });
+    const holidaySet = new Set(holidays.map(h => dayKey(h.date)));
+    const days: Date[] = [];
+    for (const d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      const wd = d.getUTCDay();
+      if (wd === 0 || wd === 6) continue;            // weekend
+      if (holidaySet.has(dayKey(d))) continue;        // holiday
+      days.push(utcDay(d));
+    }
+    return days;
+  }
+
   async create(userId: string, dto: { leaveType: string; startDate: string; endDate: string; reason?: string }) {
     const start = parseDay(dto.startDate.slice(0, 10));
     const end = parseDay(dto.endDate.slice(0, 10));
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
-    const numDays = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
     const organizationId = await this.orgOf(userId);
+    // Count business days only — weekends and holidays do not consume leave balance.
+    const numDays = (await this.businessDays(organizationId, start, end)).length;
+    if (numDays === 0) throw new BadRequestException('Selected dates contain no working days');
     return this.prisma.leaveRequest.create({
       data: { userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end, numDays, reason: dto.reason ?? null, status: 'PENDING' },
       include: { user: this.userSelect },
@@ -261,28 +293,41 @@ export class LeaveService {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.status !== 'PENDING') throw new BadRequestException('Only PENDING requests can be approved');
+    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own leave request');
 
-    // Write ON_LEAVE attendance for each day in range (skip days already marked).
-    const rows: { userId: string; organizationId: string | null; date: Date; status: string; note: string }[] = [];
-    for (const d = new Date(req.startDate); d <= req.endDate; d.setUTCDate(d.getUTCDate() + 1)) {
-      rows.push({ userId: req.userId, organizationId: req.organizationId, date: utcDay(d), status: 'ON_LEAVE', note: `${req.leaveType} leave` });
-    }
+    // Write ON_LEAVE attendance only for business days (skip weekends + holidays),
+    // so leave spanning a weekend doesn't inflate ON_LEAVE / working-day counts.
+    const days = await this.businessDays(req.organizationId, req.startDate, req.endDate);
+    const rows = days.map(date => ({ userId: req.userId, organizationId: req.organizationId, date, status: 'ON_LEAVE', note: `${req.leaveType} leave` }));
     if (rows.length) await this.prisma.attendance.createMany({ data: rows, skipDuplicates: true });
 
-    return this.prisma.leaveRequest.update({
+    const updated = await this.prisma.leaveRequest.update({
       where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
       include: { user: this.userSelect },
     });
+    await this.notifications.notify(req.userId, {
+      type: 'leave.approved',
+      title: 'Leave approved',
+      message: `Your ${req.leaveType} leave (${req.numDays} day${req.numDays === 1 ? '' : 's'}) was approved.`,
+    });
+    return updated;
   }
 
   async reject(id: string, actorId: string, note?: string) {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.status !== 'PENDING') throw new BadRequestException('Only PENDING requests can be rejected');
-    return this.prisma.leaveRequest.update({
+    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own leave request');
+    const updated = await this.prisma.leaveRequest.update({
       where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
       include: { user: this.userSelect },
     });
+    await this.notifications.notify(req.userId, {
+      type: 'leave.rejected',
+      title: 'Leave rejected',
+      message: `Your ${req.leaveType} leave request was rejected.`,
+    });
+    return updated;
   }
 
   async cancel(id: string, actorId: string) {
@@ -351,7 +396,9 @@ class AttendanceController {
   @Get('me/month')
   myMonth(@Actor() actorId: string | null, @Query('year') year: string, @Query('month') month: string) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.getMonth(actorId, parseInt(year, 10), parseInt(month, 10));
+    const y = parseInt(year, 10), m = parseInt(month, 10);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) throw new BadRequestException('year and month are required');
+    return this.svc.getMonth(actorId, y, m);
   }
 
   @Post('punch')
@@ -378,7 +425,9 @@ class AttendanceController {
   @Get('users/:userId/month')
   @RequirePermission('attendance.view.organization')
   userMonth(@Param('userId') userId: string, @Query('year') year: string, @Query('month') month: string) {
-    return this.svc.getMonth(userId, parseInt(year, 10), parseInt(month, 10));
+    const y = parseInt(year, 10), m = parseInt(month, 10);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) throw new BadRequestException('year and month are required');
+    return this.svc.getMonth(userId, y, m);
   }
 
   @Get('org/summary')

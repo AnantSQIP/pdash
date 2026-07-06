@@ -12,7 +12,7 @@ import {
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { userInitials, avatarColor } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 // ── status styling ──────────────────────────────────────────────────────────────
 const STATUS_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
@@ -75,42 +75,47 @@ export default function AttendancePage() {
 
   async function punch() {
     if (busy) return; setBusy(true);
-    try { await api.attendance.punch(); invalidate('attn-today', 'attn-month', 'attn-org'); } finally { setBusy(false); }
+    try { await api.attendance.punch(); invalidate('attn-today', 'attn-month', 'attn-org'); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
+    finally { setBusy(false); }
   }
 
   const clockedIn = !!today?.checkIn && !today?.checkOut;
+  const dayComplete = !!today?.checkIn && !!today?.checkOut; // clocked in AND out — locked for the day
   const elapsed = today?.checkIn ? Date.now() - new Date(today.checkIn).getTime() : 0;
 
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 shrink-0">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 shrink-0">
         <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Clock size={20} className="text-brand-600" /> Attendance &amp; Leave</h1>
         <p className="text-sm text-gray-500 mt-0.5">Punch in/out, track leave balances, regularise and manage holidays</p>
-        <div className="flex items-center gap-1 mt-4">
+        <div className="flex items-center gap-1 mt-4 overflow-x-auto">
           {([['overview', 'Overview'], ['leaves', 'Leaves'], ['holidays', 'Holidays'], ...(canTeam ? [['team', 'Team']] : [])] as [Tab, string][]).map(([t, label]) => (
-            <button key={t} onClick={() => setTab(t)} className={clsx('px-4 py-1.5 rounded-full text-sm font-medium', tab === t ? 'bg-brand-600 text-white' : 'text-gray-500 hover:bg-gray-100')}>{label}</button>
+            <button key={t} onClick={() => setTab(t)} className={clsx('px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap shrink-0', tab === t ? 'bg-brand-600 text-white' : 'text-gray-500 hover:bg-gray-100')}>{label}</button>
           ))}
         </div>
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-6">
         {/* ───────── OVERVIEW ───────── */}
         {tab === 'overview' && (
           <>
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Punch card */}
-              <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
-                <div className="flex items-center justify-between">
+              <div className="sm:col-span-2 lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
+                <div className="flex items-center justify-between flex-wrap gap-4">
                   <div>
                     <p className="text-xs text-gray-400 uppercase tracking-wide">Today · {format(new Date(), 'EEE, MMM d')}</p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{clockedIn ? fmtElapsed(elapsed) : (today?.checkOut ? 'Day complete' : 'Not clocked in')}</p>
                     <p className="text-xs text-gray-500 mt-1">In {timeOf(today?.checkIn)} · Out {timeOf(today?.checkOut)}{today?.totalHours != null ? ` · ${today.totalHours}h` : ''}</p>
                   </div>
-                  <button onClick={punch} disabled={busy} className={clsx('inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white disabled:opacity-60', clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}>
-                    {busy ? <Loader size={16} className="animate-spin" /> : clockedIn ? <LogOut size={16} /> : <LogIn size={16} />}
-                    {clockedIn ? 'Punch Out' : today?.checkOut ? 'Punch Again' : 'Punch In'}
+                  <button onClick={punch} disabled={busy || dayComplete}
+                    title={dayComplete ? 'You have clocked in and out — the day is complete.' : undefined}
+                    className={clsx('inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white disabled:opacity-60 disabled:cursor-not-allowed', dayComplete ? 'bg-gray-400' : clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}>
+                    {busy ? <Loader size={16} className="animate-spin" /> : dayComplete ? <Check size={16} /> : clockedIn ? <LogOut size={16} /> : <LogIn size={16} />}
+                    {dayComplete ? 'Completed' : clockedIn ? 'Punch Out' : 'Punch In'}
                   </button>
                 </div>
               </div>
@@ -150,27 +155,7 @@ export default function AttendancePage() {
 
         {/* ───────── HOLIDAYS ───────── */}
         {tab === 'holidays' && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden max-w-2xl">
-            <div className="px-5 py-3 border-b border-gray-100"><h3 className="text-sm font-semibold text-gray-700">Holidays · {year}</h3></div>
-            <ul className="divide-y divide-gray-50">
-              {holidays.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">No holidays configured</li>}
-              {holidays.map(h => (
-                <li key={h.id} className="px-5 py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex flex-col items-center justify-center leading-none">
-                      <span className="text-[10px] uppercase">{format(new Date(h.date), 'MMM')}</span>
-                      <span className="text-sm font-bold">{format(new Date(h.date), 'd')}</span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-800">{h.name}</p>
-                      <p className="text-xs text-gray-400">{format(new Date(h.date), 'EEEE')}</p>
-                    </div>
-                  </div>
-                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{h.type}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+          <HolidayManager orgId={org?.id} year={year} holidays={holidays} canManage={can('holiday.manage')} />
         )}
 
         {/* ───────── TEAM (admin) ───────── */}
@@ -185,6 +170,59 @@ export default function AttendancePage() {
           onClose={() => setRegDate(null)}
           onSuccess={() => { setRegDate(null); invalidate('attn-month', 'attn-today', 'attn-org'); }}
         />
+      )}
+    </div>
+  );
+}
+
+// ── Holidays list + (permission-gated) add/delete management ──────────────────
+function HolidayManager({ orgId, year, holidays, canManage }: { orgId?: string; year: number; holidays: Holiday[]; canManage: boolean }) {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [date, setDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const inv = () => qc.invalidateQueries({ queryKey: ['holidays', orgId, year] });
+  async function add() {
+    if (!orgId || !name.trim() || !date) return;
+    setBusy(true);
+    try { await api.leave.createHoliday({ organizationId: orgId, name: name.trim(), date }); setName(''); setDate(''); inv(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Failed to add holiday'); }
+    finally { setBusy(false); }
+  }
+  async function del(id: string) {
+    try { await api.leave.removeHoliday(id); inv(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Failed to delete holiday'); }
+  }
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden max-w-2xl">
+      <div className="px-5 py-3 border-b border-gray-100"><h3 className="text-sm font-semibold text-gray-700">Holidays · {year}</h3></div>
+      <ul className="divide-y divide-gray-50">
+        {holidays.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">No holidays configured</li>}
+        {holidays.map(h => (
+          <li key={h.id} className="px-5 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex flex-col items-center justify-center leading-none">
+                <span className="text-[10px] uppercase">{format(new Date(h.date), 'MMM')}</span>
+                <span className="text-sm font-bold">{format(new Date(h.date), 'd')}</span>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-800">{h.name}</p>
+                <p className="text-xs text-gray-400">{format(new Date(h.date), 'EEEE')}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">{h.type}</span>
+              {canManage && <button onClick={() => del(h.id)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete holiday"><X size={14} /></button>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {canManage && (
+        <div className="px-5 py-3 border-t border-gray-100 flex items-center gap-2 flex-wrap">
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Holiday name" className="flex-1 min-w-[8rem] px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+          <button disabled={busy || !name.trim() || !date} onClick={add} className="px-3 py-1.5 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">Add</button>
+        </div>
       )}
     </div>
   );
@@ -426,9 +464,7 @@ function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendan
           {pending.map(r => (
             <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0', avatarColor(r.userId))}>
-                  {userInitials({ firstName: r.user?.firstName ?? '', lastName: r.user?.lastName ?? '' })}
-                </div>
+                <Avatar user={r.user} size={32} />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-gray-800 truncate">{r.user?.firstName} {r.user?.lastName} · {r.leaveType} · {r.numDays}d</p>
                   <p className="text-xs text-gray-400">{format(new Date(r.startDate), 'MMM d')} – {format(new Date(r.endDate), 'MMM d')}{r.reason ? ` · ${r.reason}` : ''}</p>
@@ -451,7 +487,7 @@ function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendan
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead><tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+            <thead><tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide whitespace-nowrap">
               <th className="px-5 py-2.5">Member</th><th className="px-3 py-2.5">Present</th><th className="px-3 py-2.5">Absent</th>
               <th className="px-3 py-2.5">On leave</th><th className="px-3 py-2.5">Hours</th><th className="px-3 py-2.5 w-40">Attendance</th>
             </tr></thead>
@@ -460,7 +496,7 @@ function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendan
               {rows.map(r => (
                 <tr key={r.userId} className="hover:bg-gray-50">
                   <td className="px-5 py-2.5"><div className="flex items-center gap-2">
-                    <div className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white', avatarColor(r.userId))}>{userInitials({ firstName: r.name.split(' ')[0], lastName: r.name.split(' ')[1] })}</div>
+                    <Avatar user={{ firstName: r.name.split(' ')[0], lastName: r.name.split(' ')[1], id: r.userId }} size={24} />
                     <span className="text-gray-800">{r.name}</span><span className="text-xs text-gray-400">{r.designation}</span>
                   </div></td>
                   <td className="px-3 py-2.5 text-green-600 font-medium">{r.present}</td>

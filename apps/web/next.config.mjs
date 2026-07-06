@@ -4,6 +4,8 @@
 const API_ORIGIN = process.env.API_ORIGIN ?? 'http://localhost:4000';
 
 const nextConfig = {
+  // Self-contained server bundle for small, portable production Docker images.
+  output: 'standalone',
   transpilePackages: ['@pdash/db'],
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${API_ORIGIN}/api/:path*` }];

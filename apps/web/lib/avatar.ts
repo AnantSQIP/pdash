@@ -24,7 +24,13 @@ export function initials(firstName?: string | null, lastName?: string | null): s
   const f = (firstName ?? '').trim();
   const l = (lastName ?? '').trim();
   if (f && l) return (f[0] + l[0]).toUpperCase();
-  if (f) return f.slice(0, 2).toUpperCase();
+  if (f) {
+    // No surname: if the first name itself is two words (e.g. "Ankit Kumar"),
+    // use the initial of each; otherwise the first two letters.
+    const parts = f.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return f.slice(0, 2).toUpperCase();
+  }
   if (l) return l.slice(0, 2).toUpperCase();
   return '?';
 }

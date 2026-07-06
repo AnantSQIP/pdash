@@ -7,7 +7,8 @@ import {
   Plus, MessageCircle, RefreshCw, Flag, CheckCircle, Trash2, FolderKanban, Clock, Download, Activity as ActivityIcon,
 } from 'lucide-react';
 import { api, type ActivityItem } from '@/lib/api';
-import { userInitials, avatarColor, fullName } from '@/lib/avatar';
+import { fullName } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 // action → display verb, filter category, and icon.
 const ACTION_META: Record<string, { verb: string; cat: string; icon: React.ReactNode; color: string }> = {
@@ -56,9 +57,7 @@ function EventRow({ a }: { a: ActivityItem }) {
   return (
     <div className="flex gap-3 py-2.5">
       {a.actor ? (
-        <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0', avatarColor(a.actor.id))}>
-          {userInitials(a.actor)}
-        </div>
+        <Avatar user={a.actor} size={28} className="shrink-0" />
       ) : (
         <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center shrink-0', meta.color)}>{meta.icon}</div>
       )}

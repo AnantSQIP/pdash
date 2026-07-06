@@ -1,6 +1,7 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuditEventsModule } from './modules/audit-events/audit-events.module';
 import { PermissionsModule } from './modules/permissions/permissions.module';
@@ -28,10 +29,13 @@ import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { PerformanceModule } from './modules/performance/performance.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // Rate-limit primitives (applied selectively, e.g. on auth, via ThrottlerGuard).
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 200 }]),
     PrismaModule,
     AuditEventsModule,
     PermissionsModule,
@@ -63,6 +67,7 @@ import { AttendanceModule } from './modules/attendance/attendance.module';
     AnalyticsModule,
     AuditModule,
     PerformanceModule,
+    NotificationsModule,
   ],
   providers: [
     // 1) Global authentication (deny-by-default; @Public() opts out).

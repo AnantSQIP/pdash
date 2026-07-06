@@ -6,6 +6,7 @@ import { QueryProvider } from '@/providers/query-provider';
 import { OrgProvider } from '@/lib/org-context';
 import { AuthProvider } from '@/lib/auth-context';
 import { PermissionsProvider } from '@/lib/permissions-context';
+import { ToastProvider } from '@/components/ui/Toast';
 
 const geistSans = localFont({
   src: '../public/fonts/GeistVariable.woff2',
@@ -27,7 +28,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AuthProvider>
             <OrgProvider>
               <PermissionsProvider>
-                <AppShell>{children}</AppShell>
+                <ToastProvider>
+                  <AppShell>{children}</AppShell>
+                </ToastProvider>
               </PermissionsProvider>
             </OrgProvider>
           </AuthProvider>

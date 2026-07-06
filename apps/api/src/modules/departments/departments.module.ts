@@ -1,7 +1,8 @@
 import { Body, Controller, Delete, Get, Injectable, Module, Param, Post, Query } from '@nestjs/common';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 class CreateDepartmentDto {
   @IsString()
@@ -75,6 +76,12 @@ export class DepartmentsService {
     const dept = await this.prisma.department.findUnique({ where: { id: departmentId } });
     if (!dept) throw new NotFoundException(`Department ${departmentId} not found`);
 
+    // The member must belong to the same organization as the department.
+    const user = await this.prisma.user.findFirst({
+      where: { id: dto.userId, organizationId: dept.organizationId, deletedAt: null },
+    });
+    if (!user) throw new BadRequestException(`User ${dto.userId} is not in this organization`);
+
     return this.prisma.departmentMember.create({
       data: {
         departmentId,
@@ -108,7 +115,7 @@ class DepartmentsController {
     return this.service.list(organizationId);
   }
 
-  @Post()
+  @Post() @RequirePermission('department.create')
   create(@Body() dto: CreateDepartmentDto) {
     return this.service.create(dto);
   }
@@ -118,12 +125,12 @@ class DepartmentsController {
     return this.service.listMembers(id);
   }
 
-  @Post(':id/members')
+  @Post(':id/members') @RequirePermission('department.update')
   addMember(@Param('id') id: string, @Body() dto: AddDepartmentMemberDto) {
     return this.service.addMember(id, dto);
   }
 
-  @Delete(':id/members/:userId')
+  @Delete(':id/members/:userId') @RequirePermission('department.update')
   removeMember(@Param('id') id: string, @Param('userId') userId: string) {
     return this.service.removeMember(id, userId);
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext, useCallback, useMemo, ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type AuthUser } from './api';
 
@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     staleTime: 60_000,
   });
 
-  const login = async (email: string, password: string): Promise<Result> => {
+  const login = useCallback(async (email: string, password: string): Promise<Result> => {
     try {
       await api.auth.login(email, password);
       await qc.invalidateQueries({ queryKey: ['auth-me'] });
@@ -39,16 +39,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (e: any) {
       return { ok: false, error: e?.message ?? 'Sign in failed' };
     }
-  };
+  }, [qc]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try { await api.auth.logout(); } catch { /* ignore */ }
     qc.clear();
     qc.setQueryData(['auth-me'], null);
-  };
+  }, [qc]);
+
+  const value = useMemo<AuthValue>(() => ({
+    user, email: user?.email ?? null, isAuthed: !!user, loading: isLoading, login, logout,
+  }), [user, isLoading, login, logout]);
 
   return (
-    <AuthContext.Provider value={{ user, email: user?.email ?? null, isAuthed: !!user, loading: isLoading, login, logout }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

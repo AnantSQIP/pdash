@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post, 
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 class CreateTaskListDto {
   @IsString()
@@ -53,14 +54,14 @@ export class TaskListsService {
     return this.prisma.taskList.findMany({
       where: { projectId, milestoneId, deletedAt: null },
       orderBy: { sequence: 'asc' },
-      include: { _count: { select: { projectTasks: true } } },
+      include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
   }
 
   async get(projectId: string, id: string) {
     const list = await this.prisma.taskList.findFirst({
       where: { id, projectId, deletedAt: null },
-      include: { _count: { select: { projectTasks: true } } },
+      include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
     if (!list) throw new NotFoundException(`Task list ${id} not found`);
     return list;
@@ -93,7 +94,7 @@ export class TaskListsService {
 class TaskListsController {
   constructor(private readonly service: TaskListsService) {}
 
-  @Post()
+  @Post() @RequirePermission('tasklist.create')
   create(@Param('projectId') projectId: string, @Body() dto: CreateTaskListDto) {
     return this.service.create(projectId, dto);
   }
@@ -108,12 +109,12 @@ class TaskListsController {
     return this.service.get(projectId, id);
   }
 
-  @Patch(':id')
+  @Patch(':id') @RequirePermission('tasklist.update')
   update(@Param('projectId') projectId: string, @Param('id') id: string, @Body() dto: UpdateTaskListDto) {
     return this.service.update(projectId, id, dto);
   }
 
-  @Delete(':id')
+  @Delete(':id') @RequirePermission('tasklist.delete')
   remove(@Param('projectId') projectId: string, @Param('id') id: string) {
     return this.service.remove(projectId, id);
   }

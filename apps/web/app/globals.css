@@ -68,3 +68,9 @@ button:not(:disabled):active,
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background-color: rgb(209 213 219); border-radius: 9999px; }
 ::-webkit-scrollbar-thumb:hover { background-color: rgb(156 163 175); }
+
+/* Toast slide/fade-in */
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}

@@ -6,21 +6,20 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Loader, Plus, Shield, X, Check, Trash2, Search, MoreHorizontal, Copy, Pencil,
-  Users as UsersIcon, KeyRound, Layers, Grid3x3, ListChecks, FlaskConical, Lock, AlertTriangle, Code2,
+  Users as UsersIcon, KeyRound, Layers, Grid3x3, ListChecks, Lock, AlertTriangle, Code2,
 } from 'lucide-react';
-import { api, type PermissionDef, type RoleSummary, type GroupSummary, type UserSummary, type EffectivePermissions } from '@/lib/api';
+import { api, type PermissionDef, type RoleSummary, type GroupSummary, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { userInitials, avatarColor, fullName } from '@/lib/avatar';
+import { fullName } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 import { AddPermissionsWizard } from '@/components/admin/AddPermissionsWizard';
 
-type Tab = 'Users' | 'Roles' | 'Groups' | 'Matrix' | 'Catalog' | 'Simulator';
+type Tab = 'Users' | 'Roles' | 'Groups' | 'Permissions';
 const MGMT_TABS: { key: Tab; icon: React.ElementType }[] = [
   { key: 'Users', icon: UsersIcon }, { key: 'Roles', icon: KeyRound }, { key: 'Groups', icon: Layers },
-  { key: 'Matrix', icon: Grid3x3 }, { key: 'Catalog', icon: ListChecks },
+  { key: 'Permissions', icon: Grid3x3 },
 ];
-const REPORT_TABS: { key: Tab; icon: React.ElementType }[] = [{ key: 'Simulator', icon: FlaskConical }];
-
 const SYSTEM_ROLES = new Set(['Super Admin', 'Admin', 'Manager', 'Senior Consultant', 'Consultant', 'HR', 'Employee']);
 function moduleOf(code: string) { return code.split('.')[0]; }
 function actionOf(code: string) { return code.split('.').slice(1).join('.'); }
@@ -85,7 +84,7 @@ export default function AdminPage() {
 
   return (
     <div className="min-h-full">
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4">
         <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Shield size={20} className="text-brand-600" /> Administration</h1>
         <p className="text-sm text-gray-500 mt-0.5">Manage users, roles, permission groups and the permission matrix</p>
         <div className="flex items-center gap-3 mt-4 flex-wrap">
@@ -95,18 +94,15 @@ export default function AdminPage() {
           </div>
           <div className="flex items-center gap-1 flex-wrap pl-3 border-l border-gray-200">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mr-1">Access reports</span>
-            {REPORT_TABS.map(t => <TabBtn key={t.key} k={t.key} icon={t.icon} />)}
             <a href="/admin/audit" className="px-3.5 py-1.5 rounded-full text-sm font-medium text-gray-500 hover:bg-gray-100 flex items-center gap-1.5"><ListChecks size={14} /> Audit Log</a>
           </div>
         </div>
       </div>
-      <div className="p-6">
+      <div className="p-4 sm:p-6">
         {org && tab === 'Users' && <UsersTab orgId={org.id} />}
         {org && tab === 'Roles' && <RolesTab orgId={org.id} />}
         {org && tab === 'Groups' && <GroupsTab orgId={org.id} />}
-        {org && tab === 'Matrix' && <MatrixTab orgId={org.id} />}
-        {tab === 'Catalog' && <CatalogTab />}
-        {org && tab === 'Simulator' && <SimulatorTab orgId={org.id} />}
+        {org && tab === 'Permissions' && <MatrixTab orgId={org.id} />}
       </div>
     </div>
   );
@@ -144,15 +140,16 @@ function UsersTab({ orgId }: { orgId: string }) {
         <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"><Plus size={14} /> Add User</button>
       </div>
       <div className="bg-white rounded-xl border border-gray-200 overflow-visible">
+        <div className="overflow-x-auto lg:overflow-visible">
         <table className="w-full text-left text-sm">
-          <thead><tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+          <thead><tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide whitespace-nowrap">
             <th className="px-5 py-2.5">Member</th><th className="px-3 py-2.5">Designation</th><th className="px-3 py-2.5">Email</th><th className="px-3 py-2.5">Status</th><th className="px-3 py-2.5"></th>
           </tr></thead>
           <tbody className="divide-y divide-gray-50">
             {filtered.map(u => (
               <tr key={u.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => router.push(`/admin/users/${u.id}`)}>
                 <td className="px-5 py-2.5"><div className="flex items-center gap-2">
-                  <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white', avatarColor(u.id))}>{userInitials(u)}</div>
+                  <Avatar user={u} size={28} />
                   <span className="font-medium text-gray-800">{fullName(u)}</span>
                 </div></td>
                 <td className="px-3 py-2.5 text-gray-500">{u.designation ?? '—'}</td>
@@ -175,6 +172,7 @@ function UsersTab({ orgId }: { orgId: string }) {
             {filtered.length === 0 && <tr><td colSpan={5} className="px-5 py-10 text-center text-sm text-gray-400">No members match.</td></tr>}
           </tbody>
         </table>
+        </div>
       </div>
       {showCreate && <CreateUserModal orgId={orgId} roles={roles} onClose={() => setShowCreate(false)} onDone={() => { qc.invalidateQueries({ queryKey: ['users', orgId] }); setShowCreate(false); }} />}
       {wizardUser && <AddPermissionsWizard orgId={orgId} user={wizardUser} onClose={() => setWizardUser(null)} onDone={() => qc.invalidateQueries({ queryKey: ['users', orgId] })} />}
@@ -185,21 +183,55 @@ function UsersTab({ orgId }: { orgId: string }) {
 function CreateUserModal({ orgId, roles, onClose, onDone }: { orgId: string; roles: RoleSummary[]; onClose: () => void; onDone: () => void }) {
   const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState(''); const [designation, setDesignation] = useState('');
+  const [password, setPassword] = useState('');
   const [roleIds, setRoleIds] = useState<string[]>([]); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null);
+
   async function submit() {
     setBusy(true); setErr('');
-    try { await api.users.create({ organizationId: orgId, firstName, lastName, email, designation, roleIds }); onDone(); }
-    catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); setBusy(false); }
+    try {
+      const u = await api.users.create({ organizationId: orgId, firstName, lastName, email, designation, password: password.trim() || undefined, roleIds });
+      setCreated({ email: u.email, tempPassword: u.tempPassword });
+      setBusy(false);
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); setBusy(false); }
   }
+
+  if (created) {
+    return (
+      <Modal title="User created" onClose={onDone}>
+        <div className="space-y-3">
+          <p className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+            ✓ <b>{created.email}</b> can now sign in. Share these credentials — they&apos;ll be required to set a new password on first login.
+          </p>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2 text-sm">
+            <div className="flex items-center justify-between"><span className="text-gray-500">Email</span><span className="font-mono text-gray-800">{created.email}</span></div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-gray-500">Temp password</span>
+              <span className="flex items-center gap-2">
+                <span className="font-mono text-gray-800">{created.tempPassword}</span>
+                <button onClick={() => navigator.clipboard?.writeText(`${created.email} / ${created.tempPassword}`)} className="text-xs text-brand-600 hover:underline">Copy</button>
+              </span>
+            </div>
+          </div>
+          <button onClick={onDone} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium">Done</button>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
     <Modal title="Add User" onClose={onClose}>
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <input className={inputCls} placeholder="First name" value={firstName} onChange={e => setFirstName(e.target.value)} />
           <input className={inputCls} placeholder="Last name" value={lastName} onChange={e => setLastName(e.target.value)} />
         </div>
         <input className={inputCls} placeholder="email@squarkip.com" value={email} onChange={e => setEmail(e.target.value)} />
         <input className={inputCls} placeholder="Designation" value={designation} onChange={e => setDesignation(e.target.value)} />
+        <div>
+          <input className={inputCls} placeholder="Initial password (optional — auto-generated if blank)" value={password} onChange={e => setPassword(e.target.value)} />
+          <p className="text-[11px] text-gray-400 mt-1">Min 8 characters. The user must change it on first sign-in.</p>
+        </div>
         <div>
           <p className="text-xs font-medium text-gray-600 mb-1.5">Roles</p>
           <div className="space-y-1 max-h-40 overflow-y-auto">
@@ -245,7 +277,7 @@ function RolesTab({ orgId }: { orgId: string }) {
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
-        <p className="text-sm text-gray-500">{roles.length} roles · permissions edited in the <b>Matrix</b> tab</p>
+        <p className="text-sm text-gray-500">{roles.length} roles · permissions edited in the <b>Permissions</b> tab</p>
         <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"><Plus size={14} /> New Role</button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -292,9 +324,14 @@ function CreateRoleModal({ orgId, perms, onClose, onDone }: { orgId: string; per
   const [name, setName] = useState(''); const [desc, setDesc] = useState(''); const [template, setTemplate] = useState('Empty role'); const [busy, setBusy] = useState(false);
   async function submit() {
     setBusy(true);
-    const permissionIds = ROLE_TEMPLATES[template]?.(perms) ?? [];
-    await api.roles.create({ organizationId: orgId, name, description: desc, permissionIds });
-    onDone();
+    try {
+      const permissionIds = ROLE_TEMPLATES[template]?.(perms) ?? [];
+      await api.roles.create({ organizationId: orgId, name, description: desc, permissionIds });
+      onDone();
+    } catch (e) {
+      setBusy(false);
+      alert(e instanceof Error ? e.message : 'Failed to create role');
+    }
   }
   return (
     <Modal title="New Role" onClose={onClose}>
@@ -306,7 +343,7 @@ function CreateRoleModal({ orgId, perms, onClose, onDone }: { orgId: string; per
           <select className={inputCls} value={template} onChange={e => setTemplate(e.target.value)}>
             {Object.keys(ROLE_TEMPLATES).map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          <p className="text-[11px] text-gray-400 mt-1">You can fine-tune permissions afterwards in the Matrix tab.</p>
+          <p className="text-[11px] text-gray-400 mt-1">You can fine-tune permissions afterwards in the Permissions tab.</p>
         </div>
         <button disabled={busy || !name} onClick={submit} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Create Role</button>
       </div>
@@ -356,8 +393,9 @@ function GroupsTab({ orgId }: { orgId: string }) {
 }
 
 function MembersModal({ group, users, onClose, onDone }: { group: GroupSummary; users: UserSummary[]; onClose: () => void; onDone: () => void }) {
-  const [ids, setIds] = useState<string[]>([]); const [busy, setBusy] = useState(false);
-  async function save() { setBusy(true); try { await api.groups.setMembers(group.id, ids); onDone(); onClose(); } catch { setBusy(false); } }
+  // Preload current members so editing is additive, not a blind full-replace wipe.
+  const [ids, setIds] = useState<string[]>(group.memberIds ?? []); const [busy, setBusy] = useState(false);
+  async function save() { setBusy(true); try { await api.groups.setMembers(group.id, ids); onDone(); onClose(); } catch (e) { setBusy(false); alert(e instanceof Error ? e.message : 'Failed to save members'); } }
   return (
     <Modal title={`Members — ${group.name}`} onClose={onClose}>
       <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">This replaces the full member list for the group.</p>
@@ -381,7 +419,7 @@ function CreateNamedModal({ title, onClose, onSubmit }: { title: string; onClose
       <div className="space-y-3">
         <input className={inputCls} placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
         <input className={inputCls} placeholder="Description (optional)" value={desc} onChange={e => setDesc(e.target.value)} />
-        <button disabled={busy || !name} onClick={async () => { setBusy(true); await onSubmit(name, desc); }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Create</button>
+        <button disabled={busy || !name} onClick={async () => { setBusy(true); try { await onSubmit(name, desc); } catch (e) { setBusy(false); alert(e instanceof Error ? e.message : 'Failed'); } }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Create</button>
       </div>
     </Modal>
   );
@@ -394,7 +432,7 @@ function EditNamedModal({ title, initial, onClose, onSave }: { title: string; in
       <div className="space-y-3">
         <input className={inputCls} value={name} onChange={e => setName(e.target.value)} />
         <input className={inputCls} placeholder="Description" value={desc} onChange={e => setDesc(e.target.value)} />
-        <button disabled={busy || !name} onClick={async () => { setBusy(true); await onSave(name, desc); }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Save</button>
+        <button disabled={busy || !name} onClick={async () => { setBusy(true); try { await onSave(name, desc); } catch (e) { setBusy(false); alert(e instanceof Error ? e.message : 'Failed'); } }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Save</button>
       </div>
     </Modal>
   );
@@ -464,7 +502,7 @@ function MatrixTab({ orgId }: { orgId: string }) {
 
   return (
     <div>
-      <div className="sticky top-0 z-10 bg-gray-50 -mx-6 px-6 py-3 mb-4 border-b border-gray-200 flex items-center gap-3 flex-wrap">
+      <div className="sticky top-0 z-10 bg-gray-50 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 mb-4 border-b border-gray-200 flex items-center gap-3 flex-wrap">
         <span className="text-sm font-medium text-gray-600">Edit permissions for:</span>
         <select value={target} onChange={e => { setTarget(e.target.value); setSelected(null); }} className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
           <option value="">Select a role or group…</option>
@@ -525,65 +563,3 @@ function MatrixTab({ orgId }: { orgId: string }) {
   );
 }
 
-// ── Catalog ──────────────────────────────────────────────────────────────────
-function CatalogTab() {
-  const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 });
-  const byModule = useMemo(() => {
-    const m = new Map<string, PermissionDef[]>();
-    for (const p of perms) { const k = moduleOf(p.code); (m.get(k) ?? m.set(k, []).get(k)!).push(p); }
-    return [...m.entries()].sort();
-  }, [perms]);
-  return (
-    <div>
-      <p className="text-sm text-gray-500 mb-4">{perms.length} permission codes across {byModule.length} modules · the system action vocabulary (read-only)</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {byModule.map(([mod, list]) => (
-          <div key={mod} className="bg-white rounded-xl border border-gray-200 p-4">
-            <p className="text-sm font-semibold text-gray-700 mb-2">{titleCase(mod)}</p>
-            <div className="space-y-1">
-              {list.map(p => <div key={p.id} className="flex items-center justify-between text-xs"><code className="text-gray-600">{p.code}</code><span className="text-gray-400">{p.name}</span></div>)}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Simulator ────────────────────────────────────────────────────────────────
-function SimulatorTab({ orgId }: { orgId: string }) {
-  const { data: users = [] } = useQuery({ queryKey: ['users', orgId], queryFn: () => api.users.list(orgId), staleTime: 30_000 });
-  const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 });
-  const [userId, setUserId] = useState(''); const [code, setCode] = useState('');
-  const { data: eff } = useQuery<EffectivePermissions>({ queryKey: ['eff', userId], queryFn: () => api.users.effectivePermissions(userId), enabled: !!userId, staleTime: 5_000 });
-
-  const allowed = eff ? (eff.isSuperAdmin || eff.codes.includes(code)) : null;
-  const source = eff ? (eff.isSuperAdmin ? 'super-admin' : eff.sources[code]) : null;
-
-  return (
-    <div className="max-w-2xl">
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <h3 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2"><FlaskConical size={16} className="text-brand-600" /> Permission Simulator</h3>
-        <p className="text-xs text-gray-500 mb-4">Check whether a user is allowed a permission, and why — like AWS IAM&apos;s Policy Simulator.</p>
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <select className={inputCls} value={userId} onChange={e => setUserId(e.target.value)}>
-            <option value="">Select user…</option>{users.map(u => <option key={u.id} value={u.id}>{fullName(u)}</option>)}
-          </select>
-          <select className={inputCls} value={code} onChange={e => setCode(e.target.value)}>
-            <option value="">Select permission…</option>{perms.map(p => <option key={p.id} value={p.code}>{p.code}</option>)}
-          </select>
-        </div>
-        {userId && code && eff && (
-          <div className={clsx('rounded-lg p-4 border', allowed ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200')}>
-            <p className={clsx('text-sm font-semibold flex items-center gap-2', allowed ? 'text-green-700' : 'text-red-700')}>
-              {allowed ? <Check size={16} /> : <X size={16} />} {allowed ? 'ALLOWED' : 'DENIED'}
-            </p>
-            <p className="text-xs text-gray-600 mt-1">
-              {allowed ? <>Granted via <b>{source ?? 'unknown'}</b>.</> : <>No grant resolves to <code>{code}</code> for this user (implicit default-deny).</>}
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}

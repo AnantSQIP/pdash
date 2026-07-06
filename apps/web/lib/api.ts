@@ -5,6 +5,27 @@
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api/v1';
 
+// Endpoints that must NOT trigger the silent-refresh retry (would recurse / are the
+// auth primitives themselves). /auth/me IS allowed to refresh so a session survives
+// past the 15-minute access-token lifetime.
+const NO_REFRESH = new Set(['/auth/refresh', '/auth/login', '/auth/logout']);
+
+// SINGLE-FLIGHT refresh: when the access token expires, a page can fire many requests
+// at once and they all 401 together. Without coordination they would each POST
+// /auth/refresh with the same rotating refresh-token cookie — the first rotates it and
+// the rest present a now-revoked token, tripping the backend's reuse-detection and
+// nuking the whole session. So all concurrent 401s share ONE refresh promise.
+let refreshInFlight: Promise<boolean> | null = null;
+function refreshOnce(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
+      .then(r => r.ok)
+      .catch(() => false)
+      .finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
+}
+
 async function req<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
@@ -15,10 +36,10 @@ async function req<T>(path: string, init?: RequestInit, retried = false): Promis
     ...init,
   });
 
-  // Access token expired → attempt one silent refresh, then retry the request once.
-  if (res.status === 401 && !retried && !path.startsWith('/auth/')) {
-    const r = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include' });
-    if (r.ok) return req<T>(path, init, true);
+  // Access token expired → attempt ONE shared silent refresh, then retry the request once.
+  if (res.status === 401 && !retried && !NO_REFRESH.has(path)) {
+    const ok = await refreshOnce();
+    if (ok) return req<T>(path, init, true);
   }
 
   if (!res.ok) {
@@ -26,7 +47,13 @@ async function req<T>(path: string, init?: RequestInit, retried = false): Promis
     try { message = (await res.json()).message ?? message; } catch { /* swallow */ }
     throw new Error(message);
   }
-  return res.json();
+
+  // A 204 or empty-body 200 (e.g. attendance "not clocked in" → null) must not be
+  // fed to JSON.parse — return null (NOT undefined, which React Query rejects as
+  // "Query data cannot be undefined") instead of throwing a SyntaxError.
+  if (res.status === 204) return null as unknown as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,7 +96,7 @@ export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
   priority: string; startDate?: string; dueDate?: string;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
-  createdAt: string; updatedAt: string;
+  createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
   taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
@@ -79,7 +106,7 @@ export type ApiProject = {
 export type ApiComment = {
   id: string; entityType: string; entityId: string;
   userId: string; content: string; createdAt: string;
-  user?: UserSummary;
+  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName'>;
 };
 
 export type Timesheet = {
@@ -101,6 +128,11 @@ export type Channel = {
   type: string; createdBy: string; createdAt: string;
   _count?: { messages: number; members: number };
   messages?: Message[];
+  members?: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
+};
+export type ChannelMembers = {
+  ownerId: string;
+  members: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
 };
 
 export type Message = {
@@ -133,9 +165,15 @@ export type DashboardStats = {
   hoursLoggedThisWeek: number;
 };
 
+export type NotificationItem = {
+  id: string; userId: string; title: string; message: string;
+  type: string; isRead: boolean; createdAt: string;
+};
+
 // ─── RBAC types ─────────────────────────────────────────────────────────────
 export type EffectivePermissions = {
-  userId: string; isSuperAdmin: boolean; codes: string[]; sources: Record<string, string>;
+  userId: string; isSuperAdmin: boolean; roles: string[]; codes: string[];
+  deny?: string[]; sources: Record<string, string>;
 };
 export type PermissionDef = { id: string; code: string; name: string; description?: string };
 export type RoleSummary = {
@@ -144,7 +182,7 @@ export type RoleSummary = {
 };
 export type GroupSummary = {
   id: string; name: string; description?: string; isSystemGroup: boolean;
-  memberCount: number; permissionIds: string[];
+  memberCount: number; memberIds: string[]; permissionIds: string[];
 };
 export type AuditLogItem = {
   id: string; userId: string; organizationId?: string | null; entityType: string; entityId: string;
@@ -254,12 +292,14 @@ export const api = {
 
   orgs: {
     list: () => req<OrgSummary[]>('/organizations'),
+    update: (id: string, data: { name?: string }) =>
+      req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 
   users: {
     list: (orgId: string) => req<UserSummary[]>(`/users?organizationId=${encodeURIComponent(orgId)}`),
-    create: (data: { organizationId: string; firstName: string; lastName?: string; email: string; designation?: string; phone?: string; roleIds?: string[] }) =>
-      req<UserSummary>('/users', { method: 'POST', body: JSON.stringify(data) }),
+    create: (data: { organizationId: string; firstName: string; lastName?: string; email: string; designation?: string; phone?: string; password?: string; roleIds?: string[] }) =>
+      req<UserSummary & { tempPassword: string }>('/users', { method: 'POST', body: JSON.stringify(data) }),
     setRoles: (id: string, roleIds: string[]) =>
       req<{ ok: boolean }>(`/users/${id}/roles`, { method: 'PUT', body: JSON.stringify({ roleIds }) }),
     setPermissions: (id: string, permissionIds: string[]) =>
@@ -267,6 +307,9 @@ export const api = {
     setOverrides: (id: string, overrides: { permissionId: string; effect: string }[]) =>
       req<{ ok: boolean }>(`/users/${id}/overrides`, { method: 'PUT', body: JSON.stringify({ overrides }) }),
     effectivePermissions: (id: string) => req<EffectivePermissions>(`/users/${id}/effective-permissions`),
+    overrides: (id: string) => req<{ permissionId: string; effect: string }[]>(`/users/${id}/overrides`),
+    setMyPhoto: (profilePhoto: string | null) =>
+      req<{ ok: boolean }>('/users/me/photo', { method: 'PUT', body: JSON.stringify({ profilePhoto: profilePhoto ?? '' }) }),
     get: (id: string) => req<UserSummary>(`/users/${id}`),
     update: (id: string, data: Partial<Pick<UserSummary, 'firstName' | 'lastName' | 'designation' | 'status'>>) =>
       req<UserSummary>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -284,10 +327,11 @@ export const api = {
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'completionPercentage'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/projects/${id}`, { method: 'DELETE' }),
-    approve: (id: string, actorId: string) =>
-      req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify({ actorId }) }),
-    reject: (id: string, actorId: string) =>
-      req<void>(`/projects/${id}/reject`, { method: 'POST', body: JSON.stringify({ actorId }) }),
+    // The approver is the verified cookie actor server-side; only an optional reason is sent.
+    approve: (id: string, reason?: string) =>
+      req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+    reject: (id: string, reason?: string) =>
+      req<void>(`/projects/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
   },
 
   taskLists: {
@@ -369,19 +413,23 @@ export const api = {
   channels: {
     list: (orgId: string) => req<Channel[]>(`/channels?organizationId=${encodeURIComponent(orgId)}`),
     get: (id: string) => req<Channel>(`/channels/${id}`),
-    create: (data: { organizationId: string; name: string; description?: string; type?: string; createdBy: string }) =>
+    create: (data: { organizationId: string; name: string; description?: string; memberIds?: string[] }) =>
       req<Channel>('/channels', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { name?: string; description?: string }) =>
       req<Channel>(`/channels/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/channels/${id}`, { method: 'DELETE' }),
     messages: (channelId: string, limit?: number) =>
       req<Message[]>(`/channels/${channelId}/messages${limit ? `?limit=${limit}` : ''}`),
-    sendMessage: (channelId: string, data: { userId: string; content: string }) =>
+    // Author is the verified cookie actor — no userId sent.
+    sendMessage: (channelId: string, data: { content: string }) =>
       req<Message>(`/channels/${channelId}/messages`, { method: 'POST', body: JSON.stringify(data) }),
     deleteMessage: (channelId: string, messageId: string) =>
       req<void>(`/channels/${channelId}/messages/${messageId}`, { method: 'DELETE' }),
-    join: (channelId: string, userId: string) =>
-      req<void>(`/channels/${channelId}/join`, { method: 'POST', body: JSON.stringify({ userId }) }),
+    members: (channelId: string) => req<ChannelMembers>(`/channels/${channelId}/members`),
+    addMembers: (channelId: string, userIds: string[]) =>
+      req<{ ok: boolean }>(`/channels/${channelId}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
+    removeMember: (channelId: string, userId: string) =>
+      req<void>(`/channels/${channelId}/members/${userId}`, { method: 'DELETE' }),
   },
 
   issues: {
@@ -419,6 +467,13 @@ export const api = {
 
   me: {
     effectivePermissions: () => req<EffectivePermissions>('/me/effective-permissions'),
+  },
+
+  notifications: {
+    list: (limit = 30) => req<NotificationItem[]>(`/notifications?limit=${limit}`),
+    unreadCount: () => req<{ count: number }>('/notifications/unread-count'),
+    markRead: (id: string) => req<{ ok: boolean }>(`/notifications/${id}/read`, { method: 'POST' }),
+    markAllRead: () => req<{ ok: boolean }>('/notifications/read-all', { method: 'POST' }),
   },
 
   permissions: {

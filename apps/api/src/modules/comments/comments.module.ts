@@ -1,9 +1,11 @@
 import { Body, Controller, Delete, Get, Injectable, Module, Param, Post, Query } from '@nestjs/common';
 import { NotFoundException } from '@nestjs/common';
-import { IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { getActorId } from '../../common/context/request-context';
 
 class CreateCommentDto {
   @IsString()
@@ -12,8 +14,10 @@ class CreateCommentDto {
   @IsString()
   entityId!: string;
 
+  // Deprecated/ignored — the author is taken from the verified cookie actor.
+  @IsOptional()
   @IsString()
-  userId!: string;
+  userId?: string;
 
   @IsString()
   @MinLength(1)
@@ -38,11 +42,13 @@ export class CommentsService {
   }
 
   async create(dto: CreateCommentDto) {
+    // Author is the verified cookie actor — never a client-supplied id.
+    const userId = getActorId() ?? dto.userId ?? 'system';
     const comment = await this.prisma.comment.create({
       data: {
         entityType: dto.entityType,
         entityId: dto.entityId,
-        userId: dto.userId,
+        userId,
         content: dto.content,
       },
       include: {
@@ -53,7 +59,6 @@ export class CommentsService {
       action: EVENTS.COMMENT_CREATED,
       entityType: dto.entityType,
       entityId: dto.entityId,
-      actorId: dto.userId,
       metadata: {
         projectId: dto.entityType === 'PROJECT' ? dto.entityId : undefined,
         commentId: comment.id,
@@ -82,12 +87,12 @@ class CommentsController {
     return this.service.list(entityType, entityId);
   }
 
-  @Post()
+  @Post() @RequirePermission('comment.create')
   create(@Body() dto: CreateCommentDto) {
     return this.service.create(dto);
   }
 
-  @Delete(':id')
+  @Delete(':id') @RequirePermission('comment.delete')
   remove(@Param('id') id: string) {
     return this.service.softDelete(id);
   }

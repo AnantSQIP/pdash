@@ -157,12 +157,15 @@ const CONSULTANT_CODES = [
 ];
 
 // HR: people operations — attendance, leave, holidays, user & department
-// management and org-wide performance visibility, but no delivery (project/task)
-// authoring.
+// management and org-wide performance visibility. Deliberately does NOT include
+// the delivery surfaces (projects/tasks/milestones/issues), so HR's dashboard and
+// nav are people-ops focused rather than delivery. Keeps the common surfaces
+// (calendar, channels, reports) + its own attendance/leave.
 const HR_CODES = [
-  ...VIEW_BASICS,
-  code('comment', 'create'),
-  code('report', 'export'),
+  code('dashboard', 'view'),
+  code('comment', 'view'), code('comment', 'create'),
+  code('calendar', 'view'), code('channel', 'view'),
+  code('report', 'view'), code('report', 'export'),
   code('analytics', 'view.own'),
   code('performance', 'view.own'), code('performance', 'view.organization'),
   code('attendance', 'view.own'), code('attendance', 'view.organization'),

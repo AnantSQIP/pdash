@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 import { Prisma } from '@pdash/db';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 class CreateWorkflowDto {
   @IsString()
@@ -137,7 +138,7 @@ class WorkflowsController {
     return this.service.get(id);
   }
 
-  @Post()
+  @Post() @RequirePermission('settings.update')
   create(@Body() dto: CreateWorkflowDto) {
     return this.service.create(dto);
   }
@@ -147,7 +148,7 @@ class WorkflowsController {
     return this.service.listStatuses(id);
   }
 
-  @Post(':workflowId/transitions')
+  @Post(':workflowId/transitions') @RequirePermission('settings.update')
   createTransition(
     @Param('workflowId') workflowId: string,
     @Body() dto: CreateWorkflowTransitionDto,

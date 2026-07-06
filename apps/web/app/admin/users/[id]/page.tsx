@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,7 +19,8 @@ import {
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { userInitials, avatarColor, fullName } from '@/lib/avatar';
+import { avatarColor, fullName } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function moduleOf(code: string) { return code.split('.')[0]; }
@@ -111,9 +112,13 @@ export default function UserDetailPage() {
           <ArrowLeft size={15} /> Back to Administration
         </Link>
         <div className="flex items-start gap-4">
-          <div className={clsx('w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold text-white shrink-0', avatarColor(id))}>
-            {user ? userInitials(user) : <RiShieldUserLine size={22} />}
-          </div>
+          {user ? (
+            <Avatar user={user} size={56} className="shrink-0" />
+          ) : (
+            <div className={clsx('w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold text-white shrink-0', avatarColor(id))}>
+              <RiShieldUserLine size={22} />
+            </div>
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-gray-900">{user ? fullName(user) : 'User'}</h1>
@@ -238,13 +243,15 @@ function PermissionsTab({ eff, loading }: { eff?: { isSuperAdmin: boolean; codes
 }
 
 // ── Roles ────────────────────────────────────────────────────────────────────
-function RolesTab({ userId, orgId, eff }: { userId: string; orgId: string; eff?: { sources: Record<string, string> } }) {
+function RolesTab({ userId, orgId, eff }: { userId: string; orgId: string; eff?: { roles?: string[]; sources: Record<string, string> } }) {
   const qc = useQueryClient();
   const { data: roles = [], isLoading } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 20_000 });
 
-  // Current roles are derived from the effective-permission sources ("role:<name>").
+  // Derive current roles from the authoritative eff.roles list — NOT from `sources`,
+  // which last-write-wins per code and silently omits a role whose permissions are all
+  // shadowed by a higher-precedence grant (which made setRoles' replace drop it on save).
   const currentRoleIds = useMemo(
-    () => roles.filter(r => eff?.sources && Object.values(eff.sources).some(s => s === `role:${r.name}`)).map(r => r.id),
+    () => roles.filter(r => eff?.roles?.includes(r.name)).map(r => r.id),
     [roles, eff],
   );
 
@@ -354,8 +361,17 @@ type Override = { permissionId: string; effect: 'ALLOW' | 'DENY' };
 function OverridesTab({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const { data: perms = [], isLoading } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 });
+  // Preload the user's EXISTING overrides so Save (replace-semantics) doesn't wipe them.
+  const { data: existing } = useQuery({ queryKey: ['overrides', userId], queryFn: () => api.users.overrides(userId), staleTime: 10_000 });
 
   const [overrides, setOverrides] = useState<Override[]>([]);
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (existing && !seeded.current) {
+      setOverrides(existing.map(o => ({ permissionId: o.permissionId, effect: o.effect as 'ALLOW' | 'DENY' })));
+      seeded.current = true;
+    }
+  }, [existing]);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -381,7 +397,10 @@ function OverridesTab({ userId }: { userId: string }) {
     try {
       await api.users.setOverrides(userId, overrides.map(o => ({ permissionId: o.permissionId, effect: o.effect })));
       qc.invalidateQueries({ queryKey: ['eff', userId] });
+      qc.invalidateQueries({ queryKey: ['overrides', userId] });
       setSaved(true);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to save overrides');
     } finally { setBusy(false); }
   }
 

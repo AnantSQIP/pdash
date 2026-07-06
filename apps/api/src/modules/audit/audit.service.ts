@@ -1,6 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@pdash/db';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PermissionService } from '../permissions/permission.service';
+import { getActorId } from '../../common/context/request-context';
 
 const ACTOR_SELECT = { id: true, firstName: true, lastName: true, email: true };
 
@@ -23,9 +25,19 @@ export interface AuditQuery {
 
 @Injectable()
 export class AuditService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
+  ) {}
 
-  listActivity(q: ActivityQuery) {
+  async listActivity(q: ActivityQuery) {
+    // Org-wide (unscoped) activity is sensitive — require audit.view. Project- or
+    // entity-scoped reads (the project Activity tab) stay open to authenticated users.
+    if (!q.projectId && !q.entityId) {
+      const actorId = getActorId();
+      const ok = actorId ? await this.permissions.check(actorId, 'audit.view') : false;
+      if (!ok) throw new ForbiddenException('audit.view is required to read org-wide activity.');
+    }
     const where: Prisma.ActivityWhereInput = {};
     if (q.organizationId) where.organizationId = q.organizationId;
     if (q.entityType) where.entityType = q.entityType;

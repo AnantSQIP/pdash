@@ -31,11 +31,11 @@ export function AddPermissionsWizard({ orgId, user, onClose, onDone }: {
   const [permSearch, setPermSearch] = useState('');
   const { data: sourceEff } = useQuery({ queryKey: ['eff', sourceUserId], queryFn: () => api.users.effectivePermissions(sourceUserId), enabled: !!sourceUserId, staleTime: 5_000 });
 
-  // current role ids of the target (derived from effective sources → role names → ids)
+  // Current role ids of the target — from the authoritative eff.roles (not the lossy
+  // sources map, which drops roles whose codes are all shadowed by higher-precedence grants).
   const currentRoleIds = useMemo(() => {
     if (!targetEff) return [] as string[];
-    const names = new Set(Object.values(targetEff.sources).filter(s => s.startsWith('role:')).map(s => s.slice(5)));
-    return roles.filter(r => names.has(r.name)).map(r => r.id);
+    return roles.filter(r => targetEff.roles?.includes(r.name)).map(r => r.id);
   }, [targetEff, roles]);
   const currentDirectCodes = useMemo(() => targetEff ? Object.entries(targetEff.sources).filter(([, s]) => s === 'direct').map(([c]) => c) : [], [targetEff]);
 
@@ -54,8 +54,7 @@ export function AddPermissionsWizard({ orgId, user, onClose, onDone }: {
       return { kind: 'direct' as const, addedCodes: added, finalDirectIds: finalCodes.map(c => idByCode.get(c)!).filter(Boolean) };
     }
     if (method === 'copy' && sourceEff) {
-      const srcRoleNames = new Set(Object.values(sourceEff.sources).filter(s => s.startsWith('role:')).map(s => s.slice(5)));
-      const srcRoleIds = roles.filter(r => srcRoleNames.has(r.name)).map(r => r.id);
+      const srcRoleIds = roles.filter(r => sourceEff.roles?.includes(r.name)).map(r => r.id);
       const srcDirect = Object.entries(sourceEff.sources).filter(([, s]) => s === 'direct').map(([c]) => c);
       const finalRoleIds = Array.from(new Set([...currentRoleIds, ...srcRoleIds]));
       const finalDirectCodes = Array.from(new Set([...currentDirectCodes, ...srcDirect]));

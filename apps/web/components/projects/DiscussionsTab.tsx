@@ -1,12 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, Send, Trash2 } from 'lucide-react';
 import { api, ApiComment } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
-import { userInitials, avatarColor, fullName } from '@/lib/avatar';
+import { fullName } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -19,26 +19,6 @@ function formatTimestamp(iso: string): string {
     minute: '2-digit',
     hour12: true,
   });
-}
-
-function Avatar({
-  user,
-  size = 'md',
-}: {
-  user: ApiComment['user'];
-  size?: 'sm' | 'md';
-}) {
-  return (
-    <div
-      className={clsx(
-        'rounded-full flex items-center justify-center text-white font-semibold shrink-0',
-        avatarColor(user?.id),
-        size === 'sm' ? 'w-7 h-7 text-xs' : 'w-9 h-9 text-sm'
-      )}
-    >
-      {userInitials(user)}
-    </div>
-  );
 }
 
 function CommentRow({
@@ -54,7 +34,7 @@ function CommentRow({
 }) {
   return (
     <div className="group flex items-start gap-3 bg-white border border-gray-200 rounded-xl p-4">
-      <Avatar user={comment.user} />
+      <Avatar user={comment.user} size={36} />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2 flex-wrap">
           <span className="text-sm font-semibold text-gray-900">{fullName(comment.user)}</span>
@@ -180,7 +160,7 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
       {/* Composer — fixed bottom bar */}
       <div className="shrink-0 border-t border-gray-200 bg-white px-5 py-4">
         <div className="flex items-start gap-3">
-          <Avatar user={currentUser ?? undefined} />
+          <Avatar user={currentUser ?? undefined} size={36} />
           <div className="flex-1">
             <textarea
               value={draft}

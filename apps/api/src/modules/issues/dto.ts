@@ -18,8 +18,10 @@ export class CreateIssueDto {
   @IsIn(['CRITICAL', 'MAJOR', 'MINOR', 'TRIVIAL'])
   severity?: string;
 
+  // Deprecated/ignored — the reporter is taken from the verified cookie actor.
+  @IsOptional()
   @IsString()
-  reportedBy!: string;
+  reportedBy?: string;
 
   @IsOptional()
   @IsString()

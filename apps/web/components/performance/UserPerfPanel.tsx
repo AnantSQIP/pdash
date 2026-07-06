@@ -18,6 +18,7 @@ import {
   type GridColumn,
 } from './charts';
 import { C, PRIORITY_COLORS, SEVERITY_COLORS, STATUS_COLORS } from './tokens';
+import { ExportMenu, type ExportData } from '@/components/ExportMenu';
 
 function withColors(data: NameValue[], map: Record<string, string>): NameValue[] {
   return data.map(d => ({ ...d, color: map[d.name] ?? C.slate }));
@@ -93,8 +94,36 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
     { key: 'dueDate', header: 'Due', sortable: true, accessor: t => t.dueDate ?? '', render: t => (t.dueDate ? <DueCell due={t.dueDate} closed={t.currentStatus?.type === 'CLOSED'} /> : <span className="text-gray-300">—</span>), exportValue: t => t.dueDate ? t.dueDate.slice(0, 10) : '' },
   ];
 
+  const exportReport = (): ExportData => ({
+    filename: `performance-${(perf.name || 'user').replace(/\s+/g, '-').toLowerCase()}`,
+    title: `Performance Report — ${perf.name}`,
+    subtitle: `Last ${days} days`,
+    columns: ['Metric', 'Value'],
+    rows: [
+      ['Tasks completed (period)', perf.periodTasksCompleted],
+      ['Tasks assigned', k.tasksAssigned],
+      ['Tasks open', k.tasksOpen],
+      ['Tasks overdue', k.tasksOverdue],
+      ['Completion rate', `${k.completionRate}%`],
+      ['On-time completion rate', `${k.onTimeCompletionRate}%`],
+      ['Hours logged', `${k.hoursLogged}h`],
+      ['Billable hours', `${k.billableHours}h`],
+      ['Billable %', `${k.billablePct}%`],
+      ['Issues reported', k.issuesReported],
+      ['Issues resolved', k.issuesResolved],
+      ['Comments posted', k.commentsPosted],
+      ['Activity volume', k.activityVolume],
+      ['Avg cycle time', perf.cycleTimeDays != null ? `${perf.cycleTimeDays} days` : '—'],
+    ],
+    meta: [{ label: 'Member', value: perf.name }, { label: 'Period', value: `Last ${days} days` }],
+  });
+
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-gray-700">{perf.name}<span className="font-normal text-gray-400"> · last {days} days</span></p>
+        <ExportMenu getData={exportReport} label="Export report" />
+      </div>
       {/* KPI strip with deltas + sparklines */}
       <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-3">
         <KpiTile label="Completed" value={perf.periodTasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-green-100 text-green-600" delta={delta(perf.periodTasksCompleted, p.tasksCompleted)} spark={sparkOf('completed')} sparkColor={C.green} />

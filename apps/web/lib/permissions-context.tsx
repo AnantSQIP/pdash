@@ -1,19 +1,27 @@
 'use client';
 
-import { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext, useMemo, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type EffectivePermissions } from './api';
 import { useOrg } from './org-context';
 
+// Highest-privilege first. The user's "persona" is the first of these they hold.
+const ROLE_PRIORITY = ['Super Admin', 'Admin', 'Manager', 'HR', 'Senior Consultant', 'Consultant', 'Employee'];
+
 type PermissionsValue = {
   codes: string[];
+  roles: string[];
+  /** The highest-privilege role the user holds — used only for persona labels/ordering, never for gating. */
+  primaryRole: string | null;
   isSuperAdmin: boolean;
   loading: boolean;
   can: (code: string | string[]) => boolean;
+  hasRole: (name: string) => boolean;
 };
 
 const PermissionsContext = createContext<PermissionsValue>({
-  codes: [], isSuperAdmin: false, loading: true, can: () => false,
+  codes: [], roles: [], primaryRole: null, isSuperAdmin: false, loading: true,
+  can: () => false, hasRole: () => false,
 });
 
 export function PermissionsProvider({ children }: { children: ReactNode }) {
@@ -26,17 +34,30 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     staleTime: 60_000,
   });
 
-  const codes = data?.codes ?? [];
-  const isSuperAdmin = data?.isSuperAdmin ?? false;
-
-  const can = (code: string | string[]) => {
-    if (isSuperAdmin) return true;
-    const list = Array.isArray(code) ? code : [code];
-    return list.some(c => codes.includes(c));
-  };
+  // Memoize the context value so consumers (Sidebar, every <Can>, every page) don't
+  // re-render on unrelated parent updates. Rebuilds only when the permission data changes.
+  const value = useMemo<PermissionsValue>(() => {
+    const codes = data?.codes ?? [];
+    const roles = data?.roles ?? [];
+    const isSuperAdmin = data?.isSuperAdmin ?? false;
+    const codeSet = new Set(codes);
+    return {
+      codes,
+      roles,
+      isSuperAdmin,
+      primaryRole: ROLE_PRIORITY.find(r => roles.includes(r)) ?? roles[0] ?? null,
+      loading: isLoading,
+      can: (code: string | string[]) => {
+        if (isSuperAdmin) return true;
+        const list = Array.isArray(code) ? code : [code];
+        return list.some(c => codeSet.has(c));
+      },
+      hasRole: (name: string) => roles.includes(name),
+    };
+  }, [data, isLoading]);
 
   return (
-    <PermissionsContext.Provider value={{ codes, isSuperAdmin, loading: isLoading, can }}>
+    <PermissionsContext.Provider value={value}>
       {children}
     </PermissionsContext.Provider>
   );

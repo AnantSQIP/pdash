@@ -15,7 +15,7 @@ import {
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { userInitials, avatarColor } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 import {
   ChartCard, KpiTile, GaugeCard, DonutCard, PieCard, LineCard, AreaCard, BarCard, ColumnCard, BulletChart, DataGrid,
   type GridColumn,
@@ -24,6 +24,7 @@ import { ContributionHeatmap } from './ContributionHeatmap';
 import { UserPerfPanel } from './UserPerfPanel';
 import { MultiSelectFilter, FilterBar } from './controls';
 import { C, DONUT_COLORS, STATUS_COLORS, SEVERITY_COLORS, rateColor, round1 } from './tokens';
+import { ExportMenu, type ExportData } from '@/components/ExportMenu';
 
 type Metric = 'tasksCompleted' | 'hoursLogged' | 'onTimeRate' | 'activityVolume';
 const METRIC_LABEL: Record<Metric, string> = {
@@ -130,9 +131,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
       key: 'name', header: 'Member', sortable: true, accessor: r => r.name,
       render: r => (
         <div className="flex items-center gap-2">
-          <div className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white', avatarColor(r.userId))}>
-            {userInitials({ firstName: r.name.split(' ')[0], lastName: r.name.split(' ')[1] })}
-          </div>
+          <Avatar user={{ firstName: r.name.split(' ')[0], lastName: r.name.split(' ')[1], id: r.userId }} size={24} />
           <span className="text-gray-800">{r.name}</span>
         </div>
       ),
@@ -153,6 +152,23 @@ export function OrgView({ days = 30 }: { days?: number }) {
     { key: 'score', header: 'Score', align: 'right', sortable: true, accessor: r => r.score, render: r => <span className="font-semibold text-brand-600">{r.score}</span> },
   ];
 
+  const exportOrg = (): ExportData => ({
+    filename: 'org-performance',
+    title: 'Organization Performance Report',
+    subtitle: `Last ${days} days · ${ranked.length} members`,
+    columns: ['Member', 'Role', 'Department', 'Tasks completed', 'Hours logged', 'On-time %', 'Activity', 'Score'],
+    rows: ranked.map(r => [
+      r.name, r.designation ?? '', r.department ?? '',
+      r.tasksCompleted, `${r.hoursLogged}h`, `${r.onTimeRate}%`, r.activityVolume, r.score,
+    ]),
+    meta: [
+      { label: 'Members', value: String(t.users) },
+      { label: 'Tasks completed', value: String(t.tasksCompleted) },
+      { label: 'Hours logged', value: `${Math.round(t.hoursLogged)}h` },
+      { label: 'Avg on-time', value: `${t.avgOnTimeRate}%` },
+    ],
+  });
+
   return (
     <div className="space-y-6">
       {/* toolbar: summary + filters + freshness/rebuild */}
@@ -167,6 +183,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
               <RiRefreshLine size={14} className={clsx(rebuilding && 'animate-spin')} />{rebuilding ? 'Rebuilding…' : 'Rebuild snapshots'}
             </button>
           )}
+          <ExportMenu getData={exportOrg} label="Export report" />
         </FilterBar>
       </div>
 
@@ -221,7 +238,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
       {/* Gauges + capacity bullets + project progress */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <ChartCard title="Org rates">
-          <div className="flex items-center justify-around">
+          <div className="flex flex-wrap items-center justify-around gap-3">
             <GaugeCard value={t.avgOnTimeRate} label="On-time" />
             <GaugeCard value={avgCompletion} label="Avg completion" color={C.brand} />
             <GaugeCard value={capUsed} label="Capacity used" color={C.teal} />
@@ -255,7 +272,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
 
       {/* Drill-down into a single member */}
       {selectedUser && (
-        <div ref={drillRef} className="scroll-mt-4 bg-gradient-to-b from-brand-50/60 to-transparent rounded-xl border border-brand-200 p-5">
+        <div ref={drillRef} className="scroll-mt-4 bg-gradient-to-b from-brand-50/60 to-transparent rounded-xl border border-brand-200 p-4 sm:p-5">
           <div className="flex items-center justify-between gap-2 mb-4">
             <div className="flex items-center gap-2 text-sm text-gray-500">
               <button onClick={() => setSelectedUser('')} className="hover:text-brand-600">Organization</button>

@@ -10,12 +10,23 @@
   "scripts": {
     "db:generate": "prisma generate --schema=packages/db/prisma/schema.prisma",
     "db:push": "prisma db push --schema=packages/db/prisma/schema.prisma --accept-data-loss",
+    "db:migrate:dev": "prisma migrate dev --schema=packages/db/prisma/schema.prisma",
+    "db:migrate:deploy": "prisma migrate deploy --schema=packages/db/prisma/schema.prisma",
     "db:seed": "npx ts-node packages/db/prisma/seed.ts",
+    "build": "npm run build --workspace=packages/db && npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "build:all": "npm run db:generate && npm run build",
+    "serve": "node scripts/serve.mjs",
+    "start:api": "node apps/api/dist/main.js",
+    "start:web": "npm run start --workspace=apps/web",
     "api:start": "bash scripts/start-api.sh",
     "api:restart": "bash scripts/restart-api.sh",
     "web:dev": "npm run dev --workspace=apps/web",
+    "prod:up": "docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build",
+    "prod:down": "docker compose -f docker-compose.prod.yml down",
     "infra:up": "docker compose up -d",
-    "infra:down": "docker compose down"
+    "infra:down": "docker compose down",
+    "keepalive": "bash scripts/keep-alive-start.sh",
+    "link": "bash scripts/link.sh"
   },
   "engines": {
     "node": ">=20"

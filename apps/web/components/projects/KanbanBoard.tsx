@@ -2,9 +2,9 @@
 
 import { useState } from 'react';
 import clsx from 'clsx';
-import { Plus, MoreHorizontal, Flag, GripVertical } from 'lucide-react';
+import { Plus, Flag, GripVertical } from 'lucide-react';
 import type { ApiTask, WorkflowStatus } from '@/lib/api';
-import { userInitials, avatarColor } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
 interface KanbanBoardProps {
   tasks: ApiTask[];
@@ -45,7 +45,7 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
   }
 
   return (
-    <div className="flex gap-4 h-full overflow-x-auto py-1 px-1">
+    <div className="flex gap-3 lg:gap-4 h-full overflow-x-auto py-1 px-0.5 lg:px-1">
       {columns.map(col => {
         const colTasks = tasks.filter(t => (t.currentStatus?.id ?? '') === col.id || t.currentStatus?.name === col.name);
         const isClosed = col.type === 'CLOSED';
@@ -57,7 +57,8 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
             onDragLeave={() => setOverCol(c => (c === col.id ? null : c))}
             onDrop={() => handleDrop(col.id)}
             className={clsx(
-              'flex flex-col w-72 shrink-0 bg-gray-50 rounded-xl border overflow-hidden transition-colors',
+              // Mobile: fixed, swipeable columns. Desktop (lg+): flex to fill the width — no horizontal scroll.
+              'flex flex-col shrink-0 w-[85vw] max-w-[20rem] lg:w-auto lg:max-w-none lg:flex-1 lg:min-w-0 bg-gray-50 rounded-xl border overflow-hidden transition-colors',
               overCol === col.id ? 'border-brand-400 bg-brand-50/40' : 'border-gray-200',
             )}
           >
@@ -70,9 +71,6 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
                   {colTasks.length}
                 </span>
               </div>
-              <button className="p-1 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100 transition-colors">
-                <MoreHorizontal size={14} />
-              </button>
             </div>
 
             {/* Cards */}
@@ -110,12 +108,7 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
 
                     <div className="flex items-center justify-between">
                       {assignee ? (
-                        <div
-                          title={`${assignee.firstName} ${assignee.lastName ?? ''}`.trim()}
-                          className={clsx('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white', avatarColor(assignee.id))}
-                        >
-                          {userInitials(assignee)}
-                        </div>
+                        <Avatar user={assignee} size={24} />
                       ) : (
                         <div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />
                       )}

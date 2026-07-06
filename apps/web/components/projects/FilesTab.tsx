@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import clsx from 'clsx';
 import { Upload, Search, Grid, List, Download, Trash2, FileText, File } from 'lucide-react';
+import { Avatar } from '@/components/Avatar';
 
 type MockFile = {
   id: string;
@@ -29,13 +30,6 @@ const TYPE_CONFIG: Record<MockFile['type'], { label: string; bgColor: string; te
   docx:   { label: 'DOCX',   bgColor: 'bg-blue-50',   textColor: 'text-blue-600',   dotColor: 'bg-blue-500' },
 };
 
-const UPLOADER_COLORS: Record<string, string> = {
-  SA: 'bg-orange-500',
-  CP: 'bg-pink-500',
-  BT: 'bg-slate-600',
-  AK: 'bg-green-500',
-};
-
 function FileTypeIcon({ type, large }: { type: MockFile['type']; large?: boolean }) {
   const cfg = TYPE_CONFIG[type];
   return (
@@ -49,20 +43,6 @@ function FileTypeIcon({ type, large }: { type: MockFile['type']; large?: boolean
       <span className={clsx('font-bold', cfg.textColor, large ? 'text-sm' : 'text-xs')}>
         {cfg.label}
       </span>
-    </div>
-  );
-}
-
-function UploaderAvatar({ initials }: { initials: string }) {
-  const color = UPLOADER_COLORS[initials] ?? 'bg-gray-400';
-  return (
-    <div
-      className={clsx(
-        'w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-semibold shrink-0',
-        color
-      )}
-    >
-      {initials}
     </div>
   );
 }
@@ -119,7 +99,7 @@ function GridCard({ file }: { file: MockFile }) {
       {/* Footer */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <UploaderAvatar initials={file.uploadedBy} />
+          <Avatar user={{ firstName: file.uploadedBy }} size={24} />
           <span className="text-xs text-gray-500">{file.uploadedAt}</span>
         </div>
         <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
@@ -147,7 +127,7 @@ function ListRow({ file }: { file: MockFile }) {
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">
-          <UploaderAvatar initials={file.uploadedBy} />
+          <Avatar user={{ firstName: file.uploadedBy }} size={24} />
           <span className="text-sm text-gray-600">{file.uploadedBy}</span>
         </div>
       </td>

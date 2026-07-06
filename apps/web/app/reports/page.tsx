@@ -2,10 +2,30 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, Edit3, Check, X } from 'lucide-react';
+import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, Edit3, Check, X } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type ApiProject, type DashboardStats } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { ExportMenu, type ExportData } from '@/components/ExportMenu';
+
+function projectsExport(projects: ApiProject[], stats?: DashboardStats): ExportData {
+  return {
+    filename: 'projects-report',
+    title: 'Projects Report',
+    subtitle: `${projects.length} projects`,
+    columns: ['Title', 'Phase', 'Priority', 'Completion %', 'Tasks', 'Members', 'Due Date'],
+    rows: projects.map(p => [
+      p.title, p.projectPhase, p.priority, `${p.completionPercentage}%`,
+      p._count?.projectTasks ?? 0, p._count?.members ?? 0,
+      p.dueDate ? new Date(p.dueDate).toLocaleDateString() : '',
+    ]),
+    meta: stats ? [
+      { label: 'Total', value: String(stats.totalProjects) },
+      { label: 'Active', value: String(stats.activeProjects) },
+      { label: 'Avg completion', value: `${stats.avgCompletion}%` },
+    ] : undefined,
+  };
+}
 
 const PHASE_COLORS: Record<string, { color: string; label: string }> = {
   ACTIVE:    { color: '#34a853', label: 'Active'    },
@@ -19,38 +39,6 @@ const PHASE_COLORS: Record<string, { color: string; label: string }> = {
 const PRIORITY_COLORS: Record<string, string> = {
   CRITICAL: '#ea4335', HIGH: '#fa7b17', MEDIUM: '#fbbc04', LOW: '#34a853',
 };
-
-function ExportCsvButton({ projects }: { projects: ApiProject[] }) {
-  function exportCsv() {
-    const headers = ['Title', 'Phase', 'Priority', 'Completion %', 'Tasks', 'Members', 'Due Date'];
-    const rows = projects.map(p => [
-      `"${p.title}"`,
-      p.projectPhase,
-      p.priority,
-      p.completionPercentage,
-      p._count?.projectTasks ?? 0,
-      p._count?.members ?? 0,
-      p.dueDate ? new Date(p.dueDate).toLocaleDateString() : '',
-    ]);
-    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `projects-report-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-  return (
-    <button
-      onClick={exportCsv}
-      className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-    >
-      <Download size={14} />
-      Export CSV
-    </button>
-  );
-}
 
 function ProgressEditor({ project, onUpdated }: { project: ApiProject; onUpdated: () => void }) {
   const [editing, setEditing] = useState(false);
@@ -153,18 +141,18 @@ export default function ReportsPage() {
   return (
     <div className="min-h-full">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Reports</h1>
           <p className="text-sm text-gray-500 mt-0.5">Project analytics and progress tracking</p>
         </div>
         <div className="flex items-center gap-2">
           {loading && <Loader size={16} className="animate-spin text-gray-400" />}
-          <ExportCsvButton projects={projects} />
+          <ExportMenu getData={() => projectsExport(projects, stats)} disabled={loading || projects.length === 0} />
         </div>
       </div>
 
-      <div className="p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-6">
         {/* Stats row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
@@ -187,7 +175,7 @@ export default function ReportsPage() {
           ))}
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Status distribution chart */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <h3 className="text-sm font-semibold text-gray-900 mb-4">Projects by Phase</h3>
@@ -280,7 +268,7 @@ export default function ReportsPage() {
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
             <h3 className="text-sm font-semibold text-gray-900">All Projects</h3>
-            <ExportCsvButton projects={projects} />
+            <ExportMenu getData={() => projectsExport(projects, stats)} disabled={loading || projects.length === 0} />
           </div>
 
           {projectsLoading ? (
@@ -289,6 +277,7 @@ export default function ReportsPage() {
               <span className="text-sm">Loading…</span>
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
@@ -300,15 +289,15 @@ export default function ReportsPage() {
                   ].map(([field, label]) => (
                     <th
                       key={field}
-                      className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-700 select-none"
+                      className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-700 select-none whitespace-nowrap"
                       onClick={() => toggleSort(field as typeof sortField)}
                     >
                       {label}
                       <SortIcon field={field as typeof sortField} />
                     </th>
                   ))}
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tasks</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Due Date</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Tasks</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -345,6 +334,7 @@ export default function ReportsPage() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>

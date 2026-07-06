@@ -6,6 +6,12 @@ import { PERMISSIONS, ROLE_PRESETS, ALL_PERMISSION_CODES } from './permissions-c
 const prisma = new PrismaClient();
 
 async function main() {
+  // SAFETY: this seed DELETES all data. Refuse to run against a production database
+  // unless explicitly overridden, so a stray `db:seed` can never wipe live data.
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PROD_SEED !== 'true') {
+    console.error('Refusing to seed in production (it wipes all data). Set ALLOW_PROD_SEED=true to override.');
+    process.exit(1);
+  }
   console.log('Wiping existing data...');
   // Event/audit + metrics first (AuditLog.user is onDelete: Restrict, so it MUST go before users)
   await prisma.userMetricDaily.deleteMany();
@@ -103,13 +109,14 @@ async function main() {
   // as anyone locally. Override via SEED_DEFAULT_PASSWORD; in prod, real users set
   // their own password via the invite/reset flow.
   const devHash = await argonHash(process.env.SEED_DEFAULT_PASSWORD ?? 'sqip@1234');
-  async function makeUser(firstName: string, lastName: string, designation: string, roleId: string) {
+  async function makeUser(firstName: string, lastName: string, email: string, designation: string, roleId: string, phone?: string) {
     return prisma.user.create({
       data: {
         organizationId: org.id,
         firstName,
         lastName,
-        email: `${firstName.toLowerCase()}@squarkip.com`,
+        email: email.toLowerCase(),
+        phone: phone ?? null,
         designation,
         status: 'ACTIVE',
         passwordHash: devHash,
@@ -119,22 +126,39 @@ async function main() {
     });
   }
 
-  const mohit     = await makeUser('Mohit',     'Kalra',        'VP',                        superAdminRole.id);
-  const yash      = await makeUser('Yash',      'Bhargava',     'VP',                        superAdminRole.id);
-  const arjun     = await makeUser('Arjun',     '',             'Research Associate',        employeeRole.id);
-  const vijay     = await makeUser('Vijay',     'Mishra',       'Consultant',                consultantRole.id);
-  const basant    = await makeUser('Basant',    'Goyal',        'Senior Consultant',         seniorConsultantRole.id);
-  const khushi    = await makeUser('Khushi',    'Gupta',        'Senior Research Associate', employeeRole.id);
-  const meetu     = await makeUser('Meetu',     'Singh',        'Consultant',                consultantRole.id);
-  const nehu      = await makeUser('Neha',      'Shukla',       'Consultant',                consultantRole.id);
-  const amrit     = await makeUser('Amritpal',  'Kaur',         'Senior Consultant',         seniorConsultantRole.id);
-  const nitin     = await makeUser('Nitin',     'Goel',         'Manager',                   managerRole.id);
-  const divyanshu = await makeUser('Divyanshu', '',             'Testing and QA',            employeeRole.id);
-  const ankit     = await makeUser('Ankit',     'Kumar Verma',  'Product Development',       managerRole.id);
-  const anant     = await makeUser('Anant',     'Gupta',        'Product Development',       managerRole.id);
-  const riya      = await makeUser('Riya',      'Bhola',        'HR',                        hrRole.id);
-  const shaveta   = await makeUser('Shaveta',   'Sharma',       'HR',                        hrRole.id);
-  const ketan     = await makeUser('Ketan',     'Dagar',        'Senior Research Associate', employeeRole.id);
+  // ── Core team — referenced by the project/task/timesheet/attendance data below ──
+  const mohit     = await makeUser('Mohit',     'Kalra',     'mohit@squarkip.com',            'VP',                        superAdminRole.id,       '8302971071');
+  const yash      = await makeUser('Yash',      'Bhargava',  'yash@squarkip.com',             'VP',                        superAdminRole.id,       '9166876696');
+  const arjun     = await makeUser('Arjun',     'Ghosh',     'arjun.ghosh@squarkip.com',      'Research Associate',        employeeRole.id,         '9002766291');
+  const vijay     = await makeUser('Vijay',     'Mishra',    'vijay.mishra@squarkip.com',     'Consultant',                consultantRole.id,       '9654129571');
+  const basant    = await makeUser('Basant',    'Goyal',     'basant.goyal@squarkip.com',     'Senior Consultant',         seniorConsultantRole.id, '8946889936');
+  const khushi    = await makeUser('Khushi',    'Gupta',     'khushi.gupta@squarkip.com',     'Senior Research Associate', employeeRole.id,         '8875555997');
+  const meetu     = await makeUser('Meetu',     'Singh',     'meetu.singh@squarkip.com',      'Consultant',                consultantRole.id,       '6376595932');
+  const nehu      = await makeUser('Neha',      'Shukla',    'neha.shukla@squarkip.com',      'Consultant',                consultantRole.id,       '9694815249');
+  const amrit     = await makeUser('Amritpal',  'Kaur',      'amritpal.kaur@squarkip.com',    'Senior Consultant',         seniorConsultantRole.id, '8699426272');
+  const nitin     = await makeUser('Nitin',     'Goel',      'nitin.goel@squarkip.com',       'Manager',                   managerRole.id,          '8826599004');
+  const divyanshu = await makeUser('Divyanshu', 'Saxena',    'divyanshu.saxena@squarkip.com', 'Testing and QA',            employeeRole.id,         '6376685331');
+  const ankit     = await makeUser('Ankit',     'Verma',     'ankit.verma@squarkip.com',      'Product Development',       managerRole.id,          '7217827713');
+  const anant     = await makeUser('Anant',     'Gupta',     'anant.gupta@squarkip.com',      'Product Development',       managerRole.id,          '7206390512');
+  const riya      = await makeUser('Riya',      'Bhola',     'riya.bhola@squarkip.com',       'HR',                        hrRole.id,               '9649332546');
+  const shaveta   = await makeUser('Shaveta',   'Sharma',    'shavetasharma@squarkip.com',    'HR',                        hrRole.id,               '6280149294');
+  const ketan     = await makeUser('Ketan',     'Dagar',     'ketan.dagar@squarkip.com',      'Senior Research Associate', employeeRole.id,         '6284795508');
+
+  // ── Wider roster — additional real team members ──
+  await Promise.all([
+    makeUser('Ajay',    'Sharma',     'ajay.sharma@squarkip.com',      'Research Associate', employeeRole.id, '9460639443'),
+    makeUser('Aman',    'Sharma',     'aman.sharma@squarkip.com',      'Research Associate', employeeRole.id, '6378172788'),
+    makeUser('Drishti', 'Jain',       'drishti.jain@squarkip.com',     'Associate',          employeeRole.id, '8305088898'),
+    makeUser('HR',      'Admin',      'hr@squarkip.com',               'HR',                 hrRole.id,       '09166876696'),
+    makeUser('Poorvi',  'Gupta',      'poorvi.gupta@squarkip.com',     'Research Associate', employeeRole.id, '8209218618'),
+    makeUser('Ragini',  'Kumari',     'ragini.kumari@squarkip.com',    'Associate',          employeeRole.id, '7807290342'),
+    makeUser('Rajesh',  'Joshi',      'rajesh.joshi@squarkip.com',     'Senior Associate',   employeeRole.id, '9205688453'),
+    makeUser('Ritik',   'Sharma',     'ritik.sharma@squarkip.com',     'Research Associate', employeeRole.id, '8194932267'),
+    makeUser('Ronak',   'Khandelwal', 'ronak.khandelwal@squarkip.com', 'Associate',          employeeRole.id, '9887145023'),
+    makeUser('Sugandh', 'Raghav',     'sugandh.raghav@squarkip.com',   'Research Associate', employeeRole.id, '9456252763'),
+    makeUser('Tanisha', 'Jain',       'tanisha.jain@squarkip.com',     'Associate',          employeeRole.id, '7828717606'),
+    makeUser('Vandana', 'Boora',      'vandana.boora@squarkip.com',    'Research Associate', employeeRole.id, '9413541413'),
+  ]);
 
   // Role aliases used throughout the data below.
   const admin = mohit;   // VP / approver / "current user"
@@ -661,7 +685,7 @@ async function main() {
 
   console.log('\nSeed complete ✓');
   console.log('  Org:      Squark IP (code: pdash-demo)');
-  console.log('  Users:    16 SquarkIP users (@squarkip.com) — current user: Mohit (VP)');
+  console.log('  Users:    28 SquarkIP users (@squarkip.com) — current user: Mohit (VP)');
   console.log('  Projects: 5 IP/patent engagements  |  Tasks: 65  |  Timesheets: 12  |  Issues: 14  |  Channels: 5  |  Events: 15');
 }
 

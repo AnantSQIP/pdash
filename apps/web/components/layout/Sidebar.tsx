@@ -7,39 +7,58 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, CheckSquare, BarChart2, Calendar, Clock,
   MessageSquare, Users, Settings, Bell, ChevronDown, TrendingUp,
-  Shield, ScrollText, PanelLeftClose, PanelLeftOpen,
+  Shield, ScrollText, PanelLeftClose, PanelLeftOpen, X, type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useQuery } from '@tanstack/react-query';
 import { NotificationsPanel } from './NotificationsPanel';
 import { UserMenu } from './UserMenu';
+import { api } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { userInitials, fullName } from '@/lib/avatar';
+import { fullName } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
 
-const NAV = [
+type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | string[] };
+
+// Home is always shown (landing page). The rest are permission-gated so each role
+// sees only what it can use — e.g. HR (no project/task perms) won't see Projects/My Tasks.
+const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
-  { href: '/projects',    icon: FolderKanban,    label: 'Projects' },
-  { href: '/tasks',       icon: CheckSquare,     label: 'My Tasks' },
-  { href: '/performance', icon: TrendingUp,      label: 'Performance' },
-  { href: '/calendar',    icon: Calendar,        label: 'Calendar' },
-  { href: '/attendance',  icon: Clock,           label: 'Attendance' },
-  { href: '/reports',     icon: BarChart2,       label: 'Reports' },
-  { href: '/discuss',     icon: MessageSquare,   label: 'Discuss' },
-  { href: '/users',       icon: Users,           label: 'People' },
+  { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view' },
+  { href: '/tasks',       icon: CheckSquare,     label: 'My Tasks',    perm: 'task.view' },
+  { href: '/performance', icon: TrendingUp,      label: 'Performance', perm: 'performance.view.own' },
+  { href: '/calendar',    icon: Calendar,        label: 'Calendar',    perm: 'calendar.view' },
+  { href: '/attendance',  icon: Clock,           label: 'Attendance',  perm: 'attendance.view.own' },
+  { href: '/reports',     icon: BarChart2,       label: 'Reports',     perm: ['report.view', 'report.export'] },
+  { href: '/discuss',     icon: MessageSquare,   label: 'Discuss',     perm: 'channel.view' },
+  { href: '/users',       icon: Users,           label: 'People',      perm: 'user.view' },
 ];
 
 // Permission-gated admin entries (shown only when the actor can access them).
 const ADMIN_NAV = [
-  { href: '/admin',       icon: Shield,     label: 'Admin',     perm: ['permission.view', 'role.view', 'user.create'] },
+  // "Admin" = RBAC/system administration (roles, groups, permission matrix) — gated on
+  // RBAC perms, NOT user.create (HR has user.create for people-ops but isn't an RBAC admin).
+  { href: '/admin',       icon: Shield,     label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
   { href: '/admin/audit', icon: ScrollText, label: 'Audit Log', perm: ['audit.view'] },
 ];
 
 const STORAGE_KEY = 'sidebar-collapsed';
 
-export function Sidebar() {
+export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void } = {}) {
   const path = usePathname();
   const { currentUser } = useOrg();
   const { can } = usePermissions();
+  // Real unread-notification count. Polled at 30s, and paused while the tab is
+  // hidden (refetchIntervalInBackground defaults false) to avoid idle background load.
+  const { data: unread } = useQuery({
+    queryKey: ['notifications-unread'],
+    queryFn: () => api.notifications.unreadCount(),
+    enabled: !!currentUser?.id,
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  });
+  const unreadCount = unread?.count ?? 0;
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -72,28 +91,44 @@ export function Sidebar() {
 
   const name = currentUser ? fullName(currentUser) : 'Loading…';
   const email = currentUser?.email ?? '';
-  const initials = currentUser ? userInitials(currentUser) : '··';
 
   return (
-    <aside
-      className={clsx(
-        'relative flex flex-col shrink-0 bg-sidebar text-white overflow-y-auto overflow-x-hidden transition-[width] duration-200 ease-in-out',
-        collapsed ? 'w-16' : 'w-56',
-      )}
-    >
+    <>
+      {/* Mobile drawer backdrop */}
+      {mobileOpen && <div onClick={onClose} className="fixed inset-0 z-40 bg-black/50 lg:hidden" aria-hidden />}
+      <aside
+        className={clsx(
+          'flex flex-col bg-sidebar text-white overflow-y-auto overflow-x-hidden ease-in-out',
+          // Mobile/tablet: off-canvas drawer
+          'fixed inset-y-0 left-0 z-50 w-64 transition-transform duration-200',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          // Desktop (lg+): static, in-flow, collapsible
+          'lg:static lg:z-auto lg:translate-x-0 lg:shrink-0 lg:transition-[width]',
+          collapsed ? 'lg:w-16' : 'lg:w-56',
+        )}
+      >
       {/* Logo + collapse toggle */}
       <div className={clsx('flex items-center border-b border-white/10 py-5', collapsed ? 'justify-center px-0' : 'gap-2.5 px-4')}>
         <Image src="/fav.png" alt="SquarkIP" width={32} height={32} className="rounded-lg shrink-0" />
         {!collapsed && <span className="font-bold text-lg tracking-tight flex-1">SquarkIP</span>}
         {!collapsed && (
-          <button
-            onClick={toggle}
-            title="Collapse sidebar (Ctrl/⌘ B)"
-            aria-label="Collapse sidebar"
-            className="p-1.5 rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20 ring-1 ring-white/10 transition-colors"
-          >
-            <PanelLeftClose size={18} />
-          </button>
+          <>
+            <button
+              onClick={toggle}
+              title="Collapse sidebar (Ctrl/⌘ B)"
+              aria-label="Collapse sidebar"
+              className="hidden lg:inline-flex p-1.5 rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20 ring-1 ring-white/10 transition-colors"
+            >
+              <PanelLeftClose size={18} />
+            </button>
+            <button
+              onClick={onClose}
+              aria-label="Close menu"
+              className="lg:hidden p-1.5 rounded-md bg-white/10 text-white/80 hover:text-white hover:bg-white/20"
+            >
+              <X size={18} />
+            </button>
+          </>
         )}
       </div>
 
@@ -111,7 +146,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 py-3 px-2 space-y-0.5">
-        {NAV.map(({ href, icon: Icon, label }) => {
+        {NAV.filter(n => !n.perm || can(n.perm)).map(({ href, icon: Icon, label }) => {
           const active = href === '/home' ? path === '/home' : path.startsWith(href);
           return (
             <Link
@@ -168,9 +203,11 @@ export function Sidebar() {
         >
           <span className="relative shrink-0">
             <Bell size={17} />
-            <span className="w-4 h-4 bg-red-500 text-white text-[10px] rounded-full flex items-center justify-center absolute -top-0.5 -right-0.5">
-              3
-            </span>
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </span>
           {!collapsed && 'Notifications'}
         </button>
@@ -193,9 +230,7 @@ export function Sidebar() {
             collapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2',
           )}
         >
-          <div className="w-7 h-7 rounded-full bg-brand-600 flex items-center justify-center text-xs font-bold shrink-0">
-            {initials}
-          </div>
+          <Avatar user={currentUser} size={28} />
           {!collapsed && (
             <>
               <div className="flex-1 min-w-0">
@@ -210,6 +245,7 @@ export function Sidebar() {
 
       {showNotifications && <NotificationsPanel onClose={() => setShowNotifications(false)} />}
       {showUserMenu && <UserMenu onClose={() => setShowUserMenu(false)} />}
-    </aside>
+      </aside>
+    </>
   );
 }

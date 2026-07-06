@@ -106,12 +106,14 @@ export class RbacService {
       orderBy: { name: 'asc' },
       include: {
         permissionGroupPermissions: { select: { permissionId: true } },
+        members: { select: { userId: true } },
         _count: { select: { members: true } },
       },
     });
     return groups.map(g => ({
       id: g.id, name: g.name, description: g.description, isSystemGroup: g.isSystemGroup,
       memberCount: g._count.members,
+      memberIds: g.members.map(m => m.userId),
       permissionIds: g.permissionGroupPermissions.map(p => p.permissionId),
     }));
   }

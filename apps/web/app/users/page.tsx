@@ -1,22 +1,14 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { UserPlus, Search, Loader } from 'lucide-react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type UserSummary, type ApiProject } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { Can } from '@/lib/permissions-context';
+import { Avatar } from '@/components/Avatar';
 
-const AVATAR_COLORS = ['bg-brand-600', 'bg-purple-500', 'bg-pink-500', 'bg-slate-600', 'bg-green-500', 'bg-amber-500', 'bg-teal-500', 'bg-red-500', 'bg-cyan-500', 'bg-indigo-500'];
-function avatarColor(seed: string) {
-  let h = 0;
-  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
-function initials(u: UserSummary) {
-  const a = u.firstName?.[0] ?? '';
-  const b = u.lastName?.[0] ?? u.firstName?.[1] ?? '';
-  return (a + b).toUpperCase();
-}
 function fullName(u: UserSummary) {
   return `${u.firstName} ${u.lastName ?? ''}`.trim();
 }
@@ -38,15 +30,6 @@ function departmentOf(designation?: string): string {
 }
 
 type Tab = 'All Members' | 'Departments';
-
-function Avatar({ seed, label, size = 'md' }: { seed: string; label: string; size?: 'sm' | 'md' }) {
-  return (
-    <span className={`inline-flex items-center justify-center rounded-full font-semibold text-white shrink-0
-      ${size === 'sm' ? 'w-7 h-7 text-[10px]' : 'w-9 h-9 text-xs'} ${avatarColor(seed)}`}>
-      {label}
-    </span>
-  );
-}
 
 export default function UsersPage() {
   const { org, loading: orgLoading } = useOrg();
@@ -94,24 +77,26 @@ export default function UsersPage() {
   return (
     <div className="flex flex-col h-full bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">People</h1>
           <p className="text-sm text-gray-500 mt-0.5">{isLoading ? 'Loading…' : `${users.length} members`}</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 transition-colors">
-          <UserPlus size={15} />
-          Invite Member
-        </button>
+        <Can perm="user.create">
+          <Link href="/admin" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 transition-colors">
+            <UserPlus size={15} />
+            Invite Member
+          </Link>
+        </Can>
       </div>
 
       {/* Tab bar */}
-      <div className="bg-white border-b border-gray-200 px-6 flex items-center gap-1">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 flex items-center gap-1 overflow-x-auto">
         {(['All Members', 'Departments'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+            className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap shrink-0 transition-colors ${
               tab === t ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
@@ -120,7 +105,7 @@ export default function UsersPage() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-gray-400">
             <Loader size={18} className="animate-spin mr-2" />
@@ -140,15 +125,15 @@ export default function UsersPage() {
               />
             </div>
 
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+              <table className="w-full text-sm min-w-[640px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Member</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Role</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Department</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Projects</th>
+                    <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Member</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Role</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Department</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Projects</th>
                     <th className="px-3 py-2.5" />
                   </tr>
                 </thead>
@@ -157,7 +142,7 @@ export default function UsersPage() {
                     <tr key={u.id} className={`${idx < filtered.length - 1 ? 'border-b border-gray-50' : ''} hover:bg-gray-50 transition-colors`}>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">
-                          <Avatar seed={u.id} label={initials(u)} />
+                          <Avatar user={u} size={36} />
                           <div>
                             <p className="font-medium text-gray-900">{fullName(u)}</p>
                             <p className="text-xs text-gray-400">{u.email}</p>
@@ -175,9 +160,9 @@ export default function UsersPage() {
                       </td>
                       <td className="px-3 py-3 text-gray-500">{projectCount[u.id] ?? 0}</td>
                       <td className="px-3 py-3">
-                        <button className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                        <Link href={`/admin/users/${u.id}`} className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
                           View
-                        </button>
+                        </Link>
                       </td>
                     </tr>
                   ))}
@@ -192,7 +177,7 @@ export default function UsersPage() {
           </div>
         ) : (
           /* Departments Tab */
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {Object.entries(byDept).map(([dept, members]) => (
               <div key={dept} className="bg-white rounded-xl border border-gray-200 p-5">
                 <div className="flex items-start justify-between mb-4">
@@ -203,15 +188,15 @@ export default function UsersPage() {
                 </div>
                 <div className="flex -space-x-2 mb-3">
                   {members.slice(0, 6).map(u => (
-                    <Avatar key={u.id} seed={u.id} label={initials(u)} size="sm" />
+                    <Avatar key={u.id} user={u} size={28} className="ring-2 ring-white" />
                   ))}
                 </div>
                 <p className="text-xs text-gray-500 mb-4">
                   Head: <span className="font-medium text-gray-700">{fullName(members[0])}</span>
                 </p>
-                <button className="w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
-                  + Add Member
-                </button>
+                <Link href="/admin" className="block text-center w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                  Manage in Admin →
+                </Link>
               </div>
             ))}
           </div>

@@ -6,6 +6,11 @@ export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getDashboard(organizationId: string) {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
     const [projects, taskCounts, timesheetHours, overdueCount, dueTodayCount] = await Promise.all([
       this.prisma.project.findMany({
         where: {
@@ -49,7 +54,7 @@ export class AnalyticsService {
           },
           task: {
             deletedAt: null,
-            dueDate: { lt: new Date() },
+            dueDate: { lt: startOfToday },
             currentStatus: { type: { not: 'CLOSED' } },
           },
         },
@@ -64,9 +69,11 @@ export class AnalyticsService {
           task: {
             deletedAt: null,
             dueDate: {
-              gte: new Date(new Date().setHours(0, 0, 0, 0)),
-              lt: new Date(new Date().setHours(23, 59, 59, 999)),
+              gte: startOfToday,
+              lt: endOfToday,
             },
+            currentStatus: { type: { not: 'CLOSED' } },
+            completionPercentage: { not: 100 },
           },
         },
       }),
@@ -105,32 +112,59 @@ export class AnalyticsService {
   }
 
   async getTimesheetSummary(organizationId: string, from?: string, to?: string) {
-    const entries = await this.prisma.timesheet.findMany({
-      where: {
-        deletedAt: null,
-        user: { organizationId },
-        ...(from || to
-          ? { date: { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } }
-          : {}),
-      },
-      include: {
-        user: { select: { id: true, firstName: true, lastName: true } },
-        task: { select: { id: true, title: true } },
-      },
-      orderBy: { date: 'desc' },
+    const where = {
+      deletedAt: null,
+      user: { organizationId },
+      ...(from || to
+        ? { date: { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } }
+        : {}),
+    };
+
+    const [totals, grouped, entries] = await Promise.all([
+      this.prisma.timesheet.aggregate({
+        where,
+        _sum: { hoursLogged: true },
+      }),
+      this.prisma.timesheet.groupBy({
+        by: ['userId', 'billable'],
+        where,
+        _sum: { hoursLogged: true },
+      }),
+      this.prisma.timesheet.findMany({
+        where,
+        include: {
+          user: { select: { id: true, firstName: true, lastName: true } },
+          task: { select: { id: true, title: true } },
+        },
+        orderBy: { date: 'desc' },
+        take: 200,
+      }),
+    ]);
+
+    const userIds = [...new Set(grouped.map(g => g.userId))];
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, firstName: true, lastName: true },
     });
+    const nameById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`]));
 
     const byUser: Record<string, { name: string; hours: number; billableHours: number }> = {};
-    for (const e of entries) {
-      const name = `${e.user.firstName} ${e.user.lastName}`;
-      if (!byUser[e.userId]) byUser[e.userId] = { name, hours: 0, billableHours: 0 };
-      byUser[e.userId].hours += e.hoursLogged;
-      if (e.billable) byUser[e.userId].billableHours += e.hoursLogged;
+    let billableHours = 0;
+    for (const g of grouped) {
+      const sum = g._sum.hoursLogged ?? 0;
+      if (!byUser[g.userId]) {
+        byUser[g.userId] = { name: nameById.get(g.userId) ?? '', hours: 0, billableHours: 0 };
+      }
+      byUser[g.userId].hours += sum;
+      if (g.billable) {
+        byUser[g.userId].billableHours += sum;
+        billableHours += sum;
+      }
     }
 
     return {
-      totalHours: entries.reduce((s, e) => s + e.hoursLogged, 0),
-      billableHours: entries.filter(e => e.billable).reduce((s, e) => s + e.hoursLogged, 0),
+      totalHours: totals._sum.hoursLogged ?? 0,
+      billableHours,
       byUser: Object.values(byUser),
       entries,
     };
