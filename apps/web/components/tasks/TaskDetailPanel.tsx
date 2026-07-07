@@ -566,7 +566,7 @@ function TaskDetailPanelInner({
               : 'border border-green-400 text-green-600 hover:bg-green-50',
           )}
         >
-          {isClosed ? 'Completed ✓' : 'Mark Complete'}
+          {isClosed ? 'Completed' : 'Mark Complete'}
         </button>
         <div className="flex-1" />
         <button

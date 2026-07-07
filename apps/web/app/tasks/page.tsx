@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api, type ApiTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { AvatarStack } from '@/components/ui/AvatarStack';
 
 const PRIORITY_META = {
   CRITICAL: { label: 'Critical', color: 'text-red-600',    bg: 'bg-red-50',    dot: 'bg-red-500'    },
@@ -14,13 +15,6 @@ const PRIORITY_META = {
   MEDIUM:   { label: 'Medium',   color: 'text-amber-600',  bg: 'bg-amber-50',  dot: 'bg-amber-500'  },
   LOW:      { label: 'Low',      color: 'text-gray-400',   bg: 'bg-gray-50',   dot: 'bg-gray-400'   },
 };
-
-const AVATAR_COLORS = ['bg-brand-600','bg-purple-500','bg-pink-500','bg-slate-600','bg-green-500','bg-amber-500'];
-function avatarColor(name: string) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
 
 type StatusFilter = 'All' | 'Open' | 'In Progress' | 'Closed' | 'Overdue';
 const STATUS_FILTERS: StatusFilter[] = ['All', 'Open', 'In Progress', 'Closed', 'Overdue'];
@@ -160,6 +154,7 @@ export default function TasksPage() {
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Project</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Priority</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Assignees</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Progress</th>
                 </tr>
@@ -172,6 +167,7 @@ export default function TasksPage() {
                     <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-24" /></td>
                     <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-16" /></td>
                     <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-20" /></td>
+                    <td className="px-4 py-3"><div className="h-6 bg-gray-100 rounded-full w-16" /></td>
                     <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>
                     <td className="px-4 py-3"><div className="h-1.5 bg-gray-100 rounded-full w-16" /></td>
                   </tr>
@@ -199,6 +195,7 @@ export default function TasksPage() {
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Project</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Priority</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Assignees</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Progress</th>
                 </tr>
@@ -247,6 +244,9 @@ export default function TasksPage() {
                             {task.currentStatus.name}
                           </span>
                         ) : <span className="text-xs text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <AvatarStack users={assignees.map(a => a.user)} size={22} />
                       </td>
                       <td className="px-4 py-3">
                         {task.dueDate ? (

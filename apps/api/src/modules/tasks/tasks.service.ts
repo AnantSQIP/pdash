@@ -331,7 +331,7 @@ export class TasksService {
     return {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignees: {
-        select: { user: { select: { id: true, firstName: true, lastName: true } } },
+        select: { user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
@@ -350,13 +350,13 @@ export class TasksService {
     return {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignees: {
-        select: { user: { select: { id: true, firstName: true, lastName: true } } },
+        select: { user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
         orderBy: { createdAt: 'asc' as const },
         include: {
-          assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } },
+          assignees: { include: { user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } } },
         },
       },
       projectTasks: {
