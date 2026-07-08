@@ -41,6 +41,26 @@ export class TasksService {
       where: { taskListId: dto.taskListId },
     });
 
+    // Resolve the task's home workflow up front. Previously left null, which made the
+    // cross-workflow guard in setStatus() dead and forced clients to fall back to the
+    // 'default' alias. Derive it from the chosen status, else the GLOBAL workflow.
+    let workflowId: string | undefined;
+    if (dto.currentWorkflowStatusId) {
+      const st = await this.prisma.workflowStatus.findUnique({
+        where: { id: dto.currentWorkflowStatusId },
+        select: { workflowId: true },
+      });
+      workflowId = st?.workflowId;
+    }
+    if (!workflowId) {
+      const wf = await this.prisma.workflow.findFirst({
+        where: { type: 'GLOBAL' },
+        orderBy: { name: 'asc' },
+        select: { id: true },
+      });
+      workflowId = wf?.id;
+    }
+
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
         data: {
@@ -51,6 +71,7 @@ export class TasksService {
           dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
           estimatedHours: dto.estimatedHours,
           createdBy: getActorId() ?? dto.createdBy ?? 'system',
+          workflowId,
           currentWorkflowStatusId: dto.currentWorkflowStatusId,
           assignees: dto.assigneeIds?.length
             ? { create: dto.assigneeIds.map((userId) => ({ userId })) }
@@ -331,7 +352,7 @@ export class TasksService {
     return {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignees: {
-        select: { user: { select: { id: true, firstName: true, lastName: true } } },
+        select: { userId: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
@@ -350,13 +371,13 @@ export class TasksService {
     return {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignees: {
-        select: { user: { select: { id: true, firstName: true, lastName: true } } },
+        select: { userId: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
         orderBy: { createdAt: 'asc' as const },
         include: {
-          assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } },
+          assignees: { include: { user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } } },
         },
       },
       projectTasks: {

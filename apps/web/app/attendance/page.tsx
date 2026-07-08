@@ -13,6 +13,7 @@ import {
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
+import { DateField } from '@/components/ui/DateField';
 
 // ── status styling ──────────────────────────────────────────────────────────────
 const STATUS_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
@@ -220,7 +221,7 @@ function HolidayManager({ orgId, year, holidays, canManage }: { orgId?: string; 
       {canManage && (
         <div className="px-5 py-3 border-t border-gray-100 flex items-center gap-2 flex-wrap">
           <input value={name} onChange={e => setName(e.target.value)} placeholder="Holiday name" className="flex-1 min-w-[8rem] px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+          <DateField type="date" value={date} onChange={e => setDate(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
           <button disabled={busy || !name.trim() || !date} onClick={add} className="px-3 py-1.5 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">Add</button>
         </div>
       )}
@@ -332,11 +333,11 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">In (optional)</label>
-              <input type="time" value={checkIn} onChange={e => setCheckIn(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+              <DateField type="time" value={checkIn} onChange={e => setCheckIn(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Out (optional)</label>
-              <input type="time" value={checkOut} onChange={e => setCheckOut(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+              <DateField type="time" value={checkOut} onChange={e => setCheckOut(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
           </div>
           <div>
@@ -404,8 +405,8 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
               {leaveTypes.map(t => <option key={t.code} value={t.code}>{t.name}</option>)}
             </select>
             <div className="grid grid-cols-2 gap-2">
-              <input type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
-              <input type="date" value={form.endDate} min={form.startDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+              <DateField type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+              <DateField type="date" value={form.endDate} min={form.startDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
             <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason (optional)" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             <div className="flex gap-2">

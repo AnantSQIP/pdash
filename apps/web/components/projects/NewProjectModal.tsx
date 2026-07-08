@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { X, Plus } from 'lucide-react';
 
 import { api } from '@/lib/api';
+import { DateField } from '@/components/ui/DateField';
 
 interface NewProjectModalProps {
   onClose: () => void;
@@ -101,7 +102,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Due Date</label>
-              <input
+              <DateField
                 type="date"
                 value={dueDate}
                 onChange={e => setDueDate(e.target.value)}

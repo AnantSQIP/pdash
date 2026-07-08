@@ -10,6 +10,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApiTask, type CalendarEvent, type NotificationItem } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { Portal } from '@/components/ui/Portal';
 
 type Reminder = { id: string; kind: 'overdue' | 'due' | 'event' | 'milestone'; text: string; time: string; ts: number };
 
@@ -51,7 +52,7 @@ const KIND_META: Record<Reminder['kind'], { Icon: typeof RiAlarmWarningLine; col
   milestone: { Icon: RiFlag2Line,         color: 'text-purple-600', bg: 'bg-purple-50' },
 };
 
-export function NotificationsPanel({ onClose }: { onClose: () => void }) {
+export function NotificationsPanel({ onClose, collapsed = false }: { onClose: () => void; collapsed?: boolean }) {
   const { org, currentUser } = useOrg();
   const qc = useQueryClient();
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
@@ -100,9 +101,9 @@ export function NotificationsPanel({ onClose }: { onClose: () => void }) {
   const empty = notifs.length === 0 && reminders.length === 0;
 
   return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed bottom-4 z-50 max-h-[80vh] lg:max-h-[520px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col left-4 right-4 lg:left-20 lg:right-auto lg:w-96">
+    <Portal>
+      <div className="fixed inset-0 z-[60]" onClick={onClose} />
+      <div className={`fixed bottom-4 z-[61] max-h-[80vh] lg:max-h-[520px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col left-4 right-4 lg:right-auto lg:w-96 ${collapsed ? 'lg:left-20' : 'lg:left-[240px]'}`}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
           <div className="flex items-center gap-2">
             <RiNotification3Line size={16} className="text-gray-600" />
@@ -170,6 +171,6 @@ export function NotificationsPanel({ onClose }: { onClose: () => void }) {
           <a href="/tasks" className="block w-full py-3 text-center text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-50 font-medium">View my tasks</a>
         </div>
       </div>
-    </>
+    </Portal>
   );
 }

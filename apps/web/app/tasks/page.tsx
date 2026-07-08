@@ -1,12 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, CheckSquare, Search, Circle, CheckCircle } from 'lucide-react';
+import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { api, type ApiTask } from '@/lib/api';
+import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { useToast } from '@/components/ui/Toast';
+import { AvatarStack } from '@/components/ui/AvatarStack';
+import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
+import { formatDate, isPastDue } from '@/lib/date';
 
 const PRIORITY_META = {
   CRITICAL: { label: 'Critical', color: 'text-red-600',    bg: 'bg-red-50',    dot: 'bg-red-500'    },
@@ -15,72 +19,98 @@ const PRIORITY_META = {
   LOW:      { label: 'Low',      color: 'text-gray-400',   bg: 'bg-gray-50',   dot: 'bg-gray-400'   },
 };
 
-const AVATAR_COLORS = ['bg-brand-600','bg-purple-500','bg-pink-500','bg-slate-600','bg-green-500','bg-amber-500'];
-function avatarColor(name: string) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
-  return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
-}
-
 type StatusFilter = 'All' | 'Open' | 'In Progress' | 'Closed' | 'Overdue';
 const STATUS_FILTERS: StatusFilter[] = ['All', 'Open', 'In Progress', 'Closed', 'Overdue'];
+
+// Single source of truth for a task's bucket — used by BOTH the filter and the
+// counts so the tab badges can never disagree with the rows shown.
+function statusCategory(t: ApiTask): 'Open' | 'In Progress' | 'Closed' {
+  if (isTaskClosed(t)) return 'Closed';
+  if ((t.currentStatus?.name ?? '').toLowerCase().includes('progress')) return 'In Progress';
+  return 'Open';
+}
+const isOverdue = (t: ApiTask) => isPastDue(t.dueDate) && !isTaskClosed(t);
 
 export default function TasksPage() {
   const { currentUser, loading: orgLoading } = useOrg();
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
   const [search, setSearch] = useState('');
 
-  const { data: tasks = [], isLoading: tasksLoading } = useQuery<ApiTask[]>({
-    queryKey: ['tasks-me', currentUser?.id],
+  const meKey = ['tasks-me', currentUser?.id];
+
+  const { data: tasks = [], isLoading: tasksLoading, isError } = useQuery<ApiTask[]>({
+    queryKey: meKey,
     queryFn: () => api.tasks.listForUser(currentUser!.id),
     enabled: !!currentUser?.id,
     staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
 
+  // Statuses drive the inline status dropdown. All tasks share the global workflow.
+  const { data: statuses = [] } = useQuery<WorkflowStatus[]>({
+    queryKey: ['workflow-statuses', 'default'],
+    queryFn: () => api.workflows.statuses('default'),
+    staleTime: 5 * 60_000,
+  });
+
   const isLoading = orgLoading || (!!currentUser?.id && tasksLoading);
 
-  const today = new Date().toISOString().split('T')[0];
+  const filtered = tasks.filter(t => {
+    if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
+    if (priorityFilter !== 'All' && t.priority !== priorityFilter) return false;
+    if (statusFilter === 'All') return true;
+    if (statusFilter === 'Overdue') return isOverdue(t);
+    return statusCategory(t) === statusFilter;
+  });
 
-  function filterTasks(tasks: ApiTask[]): ApiTask[] {
-    return tasks.filter(t => {
-      if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
-      if (priorityFilter !== 'All' && t.priority !== priorityFilter) return false;
-      const statusName = t.currentStatus?.name ?? '';
-      const isClosed = t.currentStatus?.type === 'CLOSED';
-      const isOverdue = !!t.dueDate && new Date(t.dueDate) < new Date(today) && !isClosed;
-      if (statusFilter === 'Closed' && !isClosed) return false;
-      if (statusFilter === 'Open' && (isClosed || statusName.toLowerCase().includes('progress'))) return false;
-      if (statusFilter === 'In Progress' && !statusName.toLowerCase().includes('progress')) return false;
-      if (statusFilter === 'Overdue' && !isOverdue) return false;
-      return true;
-    });
+  const counts: Record<StatusFilter, number> = { All: tasks.length, Open: 0, 'In Progress': 0, Closed: 0, Overdue: 0 };
+  for (const t of tasks) {
+    counts[statusCategory(t)]++;
+    if (isOverdue(t)) counts.Overdue++;
   }
 
-  const filtered = filterTasks(tasks);
+  // Optimistically patch a task in the cache, then reconcile with the server.
+  function patchTask(taskId: string, patch: Partial<ApiTask>) {
+    qc.setQueryData<ApiTask[]>(meKey, old => (old ?? []).map(t => (t.id === taskId ? { ...t, ...patch } : t)));
+  }
 
-  const counts = {
-    All: tasks.length,
-    Open: tasks.filter(t => t.currentStatus?.type === 'OPEN' && !t.currentStatus?.name.toLowerCase().includes('progress')).length,
-    'In Progress': tasks.filter(t => t.currentStatus?.name.toLowerCase().includes('progress')).length,
-    Closed: tasks.filter(t => t.currentStatus?.type === 'CLOSED').length,
-    Overdue: tasks.filter(t => !!t.dueDate && new Date(t.dueDate) < new Date(today) && t.currentStatus?.type !== 'CLOSED').length,
-  };
-
-  async function markComplete(task: ApiTask) {
-    const closedStatus = task.currentStatus?.type === 'CLOSED';
-    if (closedStatus) return;
-    // Find the closed status from the workflow
+  async function changeStatus(task: ApiTask, statusId: string) {
+    if (statusId === task.currentWorkflowStatusId) return;
+    const status = statuses.find(s => s.id === statusId);
+    patchTask(task.id, {
+      currentWorkflowStatusId: statusId,
+      currentStatus: status ?? task.currentStatus,
+      completionPercentage: status?.type === CLOSED_TYPE ? 100 : (task.completionPercentage >= 100 ? 0 : task.completionPercentage),
+    });
     try {
-      const statuses = await api.workflows.statuses(task.workflowId ?? 'default');
-      const closedSt = statuses.find(s => s.type === 'CLOSED');
-      if (closedSt) {
-        await api.tasks.setStatus(task.id, closedSt.id);
-        qc.invalidateQueries({ queryKey: ['tasks-me', currentUser?.id] });
-      }
-    } catch {}
+      await api.tasks.setStatus(task.id, statusId);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not update status', 'error');
+    } finally {
+      qc.invalidateQueries({ queryKey: meKey });
+    }
+  }
+
+  async function changeProgress(task: ApiTask, pct: number) {
+    if (pct === task.completionPercentage) return;
+    patchTask(task.id, { completionPercentage: pct });
+    try {
+      await api.tasks.update(task.id, { completionPercentage: pct });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not update progress', 'error');
+    } finally {
+      qc.invalidateQueries({ queryKey: meKey });
+    }
+  }
+
+  // Toggle done ↔ open via the workflow, so it's reversible (was a silent no-op before).
+  async function toggleComplete(task: ApiTask) {
+    const target = isTaskClosed(task) ? statuses.find(s => s.type === OPEN_TYPE) : statuses.find(s => s.type === CLOSED_TYPE);
+    if (!target) { toast('No suitable workflow status is configured', 'error'); return; }
+    await changeStatus(task, target.id);
   }
 
   return (
@@ -150,35 +180,31 @@ export default function TasksPage() {
       {/* Content */}
       <div className="p-4 sm:p-6">
         {isLoading ? (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="w-8 px-4 py-2.5" />
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Task</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Project</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Priority</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Progress</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} className="animate-pulse">
-                    <td className="px-4 py-3 w-8"><div className="w-4 h-4 rounded-full bg-gray-200" /></td>
-                    <td className="px-4 py-3"><div className="h-3.5 bg-gray-200 rounded w-48" /></td>
-                    <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-24" /></td>
-                    <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-16" /></td>
-                    <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-20" /></td>
-                    <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>
-                    <td className="px-4 py-3"><div className="h-1.5 bg-gray-100 rounded-full w-16" /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </div>
+          <TableShell>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <tr key={i} className="animate-pulse">
+                <td className="px-4 py-3 w-8"><div className="w-4 h-4 rounded-full bg-gray-200" /></td>
+                <td className="px-4 py-3"><div className="h-3.5 bg-gray-200 rounded w-48" /></td>
+                <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-24" /></td>
+                <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-16" /></td>
+                <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-20" /></td>
+                <td className="px-4 py-3"><div className="h-6 bg-gray-100 rounded-full w-16" /></td>
+                <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>
+                <td className="px-4 py-3"><div className="h-1.5 bg-gray-100 rounded-full w-16" /></td>
+              </tr>
+            ))}
+          </TableShell>
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+            <AlertTriangle size={36} className="mb-3 text-red-300" />
+            <p className="text-sm font-medium text-gray-600">Couldn’t load your tasks</p>
+            <p className="text-xs mt-1">Check your connection and try again.</p>
+            <button
+              onClick={() => qc.invalidateQueries({ queryKey: meKey })}
+              className="mt-3 text-xs font-medium text-brand-600 hover:underline"
+            >
+              Retry
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -189,92 +215,107 @@ export default function TasksPage() {
             </p>
           </div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="w-8 px-4 py-2.5" />
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Task</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Project</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Priority</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Due</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Progress</th>
+          <TableShell>
+            {filtered.map(task => {
+              const closed = isTaskClosed(task);
+              const overdue = isOverdue(task);
+              const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
+              const project = task.projectTasks?.[0]?.project;
+              return (
+                <tr key={task.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-3 w-8">
+                    <button
+                      onClick={() => toggleComplete(task)}
+                      className={clsx('transition-colors', closed ? 'text-green-500' : 'text-gray-300 hover:text-green-400')}
+                      title={closed ? 'Completed — click to reopen' : 'Mark complete'}
+                      aria-label={closed ? 'Reopen task' : 'Mark task complete'}
+                    >
+                      {closed ? <CheckCircle size={16} /> : <Circle size={16} />}
+                    </button>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={clsx('text-sm font-medium text-gray-900', closed && 'line-through text-gray-400')}>
+                      {task.title}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {project ? (
+                      <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline">
+                        {project.title}
+                      </Link>
+                    ) : <span className="text-xs text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', pm.bg, pm.color)}>
+                      {pm.label}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <select
+                      value={task.currentWorkflowStatusId ?? ''}
+                      onChange={e => changeStatus(task, e.target.value)}
+                      disabled={statuses.length === 0}
+                      aria-label="Task status"
+                      className="text-xs font-medium rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand-500/30 cursor-pointer disabled:cursor-default"
+                      style={task.currentStatus ? { backgroundColor: task.currentStatus.colorHex + '22', color: task.currentStatus.colorHex } : { backgroundColor: '#f1f5f9', color: '#64748b' }}
+                    >
+                      {!task.currentStatus && <option value="">—</option>}
+                      {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-4 py-3">
+                    <AvatarStack users={taskAssigneeUsers(task)} size={22} />
+                  </td>
+                  <td className="px-4 py-3">
+                    {task.dueDate ? (
+                      <span className={clsx('text-xs', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
+                        {formatDate(task.dueDate)}{overdue && ' (overdue)'}
+                      </span>
+                    ) : <span className="text-xs text-gray-400">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-brand-500" style={{ width: `${task.completionPercentage}%` }} />
+                      </div>
+                      <select
+                        value={task.completionPercentage}
+                        onChange={e => changeProgress(task, Number(e.target.value))}
+                        disabled={closed}
+                        aria-label="Task progress"
+                        className="text-xs text-gray-500 bg-transparent focus:outline-none focus:ring-2 focus:ring-brand-500/30 rounded cursor-pointer disabled:cursor-default"
+                        title={closed ? 'Reopen the task to change progress' : 'Set progress'}
+                      >
+                        {progressOptions(task.completionPercentage).map(p => <option key={p} value={p}>{p}%</option>)}
+                      </select>
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filtered.map(task => {
-                  const isClosed = task.currentStatus?.type === 'CLOSED';
-                  const isOverdue = !!task.dueDate && new Date(task.dueDate) < new Date(today) && !isClosed;
-                  const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
-                  const project = (task as any).projectTasks?.[0]?.project;
-                  const assignees = task.assignees ?? [];
-                  return (
-                    <tr key={task.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 w-8">
-                        <button
-                          onClick={() => markComplete(task)}
-                          className={clsx('transition-colors', isClosed ? 'text-green-500' : 'text-gray-300 hover:text-green-400')}
-                          title={isClosed ? 'Completed' : 'Mark complete'}
-                        >
-                          {isClosed ? <CheckCircle size={16} /> : <Circle size={16} />}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={clsx('text-sm font-medium text-gray-900', isClosed && 'line-through text-gray-400')}>
-                          {task.title}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {project ? (
-                          <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline">
-                            {project.title}
-                          </Link>
-                        ) : <span className="text-xs text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', pm.bg, pm.color)}>
-                          {pm.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {task.currentStatus ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{
-                            backgroundColor: task.currentStatus.colorHex + '22',
-                            color: task.currentStatus.colorHex,
-                          }}>
-                            {task.currentStatus.name}
-                          </span>
-                        ) : <span className="text-xs text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        {task.dueDate ? (
-                          <span className={clsx('text-xs', isOverdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
-                            {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                            {isOverdue && ' (overdue)'}
-                          </span>
-                        ) : <span className="text-xs text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-brand-500"
-                              style={{ width: `${task.completionPercentage}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-gray-400 w-8">{task.completionPercentage}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            </div>
-          </div>
+              );
+            })}
+          </TableShell>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Shared table chrome so the loading, populated and (implicitly) empty states line up.
+function TableShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="w-8 px-4 py-2.5" />
+              {['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due', 'Progress'].map(h => (
+                <th key={h} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">{children}</tbody>
+        </table>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useOrg } from '@/lib/org-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { Portal } from '@/components/ui/Portal';
 
 interface MenuItem {
   icon: React.ElementType;
@@ -17,7 +18,7 @@ interface MenuItem {
   separator?: boolean;
 }
 
-export function UserMenu({ onClose }: { onClose: () => void }) {
+export function UserMenu({ onClose, collapsed = false }: { onClose: () => void; collapsed?: boolean }) {
   const router = useRouter();
   const { logout, email } = useAuth();
   const { currentUser } = useOrg();
@@ -34,10 +35,10 @@ export function UserMenu({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+    <Portal>
+      <div className="fixed inset-0 z-[60]" onClick={onClose} />
 
-      <div className="fixed bottom-20 z-50 rounded-xl shadow-2xl bg-white overflow-hidden left-4 right-4 lg:left-64 lg:right-auto lg:w-64">
+      <div className={`fixed bottom-20 z-[61] rounded-xl shadow-2xl bg-white overflow-hidden left-4 right-4 lg:right-auto lg:w-64 ${collapsed ? 'lg:left-20' : 'lg:left-[240px]'}`}>
         {/* Profile header */}
         <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center gap-3">
           <Avatar user={currentUser} size={40} />
@@ -82,6 +83,6 @@ export function UserMenu({ onClose }: { onClose: () => void }) {
           })}
         </div>
       </div>
-    </>
+    </Portal>
   );
 }

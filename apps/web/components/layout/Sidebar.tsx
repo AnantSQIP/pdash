@@ -243,8 +243,8 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
         </div>
       </div>
 
-      {showNotifications && <NotificationsPanel onClose={() => setShowNotifications(false)} />}
-      {showUserMenu && <UserMenu onClose={() => setShowUserMenu(false)} />}
+      {showNotifications && <NotificationsPanel onClose={() => setShowNotifications(false)} collapsed={collapsed} />}
+      {showUserMenu && <UserMenu onClose={() => setShowUserMenu(false)} collapsed={collapsed} />}
       </aside>
     </>
   );

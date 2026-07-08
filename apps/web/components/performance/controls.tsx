@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { RiSearchLine, RiArrowDownSLine, RiCloseLine, RiFilter3Line, RiDownloadLine } from '@remixicon/react';
 import { toCSV, downloadCSV, type CsvColumn } from './tokens';
+import { DateField } from '@/components/ui/DateField';
 
 export function FilterBar({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={clsx('flex items-center gap-2 flex-wrap', className)}>{children}</div>;
@@ -39,10 +40,10 @@ export function DateRangePicker({ from, to, onChange }: {
   const active = !!(from || to);
   return (
     <div className={clsx('flex items-center gap-1.5 text-xs rounded-lg border px-2 py-1', active ? 'border-brand-300 bg-brand-50/50' : 'border-gray-200')}>
-      <input type="date" value={from ?? ''} max={to || undefined} onChange={e => onChange({ from: e.target.value || undefined, to })}
+      <DateField type="date" value={from ?? ''} max={to || undefined} onChange={e => onChange({ from: e.target.value || undefined, to })}
         className="bg-transparent text-gray-600 focus:outline-none" />
       <span className="text-gray-300">→</span>
-      <input type="date" value={to ?? ''} min={from || undefined} onChange={e => onChange({ from, to: e.target.value || undefined })}
+      <DateField type="date" value={to ?? ''} min={from || undefined} onChange={e => onChange({ from, to: e.target.value || undefined })}
         className="bg-transparent text-gray-600 focus:outline-none" />
       {active && (
         <button onClick={() => onChange({ from: undefined, to: undefined })} className="text-gray-400 hover:text-gray-600" title="Clear range">

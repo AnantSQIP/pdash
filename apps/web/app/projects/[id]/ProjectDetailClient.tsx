@@ -18,9 +18,12 @@ import TimesheetsTab from '@/components/projects/TimesheetsTab';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
-import { api, type ApiProject, type ApiTask } from '@/lib/api';
+import { api, type ApiProject, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
+import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
+import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
+import { formatDate } from '@/lib/date';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 // 'Files' is hidden — it was an unbacked mock (no files API yet).
@@ -40,6 +43,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<Tab>('Task List');
   const [showAddTask, setShowAddTask] = useState(false);
+  const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
 
   const { data: project, isLoading: projLoading, isError: projError } = useQuery({
@@ -62,9 +66,15 @@ export function ProjectDetailClient({ projectId }: Props) {
   const { data: statuses = [] } = useQuery({
     queryKey: ['workflow-statuses', project?.workflowId ?? 'default'],
     queryFn: () => api.workflows.statuses(project?.workflowId ?? 'default'),
-    enabled: !!project && (activeTab === 'Board'),
+    // Needed by the Board (columns) AND the Task List (inline status control).
+    enabled: !!project && (activeTab === 'Board' || activeTab === 'Task List'),
     staleTime: 5 * 60_000,
   });
+
+  function openAddTask(statusId?: string) {
+    setAddTaskStatusId(statusId);
+    setShowAddTask(true);
+  }
 
   function invalidateTasks() {
     qc.invalidateQueries({ queryKey: ['tasks', projectId] });
@@ -86,6 +96,18 @@ export function ProjectDetailClient({ projectId }: Props) {
       toast(e instanceof Error ? e.message : 'Could not update the task status', 'error');
     } finally {
       invalidateTasks(); // refetches tasks + project → progress bar re-syncs
+    }
+  }
+
+  async function handleProgress(taskId: string, pct: number) {
+    qc.setQueryData<ApiTask[]>(['tasks', projectId], old =>
+      (old ?? []).map(t => (t.id === taskId ? { ...t, completionPercentage: pct } : t)));
+    try {
+      await api.tasks.update(taskId, { completionPercentage: pct });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not update progress', 'error');
+    } finally {
+      invalidateTasks();
     }
   }
 
@@ -181,8 +203,10 @@ export function ProjectDetailClient({ projectId }: Props) {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => setShowAddTask(true)}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
+                onClick={() => openAddTask()}
+                disabled={!defaultTaskList}
+                title={defaultTaskList ? 'Add a task' : 'This project has no task list yet'}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus size={14} /> Add Task
               </button>
@@ -244,8 +268,12 @@ export function ProjectDetailClient({ projectId }: Props) {
           <TaskListView
             tasks={tasks}
             loading={tasksLoading}
+            statuses={statuses}
+            canAddTask={!!defaultTaskList}
             onTaskClick={task => setSelectedTask(task)}
-            onAddTask={() => setShowAddTask(true)}
+            onAddTask={() => openAddTask()}
+            onStatusChange={handleMove}
+            onProgressChange={handleProgress}
           />
         )}
         {activeTab === 'Board' && (
@@ -253,7 +281,7 @@ export function ProjectDetailClient({ projectId }: Props) {
             tasks={tasks}
             statuses={statuses}
             onTaskClick={t => setSelectedTask(t)}
-            onAddTask={() => setShowAddTask(true)}
+            onAddTask={statusId => openAddTask(statusId)}
             onMove={handleMove}
           />
         )}
@@ -266,10 +294,12 @@ export function ProjectDetailClient({ projectId }: Props) {
         {activeTab === 'Discussions' && <DiscussionsTab projectId={projectId} />}
       </div>
 
-      {showAddTask && (
+      {showAddTask && defaultTaskList && (
         <AddTaskModal
           projectId={projectId}
-          taskListId={defaultTaskList?.id ?? 'general'}
+          taskListId={defaultTaskList.id}
+          initialStatusId={addTaskStatusId}
+          workflowId={project.workflowId}
           onClose={() => setShowAddTask(false)}
           onSuccess={invalidateTasks}
         />
@@ -295,13 +325,23 @@ export function ProjectDetailClient({ projectId }: Props) {
 // ── Task List View ─────────────────────────────────────────────────────────────
 
 function TaskListView({
-  tasks, loading, onTaskClick, onAddTask,
+  tasks, loading, statuses, canAddTask, onTaskClick, onAddTask, onStatusChange, onProgressChange,
 }: {
   tasks: ApiTask[];
   loading: boolean;
+  statuses: WorkflowStatus[];
+  canAddTask: boolean;
   onTaskClick: (task: ApiTask) => void;
   onAddTask: () => void;
+  onStatusChange: (taskId: string, statusId: string) => void;
+  onProgressChange: (taskId: string, pct: number) => void;
 }) {
+  // Toggle done↔open from the row checkbox, via the workflow (reversible).
+  function toggleComplete(task: ApiTask) {
+    const target = isTaskClosed(task) ? statuses.find(s => s.type === OPEN_TYPE) : statuses.find(s => s.type === CLOSED_TYPE);
+    if (target) onStatusChange(task.id, target.id);
+  }
+
   if (loading) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -333,10 +373,12 @@ function TaskListView({
 
       {/* Column headers */}
       <div className="flex items-center gap-4 px-5 py-2.5 border-b border-gray-100 text-xs font-medium text-gray-400 uppercase tracking-wide">
+        <span className="w-4 shrink-0" />
         <span className="flex-1">Task</span>
-        <span className="w-28 hidden md:block">Status</span>
+        <span className="w-32 hidden sm:block">Status</span>
+        <span className="w-32 hidden lg:block">Progress</span>
         <span className="w-20 hidden lg:block">Priority</span>
-        <span className="w-24 hidden sm:block">Assignee</span>
+        <span className="w-20 hidden sm:block">Assignees</span>
         <span className="w-24 hidden lg:block text-right">Due Date</span>
       </div>
 
@@ -351,10 +393,7 @@ function TaskListView({
       )}
 
       {tasks.map((task, i) => {
-        const isClosed = task.currentStatus?.type === 'CLOSED' || task.completionPercentage === 100;
-        const statusName = task.currentStatus?.name ?? 'Open';
-        const statusColor = task.currentStatus?.colorHex ?? '#64748b';
-        const firstAssignee = task.assignees?.[0];
+        const closed = isTaskClosed(task);
 
         return (
           <div
@@ -365,24 +404,56 @@ function TaskListView({
               i < tasks.length - 1 && 'border-b border-gray-50',
             )}
           >
-            <div className={clsx(
-              'w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center',
-              isClosed ? 'bg-green-500 border-green-500' : 'border-gray-300',
-            )}>
-              {isClosed && (
+            <button
+              onClick={e => { e.stopPropagation(); toggleComplete(task); }}
+              aria-label={closed ? 'Reopen task' : 'Mark task complete'}
+              title={closed ? 'Completed — click to reopen' : 'Mark complete'}
+              className={clsx(
+                'w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors',
+                closed ? 'bg-green-500 border-green-500' : 'border-gray-300 hover:border-green-400',
+              )}
+            >
+              {closed && (
                 <svg viewBox="0 0 12 12" className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M2 6l3 3 5-5" />
                 </svg>
               )}
-            </div>
+            </button>
 
-            <span className={clsx('flex-1 text-sm min-w-0 truncate', isClosed ? 'line-through text-gray-400' : 'text-gray-800')}>
+            <span className={clsx('flex-1 text-sm min-w-0 truncate', closed ? 'line-through text-gray-400' : 'text-gray-800')}>
               {task.title}
             </span>
 
-            <div className="hidden md:flex items-center gap-1.5 w-28 shrink-0">
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: statusColor }} />
-              <span className="text-xs text-gray-600 truncate">{statusName}</span>
+            {/* Status control */}
+            <div className="hidden sm:block w-32 shrink-0" onClick={e => e.stopPropagation()}>
+              <select
+                value={task.currentWorkflowStatusId ?? ''}
+                onChange={e => onStatusChange(task.id, e.target.value)}
+                disabled={statuses.length === 0}
+                aria-label="Task status"
+                className="w-full text-xs font-medium rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand-500/30 cursor-pointer disabled:cursor-default"
+                style={task.currentStatus ? { backgroundColor: task.currentStatus.colorHex + '22', color: task.currentStatus.colorHex } : { backgroundColor: '#f1f5f9', color: '#64748b' }}
+              >
+                {!task.currentStatus && <option value="">—</option>}
+                {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+
+            {/* Progress control */}
+            <div className="hidden lg:flex items-center gap-2 w-32 shrink-0" onClick={e => e.stopPropagation()}>
+              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full bg-brand-500" style={{ width: `${task.completionPercentage}%` }} />
+              </div>
+              <select
+                value={task.completionPercentage}
+                onChange={e => onProgressChange(task.id, Number(e.target.value))}
+                disabled={closed}
+                aria-label="Task progress"
+                title={closed ? 'Reopen to change progress' : 'Set progress'}
+                className="text-xs text-gray-500 bg-transparent focus:outline-none focus:ring-2 focus:ring-brand-500/30 rounded cursor-pointer disabled:cursor-default"
+              >
+                {progressOptions(task.completionPercentage).map(p => <option key={p} value={p}>{p}%</option>)}
+              </select>
             </div>
 
             <div className="hidden lg:block w-20 shrink-0">
@@ -392,16 +463,17 @@ function TaskListView({
               </span>
             </div>
 
-            <div className="hidden sm:flex items-center gap-2 w-24 shrink-0">
-              {firstAssignee ? (
-                <Avatar user={firstAssignee.user} size={24} />
-              ) : (
-                <div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />
-              )}
+            <div className="hidden sm:flex items-center w-20 shrink-0">
+              <AvatarStack
+                users={taskAssigneeUsers(task)}
+                size={24}
+                max={3}
+                empty={<div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />}
+              />
             </div>
 
             <span className="hidden lg:block w-24 shrink-0 text-right text-xs text-gray-500">
-              {task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+              {formatDate(task.dueDate)}
             </span>
           </div>
         );
