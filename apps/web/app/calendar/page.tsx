@@ -23,6 +23,7 @@ import clsx from 'clsx';
 import { api, type CalendarEvent } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
+import { DateField } from '@/components/ui/DateField';
 
 type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER';
 const TYPE_COLORS: Record<EventType, string> = {
@@ -169,13 +170,13 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Start date</label>
-              <input type="date" required value={startDate} onChange={e => setStartDate(e.target.value)}
+              <DateField type="date" required value={startDate} onChange={e => setStartDate(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
             {!allDay && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Start time</label>
-                <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
+                <DateField type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
               </div>
             )}
@@ -184,13 +185,13 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">End date</label>
-              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+              <DateField type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
             {!allDay && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">End time</label>
-                <input type="time" value={endTime} onChange={e => setEndTime(e.target.value)}
+                <DateField type="time" value={endTime} onChange={e => setEndTime(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
               </div>
             )}

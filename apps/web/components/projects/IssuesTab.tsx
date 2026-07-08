@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Issue, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { Avatar } from '@/components/Avatar';
+import { DateField } from '@/components/ui/DateField';
 
 const SEVERITY_COLORS: Record<string, { bg: string; text: string }> = {
   CRITICAL: { bg: 'bg-red-100',    text: 'text-red-700'    },
@@ -98,7 +99,7 @@ function AddIssueModal({ projectId, users, onClose, onSuccess }: {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Due date</label>
-            <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
+            <DateField type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}

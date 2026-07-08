@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { X, Clock } from 'lucide-react';
 import { api, type ApiTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { DateField } from '@/components/ui/DateField';
 
 interface LogTimeModalProps {
   projectId: string;
@@ -86,7 +87,7 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Date <span className="text-red-500">*</span></label>
-              <input
+              <DateField
                 type="date" required value={date} onChange={e => setDate(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
               />
