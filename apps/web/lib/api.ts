@@ -74,10 +74,17 @@ export type WorkflowStatus = {
   id: string; name: string; colorHex: string; sequence: number; type: string;
 };
 
+// The assignee projection the API actually returns (see tasks.service taskInclude):
+// a join-row userId plus a lightweight user (NOT a full UserSummary — no email/status).
+export type AssigneeRef = {
+  userId: string;
+  user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'>;
+};
+
 export type Subtask = {
   id: string; taskId: string; title: string; status: string; priority: string;
   dueDate?: string; deletedAt?: string;
-  assignees?: { userId: string; user: UserSummary }[];
+  assignees?: AssigneeRef[];
 };
 
 export type ApiTask = {
@@ -86,10 +93,10 @@ export type ApiTask = {
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdBy: string; createdAt: string; updatedAt: string;
   currentStatus?: WorkflowStatus;
-  assignees?: { userId: string; user: UserSummary }[];
+  assignees?: AssigneeRef[];
   subtasks?: Subtask[];
-  projectTasks?: { projectId: string; taskListId?: string; milestoneId?: string; sequence: number }[];
-  _count?: { subtasks: number };
+  projectTasks?: { projectId: string; taskListId?: string; milestoneId?: string; sequence: number; project?: { id: string; title: string } }[];
+  _count?: { subtasks: number; checklists?: number };
 };
 
 export type ApiProject = {

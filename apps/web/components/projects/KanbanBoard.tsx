@@ -4,17 +4,20 @@ import { useState } from 'react';
 import clsx from 'clsx';
 import { Plus, Flag, GripVertical } from 'lucide-react';
 import type { ApiTask, WorkflowStatus } from '@/lib/api';
-import { Avatar } from '@/components/Avatar';
+import { AvatarStack } from '@/components/ui/AvatarStack';
+import { taskAssigneeUsers } from '@/lib/tasks';
+import { formatDate } from '@/lib/date';
 
 interface KanbanBoardProps {
   tasks: ApiTask[];
   statuses: WorkflowStatus[];
   onTaskClick?: (task: ApiTask) => void;
-  onAddTask?: (statusName?: string) => void;
+  onAddTask?: (statusId?: string) => void;
   onMove?: (taskId: string, statusId: string) => void;
 }
 
-// Fallback columns if the workflow statuses haven't loaded yet.
+// Fallback columns if the workflow statuses haven't loaded yet. These carry no real
+// status ids, so drag-to-move is disabled until the live statuses arrive.
 const FALLBACK = [
   { id: 'open',        name: 'Open',        colorHex: '#64748b', type: 'OPEN',   sequence: 1 },
   { id: 'in_progress', name: 'In Progress', colorHex: '#E8533A', type: 'OPEN',   sequence: 2 },
@@ -30,12 +33,13 @@ const PRIORITY_COLOR: Record<string, string> = {
 };
 
 export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }: KanbanBoardProps) {
-  const columns = (statuses && statuses.length ? [...statuses].sort((a, b) => a.sequence - b.sequence) : FALLBACK);
+  const ready = !!(statuses && statuses.length); // real, movable statuses loaded?
+  const columns = ready ? [...statuses].sort((a, b) => a.sequence - b.sequence) : FALLBACK;
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
 
   function handleDrop(statusId: string) {
-    if (dragTaskId) {
+    if (ready && dragTaskId) {
       const task = tasks.find(t => t.id === dragTaskId);
       // Only fire if the status actually changed
       if (task && task.currentStatus?.id !== statusId) onMove?.(dragTaskId, statusId);
@@ -48,12 +52,12 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
     <div className="flex gap-3 lg:gap-4 h-full overflow-x-auto py-1 px-0.5 lg:px-1">
       {columns.map(col => {
         const colTasks = tasks.filter(t => (t.currentStatus?.id ?? '') === col.id || t.currentStatus?.name === col.name);
-        const isClosed = col.type === 'CLOSED';
+        const isClosedCol = col.type === 'CLOSED';
 
         return (
           <div
             key={col.id}
-            onDragOver={e => { e.preventDefault(); setOverCol(col.id); }}
+            onDragOver={e => { if (ready) { e.preventDefault(); setOverCol(col.id); } }}
             onDragLeave={() => setOverCol(c => (c === col.id ? null : c))}
             onDrop={() => handleDrop(col.id)}
             className={clsx(
@@ -76,24 +80,29 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
             {/* Cards */}
             <div className="flex flex-col gap-2 p-3 flex-1 overflow-y-auto min-h-[120px]">
               {colTasks.map(task => {
-                const assignee = task.assignees?.[0]?.user;
                 const pr = task.priority ?? 'LOW';
                 return (
                   <div
                     key={task.id}
-                    draggable
-                    onDragStart={() => setDragTaskId(task.id)}
+                    draggable={ready}
+                    onDragStart={() => ready && setDragTaskId(task.id)}
                     onDragEnd={() => { setDragTaskId(null); setOverCol(null); }}
                     onClick={() => onTaskClick?.(task)}
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTaskClick?.(task); } }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open task: ${task.title}`}
                     className={clsx(
-                      'bg-white rounded-lg border border-gray-200 p-3.5 pl-6 cursor-pointer group relative hover:shadow-md hover:border-gray-300 transition-all',
-                      isClosed && 'opacity-70',
+                      'bg-white rounded-lg border border-gray-200 p-3.5 pl-6 cursor-pointer group relative hover:shadow-md hover:border-gray-300 transition-all focus:outline-none focus:ring-2 focus:ring-brand-500/40',
+                      isClosedCol && 'opacity-70',
                       dragTaskId === task.id && 'opacity-40',
                     )}
                   >
-                    <div className="absolute left-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 cursor-grab transition-opacity">
-                      <GripVertical size={12} className="text-gray-400" />
-                    </div>
+                    {ready && (
+                      <div className="absolute left-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 cursor-grab transition-opacity">
+                        <GripVertical size={12} className="text-gray-400" />
+                      </div>
+                    )}
 
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <span className={clsx('flex items-center gap-1 text-xs font-medium', PRIORITY_COLOR[pr] ?? 'text-gray-400')}>
@@ -102,20 +111,27 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
                       </span>
                     </div>
 
-                    <p className={clsx('text-sm text-gray-800 leading-snug mb-3', isClosed && 'line-through text-gray-400')}>
+                    <p className={clsx('text-sm text-gray-800 leading-snug mb-3', isClosedCol && 'line-through text-gray-400')}>
                       {task.title}
                     </p>
 
+                    {/* Progress */}
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-brand-500" style={{ width: `${task.completionPercentage}%` }} />
+                      </div>
+                      <span className="text-[10px] text-gray-400 shrink-0">{task.completionPercentage}%</span>
+                    </div>
+
                     <div className="flex items-center justify-between">
-                      {assignee ? (
-                        <Avatar user={assignee} size={24} />
-                      ) : (
-                        <div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />
-                      )}
+                      <AvatarStack
+                        users={taskAssigneeUsers(task)}
+                        size={24}
+                        max={3}
+                        empty={<div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />}
+                      />
                       {task.dueDate && (
-                        <span className="text-xs text-gray-400">
-                          {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </span>
+                        <span className="text-xs text-gray-400">{formatDate(task.dueDate)}</span>
                       )}
                     </div>
                   </div>
@@ -123,7 +139,7 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
               })}
 
               <button
-                onClick={() => onAddTask?.(col.name)}
+                onClick={() => onAddTask?.(ready ? col.id : undefined)}
                 className="flex items-center gap-2 px-2 py-2 text-sm text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors w-full"
               >
                 <Plus size={14} />

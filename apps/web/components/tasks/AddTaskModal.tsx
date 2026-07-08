@@ -1,40 +1,71 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X, Plus, Check } from 'lucide-react';
 import clsx from 'clsx';
-import { api } from '@/lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { api, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { DateField } from '@/components/ui/DateField';
+import { OPEN_TYPE } from '@/lib/tasks';
 
 interface AddTaskModalProps {
   projectId: string;
   taskListId: string;
+  initialStatusId?: string;
+  workflowId?: string;
   onClose: () => void;
   onSuccess?: () => void;
 }
 
-export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddTaskModalProps) {
+export function AddTaskModal({ projectId, taskListId, initialStatusId, workflowId, onClose, onSuccess }: AddTaskModalProps) {
   const { currentUser, users } = useOrg();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
+  const [statusId, setStatusId] = useState<string>(initialStatusId ?? '');
   const [dueDate, setDueDate] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
   const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Workflow statuses populate the "Status" picker so a task can start in any column.
+  const { data: statuses = [] } = useQuery<WorkflowStatus[]>({
+    queryKey: ['workflow-statuses', workflowId ?? 'default'],
+    queryFn: () => api.workflows.statuses(workflowId ?? 'default'),
+    staleTime: 5 * 60_000,
+  });
+
+  // Default the picker to the caller's column, else the first OPEN status.
+  const defaultOpenId = useMemo(
+    () => statuses.find(s => s.type === OPEN_TYPE)?.id ?? statuses[0]?.id ?? '',
+    [statuses],
+  );
+  useEffect(() => {
+    if (!statusId && (initialStatusId || defaultOpenId)) setStatusId(initialStatusId ?? defaultOpenId);
+  }, [initialStatusId, defaultOpenId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Escape-to-close for dialog a11y.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError('');
     try {
-      // Fetch default open status so new tasks appear in the right column
-      let defaultStatusId: string | undefined;
-      try {
-        const status = await api.workflows.defaultOpenStatus('workflow-default');
-        defaultStatusId = status.id;
-      } catch { /* proceed without status */ }
+      // Prefer the chosen status; fall back to the workflow's default-open if the
+      // picker never populated (e.g. statuses failed to load).
+      let currentWorkflowStatusId = statusId || undefined;
+      if (!currentWorkflowStatusId) {
+        try {
+          currentWorkflowStatusId = (await api.workflows.defaultOpenStatus(workflowId ?? 'default')).id;
+        } catch { /* proceed without status */ }
+      }
 
       await api.tasks.create({
         title,
@@ -45,7 +76,7 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
         projectId,
         taskListId,
         createdBy: currentUser?.id ?? 'system', // server derives the real creator from the cookie actor
-        currentWorkflowStatusId: defaultStatusId,
+        currentWorkflowStatusId,
         assigneeIds: assigneeIds.length ? assigneeIds : undefined,
       });
       onSuccess?.();
@@ -58,7 +89,7 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="New task">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
@@ -66,7 +97,7 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
             <h2 className="text-lg font-semibold text-gray-900">New Task</h2>
             <p className="text-sm text-gray-500 mt-0.5">Fill in the details to create a task</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors">
+          <button onClick={onClose} aria-label="Close" className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors">
             <X size={18} />
           </button>
         </div>
@@ -77,7 +108,7 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
               Title <span className="text-red-500">*</span>
             </label>
             <input
-              type="text" required value={title} onChange={e => setTitle(e.target.value)}
+              type="text" required autoFocus value={title} onChange={e => setTitle(e.target.value)}
               placeholder="e.g. Implement login page"
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
             />
@@ -105,19 +136,30 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Due Date</label>
-              <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
-              />
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Status</label>
+              <select value={statusId} onChange={e => setStatusId(e.target.value)} disabled={statuses.length === 0}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:opacity-60"
+              >
+                {statuses.length === 0 && <option value="">Default</option>}
+                {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Estimated Hours</label>
-            <input type="number" min="0" step="0.5" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)}
-              placeholder="e.g. 4"
-              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Due Date</label>
+              <DateField type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Estimated Hours</label>
+              <input type="number" min="0" step="0.5" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)}
+                placeholder="e.g. 4"
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
+              />
+            </div>
           </div>
 
           <div>
@@ -129,7 +171,7 @@ export function AddTaskModal({ projectId, taskListId, onClose, onSuccess }: AddT
               {users.map(u => {
                 const on = assigneeIds.includes(u.id);
                 return (
-                  <button type="button" key={u.id}
+                  <button type="button" key={u.id} role="checkbox" aria-checked={on}
                     onClick={() => setAssigneeIds(prev => on ? prev.filter(x => x !== u.id) : [...prev, u.id])}
                     className={clsx('w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left transition-colors',
                       on ? 'bg-brand-50 text-brand-700' : 'hover:bg-gray-50 text-gray-700')}
