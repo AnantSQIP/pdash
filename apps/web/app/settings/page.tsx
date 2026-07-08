@@ -17,6 +17,7 @@ import clsx from 'clsx';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOrg } from '@/lib/org-context';
+import { useAuth } from '@/lib/auth-context';
 import { Can } from '@/lib/permissions-context';
 import { api, type UserSummary } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
@@ -46,6 +47,56 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
           on ? 'translate-x-5' : 'translate-x-0',
         )}
       />
+    </div>
+  );
+}
+
+// ── Change Password (self-service) ───────────────────────────────────────────────
+function ChangePasswordCard() {
+  const { user, login } = useAuth();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState('');
+  const [ok, setOk] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const inputCls = 'w-full max-w-md px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition';
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(''); setOk(false);
+    if (next.length < 8) { setErr('New password must be at least 8 characters.'); return; }
+    if (next !== confirm) { setErr('New passwords do not match.'); return; }
+    setBusy(true);
+    try {
+      await api.auth.changePassword(current, next);
+      // Changing the password revokes the current session (securityVersion bump),
+      // so silently re-establish it with the new password to stay signed in.
+      await login(user?.email ?? '', next);
+      setOk(true); setCurrent(''); setNext(''); setConfirm('');
+      setTimeout(() => setOk(false), 2500);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not update password');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">Change Password</h2>
+        <p className="text-xs text-gray-500 mt-0.5">Update the password for your own account.</p>
+      </div>
+      <form onSubmit={submit} className="space-y-3">
+        <input type="password" autoComplete="current-password" placeholder="Current password" value={current} onChange={e => setCurrent(e.target.value)} className={inputCls} />
+        <input type="password" autoComplete="new-password" placeholder="New password (min 8 characters)" value={next} onChange={e => setNext(e.target.value)} className={inputCls} />
+        <input type="password" autoComplete="new-password" placeholder="Confirm new password" value={confirm} onChange={e => setConfirm(e.target.value)} className={inputCls} />
+        {err && <p className="text-xs text-red-600">{err}</p>}
+        {ok && <p className="text-xs text-green-600 font-medium">✓ Password updated.</p>}
+        <button type="submit" disabled={busy || !current || !next || !confirm} className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
+          {busy ? 'Updating…' : 'Update Password'}
+        </button>
+      </form>
     </div>
   );
 }
@@ -87,6 +138,7 @@ function GeneralTab() {
   return (
     <div className="space-y-6">
       <ProfilePhotoCard />
+      <ChangePasswordCard />
       {/* Organization card */}
       <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Organization</h2>
