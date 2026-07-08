@@ -14,6 +14,8 @@
     "db:migrate:deploy": "prisma migrate deploy --schema=packages/db/prisma/schema.prisma",
     "db:seed": "npx ts-node packages/db/prisma/seed.ts",
     "db:seed:prod": "node packages/db/prisma/dist/seed.js",
+    "db:reset-passwords": "npx ts-node packages/db/prisma/reset-passwords.ts",
+    "db:reset-passwords:prod": "node packages/db/prisma/dist/reset-passwords.js",
     "build": "npm run build --workspace=packages/db && npm run build --workspace=apps/api && npm run build --workspace=apps/web",
     "build:all": "npm run db:generate && npm run build",
     "serve": "node scripts/serve.mjs",
