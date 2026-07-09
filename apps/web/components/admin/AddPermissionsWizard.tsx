@@ -77,6 +77,7 @@ export function AddPermissionsWizard({ orgId, user, onClose, onDone }: {
       else if (review.kind === 'copy') { await api.users.setRoles(user.id, review.finalRoleIds); await api.users.setPermissions(user.id, review.finalDirectIds); }
       qc.invalidateQueries({ queryKey: ['eff', user.id] });
       qc.invalidateQueries({ queryKey: ['users', orgId] });
+      qc.invalidateQueries({ queryKey: ['effective-permissions'] }); // M34: refresh the live gate/sidebar
       onDone(); onClose();
     } finally { setBusy(false); }
   }

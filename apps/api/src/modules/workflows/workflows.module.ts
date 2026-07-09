@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Injectable, Module, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Injectable, Module, Param, Post } from '@nestjs/common';
 import { NotFoundException } from '@nestjs/common';
 import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 import { Prisma } from '@pdash/db';
@@ -108,6 +108,13 @@ export class WorkflowsService {
 
   async createTransition(workflowId: string, dto: CreateWorkflowTransitionDto) {
     await this.get(workflowId);
+    // L10: the from/to statuses must belong to THIS workflow (previously unchecked,
+    // so a transition could reference statuses from another workflow).
+    const ids = [dto.toStatusId, ...(dto.fromStatusId ? [dto.fromStatusId] : [])];
+    const valid = await this.prisma.workflowStatus.count({ where: { id: { in: ids }, workflowId } });
+    if (valid !== ids.length) {
+      throw new BadRequestException('fromStatusId/toStatusId must belong to this workflow.');
+    }
     return this.prisma.workflowTransition.create({
       data: {
         workflowId,

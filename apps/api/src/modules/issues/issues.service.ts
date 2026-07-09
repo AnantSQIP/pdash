@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
+import { NotificationsService } from '../notifications/notifications.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { CreateIssueDto, UpdateIssueDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
@@ -12,7 +13,17 @@ export class IssuesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  private async notifyAssigned(assigneeId: string, title: string) {
+    if (!assigneeId || assigneeId === getActorId()) return; // don't notify self-assign
+    await this.notifications.notify(assigneeId, {
+      type: 'issue.assigned',
+      title: 'Issue assigned to you',
+      message: `You were assigned the issue "${title}".`,
+    });
+  }
 
   list(projectId: string, status?: string) {
     // Require an explicit project scope — never return every project's issues.
@@ -63,6 +74,7 @@ export class IssuesService {
       entityId: issue.id,
       metadata: { projectId: dto.projectId, title: issue.title, severity: issue.severity },
     });
+    if (issue.assigneeId) await this.notifyAssigned(issue.assigneeId, issue.title);
     return issue;
   }
 
@@ -92,6 +104,10 @@ export class IssuesService {
       newValue: { status: issue.status },
       metadata: { projectId: issue.projectId, title: issue.title },
     });
+    // Notify a newly-assigned user (parity with task assignment).
+    if (dto.assigneeId && dto.assigneeId !== existing.assigneeId) {
+      await this.notifyAssigned(dto.assigneeId, issue.title);
+    }
     return issue;
   }
 

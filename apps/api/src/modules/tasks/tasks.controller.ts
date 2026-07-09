@@ -66,6 +66,11 @@ export class TasksController {
     return this.tasks.closeSubtask(subtaskId);
   }
 
+  @Post(':id/subtasks/:subtaskId/reopen') @RequirePermission('task.update')
+  reopenSubtask(@Param('subtaskId') subtaskId: string) {
+    return this.tasks.reopenSubtask(subtaskId);
+  }
+
   @Delete(':id/subtasks/:subtaskId') @RequirePermission('task.update')
   deleteSubtask(@Param('subtaskId') subtaskId: string) {
     return this.tasks.softDeleteSubtask(subtaskId);

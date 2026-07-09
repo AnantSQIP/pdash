@@ -14,6 +14,7 @@ import {
   type OrgPerformance, type OrgAttendanceSummary, type LeaveRequestItem,
   type Holiday, type RoleSummary, type Attendance, type LeaveBalance, type UserSummary,
 } from '@/lib/api';
+import { formatDate } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { progressColor } from '@/lib/progress';
@@ -176,7 +177,7 @@ export function MyTasksCard() {
               <div className={clsx('w-2 h-2 rounded-full shrink-0', priorityDotClass(task.priority))} />
               {task.dueDate && (
                 <span className={clsx('text-xs shrink-0', isOverdue ? 'text-red-500' : 'text-gray-400')}>
-                  {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  {formatDate(task.dueDate)}
                 </span>
               )}
               {task.currentStatus && (
@@ -300,12 +301,15 @@ export function QuickStatsCard() {
 // ── My attendance & leave (attendance.view.own, side) ───────────────────────
 export function MyAttendanceCard() {
   const { can } = usePermissions();
+  const { currentUser } = useOrg();
   const allowed = can('attendance.view.own');
+  // M33: share the Attendance page's query keys so a punch/regularize there also
+  // refreshes this card (previously 'att-today' ≠ the page's 'attn-today').
   const { data: att } = useQuery<Attendance | null>({
-    queryKey: ['att-today'], queryFn: () => api.attendance.today(), enabled: allowed, staleTime: 30_000,
+    queryKey: ['attn-today', currentUser?.id], queryFn: () => api.attendance.today(), enabled: allowed, staleTime: 30_000,
   });
   const { data: balances = [] } = useQuery<LeaveBalance[]>({
-    queryKey: ['leave-balances'], queryFn: () => api.leave.balances(), enabled: allowed, staleTime: 60_000,
+    queryKey: ['leave-balances', currentUser?.id], queryFn: () => api.leave.balances(), enabled: allowed, staleTime: 60_000,
   });
   if (!allowed) return null;
   const clockedIn = !!att?.checkIn && !att?.checkOut;
@@ -434,8 +438,8 @@ export function LeaveApprovalsCard() {
                 <span className="ml-2 text-xs text-gray-400">{r.leaveType} · {r.numDays}d</span>
               </p>
               <p className="text-xs text-gray-400">
-                {new Date(r.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                {r.endDate && r.endDate !== r.startDate ? ` – ${new Date(r.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+                {formatDate(r.startDate)}
+                {r.endDate && r.endDate !== r.startDate ? ` – ${formatDate(r.endDate)}` : ''}
                 {r.reason ? ` · ${r.reason}` : ''}
               </p>
             </div>
@@ -487,7 +491,7 @@ export function PeopleOpsCard() {
           {upcoming.map(h => (
             <div key={h.id} className="flex items-center justify-between py-1">
               <span className="text-sm text-gray-700 truncate">{h.name}</span>
-              <span className="text-xs text-gray-400 shrink-0">{new Date(h.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+              <span className="text-xs text-gray-400 shrink-0">{formatDate(h.date)}</span>
             </div>
           ))}
         </div>

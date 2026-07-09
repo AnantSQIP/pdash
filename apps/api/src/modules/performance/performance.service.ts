@@ -34,6 +34,22 @@ function businessDays(from: Date, to: Date): number {
   return Math.max(1, n);
 }
 
+// M22: guards concurrent auto-rebuilds per org (snapshots were never auto-refreshed).
+const autoRebuildInFlight = new Set<string>();
+
+/**
+ * A `task.status_changed` event is a COMPLETION only when it moved a task INTO a
+ * CLOSED status from a non-closed one — not on every transition. Counting every
+ * status change inflated "tasks completed" (Open→In Progress→Done counted 3, and
+ * reopening also incremented). Historical events lack old.type; treating a missing
+ * old.type as "not closed" still counts genuine closes without the 3× inflation.
+ */
+function isCompletionEvent(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const p = payload as { new?: { type?: string | null }; old?: { type?: string | null } };
+  return p.new?.type === 'CLOSED' && p.old?.type !== 'CLOSED';
+}
+
 @Injectable()
 export class PerformanceService {
   constructor(
@@ -171,7 +187,7 @@ export class PerformanceService {
     // live fallback aggregates (used where snapshots are absent)
     const [sheets, events] = await Promise.all([
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: since } }, select: { date: true, hoursLogged: true } }),
-      this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true } }),
+      this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
     ]);
     const liveHours = new Map<string, number>();
     sheets.forEach(s => liveHours.set(dayKey(s.date), (liveHours.get(dayKey(s.date)) ?? 0) + s.hoursLogged));
@@ -180,7 +196,7 @@ export class PerformanceService {
     events.forEach(e => {
       const k = dayKey(e.createdAt);
       liveActivity.set(k, (liveActivity.get(k) ?? 0) + 1);
-      if (e.eventType === 'task.status_changed') liveCompleted.set(k, (liveCompleted.get(k) ?? 0) + 1);
+      if (e.eventType === 'task.status_changed' && isCompletionEvent(e.payload)) liveCompleted.set(k, (liveCompleted.get(k) ?? 0) + 1);
     });
 
     const out: { date: string; completed: number; hours: number; activity: number }[] = [];
@@ -205,10 +221,15 @@ export class PerformanceService {
       where: { userId, date: { gte: since } },
       select: { date: true, activityVolume: true },
     });
+    const snapDays = new Set(snaps.map(s => dayKey(s.date)));
     const map = new Map(snaps.map(s => [dayKey(s.date), s.activityVolume]));
-    // live fallback so the heatmap isn't empty before a rebuild
+    // Live fallback so the heatmap isn't empty before a rebuild: for days WITHOUT a
+    // snapshot, ACCUMULATE the day's events. (Previously `if (!map.has(k))` set each
+    // day exactly once, capping every active day at 1 → all rendered lowest-intensity.)
     const events = await this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true } });
-    events.forEach(e => { const k = dayKey(e.createdAt); if (!map.has(k)) map.set(k, (map.get(k) ?? 0) + 1); });
+    const live = new Map<string, number>();
+    events.forEach(e => { const k = dayKey(e.createdAt); if (!snapDays.has(k)) live.set(k, (live.get(k) ?? 0) + 1); });
+    for (const [k, v] of live) map.set(k, v);
 
     const level = (v: number) => (v === 0 ? 0 : v <= 2 ? 1 : v <= 5 ? 2 : v <= 9 ? 3 : 4);
     const out: { date: string; value: number; level: number }[] = [];
@@ -221,7 +242,63 @@ export class PerformanceService {
     return { userId, days: out };
   }
 
+  /**
+   * M22: keep snapshots current without a scheduler. If today's snapshot is missing,
+   * kick off a background rebuild of the recent window (guarded so it runs at most
+   * once at a time per org). Fire-and-forget — never blocks the dashboard response.
+   */
+  private maybeAutoRefresh(organizationId: string): void {
+    if (autoRebuildInFlight.has(organizationId)) return;
+    autoRebuildInFlight.add(organizationId);
+    (async () => {
+      try {
+        const today = utcDay(new Date());
+        const fresh = await this.prisma.userMetricDaily.findFirst({ where: { organizationId, date: today }, select: { id: true } });
+        if (!fresh) await this.rebuildSnapshots(organizationId, 7);
+      } catch { /* best-effort; the live fallback covers gaps */ }
+      finally { autoRebuildInFlight.delete(organizationId); }
+    })();
+  }
+
+  /**
+   * Per-user window metrics for the whole org computed with a handful of grouped
+   * aggregates (not one windowMetrics() call per user). Returns a userId→metrics map.
+   */
+  private async orgWindowMetrics(organizationId: string, from: Date, to: Date) {
+    const [completedTasks, hoursByUser, resolvedByUser, activityByUser] = await Promise.all([
+      this.prisma.task.findMany({
+        where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
+        select: { dueDate: true, updatedAt: true, assignees: { select: { userId: true } } },
+      }),
+      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
+      this.prisma.issue.groupBy({ by: ['assigneeId'], where: { deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to }, assignee: { organizationId } }, _count: { _all: true } }),
+      this.prisma.analyticsEvent.groupBy({ by: ['userId'], where: { organizationId, createdAt: { gte: from, lt: to } }, _count: { _all: true } }),
+    ]);
+
+    type Acc = { tasksCompleted: number; withDueCount: number; onTime: number; hoursLogged: number; issuesResolved: number; activityVolume: number };
+    const acc = new Map<string, Acc>();
+    const at = (id: string) => { let x = acc.get(id); if (!x) { x = { tasksCompleted: 0, withDueCount: 0, onTime: 0, hoursLogged: 0, issuesResolved: 0, activityVolume: 0 }; acc.set(id, x); } return x; };
+
+    for (const t of completedTasks) {
+      for (const a of t.assignees) {
+        const x = at(a.userId);
+        x.tasksCompleted++;
+        if (t.dueDate) { x.withDueCount++; if (t.updatedAt <= t.dueDate) x.onTime++; }
+      }
+    }
+    for (const h of hoursByUser) at(h.userId).hoursLogged = Math.round((h._sum.hoursLogged ?? 0) * 10) / 10;
+    for (const r of resolvedByUser) if (r.assigneeId) at(r.assigneeId).issuesResolved = r._count._all;
+    for (const a of activityByUser) at(a.userId).activityVolume = a._count._all;
+
+    const out = new Map<string, { tasksCompleted: number; withDueCount: number; onTimeRate: number; hoursLogged: number; issuesResolved: number; activityVolume: number }>();
+    for (const [id, x] of acc) {
+      out.set(id, { tasksCompleted: x.tasksCompleted, withDueCount: x.withDueCount, onTimeRate: pct(x.onTime, x.withDueCount), hoursLogged: x.hoursLogged, issuesResolved: x.issuesResolved, activityVolume: x.activityVolume });
+    }
+    return out;
+  }
+
   async getOrgPerformance(organizationId: string, days = 30) {
+    this.maybeAutoRefresh(organizationId); // M22: refresh stale snapshots in the background
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
       select: {
@@ -233,8 +310,16 @@ export class PerformanceService {
     const scoreOf = (m: { tasksCompleted: number; onTimeRate: number; hoursLogged: number; issuesResolved: number; activityVolume: number }) =>
       Math.round(m.tasksCompleted * 4 + m.onTimeRate * 0.5 + m.hoursLogged + m.issuesResolved * 3 + m.activityVolume * 0.5);
 
-    const rows = await Promise.all(users.map(async u => {
-      const [cur, prev] = await Promise.all([this.windowMetrics(u.id, from, to), this.windowMetrics(u.id, prevFrom, prevTo)]);
+    // Set-based: two window aggregations (~8 queries total) instead of the old
+    // per-user fan-out (14N+2 ≈ 394 round-trips for 28 users).
+    const [curM, prevM] = await Promise.all([
+      this.orgWindowMetrics(organizationId, from, to),
+      this.orgWindowMetrics(organizationId, prevFrom, prevTo),
+    ]);
+    const zeroM = { tasksCompleted: 0, withDueCount: 0, onTimeRate: 0, hoursLogged: 0, issuesResolved: 0, activityVolume: 0 };
+    const rows = users.map(u => {
+      const cur = curM.get(u.id) ?? zeroM;
+      const prev = prevM.get(u.id) ?? zeroM;
       return {
         userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
         department: u.departmentMemberships[0]?.department?.name ?? undefined,
@@ -242,7 +327,7 @@ export class PerformanceService {
         withDueCount: cur.withDueCount,
         score: scoreOf(cur), prevScore: scoreOf(prev), prevHours: prev.hoursLogged, prevCompleted: prev.tasksCompleted,
       };
-    }));
+    });
     rows.sort((a, b) => b.score - a.score);
 
     const sum = (f: (r: typeof rows[number]) => number) => Math.round(rows.reduce((s, r) => s + f(r), 0) * 10) / 10;
@@ -300,7 +385,7 @@ export class PerformanceService {
       const userId = u.id;
       const [sheets, events, comments] = await Promise.all([
         this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: since } }, select: { date: true, hoursLogged: true, billable: true } }),
-        this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true } }),
+        this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
         this.prisma.comment.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true } }),
       ]);
 
@@ -311,26 +396,28 @@ export class PerformanceService {
       comments.forEach(c => { const a = get(dayKey(c.createdAt)); a.comments += 1; a.activity += 1; });
       events.forEach(e => {
         const a = get(dayKey(e.createdAt)); a.activity += 1;
-        if (e.eventType === 'task.status_changed') a.completed += 1;
+        if (e.eventType === 'task.status_changed' && isCompletionEvent(e.payload)) a.completed += 1;
         if (e.eventType === 'issue.resolved') a.resolved += 1;
       });
 
+      // Batch the day-rows: one deleteMany + one createMany per user replaces up to
+      // `days` sequential upserts (365×N ≈ 10k round-trips → 2 per user), so the
+      // Rebuild button no longer hangs multi-second holding a pool connection.
+      const rows = [];
       for (const [k, a] of byDay) {
         if (a.hours === 0 && a.activity === 0) continue;
-        const date = new Date(`${k}T00:00:00.000Z`);
-        await this.prisma.userMetricDaily.upsert({
-          where: { userId_date: { userId, date } },
-          create: {
-            userId, organizationId, date,
-            hoursLogged: a.hours, billableHours: a.billable, activityVolume: a.activity,
-            tasksCompleted: a.completed, commentsPosted: a.comments, issuesResolved: a.resolved, present: true,
-          },
-          update: {
-            hoursLogged: a.hours, billableHours: a.billable, activityVolume: a.activity,
-            tasksCompleted: a.completed, commentsPosted: a.comments, issuesResolved: a.resolved, present: true,
-          },
+        rows.push({
+          userId, organizationId, date: new Date(`${k}T00:00:00.000Z`),
+          hoursLogged: a.hours, billableHours: a.billable, activityVolume: a.activity,
+          tasksCompleted: a.completed, commentsPosted: a.comments, issuesResolved: a.resolved, present: true,
         });
-        written++;
+      }
+      if (rows.length) {
+        await this.prisma.$transaction([
+          this.prisma.userMetricDaily.deleteMany({ where: { userId, date: { in: rows.map(r => r.date) } } }),
+          this.prisma.userMetricDaily.createMany({ data: rows, skipDuplicates: true }),
+        ]);
+        written += rows.length;
       }
     }
     return { ok: true, days: written };
@@ -360,7 +447,7 @@ export class PerformanceService {
       }),
       this.prisma.task.findMany({
         where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'OPEN' }, estimatedHours: { not: null } },
-        select: { id: true, title: true, estimatedHours: true, timesheets: { select: { hoursLogged: true } } },
+        select: { id: true, title: true, estimatedHours: true, timesheets: { where: { deletedAt: null }, select: { hoursLogged: true } } },
         orderBy: { dueDate: 'asc' },
         take: 8,
       }),
@@ -567,7 +654,7 @@ export class PerformanceService {
       // live fallback when snapshots aren't built yet
       const [sheets, events] = await Promise.all([
         this.prisma.timesheet.findMany({ where: { userId: { in: userIds }, deletedAt: null, date: { gte: since } }, select: { userId: true, date: true, hoursLogged: true, billable: true } }),
-        this.prisma.analyticsEvent.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true } }),
+        this.prisma.analyticsEvent.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
       ]);
       for (const s of sheets) {
         const k = dayKey(s.date);
@@ -578,7 +665,7 @@ export class PerformanceService {
       for (const e of events) {
         const t = tot(dayKey(e.createdAt));
         t.activity += 1;
-        if (e.eventType === 'task.status_changed') t.completed += 1;
+        if (e.eventType === 'task.status_changed' && isCompletionEvent(e.payload)) t.completed += 1;
       }
     }
 

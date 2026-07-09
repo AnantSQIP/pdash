@@ -5,12 +5,11 @@ import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar,
-  LayoutList, Flag,
+  LayoutList, Flag, UserPlus, X as XIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
 import GanttView from '@/components/projects/GanttView';
-import FilesTab from '@/components/projects/FilesTab';
 import DiscussionsTab from '@/components/projects/DiscussionsTab';
 import IssuesTab from '@/components/projects/IssuesTab';
 import ActivityTab from '@/components/projects/ActivityTab';
@@ -19,15 +18,16 @@ import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { api, type ApiProject, type ApiTask, type WorkflowStatus } from '@/lib/api';
+import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
 
-type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
-// 'Files' is hidden — it was an unbacked mock (no files API yet).
-const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
+type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
+const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Milestones', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -41,10 +41,30 @@ interface Props { projectId: string }
 export function ProjectDetailClient({ projectId }: Props) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [activeTab, setActiveTab] = useState<Tab>('Task List');
   const [showAddTask, setShowAddTask] = useState(false);
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
+  const [deciding, setDeciding] = useState(false);
+
+  // #10: make the project approval workflow reachable — approvers can approve/reject
+  // a project awaiting review (phase PLANNING) instead of it being stuck forever.
+  async function decideProject(approve: boolean) {
+    if (deciding) return;
+    if (!approve && !window.confirm('Reject this project?')) return;
+    setDeciding(true);
+    try {
+      await (approve ? api.projects.approve(projectId) : api.projects.reject(projectId));
+      qc.invalidateQueries({ queryKey: ['project', projectId] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast(approve ? 'Project approved' : 'Project rejected', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not update approval', 'error');
+    } finally {
+      setDeciding(false);
+    }
+  }
 
   const { data: project, isLoading: projLoading, isError: projError } = useQuery({
     queryKey: ['project', projectId],
@@ -77,8 +97,15 @@ export function ProjectDetailClient({ projectId }: Props) {
   }
 
   function invalidateTasks() {
-    qc.invalidateQueries({ queryKey: ['tasks', projectId] });
+    // Invalidate broadly (M36 + L14): a task can appear in other projects/lists and
+    // feeds the project cards + home dashboard analytics, so refresh them all — not
+    // just the list this change was made from.
+    qc.invalidateQueries({ queryKey: ['tasks'] });
     qc.invalidateQueries({ queryKey: ['project', projectId] });
+    qc.invalidateQueries({ queryKey: ['projects'] });
+    qc.invalidateQueries({ queryKey: ['tasks-me'] });
+    qc.invalidateQueries({ queryKey: ['analytics-dashboard'] });
+    qc.invalidateQueries({ queryKey: ['activity'] }); // L29: refresh activity feeds after a change
   }
 
   async function handleMove(taskId: string, statusId: string) {
@@ -262,6 +289,34 @@ export function ProjectDetailClient({ projectId }: Props) {
         </nav>
       </header>
 
+      {/* #10: approval banner — a project in PLANNING is awaiting review. */}
+      {project.projectPhase === 'PLANNING' && (
+        <div className="flex items-center gap-3 px-5 py-3 bg-amber-50 border-b border-amber-200">
+          <Flag size={15} className="text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800 flex-1">
+            This project is <span className="font-semibold">awaiting approval</span> before it becomes active.
+          </p>
+          {can('project.approve') && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => decideProject(false)}
+                disabled={deciding}
+                className="px-3 py-1.5 text-sm font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => decideProject(true)}
+                disabled={deciding}
+                className="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
+              >
+                {deciding ? 'Working…' : 'Approve'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tab content */}
       <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-4 sm:p-6')}>
         {activeTab === 'Task List' && (
@@ -270,6 +325,7 @@ export function ProjectDetailClient({ projectId }: Props) {
             loading={tasksLoading}
             statuses={statuses}
             canAddTask={!!defaultTaskList}
+            listName={defaultTaskList?.name}
             onTaskClick={task => setSelectedTask(task)}
             onAddTask={() => openAddTask()}
             onStatusChange={handleMove}
@@ -286,11 +342,11 @@ export function ProjectDetailClient({ projectId }: Props) {
           />
         )}
         {activeTab === 'Overview' && <OverviewView project={project} tasks={tasks} />}
+        {activeTab === 'Milestones' && <MilestonesView project={project} />}
         {activeTab === 'Gantt' && <GanttView tasks={tasks} project={project} />}
         {activeTab === 'Issues' && <IssuesTab projectId={projectId} />}
         {activeTab === 'Activity' && <ActivityTab projectId={projectId} />}
         {activeTab === 'Timesheets' && <TimesheetsTab projectId={projectId} />}
-        {activeTab === 'Files' && <FilesTab />}
         {activeTab === 'Discussions' && <DiscussionsTab projectId={projectId} />}
       </div>
 
@@ -300,6 +356,7 @@ export function ProjectDetailClient({ projectId }: Props) {
           taskListId={defaultTaskList.id}
           initialStatusId={addTaskStatusId}
           workflowId={project.workflowId}
+          milestones={project.milestones}
           onClose={() => setShowAddTask(false)}
           onSuccess={invalidateTasks}
         />
@@ -322,15 +379,97 @@ export function ProjectDetailClient({ projectId }: Props) {
   );
 }
 
+// ── Milestones View (U4) ────────────────────────────────────────────────────────
+
+function MilestonesView({ project }: { project: ApiProject }) {
+  const { can } = usePermissions();
+  const qc = useQueryClient();
+  const milestones = [...(project.milestones ?? [])].sort((a, b) => a.sequence - b.sequence);
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [busy, setBusy] = useState(false);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['project', project.id] });
+
+  async function create() {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api.milestones.create(project.id, { name: name.trim(), startDate: start || undefined, endDate: end || undefined });
+      setName(''); setStart(''); setEnd(''); setAdding(false); refresh();
+    } catch (e) { alert(e instanceof Error ? e.message : 'Could not create milestone.'); }
+    finally { setBusy(false); }
+  }
+  async function remove(id: string) {
+    if (!window.confirm('Delete this milestone? Its tasks stay but are detached from it.')) return;
+    try { await api.milestones.remove(project.id, id); refresh(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not delete milestone.'); }
+  }
+
+  return (
+    <div className="max-w-3xl space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-700">Milestones</h3>
+        {can('milestone.create') && !adding && (
+          <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
+            <Plus size={13} /> New milestone
+          </button>
+        )}
+      </div>
+
+      {adding && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Milestone name" className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2" />
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500">Start <input type="date" value={start} onChange={e => setStart(e.target.value)} className="ml-1 text-sm border border-gray-300 rounded-lg px-2 py-1" /></label>
+            <label className="text-xs text-gray-500">End <input type="date" value={end} onChange={e => setEnd(e.target.value)} className="ml-1 text-sm border border-gray-300 rounded-lg px-2 py-1" /></label>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setAdding(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            <button onClick={create} disabled={busy || !name.trim()} className="px-3 py-1.5 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">{busy ? 'Adding…' : 'Add milestone'}</button>
+          </div>
+        </div>
+      )}
+
+      {milestones.length === 0 && !adding ? (
+        <p className="text-sm text-gray-400">No milestones yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {milestones.map(m => (
+            <div key={m.id} className="bg-white rounded-xl border border-gray-200 p-4 group">
+              <div className="flex items-center gap-2 mb-2">
+                <Flag size={14} className="text-brand-500 shrink-0" />
+                <span className="text-sm font-medium text-gray-800 flex-1">{m.name}</span>
+                <span className="text-xs text-gray-400">{formatDate(m.startDate)} – {formatDate(m.endDate)}</span>
+                {can('milestone.delete') && (
+                  <button onClick={() => remove(m.id)} title="Delete milestone" className="p-1 rounded text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><XIcon size={14} /></button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-brand-500 rounded-full" style={{ width: `${m.completionPercentage}%` }} />
+                </div>
+                <span className="text-xs font-medium text-gray-500 w-9 text-right">{m.completionPercentage}%</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Task List View ─────────────────────────────────────────────────────────────
 
 function TaskListView({
-  tasks, loading, statuses, canAddTask, onTaskClick, onAddTask, onStatusChange, onProgressChange,
+  tasks, loading, statuses, canAddTask, listName, onTaskClick, onAddTask, onStatusChange, onProgressChange,
 }: {
   tasks: ApiTask[];
   loading: boolean;
   statuses: WorkflowStatus[];
   canAddTask: boolean;
+  listName?: string;
   onTaskClick: (task: ApiTask) => void;
   onAddTask: () => void;
   onStatusChange: (taskId: string, statusId: string) => void;
@@ -363,7 +502,7 @@ function TaskListView({
       <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
         <div className="flex items-center gap-2">
           <LayoutList size={15} className="text-gray-400" />
-          <span className="text-sm font-semibold text-gray-700">General</span>
+          <span className="text-sm font-semibold text-gray-700">{listName ?? 'General'}</span>
           <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{tasks.length}</span>
         </div>
         <button onClick={onAddTask} className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium">
@@ -502,6 +641,30 @@ function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[
   const statuses = Object.entries(statusCounts).map(([label, { count, color }]) => ({ label, count, color }));
   const members = project.members ?? [];
 
+  // #11: add / remove project members.
+  const { users } = useOrg();
+  const { can } = usePermissions();
+  const qc = useQueryClient();
+  const canManage = can('project.update');
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const memberIds = new Set(members.map(m => m.userId));
+  const candidates = (users ?? []).filter(u => !memberIds.has(u.id));
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['project', project.id] }); qc.invalidateQueries({ queryKey: ['projects'] }); };
+  async function addMember(userId: string) {
+    setBusy(true);
+    try { await api.projects.addMember(project.id, userId); setAdding(false); refresh(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not add member.'); }
+    finally { setBusy(false); }
+  }
+  async function removeMember(userId: string) {
+    if (!window.confirm('Remove this member from the project?')) return;
+    setBusy(true);
+    try { await api.projects.removeMember(project.id, userId); refresh(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not remove member.'); }
+    finally { setBusy(false); }
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
       {/* Progress card */}
@@ -537,17 +700,51 @@ function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[
 
       {/* Team */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Team Members</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-700">Team Members</h3>
+          {canManage && !adding && candidates.length > 0 && (
+            <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
+              <UserPlus size={13} /> Add member
+            </button>
+          )}
+        </div>
+        {canManage && adding && (
+          <div className="flex items-center gap-2 mb-3">
+            <select
+              disabled={busy}
+              defaultValue=""
+              onChange={e => { if (e.target.value) addMember(e.target.value); }}
+              className="flex-1 text-sm border border-gray-300 rounded-lg px-2 py-1.5"
+              autoFocus
+            >
+              <option value="" disabled>Select a teammate…</option>
+              {candidates.map(u => (
+                <option key={u.id} value={u.id}>{`${u.firstName} ${u.lastName ?? ''}`.trim()}</option>
+              ))}
+            </select>
+            <button onClick={() => setAdding(false)} className="p-1.5 text-gray-400 hover:text-gray-600"><XIcon size={15} /></button>
+          </div>
+        )}
         <div className="space-y-3">
           {members.length === 0 ? (
             <p className="text-sm text-gray-400">No members assigned</p>
           ) : members.map((m, i) => (
-            <div key={m.userId} className="flex items-center gap-3">
+            <div key={m.userId} className="flex items-center gap-3 group">
               <Avatar user={m.user} size={32} />
-              <div>
-                <p className="text-sm font-medium text-gray-800">{`${m.user.firstName} ${m.user.lastName ?? ''}`.trim()}</p>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-800 truncate">{`${m.user.firstName} ${m.user.lastName ?? ''}`.trim()}</p>
                 <p className="text-xs text-gray-500">{m.projectRole ?? (i === 0 ? 'Manager' : 'Member')}</p>
               </div>
+              {canManage && (m.projectRole !== 'MANAGER') && (
+                <button
+                  onClick={() => removeMember(m.userId)}
+                  disabled={busy}
+                  title="Remove from project"
+                  className="ml-auto p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
+                >
+                  <XIcon size={14} />
+                </button>
+              )}
             </div>
           ))}
         </div>

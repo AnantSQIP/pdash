@@ -104,12 +104,16 @@ export class ChannelsService {
 
   async listMessages(channelId: string, limit = 50) {
     await this.assertMember(channelId);
-    return this.prisma.message.findMany({
+    // Fetch the LATEST `limit` messages (newest-first), then reverse so the client
+    // renders oldest→newest. Ordering asc + take returned the OLDEST 50, so past 50
+    // messages a channel never showed anything new.
+    const rows = await this.prisma.message.findMany({
       where: { channelId },
       include: { user: { select: USER_SELECT } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: limit,
     });
+    return rows.reverse();
   }
 
   async createMessage(channelId: string, dto: CreateMessageDto) {

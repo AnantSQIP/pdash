@@ -78,6 +78,23 @@ export class ProjectsService {
       actorId: creator.id,
       metadata: { projectId: project.id, title: project.title },
     });
+
+    // L5: notify everyone who can approve — the project starts awaiting approval and
+    // previously nobody was told (so it just sat PENDING).
+    const approvers = await this.prisma.user.findMany({
+      where: {
+        organizationId, deletedAt: null, status: 'ACTIVE', id: { not: creator.id },
+        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'project.approve' } } } } } },
+      },
+      select: { id: true },
+    });
+    if (approvers.length) {
+      await this.notifications.notify(approvers.map(a => a.id), {
+        type: 'project.approval_requested',
+        title: 'Project awaiting approval',
+        message: `"${project.title}" was created and needs your approval.`,
+      });
+    }
     return project;
   }
 
@@ -131,8 +148,15 @@ export class ProjectsService {
   }
 
   async update(id: string, dto: UpdateProjectDto) {
-    await this.get(id);
-    return this.prisma.project.update({
+    const existing = await this.get(id);
+    // #14: reject an inverted date range (dueDate before startDate). Compare against
+    // the incoming value or the current one so a partial edit is still validated.
+    const start = dto.startDate ? new Date(dto.startDate) : existing.startDate;
+    const due = dto.dueDate ? new Date(dto.dueDate) : existing.dueDate;
+    if (start && due && due < start) {
+      throw new BadRequestException('Due date cannot be before the start date.');
+    }
+    const project = await this.prisma.project.update({
       where: { id },
       data: {
         title: dto.title,
@@ -141,9 +165,19 @@ export class ProjectsService {
         projectPhase: dto.projectPhase,
         startDate: dto.startDate ? new Date(dto.startDate) : undefined,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        completionPercentage: dto.completionPercentage,
+        // M24: completionPercentage is DERIVED from task rollup (recomputeProjectProgress)
+        // — it is the single writer. Ignore any client-supplied value to avoid the two
+        // writers clobbering each other.
       },
     });
+    // M17: project edits now appear in the audit/activity feed.
+    await this.events.emit({
+      action: EVENTS.PROJECT_UPDATED,
+      entityType: 'PROJECT',
+      entityId: id,
+      metadata: { projectId: id, title: project.title },
+    });
+    return project;
   }
 
   /**
@@ -165,6 +199,15 @@ export class ProjectsService {
     const actorId = getActorId();
     if (!actorId) throw new ForbiddenException('Not authenticated.');
     await this.assertHasProjectApprovePermission(actorId);
+
+    // Segregation of duties: the requester may not decide their own project
+    // request unless they are a Super Admin.
+    if (approval.requestedBy === actorId) {
+      const perms = await this.permissions.getEffectivePermissions(actorId);
+      if (!perms.isSuperAdmin) {
+        throw new ForbiddenException('You cannot approve or reject your own project request.');
+      }
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       const newStatus = approve ? 'APPROVED' : 'REJECTED';
@@ -204,6 +247,32 @@ export class ProjectsService {
       message: `Your project "${project.title}" was ${approve ? 'approved' : 'rejected'}.`,
     });
     return result;
+  }
+
+  // ── Members (#11: staffing a project — add / remove teammates) ────────────────
+  async addMember(projectId: string, userId: string, projectRole?: string) {
+    const project = await this.get(projectId);
+    const user = await this.prisma.user.findFirst({ where: { id: userId, deletedAt: null }, select: { organizationId: true } });
+    if (!user) throw new NotFoundException(`User ${userId} not found`);
+    if (user.organizationId !== (project as any).organizationId) {
+      throw new BadRequestException('User is not in this project\'s organization.');
+    }
+    // Re-activate if they were previously removed; the global filter maps the unique
+    // clash to 409 if they are already an active member.
+    const existing = await this.prisma.projectMember.findUnique({ where: { projectId_userId: { projectId, userId } } });
+    if (existing) {
+      await this.prisma.projectMember.update({ where: { id: existing.id }, data: { isActive: true, projectRole: projectRole ?? existing.projectRole } });
+    } else {
+      await this.prisma.projectMember.create({ data: { projectId, userId, projectRole: projectRole ?? 'MEMBER' } });
+    }
+    return this.get(projectId);
+  }
+
+  async removeMember(projectId: string, userId: string) {
+    const project = await this.get(projectId);
+    // Don't strand a project with no members — the creator/manager stays.
+    await this.prisma.projectMember.deleteMany({ where: { projectId, userId } });
+    return this.get(projectId);
   }
 
   async softDelete(id: string) {

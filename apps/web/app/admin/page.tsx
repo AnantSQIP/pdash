@@ -112,10 +112,12 @@ export default function AdminPage() {
 function UsersTab({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
   const router = useRouter();
-  const { data: users = [] } = useQuery({ queryKey: ['users', orgId], queryFn: () => api.users.list(orgId), staleTime: 30_000 });
+  const { data: users = [] } = useQuery({ queryKey: ['users', orgId, 'all'], queryFn: () => api.users.list(orgId, true), staleTime: 30_000 });
   const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 });
   const [showCreate, setShowCreate] = useState(false);
   const [wizardUser, setWizardUser] = useState<UserSummary | null>(null);
+  const [editUser, setEditUser] = useState<UserSummary | null>(null);
+  const [resetResult, setResetResult] = useState<{ email: string; tempPassword: string } | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [desig, setDesig] = useState('');
@@ -162,7 +164,30 @@ function UsersTab({ orgId }: { orgId: string }) {
                       <div className="fixed inset-0 z-10" onClick={() => setMenuFor(null)} />
                       <div className="absolute right-3 top-9 z-20 w-44 bg-white rounded-lg shadow-xl border border-gray-100 py-1 text-left">
                         <button onClick={() => { router.push(`/admin/users/${u.id}`); }} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Manage user</button>
+                        <button onClick={() => { setEditUser(u); setMenuFor(null); }} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Edit details…</button>
                         <button onClick={() => { setWizardUser(u); setMenuFor(null); }} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Add permissions…</button>
+                        <button
+                          onClick={async () => {
+                            setMenuFor(null);
+                            if (!window.confirm(`Reset ${fullName(u)}'s password? They will be signed out and must use a new temporary password.`)) return;
+                            try { const r = await api.users.resetPassword(u.id); setResetResult(r); }
+                            catch (e) { alert(e instanceof Error ? e.message : 'Could not reset password'); }
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
+                        >
+                          Reset password…
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const next = u.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+                            setMenuFor(null);
+                            try { await api.users.update(u.id, { status: next }); qc.invalidateQueries({ queryKey: ['users', orgId] }); }
+                            catch (e) { alert(e instanceof Error ? e.message : 'Could not update status'); }
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 text-amber-700"
+                        >
+                          {u.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
+                        </button>
                       </div>
                     </>
                   )}
@@ -176,7 +201,62 @@ function UsersTab({ orgId }: { orgId: string }) {
       </div>
       {showCreate && <CreateUserModal orgId={orgId} roles={roles} onClose={() => setShowCreate(false)} onDone={() => { qc.invalidateQueries({ queryKey: ['users', orgId] }); setShowCreate(false); }} />}
       {wizardUser && <AddPermissionsWizard orgId={orgId} user={wizardUser} onClose={() => setWizardUser(null)} onDone={() => qc.invalidateQueries({ queryKey: ['users', orgId] })} />}
+      {editUser && <EditUserModal user={editUser} onClose={() => setEditUser(null)} onDone={() => { qc.invalidateQueries({ queryKey: ['users', orgId] }); setEditUser(null); }} />}
+      {resetResult && (
+        <Modal title="Password reset" onClose={() => setResetResult(null)}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">Share this temporary password with <span className="font-medium">{resetResult.email}</span>. They&apos;ll be asked to set a new one on next sign-in. It won&apos;t be shown again.</p>
+            <div className="font-mono text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 select-all">{resetResult.tempPassword}</div>
+            <div className="flex justify-end"><button onClick={() => setResetResult(null)} className="px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700">Done</button></div>
+          </div>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+function EditUserModal({ user, onClose, onDone }: { user: UserSummary; onClose: () => void; onDone: () => void }) {
+  const [firstName, setFirstName] = useState(user.firstName);
+  const [lastName, setLastName] = useState(user.lastName ?? '');
+  const [designation, setDesignation] = useState(user.designation ?? '');
+  const [status, setStatus] = useState(user.status ?? 'ACTIVE');
+  const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!firstName.trim() || busy) return;
+    setBusy(true); setErr('');
+    try {
+      await api.users.update(user.id, { firstName: firstName.trim(), lastName: lastName.trim() || undefined, designation: designation.trim() || undefined, status });
+      onDone();
+    } catch (e) { setErr(e instanceof Error ? e.message : 'Could not save'); setBusy(false); }
+  }
+
+  return (
+    <Modal title="Edit user" onClose={onClose}>
+      <div className="space-y-3">
+        {err && <p className="text-sm text-red-600">{err}</p>}
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-sm">First name
+            <input value={firstName} onChange={e => setFirstName(e.target.value)} className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+          </label>
+          <label className="text-sm">Last name
+            <input value={lastName} onChange={e => setLastName(e.target.value)} className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+          </label>
+        </div>
+        <label className="text-sm block">Designation
+          <input value={designation} onChange={e => setDesignation(e.target.value)} className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+        </label>
+        <label className="text-sm block">Status
+          <select value={status} onChange={e => setStatus(e.target.value)} className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            {['ACTIVE', 'INACTIVE', 'SUSPENDED'].map(s => <option key={s} value={s}>{s[0] + s.slice(1).toLowerCase()}</option>)}
+          </select>
+        </label>
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+          <button onClick={submit} disabled={busy} className="px-4 py-2 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

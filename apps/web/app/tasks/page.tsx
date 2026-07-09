@@ -80,10 +80,13 @@ export default function TasksPage() {
   async function changeStatus(task: ApiTask, statusId: string) {
     if (statusId === task.currentWorkflowStatusId) return;
     const status = statuses.find(s => s.id === statusId);
+    // Match the server: only reopening a CLOSED task drops it to 0%. Keying the
+    // reset on the prior status (not `>= 100`) preserves a 100%-but-open task.
+    const wasClosed = task.currentStatus?.type === CLOSED_TYPE;
     patchTask(task.id, {
       currentWorkflowStatusId: statusId,
       currentStatus: status ?? task.currentStatus,
-      completionPercentage: status?.type === CLOSED_TYPE ? 100 : (task.completionPercentage >= 100 ? 0 : task.completionPercentage),
+      completionPercentage: status?.type === CLOSED_TYPE ? 100 : (wasClosed ? 0 : task.completionPercentage),
     });
     try {
       await api.tasks.setStatus(task.id, statusId);

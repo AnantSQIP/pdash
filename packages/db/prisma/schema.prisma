@@ -23,12 +23,14 @@ datasource db {
 // ═══════════════════════════════════════════════════════════════
 
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  code      String   @unique
-  status    String   @default("ACTIVE")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  name       String
+  code       String   @unique
+  status     String   @default("ACTIVE")
+  timezone   String   @default("UTC")     // M25: persisted Settings → General
+  brandColor String   @default("#3d8de2")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   users            User[]
   departments      Department[]
@@ -239,6 +241,9 @@ model Role {
   rolePermissions RolePermission[]
 
   @@index([organizationId])
+  // #3: role names must be unique per org (the resolver + UI key on name; duplicates
+  // silently collapse and mis-assign). Also underpins detecting Super Admin by name.
+  @@unique([organizationId, name])
   @@map("role")
 }
 
@@ -521,6 +526,10 @@ model Task {
   taskDocuments TaskDocument[]
 
   @@index([deletedAt])
+  // M14: index the columns the performance/report queries filter & sort on.
+  @@index([updatedAt])
+  @@index([dueDate])
+  @@index([currentWorkflowStatusId])
   @@map("task")
 }
 
@@ -881,6 +890,9 @@ model DocumentVersion {
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
+  // L16: a document can't have two rows for the same version number; index lookups by document.
+  @@unique([documentId, versionNumber])
+  @@index([documentId])
   @@map("document_version")
 }
 

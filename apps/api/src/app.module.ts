@@ -1,5 +1,5 @@
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
@@ -8,6 +8,7 @@ import { PermissionsModule } from './modules/permissions/permissions.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthGuard } from './common/guards/auth.guard';
 import { PermissionGuard } from './common/guards/permission.guard';
+import { AllExceptionsFilter } from './common/filters/prisma-exception.filter';
 import { CurrentActorMiddleware } from './common/middleware/current-actor.middleware';
 import { HealthModule } from './modules/health/health.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
@@ -70,6 +71,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     NotificationsModule,
   ],
   providers: [
+    // 0) Global error mapping: Prisma/unknown errors → correct HTTP status (not 500).
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // 1) Global authentication (deny-by-default; @Public() opts out).
     { provide: APP_GUARD, useClass: AuthGuard },
     // 2) Global, opt-in authorization (enforces only where @RequirePermission is set).

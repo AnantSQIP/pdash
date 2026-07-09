@@ -2,7 +2,7 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Injectable, Module, NotFoundException,
   Param, Patch, Post, Put, Query,
 } from '@nestjs/common';
-import { IsArray, IsIn, IsOptional, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Prisma } from '@pdash/db';
 import { hash as argonHash } from '@node-rs/argon2';
@@ -28,7 +28,7 @@ class CreateUserDto {
   @IsString() organizationId!: string;
   @IsString() @MinLength(1) @MaxLength(60) firstName!: string;
   @IsOptional() @IsString() @MaxLength(60) lastName?: string;
-  @IsString() @MinLength(3) @MaxLength(160) email!: string;
+  @IsEmail() @MaxLength(160) email!: string;
   @IsOptional() @IsString() designation?: string;
   @IsOptional() @IsString() phone?: string;
   // Optional admin-set initial password; if omitted a temp one is generated.
@@ -114,9 +114,11 @@ export class UsersService {
     }
   }
 
-  list(organizationId: string) {
+  list(organizationId: string, opts?: { includeInactive?: boolean }) {
+    // #4: admin can opt into inactive/suspended users so they remain manageable
+    // (default stays ACTIVE-only for the rest of the app).
     return this.prisma.user.findMany({
-      where: { organizationId, status: 'ACTIVE', deletedAt: null },
+      where: { organizationId, deletedAt: null, ...(opts?.includeInactive ? {} : { status: 'ACTIVE' }) },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
       select: {
         id: true, organizationId: true, employeeCode: true, firstName: true, lastName: true,
@@ -200,6 +202,32 @@ export class UsersService {
     return user;
   }
 
+  /**
+   * M30: admin resets another user's password to a fresh generated temp one, forces a
+   * reset on next sign-in, and bumps securityVersion (invalidating that user's existing
+   * access tokens). Returns the temp password ONCE so the admin can share it.
+   */
+  async resetPassword(id: string) {
+    const target = await this.prisma.user.findFirst({ where: { id, deletedAt: null }, select: { id: true, email: true } });
+    if (!target) throw new NotFoundException(`User ${id} not found`);
+    const tempPassword = generateTempPassword();
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash: await argonHash(tempPassword),
+        mustResetPassword: true,
+        passwordChangedAt: new Date(),
+        securityVersion: { increment: 1 },
+      },
+    });
+    await this.events.emit({ action: EVENTS.USER_UPDATED, entityType: 'User', entityId: id, metadata: { op: 'password-reset' } });
+    await this.notifications.notify(id, {
+      type: 'account.updated', title: 'Password reset',
+      message: 'An administrator reset your password. Use the temporary password you were given to sign in.',
+    });
+    return { email: target.email, tempPassword };
+  }
+
   async setRoles(id: string, roleIds: string[]) {
     await this.get(id);
     await this.assertActorMayGrant(id, { roleIds });
@@ -274,7 +302,9 @@ class UsersController {
 
   // Read endpoints stay open — the app resolves the current user from the user list.
   @Get()
-  list(@Query('organizationId') organizationId: string) { return this.service.list(organizationId); }
+  list(@Query('organizationId') organizationId: string, @Query('includeInactive') includeInactive?: string) {
+    return this.service.list(organizationId, { includeInactive: includeInactive === 'true' });
+  }
 
   @Get(':id')
   get(@Param('id') id: string) { return this.service.get(id); }
@@ -284,6 +314,9 @@ class UsersController {
 
   @Patch(':id') @RequirePermission('user.update')
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) { return this.service.update(id, dto); }
+
+  @Post(':id/reset-password') @RequirePermission('user.manage_access')
+  resetPassword(@Param('id') id: string) { return this.service.resetPassword(id); }
 
   @Put(':id/roles') @RequirePermission('user.manage_access')
   setRoles(@Param('id') id: string, @Body() dto: SetRolesDto) { return this.service.setRoles(id, dto.roleIds); }

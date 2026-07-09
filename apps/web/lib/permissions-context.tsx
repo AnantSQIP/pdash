@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useMemo, ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type EffectivePermissions } from './api';
 import { useOrg } from './org-context';
 
@@ -32,6 +32,12 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     queryFn: () => api.me.effectivePermissions(),
     enabled: !!currentUser?.id,
     staleTime: 60_000,
+    // Resilience: a transient failure of this request must NOT collapse the whole
+    // app to "no access". Retry, and keep the last-known-good permissions across a
+    // failed refetch rather than falling back to an empty (deny-everything) set.
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+    placeholderData: keepPreviousData,
   });
 
   // Memoize the context value so consumers (Sidebar, every <Can>, every page) don't

@@ -372,9 +372,18 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
   async function submit() {
     if (busy || !form.leaveType || !form.startDate || !form.endDate) return;
     setBusy(true);
-    try { await api.leave.create(form); setShowForm(false); setForm({ leaveType: '', startDate: '', endDate: '', reason: '' }); onChanged(); } finally { setBusy(false); }
+    // M32: surface backend rejections (overlap / past dates / no working days) instead
+    // of silently doing nothing.
+    try { await api.leave.create(form); setShowForm(false); setForm({ leaveType: '', startDate: '', endDate: '', reason: '' }); onChanged(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the leave request.'); }
+    finally { setBusy(false); }
   }
-  async function cancel(id: string) { setBusy(true); try { await api.leave.cancel(id); onChanged(); } finally { setBusy(false); } }
+  async function cancel(id: string) {
+    setBusy(true);
+    try { await api.leave.cancel(id); onChanged(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel the request.'); }
+    finally { setBusy(false); }
+  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -448,7 +457,9 @@ function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendan
   const [busyId, setBusyId] = useState('');
   async function review(id: string, action: 'approve' | 'reject') {
     setBusyId(id);
-    try { await (action === 'approve' ? api.leave.approve(id) : api.leave.reject(id)); onReviewed(); } finally { setBusyId(''); }
+    try { await (action === 'approve' ? api.leave.approve(id) : api.leave.reject(id)); onReviewed(); }
+    catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
+    finally { setBusyId(''); }
   }
   const rows = orgSummary?.rows ?? [];
 

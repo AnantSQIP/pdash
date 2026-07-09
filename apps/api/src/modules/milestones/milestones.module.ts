@@ -114,17 +114,20 @@ export class MilestonesService {
         ownerId: dto.ownerId,
         startDate: dto.startDate ? new Date(dto.startDate) : undefined,
         endDate: dto.endDate ? new Date(dto.endDate) : undefined,
-        completionPercentage: dto.completionPercentage,
+        // M24: completionPercentage is derived from task rollup (single writer) — ignore client value.
       },
     });
   }
 
   async softDelete(projectId: string, id: string) {
     const milestone = await this.get(projectId, id);
-    return this.prisma.milestone.update({
-      where: { id: milestone.id },
-      data: { deletedAt: new Date() },
-    });
+    // L2: detach ProjectTask rows first (parity with the hard-delete SetNull) so a
+    // soft-deleted milestone doesn't leave join rows pointing at it.
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.projectTask.updateMany({ where: { milestoneId: milestone.id }, data: { milestoneId: null } }),
+      this.prisma.milestone.update({ where: { id: milestone.id }, data: { deletedAt: new Date() } }),
+    ]);
+    return updated;
   }
 
   /** All tasks under a milestone (via ProjectTask join). */

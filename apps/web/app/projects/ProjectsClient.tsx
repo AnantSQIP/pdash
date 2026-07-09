@@ -9,6 +9,7 @@ import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { PHASE_META, PRIORITY_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { api, type ApiProject } from '@/lib/api';
 
 type ViewMode = 'grid' | 'list';
@@ -39,7 +40,8 @@ const AVATAR_COLORS = [
 
 function toDisplay(p: ApiProject): MockProject {
   const members = (p.members ?? []).map((m, i) => ({
-    initials: `${m.user.firstName[0]}${m.user.lastName[0]}`.toUpperCase(),
+    // Null-safe: a member with no lastName (or empty name) previously crashed on [0].
+    initials: (`${m.user.firstName?.[0] ?? ''}${m.user.lastName?.[0] ?? ''}`.toUpperCase() || '?'),
     color: AVATAR_COLORS[i % AVATAR_COLORS.length],
   }));
   return {
@@ -72,6 +74,7 @@ function StatPill({
 
 export function ProjectsClient() {
   const { org, currentUser, loading: orgLoading } = useOrg();
+  const { can } = usePermissions();
   const qc = useQueryClient();
 
   const [view, setView] = useState<ViewMode>('grid');
@@ -131,13 +134,15 @@ export function ProjectsClient() {
               <List size={15} />
             </button>
           </div>
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
-          >
-            <Plus size={15} />
-            New Project
-          </button>
+          {can('project.create') && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
+            >
+              <Plus size={15} />
+              New Project
+            </button>
+          )}
         </div>
       </header>
 

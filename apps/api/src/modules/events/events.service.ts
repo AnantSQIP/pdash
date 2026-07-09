@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { PermissionService } from '../permissions/permission.service';
 import { getActorId } from '../../common/context/request-context';
 import { CreateEventDto, UpdateEventDto } from './dto';
 
@@ -9,7 +10,17 @@ export class EventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly permissions: PermissionService,
   ) {}
+
+  /** Only the organizer (createdBy) or a Super Admin may modify/delete an event. */
+  private async assertOrganizerOrPrivileged(createdBy: string) {
+    const actorId = getActorId();
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    if (actorId === createdBy) return;
+    const perms = await this.permissions.getEffectivePermissions(actorId);
+    if (!perms.isSuperAdmin) throw new ForbiddenException('Only the organizer can modify this event.');
+  }
 
   private formatWhen(d: Date, allDay?: boolean) {
     return allDay
@@ -72,7 +83,8 @@ export class EventsService {
   }
 
   async update(id: string, dto: UpdateEventDto) {
-    await this.get(id);
+    const existing = await this.get(id);
+    await this.assertOrganizerOrPrivileged(existing.createdBy);
     const event = await this.prisma.calendarEvent.update({
       where: { id },
       data: {
@@ -95,7 +107,8 @@ export class EventsService {
   }
 
   async softDelete(id: string) {
-    await this.get(id);
+    const existing = await this.get(id);
+    await this.assertOrganizerOrPrivileged(existing.createdBy);
     return this.prisma.calendarEvent.update({
       where: { id },
       data: { deletedAt: new Date() },

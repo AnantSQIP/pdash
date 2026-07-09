@@ -37,10 +37,6 @@ export class TasksService {
       }
     }
 
-    const sequence = await this.prisma.projectTask.count({
-      where: { taskListId: dto.taskListId },
-    });
-
     // Resolve the task's home workflow up front. Previously left null, which made the
     // cross-workflow guard in setStatus() dead and forced clients to fall back to the
     // 'default' alias. Derive it from the chosen status, else the GLOBAL workflow.
@@ -80,6 +76,9 @@ export class TasksService {
         include: this.taskInclude(),
       });
 
+      // L19: compute the sequence INSIDE the transaction (was read from a count()
+      // outside it, so concurrent creates got the same sequence).
+      const sequence = await tx.projectTask.count({ where: { taskListId: dto.taskListId } });
       await tx.projectTask.create({
         data: {
           projectId: dto.projectId,
@@ -159,7 +158,7 @@ export class TasksService {
   }
 
   async update(id: string, dto: UpdateTaskDto) {
-    await this.get(id);
+    const before = await this.get(id);
     const updated = await this.prisma.task.update({
       where: { id },
       data: {
@@ -174,6 +173,13 @@ export class TasksService {
       include: this.taskInclude(),
     });
     if (dto.completionPercentage !== undefined) await this.recomputeForTask(id);
+    // M17: task edits now appear in the audit/activity/analytics feed.
+    await this.events.emit({
+      action: EVENTS.TASK_UPDATED,
+      entityType: 'TASK',
+      entityId: id,
+      metadata: { projectId: (before as any).projectTasks?.[0]?.projectId, title: updated.title },
+    });
     return updated;
   }
 
@@ -193,16 +199,18 @@ export class TasksService {
       throw new BadRequestException(`Status ${dto.statusId} does not belong to this task's workflow`);
     }
 
+    // Key the reset on the PRIOR status, not the percentage value: only reopening a
+    // CLOSED task drops it to 0%. Previously any move to a non-CLOSED status wiped a
+    // 100%-but-open task to 0% (e.g. Open@100% → In Progress lost the 100%).
+    const wasClosed = (task as any).currentStatus?.type === 'CLOSED';
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.task.update({
         where: { id },
         data: {
           currentWorkflowStatusId: status.id,
-          // CLOSED ⇒ 100%. Moving back OUT of done resets a 100% to 0% (it's no longer
-          // complete) while preserving any manual partial progress (e.g. 50% stays 50%).
           completionPercentage: status.type === 'CLOSED'
             ? 100
-            : (task.completionPercentage >= 100 ? 0 : task.completionPercentage),
+            : (wasClosed ? 0 : task.completionPercentage),
         },
         include: this.taskInclude(),
       });
@@ -222,7 +230,7 @@ export class TasksService {
       action: EVENTS.TASK_STATUS_CHANGED,
       entityType: 'TASK',
       entityId: id,
-      oldValue: { status: (task as any).currentStatus?.name ?? null },
+      oldValue: { status: (task as any).currentStatus?.name ?? null, type: (task as any).currentStatus?.type ?? null },
       newValue: { status: status.name, type: status.type },
       metadata: { projectId, title: task.title },
     });
@@ -246,6 +254,12 @@ export class TasksService {
       type: 'task.assigned',
       title: 'New task assigned',
       message: `You were assigned to "${before.title}".`,
+    });
+    await this.events.emit({
+      action: EVENTS.TASK_ASSIGNED,
+      entityType: 'TASK',
+      entityId: id,
+      metadata: { projectId: (before as any).projectTasks?.[0]?.projectId, title: before.title, added },
     });
     return this.get(id);
   }
@@ -313,7 +327,7 @@ export class TasksService {
 
   async createSubtask(taskId: string, dto: CreateSubtaskDto) {
     await this.get(taskId);
-    return this.prisma.subtask.create({
+    const subtask = await this.prisma.subtask.create({
       data: {
         taskId,
         title: dto.title,
@@ -326,6 +340,13 @@ export class TasksService {
       },
       include: { assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } } },
     });
+    await this.events.emit({
+      action: EVENTS.SUBTASK_CREATED,
+      entityType: 'SUBTASK',
+      entityId: subtask.id,
+      metadata: { taskId, title: subtask.title },
+    });
+    return subtask;
   }
 
   listSubtasks(taskId: string) {
@@ -340,6 +361,13 @@ export class TasksService {
     const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
     if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'CLOSED' } });
+  }
+
+  /** Reopen a closed subtask (there was previously no way back once closed / after a parent-close cascade). */
+  async reopenSubtask(subtaskId: string) {
+    const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
+    if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
+    return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'OPEN' } });
   }
 
   async softDeleteSubtask(subtaskId: string) {

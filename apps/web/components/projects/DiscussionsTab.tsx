@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, Send, Trash2 } from 'lucide-react';
 import { api, ApiComment } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 
@@ -60,6 +61,7 @@ function CommentRow({
 
 export default function DiscussionsTab({ projectId }: { projectId: string }) {
   const { currentUser } = useOrg();
+  const { can } = usePermissions();
   const queryClient = useQueryClient();
 
   const queryKey = ['comments', 'PROJECT', projectId] as const;
@@ -149,7 +151,7 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
             <CommentRow
               key={comment.id}
               comment={comment}
-              canDelete={!!currentUser && comment.userId === currentUser.id}
+              canDelete={!!currentUser && comment.userId === currentUser.id && can('comment.delete')}
               deleting={deletingId === comment.id}
               onDelete={handleDelete}
             />

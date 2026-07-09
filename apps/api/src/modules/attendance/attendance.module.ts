@@ -12,6 +12,17 @@ function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
 function utcDay(d: Date): Date { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
 function parseDay(s: string): Date { return new Date(`${s}T00:00:00.000Z`); }
 function round(n: number, p = 1): number { const f = 10 ** p; return Math.round((n ?? 0) * f) / f; }
+/**
+ * Parse a manual check-in/out timestamp unambiguously. An offset-less string
+ * (e.g. a datetime-local input "2026-07-09T09:00") is interpreted as UTC rather
+ * than the server's local timezone, so stored regularized times don't shift by
+ * the host's offset. Strings that already carry Z or an offset are used as-is.
+ */
+function parseInstant(s?: string | null): Date | null {
+  if (!s) return null;
+  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s.trim());
+  return new Date(hasTz ? s : `${s}Z`);
+}
 
 const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
 
@@ -43,6 +54,25 @@ export class AttendanceService {
     const existing = await this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
 
     if (!existing || !existing.checkIn) {
+      // M1: never silently overwrite an approved-leave or holiday day.
+      if (existing && (existing.status === 'ON_LEAVE' || existing.status === 'HOLIDAY')) {
+        const label = existing.status === 'ON_LEAVE' ? 'on approved leave' : 'a holiday';
+        throw new BadRequestException(`Today is marked ${label}. Cancel the leave or ask an admin to adjust it before clocking in.`);
+      }
+      // M2: overnight shift — a shift opened on a PRIOR day and still open is closed
+      // by this punch (clock-out across the UTC midnight boundary), instead of
+      // opening a brand-new shift and orphaning yesterday's. Bounded to <24h so a
+      // long-forgotten open row isn't closed with a huge total.
+      if (!existing) {
+        const openPrior = await this.prisma.attendance.findFirst({
+          where: { userId, checkIn: { not: null }, checkOut: null, date: { lt: today } },
+          orderBy: { date: 'desc' },
+        });
+        if (openPrior?.checkIn && now.getTime() - openPrior.checkIn.getTime() < 24 * 3_600_000) {
+          const totalHours = round((now.getTime() - openPrior.checkIn.getTime()) / 3_600_000, 2);
+          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: now, totalHours } });
+        }
+      }
       const organizationId = await this.orgOf(userId);
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
@@ -94,8 +124,8 @@ export class AttendanceService {
     if (!REG_ALLOWED.includes(status)) throw new BadRequestException(`status must be one of: ${REG_ALLOWED.join(', ')}`);
     const date = parseDay(data.date.slice(0, 10));
     if (date > utcDay(new Date())) throw new BadRequestException('Cannot regularise a future date');
-    const checkIn = data.checkIn ? new Date(data.checkIn) : null;
-    const checkOut = data.checkOut ? new Date(data.checkOut) : null;
+    const checkIn = parseInstant(data.checkIn);
+    const checkOut = parseInstant(data.checkOut);
     if (checkIn && checkOut && checkOut <= checkIn) throw new BadRequestException('Check-out must be after check-in');
     const totalHours = checkIn && checkOut ? round((checkOut.getTime() - checkIn.getTime()) / 3_600_000, 2) : undefined;
     const organizationId = await this.orgOf(userId);
@@ -165,9 +195,12 @@ export class AttendanceService {
     const count = (s: string) => days.filter(d => d.status === s).length;
     const present = count('PRESENT') + count('HALF_DAY');
     const workingDays = days.filter(d => WORKING.includes(d.status)).length;
+    // Approved leave must NOT count against attendance rate (it isn't an expected
+    // working day). Denominator = working days minus approved-leave days.
+    const expectedDays = workingDays - count('ON_LEAVE');
     const summary = {
       present, absent: count('ABSENT'), onLeave: count('ON_LEAVE'), holiday: count('HOLIDAY'),
-      weekend: count('WEEKEND'), workingDays, attendanceRate: workingDays ? Math.round((present / workingDays) * 100) : 0,
+      weekend: count('WEEKEND'), workingDays, attendanceRate: expectedDays > 0 ? Math.round((present / expectedDays) * 100) : 0,
       hoursLogged: round(days.reduce((s, d) => s + (d.totalHours ?? 0), 0)),
     };
     return { userId, year, month, days, summary };
@@ -279,6 +312,13 @@ export class LeaveService {
     const start = parseDay(dto.startDate.slice(0, 10));
     const end = parseDay(dto.endDate.slice(0, 10));
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
+    // M4: reject leave that is entirely in the past (approval would retroactively debit balance).
+    if (end < utcDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
+    // M3: reject a request overlapping an existing pending/approved one (double-debits balance).
+    const clash = await this.prisma.leaveRequest.findFirst({
+      where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
+    });
+    if (clash) throw new BadRequestException('You already have a leave request overlapping these dates.');
     const organizationId = await this.orgOf(userId);
     // Count business days only — weekends and holidays do not consume leave balance.
     const numDays = (await this.businessDays(organizationId, start, end)).length;
@@ -305,6 +345,26 @@ export class LeaveService {
       where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
       include: { user: this.userSelect },
     });
+
+    // M6: surface approved leave on the shared Calendar (it previously only wrote
+    // ON_LEAVE attendance rows, which the calendar never reads).
+    if (req.organizationId) {
+      const u = (updated as any).user;
+      const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'Employee';
+      await this.prisma.calendarEvent.create({
+        data: {
+          organizationId: req.organizationId,
+          title: `${name} — ${req.leaveType} leave`,
+          type: 'LEAVE',
+          startDate: req.startDate,
+          endDate: req.endDate,
+          allDay: true,
+          color: '#fe841f',
+          createdBy: req.userId,
+        },
+      });
+    }
+
     await this.notifications.notify(req.userId, {
       type: 'leave.approved',
       title: 'Leave approved',
@@ -416,7 +476,10 @@ class AttendanceController {
     return this.svc.regularizeDay(actorId, body);
   }
 
-  @Post(':id/regularize')
+  // Regularising an ARBITRARY attendance row (by id) is a privileged action —
+  // gate it so an Employee can't rewrite anyone's attendance (IDOR). Self-service
+  // corrections go through the `me/regularize` route above.
+  @Post(':id/regularize') @RequirePermission('attendance.regularize')
   regularize(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { reason: string; newStatus?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.regularize(id, actorId, body.reason, body.newStatus);

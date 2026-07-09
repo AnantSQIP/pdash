@@ -58,7 +58,7 @@ async function req<T>(path: string, init?: RequestInit, retried = false): Promis
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type OrgSummary = { id: string; name: string; code: string; status: string };
+export type OrgSummary = { id: string; name: string; code: string; status: string; timezone?: string; brandColor?: string };
 
 export type UserSummary = {
   id: string; firstName: string; lastName: string; email: string;
@@ -71,7 +71,9 @@ export type AuthUser = {
 };
 
 export type WorkflowStatus = {
-  id: string; name: string; colorHex: string; sequence: number; type: string;
+  // L23: sequence/type are not always sent (e.g. the project-list currentStatus
+  // projection omits them), so they are optional to match reality.
+  id: string; name: string; colorHex: string; sequence?: number; type?: string;
 };
 
 // The assignee projection the API actually returns (see tasks.service taskInclude):
@@ -99,6 +101,11 @@ export type ApiTask = {
   _count?: { subtasks: number; checklists?: number };
 };
 
+export type Milestone = {
+  id: string; name: string; description?: string; ownerId?: string;
+  completionPercentage: number; startDate?: string; endDate?: string; sequence: number;
+};
+
 export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
   priority: string; startDate?: string; dueDate?: string;
@@ -107,6 +114,7 @@ export type ApiProject = {
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
   taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
+  milestones?: Milestone[];
   _count?: { members: number; projectTasks: number };
 };
 
@@ -254,7 +262,11 @@ export type OrgTrend = {
   byDepartment: Record<string, number | string>[];
   departments: string[];
 };
-export type DepartmentSummary = { id: string; name: string; description?: string; memberCount?: number };
+export type DepartmentSummary = {
+  id: string; name: string; description?: string; status?: string; memberCount?: number;
+  members?: (UserSummary & { roleInDepartment?: string })[];
+  head?: UserSummary | null;
+};
 
 // ─── Attendance & Leave types ────────────────────────────────────────────────
 export type Attendance = {
@@ -299,12 +311,13 @@ export const api = {
 
   orgs: {
     list: () => req<OrgSummary[]>('/organizations'),
-    update: (id: string, data: { name?: string }) =>
+    update: (id: string, data: { name?: string; timezone?: string; brandColor?: string }) =>
       req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 
   users: {
-    list: (orgId: string) => req<UserSummary[]>(`/users?organizationId=${encodeURIComponent(orgId)}`),
+    list: (orgId: string, includeInactive?: boolean) =>
+      req<UserSummary[]>(`/users?organizationId=${encodeURIComponent(orgId)}${includeInactive ? '&includeInactive=true' : ''}`),
     create: (data: { organizationId: string; firstName: string; lastName?: string; email: string; designation?: string; phone?: string; password?: string; roleIds?: string[] }) =>
       req<UserSummary & { tempPassword: string }>('/users', { method: 'POST', body: JSON.stringify(data) }),
     setRoles: (id: string, roleIds: string[]) =>
@@ -318,6 +331,8 @@ export const api = {
     setMyPhoto: (profilePhoto: string | null) =>
       req<{ ok: boolean }>('/users/me/photo', { method: 'PUT', body: JSON.stringify({ profilePhoto: profilePhoto ?? '' }) }),
     get: (id: string) => req<UserSummary>(`/users/${id}`),
+    resetPassword: (id: string) =>
+      req<{ email: string; tempPassword: string }>(`/users/${id}/reset-password`, { method: 'POST' }),
     update: (id: string, data: Partial<Pick<UserSummary, 'firstName' | 'lastName' | 'designation' | 'status'>>) =>
       req<UserSummary>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
@@ -339,10 +354,28 @@ export const api = {
       req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
     reject: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+    addMember: (id: string, userId: string, projectRole?: string) =>
+      req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
+    removeMember: (id: string, userId: string) =>
+      req<ApiProject>(`/projects/${id}/members/${userId}`, { method: 'DELETE' }),
   },
 
   taskLists: {
     list: (projectId: string) => req<any[]>(`/projects/${projectId}/tasklists`),
+    create: (projectId: string, data: { name: string }) =>
+      req<any>(`/projects/${projectId}/tasklists`, { method: 'POST', body: JSON.stringify(data) }),
+    remove: (projectId: string, id: string) =>
+      req<void>(`/projects/${projectId}/tasklists/${id}`, { method: 'DELETE' }),
+  },
+
+  milestones: {
+    list: (projectId: string) => req<Milestone[]>(`/projects/${projectId}/milestones`),
+    create: (projectId: string, data: { name: string; description?: string; startDate?: string; endDate?: string }) =>
+      req<Milestone>(`/projects/${projectId}/milestones`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (projectId: string, id: string, data: Partial<Pick<Milestone, 'name' | 'description' | 'startDate' | 'endDate'>>) =>
+      req<Milestone>(`/projects/${projectId}/milestones/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (projectId: string, id: string) =>
+      req<void>(`/projects/${projectId}/milestones/${id}`, { method: 'DELETE' }),
   },
 
   tasks: {
@@ -372,6 +405,8 @@ export const api = {
     listSubtasks: (taskId: string) => req<Subtask[]>(`/tasks/${taskId}/subtasks`),
     closeSubtask: (taskId: string, subtaskId: string) =>
       req<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}/close`, { method: 'POST' }),
+    reopenSubtask: (taskId: string, subtaskId: string) =>
+      req<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}/reopen`, { method: 'POST' }),
     deleteSubtask: (taskId: string, subtaskId: string) =>
       req<void>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' }),
   },

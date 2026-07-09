@@ -27,6 +27,16 @@ export class ProjectsController {
     return this.projects.update(id, dto);
   }
 
+  @Post(':id/members') @RequirePermission('project.update')
+  addMember(@Param('id') id: string, @Body() body: { userId: string; projectRole?: string }) {
+    return this.projects.addMember(id, body.userId, body.projectRole);
+  }
+
+  @Delete(':id/members/:userId') @RequirePermission('project.update')
+  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
+    return this.projects.removeMember(id, userId);
+  }
+
   @Post(':id/approve') @RequirePermission('project.approve')
   approve(@Param('id') id: string, @Body() dto: ApprovalDto) {
     return this.projects.decide(id, true, dto);

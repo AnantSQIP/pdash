@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
+import { NotificationsService } from '../notifications/notifications.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { getActorId } from '../../common/context/request-context';
@@ -29,7 +30,22 @@ export class CommentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventService,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Who to notify about a new comment: task assignees, or an issue's assignee + reporter. */
+  private async commentRecipients(entityType: string, entityId: string): Promise<string[]> {
+    const ids = new Set<string>();
+    if (entityType === 'TASK') {
+      const task = await this.prisma.task.findUnique({ where: { id: entityId }, select: { assignees: { select: { userId: true } } } });
+      task?.assignees.forEach(a => ids.add(a.userId));
+    } else if (entityType === 'ISSUE') {
+      const issue = await this.prisma.issue.findUnique({ where: { id: entityId }, select: { assigneeId: true, reportedBy: true } });
+      if (issue?.assigneeId) ids.add(issue.assigneeId);
+      if (issue?.reportedBy) ids.add(issue.reportedBy);
+    }
+    return [...ids];
+  }
 
   list(entityType: string, entityId: string) {
     return this.prisma.comment.findMany({
@@ -65,6 +81,16 @@ export class CommentsService {
         snippet: dto.content.slice(0, 140),
       },
     });
+    // M13: notify the entity's participants (previously posting a comment notified no one).
+    const recipients = (await this.commentRecipients(dto.entityType, dto.entityId)).filter(uid => uid !== userId);
+    if (recipients.length) {
+      const who = `${comment.user.firstName} ${comment.user.lastName ?? ''}`.trim();
+      await this.notifications.notify(recipients, {
+        type: 'comment.created',
+        title: 'New comment',
+        message: `${who} commented: "${dto.content.slice(0, 100)}"`,
+      });
+    }
     return comment;
   }
 

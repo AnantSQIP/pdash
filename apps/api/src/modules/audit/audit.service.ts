@@ -31,16 +31,29 @@ export class AuditService {
   ) {}
 
   async listActivity(q: ActivityQuery) {
-    // Org-wide (unscoped) activity is sensitive — require audit.view. Project- or
-    // entity-scoped reads (the project Activity tab) stay open to authenticated users.
-    if (!q.projectId && !q.entityId) {
-      const actorId = getActorId();
-      const ok = actorId ? await this.permissions.check(actorId, 'audit.view') : false;
-      if (!ok) throw new ForbiddenException('audit.view is required to read org-wide activity.');
+    // Confidential RBAC/user activity must never be exposed to callers without
+    // audit.view — regardless of how they scope the query. Previously any
+    // entityId/entityType filter bypassed the org-wide gate, so an Employee could
+    // read role/permission history via ?entityId=<roleId>.
+    const SENSITIVE = ['Role', 'Permission', 'PermissionGroup', 'User', 'ROLE', 'PERMISSION', 'USER'];
+    const actorId = getActorId();
+    const hasAudit = actorId ? await this.permissions.check(actorId, 'audit.view') : false;
+
+    // Org-wide (unscoped) activity always requires audit.view.
+    if (!q.projectId && !q.entityId && !hasAudit) {
+      throw new ForbiddenException('audit.view is required to read org-wide activity.');
     }
+
     const where: Prisma.ActivityWhereInput = {};
     if (q.organizationId) where.organizationId = q.organizationId;
-    if (q.entityType) where.entityType = q.entityType;
+    if (q.entityType) {
+      if (!hasAudit && SENSITIVE.includes(q.entityType)) {
+        throw new ForbiddenException('audit.view is required to read this activity.');
+      }
+      where.entityType = q.entityType;
+    } else if (!hasAudit) {
+      where.entityType = { notIn: SENSITIVE };
+    }
     if (q.entityId) where.entityId = q.entityId;
     if (q.projectId) where.metadata = { path: ['projectId'], equals: q.projectId };
     return this.prisma.activity.findMany({

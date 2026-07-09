@@ -34,7 +34,7 @@ const PRIORITY_COLOR: Record<string, string> = {
 
 export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }: KanbanBoardProps) {
   const ready = !!(statuses && statuses.length); // real, movable statuses loaded?
-  const columns = ready ? [...statuses].sort((a, b) => a.sequence - b.sequence) : FALLBACK;
+  const columns = ready ? [...statuses].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)) : FALLBACK;
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
 
@@ -50,8 +50,14 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
 
   return (
     <div className="flex gap-3 lg:gap-4 h-full overflow-x-auto py-1 px-0.5 lg:px-1">
-      {columns.map(col => {
-        const colTasks = tasks.filter(t => (t.currentStatus?.id ?? '') === col.id || t.currentStatus?.name === col.name);
+      {columns.map((col, idx) => {
+        // L4: a task with no workflow status was invisible (matched no column). Surface
+        // such "unstarted" tasks in the first column instead of dropping them.
+        const colTasks = tasks.filter(t =>
+          t.currentStatus
+            ? ((t.currentStatus.id ?? '') === col.id || t.currentStatus.name === col.name)
+            : idx === 0,
+        );
         const isClosedCol = col.type === 'CLOSED';
 
         return (

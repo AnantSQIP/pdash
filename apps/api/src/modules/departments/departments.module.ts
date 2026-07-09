@@ -30,14 +30,27 @@ class AddDepartmentMemberDto {
 export class DepartmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(organizationId: string) {
-    return this.prisma.department.findMany({
+  async list(organizationId: string) {
+    // L22 + #5: return real members (for avatars) and a real head (the member whose
+    // roleInDepartment reads as head/lead/manager) — not a designation-string bucket
+    // with members[0] labelled "Head".
+    const rows = await this.prisma.department.findMany({
       where: { organizationId },
       orderBy: { name: 'asc' },
       include: {
         _count: { select: { members: true } },
+        members: {
+          orderBy: { joinedAt: 'asc' },
+          include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        },
       },
     });
+    return rows.map(({ _count, members, ...d }) => ({
+      ...d,
+      memberCount: _count.members,
+      members: members.map(m => ({ ...m.user, roleInDepartment: m.roleInDepartment })),
+      head: members.find(m => /head|lead|manager/i.test(m.roleInDepartment ?? ''))?.user ?? null,
+    }));
   }
 
   create(dto: CreateDepartmentDto) {

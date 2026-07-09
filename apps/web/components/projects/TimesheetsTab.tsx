@@ -32,6 +32,9 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ['timesheets', projectId] });
+    // L30: logging/deleting time recomputes Task.actualHours + project rollup server-side.
+    qc.invalidateQueries({ queryKey: ['tasks', projectId] });
+    qc.invalidateQueries({ queryKey: ['project', projectId] });
   }
 
   async function deleteEntry(id: string) {

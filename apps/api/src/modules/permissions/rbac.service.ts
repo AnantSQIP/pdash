@@ -1,18 +1,72 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
+import { PermissionService } from './permission.service';
 import { EVENTS } from '../../common/events/canonical-events';
+import { getActorId } from '../../common/context/request-context';
 import {
   CreateGroupDto, CreatePermissionDto, CreateRoleDto, SetMembersDto,
   SetPermissionsDto, UpdateGroupDto, UpdatePermissionDto, UpdateRoleDto,
 } from './dto';
+
+const SUPER_ADMIN_ROLE = 'Super Admin';
 
 @Injectable()
 export class RbacService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventService,
+    private readonly permissions: PermissionService,
   ) {}
+
+  // ── anti-privilege-escalation helpers ───────────────────────────────────────
+  // The RBAC setters below rewrite role/group permissions and membership from
+  // caller-supplied ids. Without these checks a non-Super-Admin holding
+  // role.update / group.update / group.manage_members could grant a role/group a
+  // permission they do not themselves hold (e.g. role.delete), rename a role to
+  // the reserved "Super Admin" (which the resolver treats as all-powerful), or
+  // add themselves to a more-privileged group — i.e. escalate. Super Admins bypass.
+  private async actorPerms() {
+    const actorId = getActorId();
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    return { actorId, perms: await this.permissions.getEffectivePermissions(actorId) };
+  }
+
+  /** A non-Super-Admin may only grant permission codes they themselves hold. */
+  private async assertMayGrantPermissionIds(permissionIds: string[]) {
+    const { perms } = await this.actorPerms();
+    if (perms.isSuperAdmin || !permissionIds.length) return;
+    const held = new Set(perms.codes);
+    const target = await this.prisma.permission.findMany({ where: { id: { in: permissionIds } }, select: { code: true } });
+    const exceeding = [...new Set(target.map(p => p.code).filter(c => !held.has(c)))];
+    if (exceeding.length) {
+      throw new ForbiddenException(`You cannot grant permissions you do not hold: ${exceeding.slice(0, 5).join(', ')}`);
+    }
+  }
+
+  /** Only a Super Admin may create/rename to — or edit — the reserved Super Admin role. */
+  private async assertMayMutateRole(current: { name: string } | null, nextName?: string) {
+    const { perms } = await this.actorPerms();
+    if (perms.isSuperAdmin) return;
+    if (current?.name === SUPER_ADMIN_ROLE) {
+      throw new ForbiddenException('Only a Super Admin may modify the Super Admin role.');
+    }
+    if (nextName === SUPER_ADMIN_ROLE) {
+      throw new ForbiddenException('Only a Super Admin may assign the reserved name "Super Admin".');
+    }
+  }
+
+  /** A non-Super-Admin may not manage membership of a group whose permissions exceed their own. */
+  private async assertMayManageGroupMembers(groupId: string) {
+    const { perms } = await this.actorPerms();
+    if (perms.isSuperAdmin) return;
+    const held = new Set(perms.codes);
+    const gp = await this.prisma.permissionGroupPermission.findMany({ where: { groupId }, select: { permission: { select: { code: true } } } });
+    const exceeding = [...new Set(gp.map(p => p.permission.code).filter(c => !held.has(c)))];
+    if (exceeding.length) {
+      throw new ForbiddenException(`You cannot manage membership of a group whose permissions exceed your own: ${exceeding.slice(0, 5).join(', ')}`);
+    }
+  }
 
   // ── Permission catalog ─────────────────────────────────────────────────────
   listPermissions() {
@@ -58,6 +112,8 @@ export class RbacService {
   }
 
   async createRole(dto: CreateRoleDto) {
+    await this.assertMayMutateRole(null, dto.name);
+    await this.assertMayGrantPermissionIds(dto.permissionIds ?? []);
     const role = await this.prisma.role.create({
       data: {
         organizationId: dto.organizationId,
@@ -73,7 +129,8 @@ export class RbacService {
   }
 
   async updateRole(id: string, dto: UpdateRoleDto) {
-    await this.mustRole(id);
+    const current = await this.mustRole(id);
+    await this.assertMayMutateRole(current, dto.name);
     const role = await this.prisma.role.update({ where: { id }, data: dto });
     await this.events.emit({ action: EVENTS.ROLE_UPDATED, entityType: 'Role', entityId: id, metadata: { name: role.name } });
     return role;
@@ -87,7 +144,9 @@ export class RbacService {
   }
 
   async setRolePermissions(id: string, dto: SetPermissionsDto) {
-    await this.mustRole(id);
+    const role = await this.mustRole(id);
+    await this.assertMayMutateRole(role);
+    await this.assertMayGrantPermissionIds(dto.permissionIds);
     await this.prisma.$transaction([
       this.prisma.rolePermission.deleteMany({ where: { roleId: id } }),
       this.prisma.rolePermission.createMany({
@@ -142,6 +201,8 @@ export class RbacService {
 
   async setGroupPermissions(id: string, dto: SetPermissionsDto) {
     await this.mustGroup(id);
+    await this.assertMayManageGroupMembers(id); // may not edit a group already above your authority
+    await this.assertMayGrantPermissionIds(dto.permissionIds);
     await this.prisma.$transaction([
       this.prisma.permissionGroupPermission.deleteMany({ where: { groupId: id } }),
       this.prisma.permissionGroupPermission.createMany({
@@ -155,6 +216,7 @@ export class RbacService {
 
   async setGroupMembers(id: string, dto: SetMembersDto) {
     await this.mustGroup(id);
+    await this.assertMayManageGroupMembers(id);
     await this.prisma.$transaction([
       this.prisma.permissionGroupMember.deleteMany({ where: { groupId: id } }),
       this.prisma.permissionGroupMember.createMany({

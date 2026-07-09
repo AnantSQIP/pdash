@@ -83,10 +83,14 @@ export class TaskListsService {
     if (list.isDefault) {
       throw new BadRequestException('The default "General" task list cannot be deleted.');
     }
-    return this.prisma.taskList.update({
-      where: { id },
-      data: { deletedAt: new Date() },
-    });
+    // L2: move this list's tasks onto the default list instead of orphaning the
+    // ProjectTask join rows (which pointed at a now-soft-deleted list).
+    const def = await this.prisma.taskList.findFirst({ where: { projectId, isDefault: true, deletedAt: null } });
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.projectTask.updateMany({ where: { taskListId: id }, data: { taskListId: def?.id ?? null } }),
+      this.prisma.taskList.update({ where: { id }, data: { deletedAt: new Date() } }),
+    ]);
+    return updated;
   }
 }
 

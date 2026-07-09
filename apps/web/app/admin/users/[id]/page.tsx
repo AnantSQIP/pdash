@@ -153,9 +153,9 @@ export default function UserDetailPage() {
 
       <div className="p-6">
         {tab === 'Permissions' && <PermissionsTab eff={eff} loading={effLoading} />}
-        {tab === 'Roles' && orgId && <RolesTab userId={id} orgId={orgId} eff={eff} />}
+        {tab === 'Roles' && orgId && <RolesTab userId={id} orgId={orgId} eff={eff} canManage={isSuperAdmin || can('user.manage_access')} />}
         {tab === 'Groups' && orgId && <GroupsTab orgId={orgId} eff={eff} />}
-        {tab === 'Overrides' && <OverridesTab userId={id} />}
+        {tab === 'Overrides' && <OverridesTab userId={id} canManage={isSuperAdmin || can('user.manage_access')} />}
         {tab === 'Activity' && orgId && <ActivityTab userId={id} orgId={orgId} />}
       </div>
     </div>
@@ -243,7 +243,7 @@ function PermissionsTab({ eff, loading }: { eff?: { isSuperAdmin: boolean; codes
 }
 
 // ── Roles ────────────────────────────────────────────────────────────────────
-function RolesTab({ userId, orgId, eff }: { userId: string; orgId: string; eff?: { roles?: string[]; sources: Record<string, string> } }) {
+function RolesTab({ userId, orgId, eff, canManage }: { userId: string; orgId: string; eff?: { roles?: string[]; sources: Record<string, string> }; canManage: boolean }) {
   const qc = useQueryClient();
   const { data: roles = [], isLoading } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 20_000 });
 
@@ -278,6 +278,7 @@ function RolesTab({ userId, orgId, eff }: { userId: string; orgId: string; eff?:
       setDraft(null);
       qc.invalidateQueries({ queryKey: ['eff', userId] });
       qc.invalidateQueries({ queryKey: ['roles', orgId] });
+      qc.invalidateQueries({ queryKey: ['effective-permissions'] }); // M34: refresh the live gate/sidebar
     } finally { setBusy(false); }
   }
 
@@ -287,7 +288,7 @@ function RolesTab({ userId, orgId, eff }: { userId: string; orgId: string; eff?:
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm text-gray-500">{currentRoleIds.length} of {roles.length} role{roles.length === 1 ? '' : 's'} assigned</p>
-        {dirty && (
+        {dirty && canManage && (
           <button disabled={busy} onClick={save} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
             <Check size={14} /> {busy ? 'Saving…' : 'Save roles'}
           </button>
@@ -358,7 +359,7 @@ function GroupsTab({ orgId, eff }: { orgId: string; eff?: { sources: Record<stri
 // ── Overrides (explicit Allow / Deny) ────────────────────────────────────────
 type Override = { permissionId: string; effect: 'ALLOW' | 'DENY' };
 
-function OverridesTab({ userId }: { userId: string }) {
+function OverridesTab({ userId, canManage }: { userId: string; canManage: boolean }) {
   const qc = useQueryClient();
   const { data: perms = [], isLoading } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 });
   // Preload the user's EXISTING overrides so Save (replace-semantics) doesn't wipe them.
@@ -398,6 +399,7 @@ function OverridesTab({ userId }: { userId: string }) {
       await api.users.setOverrides(userId, overrides.map(o => ({ permissionId: o.permissionId, effect: o.effect })));
       qc.invalidateQueries({ queryKey: ['eff', userId] });
       qc.invalidateQueries({ queryKey: ['overrides', userId] });
+      qc.invalidateQueries({ queryKey: ['effective-permissions'] }); // M34: refresh the live gate/sidebar
       setSaved(true);
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Failed to save overrides');
@@ -415,14 +417,16 @@ function OverridesTab({ userId }: { userId: string }) {
 
       <div className="flex items-center justify-between mb-3">
         <p className="text-sm text-gray-500">{overrides.length} override{overrides.length === 1 ? '' : 's'} staged</p>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setPicking(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
-            <Plus size={14} /> Add override
-          </button>
-          <button disabled={busy} onClick={save} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
-            <Check size={14} /> {busy ? 'Saving…' : 'Save overrides'}
-          </button>
-        </div>
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => setPicking(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">
+              <Plus size={14} /> Add override
+            </button>
+            <button disabled={busy} onClick={save} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              <Check size={14} /> {busy ? 'Saving…' : 'Save overrides'}
+            </button>
+          </div>
+        )}
       </div>
 
       {saved && <p className="text-xs text-green-600 mb-3">Overrides saved. Effective permissions updated.</p>}

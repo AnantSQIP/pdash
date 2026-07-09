@@ -6,6 +6,7 @@ import { Plus, Bug, X, Loader, Trash2, Edit3, Check } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Issue, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 
@@ -118,6 +119,7 @@ function AddIssueModal({ projectId, users, onClose, onSuccess }: {
 
 export default function IssuesTab({ projectId }: { projectId: string }) {
   const { users } = useOrg();
+  const { can } = usePermissions();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [statusFilter, setStatusFilter] = useState('All');
@@ -260,13 +262,17 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
                             <X size={12} />
                           </button>
                         </div>
-                      ) : (
+                      ) : can('issue.update') ? (
                         <button
                           onClick={() => setEditingStatusId(issue.id)}
                           className={clsx('text-xs px-2 py-0.5 rounded-full font-medium hover:opacity-80 transition-opacity', st.bg, st.text)}
                         >
                           {issue.status.replace('_', ' ')}
                         </button>
+                      ) : (
+                        <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', st.bg, st.text)}>
+                          {issue.status.replace('_', ' ')}
+                        </span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -293,13 +299,15 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
                       {issue.dueDate ? new Date(issue.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => deleteIssue(issue.id)}
-                        disabled={deletingId === issue.id}
-                        className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
-                      >
-                        {deletingId === issue.id ? <Loader size={13} className="animate-spin" /> : <Trash2 size={13} />}
-                      </button>
+                      {can('issue.delete') && (
+                        <button
+                          onClick={() => deleteIssue(issue.id)}
+                          disabled={deletingId === issue.id}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                        >
+                          {deletingId === issue.id ? <Loader size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

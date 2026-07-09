@@ -103,7 +103,9 @@ export class AnalyticsService {
         members: { some: { user: { organizationId } } },
       },
       include: {
-        _count: { select: { projectTasks: true, members: true } },
+        // L8: count only join rows whose task is not soft-deleted, so the reports
+        // "Tasks" column / CSV / PDF don't overcount archived tasks.
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: true } },
         currentStatus: { select: { name: true, colorHex: true } },
       },
       orderBy: { updatedAt: 'desc' },

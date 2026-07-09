@@ -52,6 +52,14 @@ export default function UsersPage() {
     placeholderData: keepPreviousData,
   });
 
+  // #5: real departments (with real members + head) — not designation-string buckets.
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments', org?.id],
+    queryFn: () => api.departments.list(org!.id),
+    enabled: !!org?.id,
+    staleTime: 60_000,
+  });
+
   // Count how many projects each user is a member of.
   const projectCount: Record<string, number> = {};
   for (const p of projects) {
@@ -67,12 +75,6 @@ export default function UsersPage() {
     u.email.toLowerCase().includes(search.toLowerCase()),
   );
 
-  // Group users by department for the Departments tab.
-  const byDept: Record<string, UserSummary[]> = {};
-  for (const u of users) {
-    const d = departmentOf(u.designation);
-    (byDept[d] ??= []).push(u);
-  }
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -176,30 +178,40 @@ export default function UsersPage() {
             </div>
           </div>
         ) : (
-          /* Departments Tab */
+          /* Departments Tab — real Department records + members */
+          departments.length === 0 ? (
+            <p className="text-sm text-gray-400 py-8 text-center">No departments have been set up yet.</p>
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {Object.entries(byDept).map(([dept, members]) => (
-              <div key={dept} className="bg-white rounded-xl border border-gray-200 p-5">
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <h3 className="font-semibold text-gray-900">{dept}</h3>
-                    <p className="text-xs text-gray-500 mt-0.5">{members.length} member{members.length !== 1 ? 's' : ''}</p>
+            {departments.map(dept => {
+              const members = dept.members ?? [];
+              return (
+                <div key={dept.id} className="bg-white rounded-xl border border-gray-200 p-5">
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{dept.name}</h3>
+                      <p className="text-xs text-gray-500 mt-0.5">{dept.memberCount ?? members.length} member{(dept.memberCount ?? members.length) !== 1 ? 's' : ''}</p>
+                    </div>
                   </div>
+                  <div className="flex -space-x-2 mb-3">
+                    {members.slice(0, 6).map(u => (
+                      <Avatar key={u.id} user={u} size={28} className="ring-2 ring-white" />
+                    ))}
+                    {members.length === 0 && <p className="text-xs text-gray-400">No members</p>}
+                  </div>
+                  {dept.head && (
+                    <p className="text-xs text-gray-500 mb-4">
+                      Head: <span className="font-medium text-gray-700">{fullName(dept.head)}</span>
+                    </p>
+                  )}
+                  <Link href="/admin" className="block text-center w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
+                    Manage in Admin →
+                  </Link>
                 </div>
-                <div className="flex -space-x-2 mb-3">
-                  {members.slice(0, 6).map(u => (
-                    <Avatar key={u.id} user={u} size={28} className="ring-2 ring-white" />
-                  ))}
-                </div>
-                <p className="text-xs text-gray-500 mb-4">
-                  Head: <span className="font-medium text-gray-700">{fullName(members[0])}</span>
-                </p>
-                <Link href="/admin" className="block text-center w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
-                  Manage in Admin →
-                </Link>
-              </div>
-            ))}
+              );
+            })}
           </div>
+          )
         )}
       </div>
     </div>

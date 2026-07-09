@@ -32,6 +32,21 @@ LOCK="$ROOT/.keep-alive.lock"
 log(){ echo "$(date '+%F %T') $*" >>"$LOG" 2>&1; }
 is_up(){ curl -sf -o /dev/null --max-time 5 "$1" 2>/dev/null; }
 
+# ── Production hardening (the public tunnel serves real users over HTTPS) ──────
+# The API keys ALL of its hardening off NODE_ENV==='production' (Secure cookies,
+# the validateEnv boot guard, and — critically — refusing the weak default JWT
+# secret). Left unset, the public site ran in development mode and signed tokens
+# with a guessable dev secret. We force production here, loading host secrets from
+# .env.production (git-ignored). SAFETY: if no strong secret is configured we stay
+# in development rather than boot-loop validateEnv and take the demo DOWN.
+export NODE_ENV=production
+if [ -f "$ROOT/.env.production" ]; then set -a; . "$ROOT/.env.production"; set +a; fi
+if [ -z "${JWT_ACCESS_SECRET:-}" ] || [ "${#JWT_ACCESS_SECRET}" -lt 32 ] \
+   || [ "${JWT_ACCESS_SECRET:-}" = "dev-access-secret-local-only-change-in-prod" ]; then
+  export NODE_ENV=development
+  log "WARN: production requested but JWT_ACCESS_SECRET is weak/unset — staying in development. Create $ROOT/.env.production with a strong (>=32 char) JWT_ACCESS_SECRET + CORS_ORIGINS to enable production hardening."
+fi
+
 # single instance
 exec 9>"$LOCK" || exit 0
 if ! flock -n 9; then
