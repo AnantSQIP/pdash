@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
 
 class UpdateOrgDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(120) name?: string;
@@ -20,9 +21,11 @@ export class OrganizationsController {
     return this.prisma.organization.findMany({ select: ORG_SELECT });
   }
 
-  // Update org general settings. Gated on user.manage_access (org admins / super admins).
+  // Update org general settings. Gated on user.manage_access (org admins / super
+  // admins) and, as an org-level "big change", also the step-up passcode.
   @Patch(':id')
   @RequirePermission('user.manage_access')
+  @RequirePasscode()
   update(@Param('id') id: string, @Body() dto: UpdateOrgDto) {
     return this.prisma.organization.update({
       where: { id },

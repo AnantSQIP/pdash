@@ -8,6 +8,7 @@ import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -41,9 +42,12 @@ function CommentRow({
           <span className="text-sm font-semibold text-gray-900">{fullName(comment.user)}</span>
           <span className="text-xs text-gray-400 ml-auto">{formatTimestamp(comment.createdAt)}</span>
         </div>
-        <p className="text-sm text-gray-700 mt-1.5 leading-relaxed whitespace-pre-wrap break-words">
-          {comment.content}
-        </p>
+        {comment.content && (
+          <p className="text-sm text-gray-700 mt-1.5 leading-relaxed whitespace-pre-wrap break-words">
+            {comment.content}
+          </p>
+        )}
+        <AttachmentList attachments={comment.attachments} />
       </div>
       {canDelete && (
         <button
@@ -75,6 +79,7 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const attachments = useAttachmentUploads();
 
   // Oldest -> newest, like a chat thread.
   const ordered = [...comments].sort(
@@ -83,7 +88,8 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
 
   async function handlePost() {
     const content = draft.trim();
-    if (!content || sending || !currentUser) return;
+    const hasFiles = attachments.documentIds.length > 0;
+    if ((!content && !hasFiles) || attachments.uploading || sending || !currentUser) return;
     setSending(true);
     try {
       await api.comments.create({
@@ -91,9 +97,13 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
         entityId: projectId,
         userId: currentUser.id,
         content,
+        documentIds: hasFiles ? attachments.documentIds : undefined,
       });
       setDraft('');
+      attachments.clear();
       await queryClient.invalidateQueries({ queryKey });
+      // Shared files also land in the project's Files tab.
+      await queryClient.invalidateQueries({ queryKey: ['project-documents', projectId] });
     } finally {
       setSending(false);
     }
@@ -173,11 +183,18 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
               disabled={!currentUser}
               className="w-full text-sm px-3 py-2 border border-gray-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent placeholder-gray-400 disabled:bg-gray-50"
             />
+            {attachments.error && <p className="text-xs text-red-600 mt-1">{attachments.error}</p>}
+            {attachments.pending.length > 0 && (
+              <div className="mt-2"><PendingAttachmentChips items={attachments.pending} onRemove={attachments.remove} /></div>
+            )}
             <div className="flex items-center justify-between mt-2">
-              <span className="text-xs text-gray-400">Ctrl+Enter to post</span>
+              <div className="flex items-center gap-1">
+                <AttachButton onPick={attachments.add} disabled={!currentUser || sending} />
+                <span className="text-xs text-gray-400">Ctrl+Enter to post</span>
+              </div>
               <button
                 onClick={handlePost}
-                disabled={!draft.trim() || sending || !currentUser}
+                disabled={(!draft.trim() && attachments.documentIds.length === 0) || attachments.uploading || sending || !currentUser}
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <Send className="w-3.5 h-3.5" />

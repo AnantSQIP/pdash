@@ -15,6 +15,7 @@ import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeIds, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
+import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 
 type PanelTab = 'details' | 'assignees' | 'subtasks' | 'comments' | 'activity';
 
@@ -89,6 +90,7 @@ function TaskDetailPanelInner({
   const [newSub, setNewSub] = useState('');
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
+  const commentFiles = useAttachmentUploads();
 
   const panelRef = useRef<HTMLDivElement>(null);
   const savingRef = useRef(false);                 // an assignee PUT is in flight
@@ -108,6 +110,8 @@ function TaskDetailPanelInner({
     setAssigneeSearch('');
     setProgress(task.completionPercentage);
     setAssigneeIds(taskAssigneeIds(task));
+    setNewComment('');
+    commentFiles.clear(); // discard staged attachments from the previously-shown task
     dirtyRef.current = null; // discard any queued edits from the previously-shown task
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
@@ -255,12 +259,19 @@ function TaskDetailPanelInner({
 
   async function postComment() {
     const text = newComment.trim();
-    if (!text || !currentUser) return;
+    const hasFiles = commentFiles.documentIds.length > 0;
+    if ((!text && !hasFiles) || commentFiles.uploading || !currentUser) return;
     setPosting(true);
     try {
-      await api.comments.create({ entityType: 'task', entityId: task.id, userId: currentUser.id, content: text });
+      await api.comments.create({
+        entityType: 'task', entityId: task.id, userId: currentUser.id, content: text,
+        documentIds: hasFiles ? commentFiles.documentIds : undefined,
+      });
       setNewComment('');
+      commentFiles.clear();
       refetchComments();
+      // Task attachments also surface in the project's Files tab.
+      qc.invalidateQueries({ queryKey: ['project-documents', projectId] });
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Failed to post comment', 'error');
     } finally { setPosting(false); }
@@ -648,12 +659,13 @@ function TaskDetailPanelInner({
                 return (
                   <div key={c.id} className="flex gap-3">
                     <Avatar user={c.user} size={32} className="shrink-0" />
-                    <div className="flex-1">
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-baseline gap-2">
                         <span className="text-sm font-medium text-gray-800">{name}</span>
                         <span className="text-xs text-gray-400">{timeStr}</span>
                       </div>
-                      <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{c.content}</p>
+                      {c.content && <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">{c.content}</p>}
+                      <AttachmentList attachments={c.attachments} />
                     </div>
                   </div>
                 );
@@ -672,9 +684,14 @@ function TaskDetailPanelInner({
                     onChange={e => setNewComment(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postComment(); } }}
                   />
-                  <div className="mt-2 flex justify-end">
+                  {commentFiles.error && <p className="text-xs text-red-600 mt-1">{commentFiles.error}</p>}
+                  {commentFiles.pending.length > 0 && (
+                    <div className="mt-2"><PendingAttachmentChips items={commentFiles.pending} onRemove={commentFiles.remove} /></div>
+                  )}
+                  <div className="mt-2 flex items-center justify-between">
+                    <AttachButton onPick={commentFiles.add} disabled={posting} />
                     <button
-                      disabled={!newComment.trim() || posting}
+                      disabled={(!newComment.trim() && commentFiles.documentIds.length === 0) || commentFiles.uploading || posting}
                       onClick={postComment}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >

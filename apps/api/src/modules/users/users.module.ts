@@ -11,6 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
 import { getActorId } from '../../common/context/request-context';
 import { PermissionService } from '../permissions/permission.service';
 import { NotificationsService } from '../notifications/notifications.module';
@@ -309,22 +310,25 @@ class UsersController {
   @Get(':id')
   get(@Param('id') id: string) { return this.service.get(id); }
 
-  @Post() @RequirePermission('user.create')
+  // Adding, editing (incl. deactivating), and resetting credentials for a person in
+  // the org, plus any change to their roles/permissions, are "big changes" — they
+  // also require the org passcode (@RequirePasscode), on top of RBAC.
+  @Post() @RequirePermission('user.create') @RequirePasscode()
   create(@Body() dto: CreateUserDto) { return this.service.create(dto); }
 
-  @Patch(':id') @RequirePermission('user.update')
+  @Patch(':id') @RequirePermission('user.update') @RequirePasscode()
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) { return this.service.update(id, dto); }
 
-  @Post(':id/reset-password') @RequirePermission('user.manage_access')
+  @Post(':id/reset-password') @RequirePermission('user.manage_access') @RequirePasscode()
   resetPassword(@Param('id') id: string) { return this.service.resetPassword(id); }
 
-  @Put(':id/roles') @RequirePermission('user.manage_access')
+  @Put(':id/roles') @RequirePermission('user.manage_access') @RequirePasscode()
   setRoles(@Param('id') id: string, @Body() dto: SetRolesDto) { return this.service.setRoles(id, dto.roleIds); }
 
-  @Put(':id/permissions') @RequirePermission('user.manage_access')
+  @Put(':id/permissions') @RequirePermission('user.manage_access') @RequirePasscode()
   setPermissions(@Param('id') id: string, @Body() dto: SetUserPermissionsDto) { return this.service.setPermissions(id, dto.permissionIds); }
 
-  @Put(':id/overrides') @RequirePermission('user.manage_access')
+  @Put(':id/overrides') @RequirePermission('user.manage_access') @RequirePasscode()
   setOverrides(@Param('id') id: string, @Body() dto: SetUserOverridesDto) { return this.service.setOverrides(id, dto.overrides); }
 
   @Get(':id/overrides') @RequirePermission('user.view', 'permission.view')

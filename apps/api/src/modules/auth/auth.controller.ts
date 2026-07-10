@@ -1,7 +1,9 @@
-import { Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { PasscodeService } from './passcode.service';
+import { PermissionService } from '../permissions/permission.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { Actor } from '../../common/decorators/actor.decorator';
 
@@ -31,7 +33,11 @@ function reqCtx(req: Request) {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly passcode: PasscodeService,
+    private readonly permissions: PermissionService,
+  ) {}
 
   @Public()
   @UseGuards(ThrottlerGuard)
@@ -82,5 +88,30 @@ export class AuthController {
   @Post('password/change')
   changePassword(@Actor() actorId: string | null, @Body() body: { currentPassword?: string; newPassword?: string }) {
     return this.auth.changePassword(actorId!, body?.currentPassword ?? '', body?.newPassword ?? '');
+  }
+
+  // ── Organization step-up passcode ("big change" second factor) ────────────────
+
+  /** Whether a step-up passcode is configured for the actor's org (drives the Settings UI). */
+  @Get('passcode/status')
+  async passcodeStatus(@Actor() actorId: string | null) {
+    const orgId = actorId ? await this.passcode.orgIdOf(actorId) : null;
+    return { configured: orgId ? await this.passcode.isConfigured(orgId) : false };
+  }
+
+  /**
+   * Change (or first-time set) the org passcode. Super Admin only, and — when one is
+   * already set — the current passcode is required (it is itself the step-up factor).
+   */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('passcode')
+  async changePasscode(@Actor() actorId: string | null, @Body() body: { currentPasscode?: string; newPasscode?: string }) {
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    const perms = await this.permissions.getEffectivePermissions(actorId);
+    if (!perms.isSuperAdmin) throw new ForbiddenException('Only a Super Admin may change the organization passcode.');
+    const orgId = await this.passcode.orgIdOf(actorId);
+    if (!orgId) throw new ForbiddenException('No organization to configure.');
+    return this.passcode.change(orgId, body?.currentPasscode, body?.newPasscode ?? '');
   }
 }

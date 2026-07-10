@@ -29,6 +29,10 @@ model Organization {
   status     String   @default("ACTIVE")
   timezone   String   @default("UTC")     // M25: persisted Settings → General
   brandColor String   @default("#3d8de2")
+  // Step-up "big change" passcode — argon2id hash of the org-wide passcode required
+  // (on top of RBAC) for sensitive org/people/RBAC mutations. Null = feature not yet
+  // configured (guard is a no-op). Updatable via POST /auth/passcode.
+  securityPasscodeHash String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -695,7 +699,8 @@ model Comment {
   content    String
   createdAt  DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attachments CommentAttachment[]
 
   @@index([entityType, entityId])
   @@index([userId])
@@ -868,17 +873,64 @@ model Document {
   name                 String
   fileUrl              String
   fileSize             Int?
+  mimeType             String?
   uploadedBy           String
   version              Int       @default(1)
   confidentialityLevel String    @default("INTERNAL")
   createdAt            DateTime  @default(now())
   deletedAt            DateTime?
 
-  versions         DocumentVersion[]
-  projectDocuments ProjectDocument[]
-  taskDocuments    TaskDocument[]
+  versions           DocumentVersion[]
+  projectDocuments   ProjectDocument[]
+  taskDocuments      TaskDocument[]
+  blob               DocumentBlob?
+  messageAttachments MessageAttachment[]
+  commentAttachments CommentAttachment[]
 
+  @@index([uploadedBy])
+  @@index([deletedAt])
   @@map("document")
+}
+
+// File bytes live in a separate 1:1 table so Document list/metadata queries never
+// drag the (potentially multi-MB) payload along. Deleting a document (or the blob
+// on soft-delete) frees the storage while the metadata row remains for history.
+model DocumentBlob {
+  id         String @id @default(cuid())
+  documentId String @unique
+  data       Bytes
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("document_blob")
+}
+
+// Attachment join: Discuss channel message ↔ document.
+model MessageAttachment {
+  id         String @id @default(cuid())
+  messageId  String
+  documentId String
+
+  message  Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, documentId])
+  @@index([documentId])
+  @@map("message_attachment")
+}
+
+// Attachment join: polymorphic comment (project/task discussion) ↔ document.
+model CommentAttachment {
+  id         String @id @default(cuid())
+  commentId  String
+  documentId String
+
+  comment  Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, documentId])
+  @@index([documentId])
+  @@map("comment_attachment")
 }
 
 model DocumentVersion {
@@ -1260,8 +1312,9 @@ model Message {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel     Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attachments MessageAttachment[]
 
   @@index([channelId])
   @@map("message")

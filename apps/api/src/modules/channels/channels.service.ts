@@ -1,10 +1,16 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateChannelDto, UpdateChannelDto, CreateMessageDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
+import { DocumentsService, DOC_SELECT } from '../documents/documents.service';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true };
+// Attachment projection on messages — deleted documents drop out automatically.
+const ATTACHMENTS_INCLUDE = {
+  where: { document: { deletedAt: null } },
+  select: { document: { select: DOC_SELECT } },
+} as const;
 
 /**
  * Discussions are PRIVATE and MEMBER-GATED. Access is governed purely by channel
@@ -18,6 +24,7 @@ export class ChannelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly documents: DocumentsService,
   ) {}
 
   private actor(): string {
@@ -109,7 +116,7 @@ export class ChannelsService {
     // messages a channel never showed anything new.
     const rows = await this.prisma.message.findMany({
       where: { channelId },
-      include: { user: { select: USER_SELECT } },
+      include: { user: { select: USER_SELECT }, attachments: ATTACHMENTS_INCLUDE },
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
@@ -119,19 +126,34 @@ export class ChannelsService {
   async createMessage(channelId: string, dto: CreateMessageDto) {
     // Posting requires membership — there is NO auto-join (that would defeat privacy).
     const { actorId } = await this.assertMember(channelId);
+    const content = dto.content?.trim() ?? '';
+    // Attachments must be the actor's own, still-unattached uploads.
+    const documentIds = await this.documents.assertAttachable(dto.documentIds ?? [], actorId);
+    if (!content && !documentIds.length) throw new BadRequestException('Message is empty.');
     return this.prisma.message.create({
-      data: { channelId, userId: actorId, content: dto.content },
-      include: { user: { select: USER_SELECT } },
+      data: {
+        channelId,
+        userId: actorId,
+        content,
+        attachments: documentIds.length ? { create: documentIds.map(documentId => ({ documentId })) } : undefined,
+      },
+      include: { user: { select: USER_SELECT }, attachments: ATTACHMENTS_INCLUDE },
     });
   }
 
   async deleteMessage(channelId: string, messageId: string) {
     await this.assertMember(channelId);
     const actorId = this.actor();
-    const msg = await this.prisma.message.findFirst({ where: { id: messageId, channelId } });
+    const msg = await this.prisma.message.findFirst({
+      where: { id: messageId, channelId },
+      include: { attachments: { select: { documentId: true } } },
+    });
     if (!msg) throw new NotFoundException('Message not found');
     if (msg.userId !== actorId) throw new ForbiddenException('You can only delete your own messages.');
-    return this.prisma.message.delete({ where: { id: msg.id } });
+    const deleted = await this.prisma.message.delete({ where: { id: msg.id } });
+    // The join rows cascade with the message; also retire the files themselves.
+    if (msg.attachments.length) await this.documents.softDeleteAttached(msg.attachments.map(a => a.documentId));
+    return deleted;
   }
 
   // ── Member management (owner-only) ──────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CreateChannelDto {
   @IsString()
@@ -54,7 +54,17 @@ export class CreateMessageDto {
   @IsString()
   userId?: string;
 
+  // Optional so an attachment-only message is valid; the service requires
+  // content OR at least one attachment.
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  content!: string;
+  @MaxLength(4000)
+  content?: string;
+
+  // Ids of documents the actor uploaded via POST /documents (unattached).
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  documentIds?: string[];
 }

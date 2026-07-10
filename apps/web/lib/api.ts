@@ -26,20 +26,51 @@ function refreshOnce(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function req<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+// ─── Step-up passcode interceptor ──────────────────────────────────────────────
+// "Big change" routes (org/people/RBAC mutations) require the org passcode as a
+// second factor. When one 403s with a PASSCODE_* code, the registered handler is
+// invoked (a modal, wired up by PasscodeProvider) to collect the passcode; the
+// request is then retried with the x-org-passcode header. Kept out of React so the
+// api client stays framework-agnostic — the provider registers a callback here.
+export type PasscodePrompt = { code: string; message: string; remaining?: number; lockedUntil?: string };
+export type PasscodeHandler = (info: PasscodePrompt) => Promise<string | null>;
+const PASSCODE_CODES = new Set(['PASSCODE_REQUIRED', 'PASSCODE_INVALID', 'PASSCODE_LOCKED']);
+let passcodeHandler: PasscodeHandler | null = null;
+export function setPasscodeHandler(fn: PasscodeHandler | null) { passcodeHandler = fn; }
+
+async function req<T>(
+  path: string,
+  init?: RequestInit,
+  opts: { retriedRefresh?: boolean; passcodeAttempt?: number } = {},
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
+    // Spread init FIRST, then set headers, so a caller/retry-supplied header (e.g.
+    // x-org-passcode) merges with Content-Type instead of being clobbered by ...init.
+    ...init,
     headers: {
       'Content-Type': 'application/json',
       ...init?.headers,
     },
-    ...init,
   });
 
   // Access token expired → attempt ONE shared silent refresh, then retry the request once.
-  if (res.status === 401 && !retried && !NO_REFRESH.has(path)) {
+  if (res.status === 401 && !opts.retriedRefresh && !NO_REFRESH.has(path)) {
     const ok = await refreshOnce();
-    if (ok) return req<T>(path, init, true);
+    if (ok) return req<T>(path, init, { ...opts, retriedRefresh: true });
+  }
+
+  // Step-up passcode required → prompt, then retry with the passcode header. Bounded
+  // attempts so an unbreakable wrong/locked passcode can't loop forever.
+  if (res.status === 403 && passcodeHandler && (opts.passcodeAttempt ?? 0) < 5) {
+    const body = await res.clone().json().catch(() => null);
+    if (body?.code && PASSCODE_CODES.has(body.code)) {
+      const passcode = await passcodeHandler({ code: body.code, message: body.message, remaining: body.remaining, lockedUntil: body.lockedUntil });
+      if (passcode) {
+        const headers = { ...(init?.headers as Record<string, string> | undefined), 'x-org-passcode': passcode };
+        return req<T>(path, { ...init, headers }, { ...opts, passcodeAttempt: (opts.passcodeAttempt ?? 0) + 1 });
+      }
+    }
   }
 
   if (!res.ok) {
@@ -52,6 +83,23 @@ async function req<T>(path: string, init?: RequestInit, retried = false): Promis
   // fed to JSON.parse — return null (NOT undefined, which React Query rejects as
   // "Query data cannot be undefined") instead of throwing a SyntaxError.
   if (res.status === 204) return null as unknown as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as T;
+}
+
+// Multipart upload variant of req(): no Content-Type header (the browser sets the
+// multipart boundary itself) but the same cookie + single-shared-refresh handling.
+async function uploadReq<T>(path: string, form: FormData, retried = false): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', credentials: 'include', body: form });
+  if (res.status === 401 && !retried) {
+    const ok = await refreshOnce();
+    if (ok) return uploadReq<T>(path, form, true);
+  }
+  if (!res.ok) {
+    let message = res.statusText;
+    try { message = (await res.json()).message ?? message; } catch { /* swallow */ }
+    throw new Error(message);
+  }
   const text = await res.text();
   return (text ? JSON.parse(text) : null) as T;
 }
@@ -118,10 +166,25 @@ export type ApiProject = {
   _count?: { members: number; projectTasks: number };
 };
 
+// ─── Files & attachments ─────────────────────────────────────────────────────
+export type DocumentRef = {
+  id: string; name: string; mimeType?: string | null; fileSize?: number | null;
+  fileUrl: string; uploadedBy?: string; createdAt?: string;
+};
+export type AttachmentRef = { document: DocumentRef };
+export type ProjectDocumentItem = {
+  id: string; name: string; mimeType?: string | null; fileSize?: number | null;
+  fileUrl: string; uploadedBy: string; createdAt: string;
+  source: 'direct' | 'task' | 'discussion';
+  task?: { id: string; title: string } | null;
+  uploader?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
+};
+
 export type ApiComment = {
   id: string; entityType: string; entityId: string;
   userId: string; content: string; createdAt: string;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName'>;
+  attachments?: AttachmentRef[];
 };
 
 export type Timesheet = {
@@ -153,6 +216,7 @@ export type ChannelMembers = {
 export type Message = {
   id: string; channelId: string; userId: string; content: string; createdAt: string;
   user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
+  attachments?: AttachmentRef[];
 };
 
 export type Issue = {
@@ -307,6 +371,10 @@ export const api = {
     me: () => req<AuthUser>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       req<{ ok: boolean }>('/auth/password/change', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+    // Org step-up "big change" passcode.
+    passcodeStatus: () => req<{ configured: boolean }>('/auth/passcode/status'),
+    changePasscode: (currentPasscode: string, newPasscode: string) =>
+      req<{ ok: boolean }>('/auth/passcode', { method: 'POST', body: JSON.stringify({ currentPasscode, newPasscode }) }),
   },
 
   orgs: {
@@ -419,9 +487,23 @@ export const api = {
   comments: {
     list: (entityType: string, entityId: string) =>
       req<ApiComment[]>(`/comments?entityType=${entityType}&entityId=${entityId}`),
-    create: (data: { entityType: string; entityId: string; userId: string; content: string }) =>
+    create: (data: { entityType: string; entityId: string; userId: string; content: string; documentIds?: string[] }) =>
       req<ApiComment>('/comments', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/comments/${id}`, { method: 'DELETE' }),
+  },
+
+  documents: {
+    // Multipart upload. Composer attachments pass no context (linked on send);
+    // the project Files tab passes projectId so the file is linked immediately.
+    upload: (file: File, opts?: { projectId?: string; taskId?: string }) => {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      if (opts?.projectId) form.append('projectId', opts.projectId);
+      if (opts?.taskId) form.append('taskId', opts.taskId);
+      return uploadReq<DocumentRef>('/documents', form);
+    },
+    listForProject: (projectId: string) => req<ProjectDocumentItem[]>(`/projects/${projectId}/documents`),
+    delete: (id: string) => req<{ ok: boolean }>(`/documents/${id}`, { method: 'DELETE' }),
   },
 
   timesheets: {
@@ -463,7 +545,7 @@ export const api = {
     messages: (channelId: string, limit?: number) =>
       req<Message[]>(`/channels/${channelId}/messages${limit ? `?limit=${limit}` : ''}`),
     // Author is the verified cookie actor — no userId sent.
-    sendMessage: (channelId: string, data: { content: string }) =>
+    sendMessage: (channelId: string, data: { content: string; documentIds?: string[] }) =>
       req<Message>(`/channels/${channelId}/messages`, { method: 'POST', body: JSON.stringify(data) }),
     deleteMessage: (channelId: string, messageId: string) =>
       req<void>(`/channels/${channelId}/messages/${messageId}`, { method: 'DELETE' }),

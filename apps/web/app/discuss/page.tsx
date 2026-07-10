@@ -8,6 +8,7 @@ import { api, type Channel, type Message, type ChannelMembers, type UserSummary 
 import { useOrg } from '@/lib/org-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 
 function fmtTime(iso: string) {
   const d = new Date(iso);
@@ -167,6 +168,7 @@ export default function DiscussPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [sending, setSending] = useState(false);
+  const attachments = useAttachmentUploads();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: channels = [], isLoading: channelsLoading } = useQuery<Channel[]>({
@@ -187,9 +189,16 @@ export default function DiscussPage() {
 
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
-    if (!draft.trim() || !activeChannel) return;
+    const hasFiles = attachments.documentIds.length > 0;
+    if ((!draft.trim() && !hasFiles) || attachments.uploading || !activeChannel) return;
     setSending(true);
-    try { await api.channels.sendMessage(activeChannel.id, { content: draft.trim() }); setDraft(''); invalidateMessages(); invalidateChannels(); }
+    try {
+      await api.channels.sendMessage(activeChannel.id, {
+        content: draft.trim(),
+        documentIds: hasFiles ? attachments.documentIds : undefined,
+      });
+      setDraft(''); attachments.clear(); invalidateMessages(); invalidateChannels();
+    }
     catch (err) { alert(err instanceof Error ? err.message : 'Failed to send'); } finally { setSending(false); }
   }
 
@@ -271,7 +280,8 @@ export default function DiscussPage() {
                           <span className="text-xs text-gray-400">{fmtTime(msg.createdAt)}</span>
                         </div>
                       )}
-                      <p className="text-sm text-gray-700 leading-relaxed break-words">{msg.content}</p>
+                      {msg.content && <p className="text-sm text-gray-700 leading-relaxed break-words">{msg.content}</p>}
+                      <AttachmentList attachments={msg.attachments} />
                     </div>
                   </div>
                 );
@@ -279,12 +289,16 @@ export default function DiscussPage() {
               <div ref={messagesEndRef} />
             </div>
 
-            <form onSubmit={sendMessage} className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-white">
-              <div className="flex items-center gap-3 bg-gray-50 rounded-xl border border-gray-200 px-4 py-2.5 focus-within:border-brand-400 transition-colors">
+            <form onSubmit={sendMessage} className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-white space-y-2">
+              {attachments.error && <p className="text-xs text-red-600">{attachments.error}</p>}
+              <PendingAttachmentChips items={attachments.pending} onRemove={attachments.remove} />
+              <div className="flex items-center gap-2 bg-gray-50 rounded-xl border border-gray-200 px-3 py-2.5 focus-within:border-brand-400 transition-colors">
+                <AttachButton onPick={attachments.add} disabled={sending} />
                 <input value={draft} onChange={e => setDraft(e.target.value)} placeholder={`Message ${activeChannel.name}`}
                   className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 focus:outline-none"
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(e); } }} />
-                <button type="submit" disabled={!draft.trim() || sending} className="p-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 shrink-0">
+                <button type="submit" disabled={(!draft.trim() && attachments.documentIds.length === 0) || attachments.uploading || sending}
+                  className="p-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 shrink-0">
                   {sending ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
                 </button>
               </div>
