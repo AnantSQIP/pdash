@@ -14,6 +14,7 @@ import DiscussionsTab from '@/components/projects/DiscussionsTab';
 import IssuesTab from '@/components/projects/IssuesTab';
 import ActivityTab from '@/components/projects/ActivityTab';
 import TimesheetsTab from '@/components/projects/TimesheetsTab';
+import FilesTab from '@/components/projects/FilesTab';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -26,8 +27,8 @@ import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
 
-type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
-const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Milestones', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
+type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
+const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Milestones', 'Files', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -343,6 +344,7 @@ export function ProjectDetailClient({ projectId }: Props) {
         )}
         {activeTab === 'Overview' && <OverviewView project={project} tasks={tasks} />}
         {activeTab === 'Milestones' && <MilestonesView project={project} />}
+        {activeTab === 'Files' && <FilesTab projectId={projectId} />}
         {activeTab === 'Gantt' && <GanttView tasks={tasks} project={project} />}
         {activeTab === 'Issues' && <IssuesTab projectId={projectId} />}
         {activeTab === 'Activity' && <ActivityTab projectId={projectId} />}

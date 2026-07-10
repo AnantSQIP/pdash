@@ -25,7 +25,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // Pass through anything already modelled as an HTTP error.
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
-      return res.status(status).json(this.body(status, exception.getResponse()));
+      const resp = exception.getResponse();
+      // Preserve a machine-readable `code` (and other scalar hints like lockedUntil/
+      // remaining) so clients can react programmatically — e.g. the step-up passcode
+      // guard's PASSCODE_REQUIRED. Without this the body() reducer would drop them.
+      const extra = resp && typeof resp === 'object' && !Array.isArray(resp)
+        ? Object.fromEntries(Object.entries(resp as Record<string, unknown>).filter(([k]) => k !== 'statusCode' && k !== 'message'))
+        : {};
+      return res.status(status).json({ ...this.body(status, resp), ...extra });
     }
 
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {

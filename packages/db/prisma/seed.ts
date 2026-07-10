@@ -62,8 +62,14 @@ async function main() {
   console.log('Done. Building SquarkIP workspace...');
 
   // ─── Organization ─────────────────────────────────────────────────────────
+  // Step-up "big change" passcode — required (on top of RBAC) for sensitive
+  // org/people/RBAC mutations. Default 'sqip@infinity'; change via Settings or
+  // the set-passcode.ts script. Override the seed default with SEED_ORG_PASSCODE.
   const org = await prisma.organization.create({
-    data: { name: 'Squark IP', code: 'pdash-demo', status: 'ACTIVE' },
+    data: {
+      name: 'Squark IP', code: 'pdash-demo', status: 'ACTIVE',
+      securityPasscodeHash: await argonHash(process.env.SEED_ORG_PASSCODE ?? 'sqip@infinity'),
+    },
   });
 
   // ─── Roles ────────────────────────────────────────────────────────────────

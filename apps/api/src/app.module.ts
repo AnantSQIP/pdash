@@ -8,6 +8,7 @@ import { PermissionsModule } from './modules/permissions/permissions.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthGuard } from './common/guards/auth.guard';
 import { PermissionGuard } from './common/guards/permission.guard';
+import { PasscodeGuard } from './common/guards/passcode.guard';
 import { AllExceptionsFilter } from './common/filters/prisma-exception.filter';
 import { CurrentActorMiddleware } from './common/middleware/current-actor.middleware';
 import { HealthModule } from './modules/health/health.module';
@@ -19,6 +20,7 @@ import { TasksModule } from './modules/tasks/tasks.module';
 import { StatusesModule } from './modules/statuses/statuses.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
 import { CommentsModule } from './modules/comments/comments.module';
+import { DocumentsModule } from './modules/documents/documents.module';
 import { ApprovalsModule } from './modules/approvals/approvals.module';
 import { UsersModule } from './modules/users/users.module';
 import { DepartmentsModule } from './modules/departments/departments.module';
@@ -54,6 +56,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     StatusesModule,
     // Generic/polymorphic
     CommentsModule,
+    DocumentsModule,
     ApprovalsModule,
     // People & org
     UsersModule,
@@ -77,6 +80,10 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     { provide: APP_GUARD, useClass: AuthGuard },
     // 2) Global, opt-in authorization (enforces only where @RequirePermission is set).
     { provide: APP_GUARD, useClass: PermissionGuard },
+    // 3) Global, opt-in step-up: "big change" routes marked @RequirePasscode() also
+    //    require the org passcode (a second factor on top of RBAC). Runs last, so an
+    //    unauthenticated / unpermitted caller is rejected before any passcode prompt.
+    { provide: APP_GUARD, useClass: PasscodeGuard },
   ],
 })
 export class AppModule implements NestModule {

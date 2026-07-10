@@ -27,6 +27,9 @@ export const EVENTS = {
   ISSUE_RESOLVED: 'issue.resolved',
   // Timesheets
   TIME_LOGGED: 'timesheet.logged',
+  // Documents / attachments
+  DOCUMENT_UPLOADED: 'document.uploaded',
+  DOCUMENT_DELETED: 'document.deleted',
   // Approvals
   APPROVAL_ACTION: 'approval.action',
   // RBAC

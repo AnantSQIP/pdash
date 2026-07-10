@@ -12,13 +12,14 @@ import {
   ImageIcon,
   Plus,
   CheckCircle,
+  ShieldAlert,
 } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOrg } from '@/lib/org-context';
 import { useAuth } from '@/lib/auth-context';
-import { Can } from '@/lib/permissions-context';
+import { Can, usePermissions } from '@/lib/permissions-context';
 import { api, type UserSummary } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
@@ -101,6 +102,72 @@ function ChangePasswordCard() {
   );
 }
 
+// ── Change Organization Passcode (Super Admin only) ──────────────────────────────
+// The org "big change" passcode is a second factor required on top of RBAC for
+// sensitive org/people/RBAC actions. Only a Super Admin can rotate it, and the
+// current passcode is required to set a new one.
+function ChangePasscodeCard() {
+  const { isSuperAdmin } = usePermissions();
+  const { data: status } = useQuery({
+    queryKey: ['passcode-status'],
+    queryFn: () => api.auth.passcodeStatus(),
+    enabled: isSuperAdmin,
+    staleTime: 60_000,
+  });
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState('');
+  const [ok, setOk] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const inputCls = 'w-full max-w-md px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition';
+
+  if (!isSuperAdmin) return null;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(''); setOk(false);
+    if (next.length < 6) { setErr('New passcode must be at least 6 characters.'); return; }
+    if (next !== confirm) { setErr('New passcodes do not match.'); return; }
+    setBusy(true);
+    try {
+      await api.auth.changePasscode(current, next);
+      setOk(true); setCurrent(''); setNext(''); setConfirm('');
+      setTimeout(() => setOk(false), 2500);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not update the passcode');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-amber-200 p-4 sm:p-6 space-y-4">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
+          <ShieldAlert className="w-[18px] h-[18px] text-amber-600" />
+        </div>
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">Organization Passcode</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            A second factor required for big changes — adding/removing people, roles &amp; permissions, and org settings —
+            even for admins. {status ? (status.configured ? 'Currently active.' : 'Not yet configured.') : ''}
+          </p>
+        </div>
+      </div>
+      <form onSubmit={submit} className="space-y-3">
+        <input type="password" autoComplete="off" placeholder="Current passcode" value={current} onChange={e => setCurrent(e.target.value)} className={inputCls} />
+        <input type="password" autoComplete="off" placeholder="New passcode (min 6 characters)" value={next} onChange={e => setNext(e.target.value)} className={inputCls} />
+        <input type="password" autoComplete="off" placeholder="Confirm new passcode" value={confirm} onChange={e => setConfirm(e.target.value)} className={inputCls} />
+        {err && <p className="text-xs text-red-600">{err}</p>}
+        {ok && <p className="text-xs text-green-600 font-medium">✓ Passcode updated.</p>}
+        <button type="submit" disabled={busy || !current || !next || !confirm} className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
+          {busy ? 'Updating…' : 'Update Passcode'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 // ── General Tab ────────────────────────────────────────────────────────────────
 function GeneralTab() {
   const { org } = useOrg();
@@ -146,6 +213,7 @@ function GeneralTab() {
     <div className="space-y-6">
       <ProfilePhotoCard />
       <ChangePasswordCard />
+      <ChangePasscodeCard />
       {/* Organization card */}
       <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Organization</h2>

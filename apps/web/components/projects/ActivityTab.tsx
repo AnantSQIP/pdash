@@ -24,6 +24,8 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'project.approved':     { verb: 'approved the project',  cat: 'Projects', icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
   'project.rejected':     { verb: 'rejected the project',  cat: 'Projects', icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
   'timesheet.logged':     { verb: 'logged time',           cat: 'Tasks',    icon: <Clock className="w-3.5 h-3.5" />,       color: 'bg-teal-100 text-teal-600' },
+  'document.uploaded':    { verb: 'uploaded a file',       cat: 'Files',    icon: <Download className="w-3.5 h-3.5" />,    color: 'bg-sky-100 text-sky-600' },
+  'document.deleted':     { verb: 'deleted a file',        cat: 'Files',    icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
 };
 function metaFor(action: string) {
   return ACTION_META[action] ?? { verb: action, cat: 'Other', icon: <ActivityIcon className="w-3.5 h-3.5" />, color: 'bg-gray-100 text-gray-500' };
