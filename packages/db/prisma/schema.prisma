@@ -75,6 +75,10 @@ model User {
   lockedUntil       DateTime?
   securityVersion   Int       @default(1) // bump to invalidate all access tokens for this user
   lastLoginAt       DateTime?
+  // Set when the user asks for a password reset from the login page. There is no mail
+  // transport, so this — not an email — is how someone locked out reaches an admin.
+  // Cleared once an admin actually resets them.
+  passwordResetRequestedAt DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?

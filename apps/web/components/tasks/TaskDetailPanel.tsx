@@ -14,10 +14,46 @@ import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeIds, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
-import { formatDate } from '@/lib/date';
+import { formatDate, toUtcDay, isPastDue } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 
 type PanelTab = 'details' | 'assignees' | 'subtasks' | 'comments' | 'activity';
+
+const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+
+const planInput =
+  'w-full px-2.5 py-1.5 text-sm rounded-lg border border-gray-200 bg-white text-gray-800 ' +
+  'focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-400';
+
+/** The task's plan as form values. `<input type="date">` wants YYYY-MM-DD, not an ISO instant. */
+function planOf(t: ApiTask) {
+  const day = (v?: string | null) => (v ? toUtcDay(v) : '');
+  return {
+    priority: t.priority ?? 'MEDIUM',
+    startDate: day(t.startDate),
+    dueDate: day(t.dueDate),
+    clientDueDate: day(t.clientDueDate),
+    estimatedHours: t.estimatedHours != null ? String(t.estimatedHours) : '',
+  };
+}
+
+function Field({ label, hint, restricted, children }: {
+  label: string; hint?: string; restricted?: boolean; children: ReactNode;
+}) {
+  return (
+    <div>
+      <div className={clsx('mb-1', restricted ? 'text-amber-600' : 'text-gray-400')}>
+        <label className="text-xs uppercase tracking-wide flex items-center gap-1">
+          {restricted && <Lock size={9} />}{label}
+        </label>
+        {/* Hint sits on its own line: at this panel width it otherwise collides with the
+            next column's label. */}
+        {hint && <p className="text-[10px] leading-tight text-gray-300 truncate">{hint}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 const PRIORITY_FLAG_COLOR: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -90,6 +126,12 @@ function TaskDetailPanelInner({
   const [newSub, setNewSub] = useState('');
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
+  // The task's PLAN. These were display-only, which froze a task's schedule at creation:
+  // a manager could be told a task was overdue and have no way to reschedule it, and the
+  // capacity board — which is driven entirely by estimatedHours + these dates — could
+  // never be corrected.
+  const [plan, setPlan] = useState(() => planOf(task));
+  const [savingPlan, setSavingPlan] = useState(false);
   const commentFiles = useAttachmentUploads();
 
   const panelRef = useRef<HTMLDivElement>(null);
@@ -111,6 +153,7 @@ function TaskDetailPanelInner({
     setProgress(task.completionPercentage);
     setAssigneeIds(taskAssigneeIds(task));
     setNewComment('');
+    setPlan(planOf(task));
     commentFiles.clear(); // discard staged attachments from the previously-shown task
     dirtyRef.current = null; // discard any queued edits from the previously-shown task
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -240,6 +283,29 @@ function TaskDetailPanelInner({
     } catch (e) {
       setProgress(task.completionPercentage);
       toast(e instanceof Error ? e.message : 'Failed to update progress', 'error');
+    }
+  }
+
+  /**
+   * Persist one field of the plan. An emptied date is sent as `null`, which CLEARS it —
+   * omitting the field would leave the old value in place.
+   *
+   * The server owns the rules (only a client-deadline viewer may set that date; the internal
+   * deadline may not fall after it), so a rejection just reverts the field and shows why.
+   * Moving the internal deadline forward also re-arms the overdue alert, server-side.
+   */
+  async function savePlan(patch: Partial<Pick<ApiTask, 'priority' | 'startDate' | 'dueDate' | 'clientDueDate' | 'estimatedHours'>>) {
+    setSavingPlan(true);
+    try {
+      const updated = await api.tasks.update(task.id, patch);
+      onUpdated?.(updated);
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['capacity'] }); // the board is computed from these
+    } catch (e) {
+      setPlan(planOf(task)); // snap back to what the server still believes
+      toast(e instanceof Error ? e.message : 'Could not save', 'error');
+    } finally {
+      setSavingPlan(false);
     }
   }
 
@@ -514,24 +580,102 @@ function TaskDetailPanelInner({
               {closed && <p className="text-xs text-gray-400 mt-1">Task is complete (100%). Reopen it to change progress.</p>}
             </div>
 
-            {/* Details grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100 text-sm">
-              {[
-                { label: 'Status', value: statusName },
-                { label: 'Priority', value: priorityLabel },
-                { label: 'Assignees', value: assigneeIds.length ? `${assigneeIds.length} assigned` : 'Unassigned' },
-                { label: 'Internal Deadline', value: formattedDue },
-                ...(formattedClientDue ? [{ label: 'Client Deadline', value: formattedClientDue, restricted: true }] : []),
-                { label: 'Est. Hours', value: task.estimatedHours ? `${task.estimatedHours}h` : 'Not set' },
-                { label: 'Progress', value: `${progress}%` },
-              ].map(({ label, value, restricted }: { label: string; value: string; restricted?: boolean }) => (
-                <div key={label}>
-                  <p className={clsx('text-xs uppercase tracking-wide mb-0.5 flex items-center gap-1', restricted ? 'text-amber-600' : 'text-gray-400')}>
-                    {restricted && <Lock size={9} />}{label}
-                  </p>
-                  <p className={clsx('font-medium', restricted ? 'text-amber-800' : 'text-gray-700')}>{value}</p>
-                </div>
-              ))}
+            {/* ── Plan: editable. Rescheduling a slipped task and correcting its estimate
+                   are the two things a manager most needs to do from here. ───────────── */}
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Plan</p>
+                {savingPlan && (
+                  <span className="text-xs text-gray-400 flex items-center gap-1">
+                    <Loader size={11} className="animate-spin" /> saving
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <Field label="Priority">
+                  <select
+                    value={plan.priority}
+                    onChange={e => { const priority = e.target.value; setPlan(p => ({ ...p, priority })); savePlan({ priority }); }}
+                    className={planInput}
+                  >
+                    {PRIORITIES.map(p => (
+                      <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Est. Hours" hint="drives the capacity board">
+                  <input
+                    type="number" min={0} max={1000} step={0.5}
+                    value={plan.estimatedHours}
+                    placeholder="Not set"
+                    onChange={e => setPlan(p => ({ ...p, estimatedHours: e.target.value }))}
+                    onBlur={e => {
+                      const raw = e.target.value.trim();
+                      const next = raw === '' ? null : Number(raw);
+                      if (next !== null && !Number.isFinite(next)) return;
+                      if ((task.estimatedHours ?? null) === next) return;
+                      savePlan({ estimatedHours: next });
+                    }}
+                    className={planInput}
+                  />
+                </Field>
+
+                <Field label="Start Date">
+                  <input
+                    type="date"
+                    value={plan.startDate}
+                    max={plan.dueDate || undefined}
+                    onChange={e => {
+                      const startDate = e.target.value;
+                      setPlan(p => ({ ...p, startDate }));
+                      savePlan({ startDate: startDate || null });
+                    }}
+                    className={planInput}
+                  />
+                </Field>
+
+                <Field label="Internal Deadline" hint="what the team works to">
+                  <input
+                    type="date"
+                    value={plan.dueDate}
+                    min={plan.startDate || undefined}
+                    max={plan.clientDueDate || undefined}
+                    onChange={e => {
+                      const dueDate = e.target.value;
+                      setPlan(p => ({ ...p, dueDate }));
+                      savePlan({ dueDate: dueDate || null });
+                    }}
+                    className={planInput}
+                  />
+                </Field>
+
+                {/* The server OMITS clientDueDate entirely unless this actor may see it — so
+                    the key's presence is the exact permission signal, and it correctly
+                    includes a project manager who lacks the org-wide permission. */}
+                {'clientDueDate' in task && (
+                  <Field label="Client Deadline" restricted hint="managers only">
+                    <input
+                      type="date"
+                      value={plan.clientDueDate}
+                      min={plan.dueDate || undefined}
+                      onChange={e => {
+                        const clientDueDate = e.target.value;
+                        setPlan(p => ({ ...p, clientDueDate }));
+                        savePlan({ clientDueDate: clientDueDate || null });
+                      }}
+                      className={clsx(planInput, 'border-amber-200 bg-amber-50/60 text-amber-900')}
+                    />
+                  </Field>
+                )}
+              </div>
+
+              {isPastDue(task.dueDate) && !closed && (
+                <p className="mt-3 text-xs text-red-600">
+                  This task is past its internal deadline. Moving the date forward re-arms the overdue alert.
+                </p>
+              )}
             </div>
           </div>
         )}

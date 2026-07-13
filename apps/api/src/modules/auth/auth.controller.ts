@@ -90,6 +90,24 @@ export class AuthController {
     return this.auth.changePassword(actorId!, body?.currentPassword ?? '', body?.newPassword ?? '');
   }
 
+  /**
+   * "I can't sign in." Public by necessity — the caller has no session. There is no mail
+   * transport, so this notifies the people who can reset the account rather than emailing
+   * a link.
+   *
+   * The response is deliberately identical whether or not the address exists: anything else
+   * makes a public endpoint an account-enumeration oracle. Throttled tightly because it is
+   * unauthenticated and writes.
+   */
+  @Public()
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('password/reset-request')
+  async requestPasswordReset(@Body() body: { email?: string }) {
+    await this.auth.requestPasswordReset(body?.email ?? '');
+    return { ok: true, message: 'If that account exists, an administrator has been notified to reset it.' };
+  }
+
   // ── Organization step-up passcode ("big change" second factor) ────────────────
 
   /** Whether a step-up passcode is configured for the actor's org (drives the Settings UI). */

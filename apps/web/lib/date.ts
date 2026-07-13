@@ -35,3 +35,20 @@ export function isPastDue(dueDate: string | Date | null | undefined): boolean {
   if (!dueDate) return false;
   return toUtcDay(dueDate) < todayUtc();
 }
+
+/**
+ * "5m ago" / "3h ago" / "2d ago" for a past TIMESTAMP.
+ *
+ * Unlike the rest of this file these are real instants, not date-only values, so the local
+ * zone is the right frame — "asked 5m ago" means five minutes ago wherever you are.
+ */
+export function relativePast(iso: string | Date): string {
+  const diff = Date.now() - (iso instanceof Date ? iso : new Date(iso)).getTime();
+  const m = Math.max(0, Math.round(diff / 60_000));
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'yesterday' : `${d}d ago`;
+}

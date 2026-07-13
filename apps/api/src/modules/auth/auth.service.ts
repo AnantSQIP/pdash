@@ -3,10 +3,13 @@ import { JwtService } from '@nestjs/jwt';
 import { hash as argonHash, hashSync as argonHashSync, verify as argonVerify } from '@node-rs/argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.module';
 
 const REFRESH_TTL_MS = 14 * 24 * 3600 * 1000; // 14 days
 const MAX_FAILED = 8;
 const LOCK_MS = 15 * 60 * 1000;
+/** Don't re-notify the admins about the same person more than once an hour. */
+const RESET_REQUEST_COOLDOWN_MS = 60 * 60 * 1000;
 // Constant dummy hash so login timing doesn't reveal whether an email exists.
 const DUMMY_HASH = argonHashSync('pdash-dummy-password-for-timing');
 
@@ -20,7 +23,54 @@ type Ctx = { ua?: string; ip?: string };
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly jwt: JwtService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwt: JwtService,
+    private readonly notifications: NotificationsService,
+  ) {}
+
+  /**
+   * Someone who cannot sign in raises their hand from the login page.
+   *
+   * There is no mail transport, so a reset LINK is impossible — instead we record the
+   * request on the user and notify everyone who can actually act on it (holders of
+   * user.manage_access: Admin, Super Admin, HR). They reset the account from People, and
+   * hand over the temporary password out of band.
+   *
+   * The caller is told the same thing whether or not the address exists: this endpoint is
+   * public, so distinguishing them would turn it into an account-enumeration oracle.
+   */
+  async requestPasswordReset(email: string): Promise<void> {
+    const user = await this.prisma.user.findFirst({
+      where: { email: email.trim().toLowerCase(), deletedAt: null, status: 'ACTIVE' },
+      select: { id: true, firstName: true, lastName: true, email: true, passwordResetRequestedAt: true },
+    });
+    if (!user) return;
+
+    // Already asked recently — keep the original timestamp and stay quiet, so a repeated
+    // click (or a bored attacker) can't flood the admins' notifications.
+    const last = user.passwordResetRequestedAt?.getTime() ?? 0;
+    if (Date.now() - last < RESET_REQUEST_COOLDOWN_MS) return;
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordResetRequestedAt: new Date() },
+    });
+
+    const admins = await this.prisma.user.findMany({
+      where: {
+        deletedAt: null, status: 'ACTIVE',
+        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } },
+      },
+      select: { id: true },
+    });
+    const name = `${user.firstName} ${user.lastName ?? ''}`.trim();
+    await this.notifications.notify(admins.map(a => a.id), {
+      type: 'account.reset_requested',
+      title: 'Password reset requested',
+      message: `${name} (${user.email}) cannot sign in and asked for a password reset. Reset it from People, then give them the temporary password.`,
+    });
+  }
 
   private toAuthUser(u: any): AuthUser {
     return {
@@ -47,12 +97,17 @@ export class AuthService {
     if (user?.lockedUntil && user.lockedUntil > new Date()) {
       throw new ForbiddenException('Account temporarily locked due to failed attempts. Try again later.');
     }
+    // Serving out a lock earns a fresh set of attempts. Without this the counter stays at
+    // MAX_FAILED once the lock lapses, so the very next typo increments past the threshold
+    // and re-locks immediately — the account never really recovers.
+    const lockLapsed = !!user?.lockedUntil && user.lockedUntil <= new Date();
+
     let valid = false;
     try { valid = await argonVerify(user?.passwordHash ?? DUMMY_HASH, password); } catch { valid = false; }
 
     if (!user || !user.passwordHash || !valid) {
       if (user) {
-        const failed = user.failedLoginCount + 1;
+        const failed = (lockLapsed ? 0 : user.failedLoginCount) + 1;
         await this.prisma.user.update({
           where: { id: user.id },
           data: { failedLoginCount: failed, lockedUntil: failed >= MAX_FAILED ? new Date(Date.now() + LOCK_MS) : null },

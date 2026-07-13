@@ -139,12 +139,15 @@ export type Subtask = {
 
 export type ApiTask = {
   id: string; title: string; description?: string; priority: string;
-  startDate?: string;
+  // `null` = no date set (what the server actually returns), and on an update `null` CLEARS
+  // the date, while omitting the field leaves it alone. `undefined` on clientDueDate means
+  // something different again: the server redacted it because this actor may not see it.
+  startDate?: string | null;
   /** INTERNAL deadline — visible to everyone; drives "overdue". */
-  dueDate?: string;
+  dueDate?: string | null;
   /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
-  clientDueDate?: string;
-  estimatedHours?: number; actualHours?: number;
+  clientDueDate?: string | null;
+  estimatedHours?: number | null; actualHours?: number;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdBy: string; createdAt: string; updatedAt: string;
   currentStatus?: WorkflowStatus;
@@ -161,11 +164,13 @@ export type Milestone = {
 
 export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
-  priority: string; startDate?: string;
+  // See ApiTask: `null` = unset (and clears on update); an ABSENT clientDueDate means the
+  // server redacted it from this actor.
+  priority: string; startDate?: string | null;
   /** INTERNAL deadline — visible to everyone. */
-  dueDate?: string;
+  dueDate?: string | null;
   /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
-  clientDueDate?: string;
+  clientDueDate?: string | null;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
@@ -367,6 +372,13 @@ export type PendingApproval = {
   requester?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
 };
 
+/** Someone who is locked out and has asked an admin to reset them. */
+export type PendingPasswordReset = {
+  id: string; firstName: string; lastName: string; email: string;
+  designation?: string | null; profilePhoto?: string | null;
+  passwordResetRequestedAt: string;
+};
+
 // ─── Attendance & Leave types ────────────────────────────────────────────────
 export type Attendance = {
   id: string; userId: string; organizationId?: string; date: string;
@@ -406,6 +418,9 @@ export const api = {
     me: () => req<AuthUser>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       req<{ ok: boolean }>('/auth/password/change', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+    /** "I can't sign in" — notifies the admins who can reset the account. Always succeeds. */
+    requestPasswordReset: (email: string) =>
+      req<{ ok: boolean; message: string }>('/auth/password/reset-request', { method: 'POST', body: JSON.stringify({ email }) }),
     // Org step-up "big change" passcode.
     passcodeStatus: () => req<{ configured: boolean }>('/auth/passcode/status'),
     changePasscode: (currentPasscode: string, newPasscode: string) =>
@@ -436,6 +451,9 @@ export const api = {
     get: (id: string) => req<UserSummary>(`/users/${id}`),
     resetPassword: (id: string) =>
       req<{ email: string; tempPassword: string }>(`/users/${id}/reset-password`, { method: 'POST' }),
+    /** People who asked for a reset from the login page and are waiting on an admin. */
+    pendingPasswordResets: () =>
+      req<PendingPasswordReset[]>('/users/password-reset-requests'),
     update: (id: string, data: Partial<Pick<UserSummary, 'firstName' | 'lastName' | 'designation' | 'status'>>) =>
       req<UserSummary>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
