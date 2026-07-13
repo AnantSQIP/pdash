@@ -21,20 +21,35 @@ async function main() {
   }
   if (added) console.log(`  Added ${added} new permission code(s) from the catalog`);
 
+  // Resolve every role's target permission set BEFORE touching anything.
+  const plan: { name: string; roleIds: string[]; permIds: string[] }[] = [];
   for (const [name, preset] of Object.entries(ROLE_PRESETS)) {
     const codes = preset === '*' ? ALL_PERMISSION_CODES : (preset as string[]);
     const perms = await prisma.permission.findMany({ where: { code: { in: codes } }, select: { id: true } });
-    const roles = await prisma.role.findMany({ where: { name } });
-    for (const r of roles) {
-      await prisma.rolePermission.deleteMany({ where: { roleId: r.id } });
-      if (perms.length) {
-        await prisma.rolePermission.createMany({
-          data: perms.map(p => ({ roleId: r.id, permissionId: p.id })),
-          skipDuplicates: true,
-        });
+    const roles = await prisma.role.findMany({ where: { name }, select: { id: true } });
+    plan.push({ name, roleIds: roles.map(r => r.id), permIds: perms.map(p => p.id) });
+  }
+
+  // Rewrite every role in ONE transaction. Each role's rows are deleted and re-created, so
+  // outside a transaction there is a window where the role holds NO permissions — and since
+  // permissions are read from the DB on every request (no cache), anyone using the app right
+  // then is denied. Postgres readers keep seeing the old rows until this commits.
+  await prisma.$transaction(async (tx) => {
+    for (const { roleIds, permIds } of plan) {
+      for (const roleId of roleIds) {
+        await tx.rolePermission.deleteMany({ where: { roleId } });
+        if (permIds.length) {
+          await tx.rolePermission.createMany({
+            data: permIds.map(permissionId => ({ roleId, permissionId })),
+            skipDuplicates: true,
+          });
+        }
       }
     }
-    console.log(`  ${name.padEnd(18)} ${roles.length} role(s) × ${perms.length} perms`);
+  });
+
+  for (const { name, roleIds, permIds } of plan) {
+    console.log(`  ${name.padEnd(18)} ${roleIds.length} role(s) × ${permIds.length} perms`);
   }
 }
 
