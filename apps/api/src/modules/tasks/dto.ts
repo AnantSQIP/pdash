@@ -9,6 +9,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateTaskDto {
   @IsString()
@@ -43,13 +44,24 @@ export class CreateTaskDto {
   @IsString()
   currentWorkflowStatusId?: string;
 
+  // `null` is meaningful on these three: it CLEARS the date. @IsOptional() lets null through
+  // validation, and the service distinguishes it from "field not sent".
   @IsOptional()
   @IsDateString()
-  startDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
 
+  /** INTERNAL deadline — what the assignee works to; drives "overdue". */
   @IsOptional()
   @IsDateString()
-  dueDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  dueDate?: string | null;
+
+  /** CLIENT deadline — restricted (requires deadline.view.client or managing the project). */
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
 
   @IsOptional()
   @IsNumber()
@@ -83,13 +95,24 @@ export class UpdateTaskDto {
   @Max(100)
   completionPercentage?: number;
 
+  // On an UPDATE, `null` (or an emptied form field, "") CLEARS the date; omitting the field
+  // leaves it alone. @IsOptional() lets null through, and the service distinguishes the two.
   @IsOptional()
   @IsDateString()
-  startDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
 
+  /** INTERNAL deadline. */
   @IsOptional()
   @IsDateString()
-  dueDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  dueDate?: string | null;
+
+  /** CLIENT deadline — restricted. */
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
 
   @IsOptional()
   @IsNumber()

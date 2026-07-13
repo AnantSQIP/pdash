@@ -6,7 +6,7 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, CheckSquare, BarChart2, Calendar, Clock,
-  MessageSquare, Users, Settings, Bell, ChevronDown, TrendingUp,
+  MessageSquare, Users, Users2, Settings, Bell, ChevronDown, TrendingUp,
   Shield, ScrollText, PanelLeftClose, PanelLeftOpen, X, type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -27,6 +27,8 @@ const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
   { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view' },
   { href: '/tasks',       icon: CheckSquare,     label: 'My Tasks',    perm: 'task.view' },
+  // Delivery-lead view: who is free, who is overloaded, who can take more work.
+  { href: '/capacity',    icon: Users2,          label: 'Team Capacity', perm: 'capacity.view' },
   { href: '/performance', icon: TrendingUp,      label: 'Performance', perm: 'performance.view.own' },
   { href: '/calendar',    icon: Calendar,        label: 'Calendar',    perm: 'calendar.view' },
   { href: '/attendance',  icon: Clock,           label: 'Attendance',  perm: 'attendance.view.own' },

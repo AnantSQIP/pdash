@@ -5,6 +5,9 @@ import { EVENTS } from '../../common/events/canonical-events';
 import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateTaskDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
+import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { startOfUtcDay, resolveDate } from '../../common/dates';
+
 
 @Injectable()
 export class TasksService {
@@ -12,7 +15,13 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
+    private readonly deadlines: DeadlineVisibilityService,
   ) {}
+
+  /** Strip the client deadline from a single task unless this actor may see it. */
+  private async redact<T extends { clientDueDate?: Date | null; projectTasks?: { projectId: string }[] }>(task: T): Promise<T> {
+    return this.deadlines.redactTask(task, await this.deadlines.scope());
+  }
 
   /**
    * Create a task and link it to a project via ProjectTask.
@@ -57,6 +66,14 @@ export class TasksService {
       workflowId = wf?.id;
     }
 
+    // Dual deadlines: the internal date is open to all; setting the CLIENT date needs
+    // deadline.view.client (or managing this project), and it must not precede it.
+    const scope = await this.deadlines.scope();
+    const internalDue = dto.dueDate ? new Date(dto.dueDate) : undefined;
+    const clientDue = dto.clientDueDate ? new Date(dto.clientDueDate) : undefined;
+    if (clientDue) await this.deadlines.assertMaySetClientDue([dto.projectId], scope);
+    this.deadlines.assertOrdered(internalDue, clientDue);
+
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
         data: {
@@ -64,7 +81,8 @@ export class TasksService {
           description: dto.description,
           priority: dto.priority ?? 'MEDIUM',
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-          dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+          dueDate: internalDue,
+          clientDueDate: clientDue,
           estimatedHours: dto.estimatedHours,
           createdBy: getActorId() ?? dto.createdBy ?? 'system',
           workflowId,
@@ -105,11 +123,11 @@ export class TasksService {
     });
     await this.recomputeProjectProgress(dto.projectId); // new task dilutes/updates progress
     if (dto.milestoneId) await this.recomputeMilestoneProgress(dto.milestoneId);
-    return task;
+    return this.deadlines.redactTask(task, scope);
   }
 
-  list(projectId: string, opts: { taskListId?: string; milestoneId?: string } = {}) {
-    return this.prisma.task.findMany({
+  async list(projectId: string, opts: { taskListId?: string; milestoneId?: string } = {}) {
+    const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
         projectTasks: {
@@ -123,10 +141,11 @@ export class TasksService {
       orderBy: { createdAt: 'asc' },
       include: this.taskInclude(),
     });
+    return this.deadlines.redactTasks(tasks, await this.deadlines.scope());
   }
 
-  listForUser(userId: string) {
-    return this.prisma.task.findMany({
+  async listForUser(userId: string) {
+    const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
         assignees: { some: { userId } },
@@ -146,9 +165,11 @@ export class TasksService {
         },
       },
     });
+    return this.deadlines.redactTasks(tasks, await this.deadlines.scope());
   }
 
-  async get(id: string) {
+  /** Unredacted read for internal callers (progress rollups, guards). */
+  private async getRaw(id: string) {
     const task = await this.prisma.task.findFirst({
       where: { id, deletedAt: null },
       include: this.taskIncludeFull(),
@@ -157,8 +178,28 @@ export class TasksService {
     return task;
   }
 
+  async get(id: string) {
+    return this.redact(await this.getRaw(id));
+  }
+
   async update(id: string, dto: UpdateTaskDto) {
-    const before = await this.get(id);
+    const before = await this.getRaw(id);
+    const projectIds = (before.projectTasks ?? []).map(pt => pt.projectId);
+
+    // Dual deadlines: only a client-deadline viewer (or this project's manager) may set
+    // one, and the internal date must not fall after it. Compare against the incoming
+    // value or the stored one, so a partial edit is still validated.
+    const scope = await this.deadlines.scope();
+    if (dto.clientDueDate !== undefined) await this.deadlines.assertMaySetClientDue(projectIds, scope);
+    const internalDue = resolveDate(dto.dueDate, before.dueDate);
+    const clientDue = resolveDate(dto.clientDueDate, before.clientDueDate);
+    this.deadlines.assertOrdered(internalDue, clientDue);
+
+    // Re-arm the overdue alert when the task can no longer be late for the reason it was
+    // flagged — the internal deadline moved into the future, or was removed altogether — so
+    // a future slip is reported again while the same slip never alerts twice.
+    const rearm = !!before.overdueNotifiedAt && (!internalDue || internalDue >= startOfUtcDay(new Date()));
+
     const updated = await this.prisma.task.update({
       where: { id },
       data: {
@@ -166,9 +207,13 @@ export class TasksService {
         description: dto.description,
         priority: dto.priority,
         completionPercentage: dto.completionPercentage,
-        startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        // `undefined` leaves the column alone; `null` CLEARS it. Collapsing the two would
+        // make a date impossible to remove once set (the update silently no-ops).
+        ...(dto.startDate === undefined ? {} : { startDate: resolveDate(dto.startDate, null) }),
+        ...(dto.dueDate === undefined ? {} : { dueDate: internalDue }),
+        ...(dto.clientDueDate === undefined ? {} : { clientDueDate: clientDue }),
         estimatedHours: dto.estimatedHours,
+        ...(rearm ? { overdueNotifiedAt: null } : {}),
       },
       include: this.taskInclude(),
     });
@@ -178,9 +223,9 @@ export class TasksService {
       action: EVENTS.TASK_UPDATED,
       entityType: 'TASK',
       entityId: id,
-      metadata: { projectId: (before as any).projectTasks?.[0]?.projectId, title: updated.title },
+      metadata: { projectId: projectIds[0], title: updated.title },
     });
-    return updated;
+    return this.deadlines.redactTask(updated, scope);
   }
 
   /**
@@ -188,7 +233,7 @@ export class TasksService {
    * If the target status has type CLOSED, all subtasks are also closed.
    */
   async setStatus(id: string, dto: SetStatusDto) {
-    const task = await this.get(id);
+    const task = await this.getRaw(id);
 
     const status = await this.prisma.workflowStatus.findUnique({
       where: { id: dto.statusId },
@@ -235,11 +280,11 @@ export class TasksService {
       metadata: { projectId, title: task.title },
     });
     await this.recomputeForTask(id); // status change → progress bar re-syncs
-    return updated;
+    return this.redact(updated);
   }
 
   async setAssignees(id: string, dto: SetAssigneesDto) {
-    const before = await this.get(id);
+    const before = await this.getRaw(id);
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     await this.prisma.$transaction([
       this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
@@ -265,7 +310,7 @@ export class TasksService {
   }
 
   async softDelete(id: string) {
-    const task = await this.get(id);
+    const task = await this.getRaw(id);
     const result = await this.prisma.task.update({
       where: { id },
       data: { deletedAt: new Date() },
@@ -326,7 +371,7 @@ export class TasksService {
   // ── Subtask methods (flat, one level only) ──────────────────
 
   async createSubtask(taskId: string, dto: CreateSubtaskDto) {
-    await this.get(taskId);
+    await this.getRaw(taskId);
     const subtask = await this.prisma.subtask.create({
       data: {
         taskId,

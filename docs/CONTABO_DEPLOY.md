@@ -17,7 +17,7 @@ read -rs -p "GitHub token: " GHT; echo
 git clone "https://x-access-token:${GHT}@github.com/AnantSQIP/pdash.git"
 cd pdash
 git remote set-url origin https://github.com/AnantSQIP/pdash.git   # scrub token from config
-git checkout squarkip-dashboard-snapshot
+git checkout main
 unset GHT
 
 # One command runs all 8 phases (system prep, Docker, secrets, build, seed, HTTPS, backups):
@@ -62,9 +62,53 @@ localhost and only Caddy (443) is public. Postgres and the API are never publish
 
 ## Update later
 
+`git pull` alone will NOT work: the clone step deliberately scrubs the token out of `origin`,
+and the repo is private. Fetch with a fresh token each time, and pin to `main` — a server left
+on an old branch silently keeps serving the old build, which looks exactly like "my changes
+didn't deploy".
+
 ```bash
-cd /root/pdash && git pull
+cd /root/pdash
+
+# 1. Fetch main with a FRESH token (never stored in git config or shell history)
+read -rs -p "GitHub token: " GHT; echo
+git fetch "https://x-access-token:${GHT}@github.com/AnantSQIP/pdash.git" main
+unset GHT
+git checkout -B main FETCH_HEAD
+git log --oneline -3          # confirm you actually got the new commits
+
+# 2. Rebuild. The api container runs `prisma migrate deploy` on start, so schema
+#    migrations apply themselves.
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+
+# 3. Wait for health
+for i in $(seq 1 40); do
+  curl -fsS http://127.0.0.1:3000/api/v1/health | grep -q '"db":"up"' && { echo HEALTHY; break; }
+  sleep 3
+done
+```
+
+### After a release that adds PERMISSIONS
+
+New permission codes are **not** granted by a migration — roles must be re-synced from the
+catalog. This is idempotent and does **not** wipe custom grants or log anyone out:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production \
+  exec -T api node packages/db/prisma/dist/regrant-roles.js
+```
+
+Verify what the release actually delivered, rather than trusting the build log:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production exec -T postgres \
+  psql -U pdash -d pdash -c "
+    select code from permission
+     where code in ('capacity.view','deadline.view.client','document.view')
+     order by code;
+    select count(*) as tasks_with_client_deadline_column
+      from information_schema.columns
+     where table_name='task' and column_name='clientDueDate';"
 ```
 
 ## Sizing for 30+ users

@@ -21,6 +21,7 @@ import { StatusesModule } from './modules/statuses/statuses.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { DocumentsModule } from './modules/documents/documents.module';
+import { DeadlinesModule } from './modules/deadlines/deadline-visibility.service';
 import { ApprovalsModule } from './modules/approvals/approvals.module';
 import { UsersModule } from './modules/users/users.module';
 import { DepartmentsModule } from './modules/departments/departments.module';
@@ -31,6 +32,8 @@ import { IssuesModule } from './modules/issues/issues.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { PerformanceModule } from './modules/performance/performance.module';
+import { CapacityModule } from './modules/capacity/capacity.module';
+import { OverdueModule } from './modules/overdue/overdue.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 
@@ -42,6 +45,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     PrismaModule,
     AuditEventsModule,
     PermissionsModule,
+    DeadlinesModule,
     AuthModule,
     HealthModule,
     // Org
@@ -71,6 +75,9 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     AnalyticsModule,
     AuditModule,
     PerformanceModule,
+    // Team availability board + the deadline watchdog that feeds its alerts.
+    CapacityModule,
+    OverdueModule,
     NotificationsModule,
   ],
   providers: [

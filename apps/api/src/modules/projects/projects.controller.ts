@@ -17,6 +17,18 @@ export class ProjectsController {
     return this.projects.list(organizationId, { phase });
   }
 
+  /** Project requests routed to me (as their manager) or, for admins, any pending one. */
+  @Get('pending-approvals')
+  pendingApprovals(@Query('organizationId') organizationId: string) {
+    return this.projects.pendingApprovals(organizationId);
+  }
+
+  /** People who can be nominated as a project's manager (i.e. can approve it). */
+  @Get('eligible-managers')
+  eligibleManagers(@Query('organizationId') organizationId: string) {
+    return this.projects.eligibleManagers(organizationId);
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     return this.projects.get(id);

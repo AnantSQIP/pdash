@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, Lock } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
@@ -33,6 +34,10 @@ const isOverdue = (t: ApiTask) => isPastDue(t.dueDate) && !isTaskClosed(t);
 
 export default function TasksPage() {
   const { currentUser, loading: orgLoading } = useOrg();
+  const { can } = usePermissions();
+  // The client deadline is redacted server-side for anyone without this; the column is
+  // only rendered for those who can actually receive it.
+  const canSeeClientDue = can('deadline.view.client');
   const qc = useQueryClient();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -183,7 +188,7 @@ export default function TasksPage() {
       {/* Content */}
       <div className="p-4 sm:p-6">
         {isLoading ? (
-          <TableShell>
+          <TableShell showClientDue={canSeeClientDue}>
             {Array.from({ length: 6 }).map((_, i) => (
               <tr key={i} className="animate-pulse">
                 <td className="px-4 py-3 w-8"><div className="w-4 h-4 rounded-full bg-gray-200" /></td>
@@ -193,6 +198,7 @@ export default function TasksPage() {
                 <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-20" /></td>
                 <td className="px-4 py-3"><div className="h-6 bg-gray-100 rounded-full w-16" /></td>
                 <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>
+                {canSeeClientDue && <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>}
                 <td className="px-4 py-3"><div className="h-1.5 bg-gray-100 rounded-full w-16" /></td>
               </tr>
             ))}
@@ -218,7 +224,7 @@ export default function TasksPage() {
             </p>
           </div>
         ) : (
-          <TableShell>
+          <TableShell showClientDue={canSeeClientDue}>
             {filtered.map(task => {
               const closed = isTaskClosed(task);
               const overdue = isOverdue(task);
@@ -276,6 +282,15 @@ export default function TasksPage() {
                       </span>
                     ) : <span className="text-xs text-gray-400">—</span>}
                   </td>
+                  {canSeeClientDue && (
+                    <td className="px-4 py-3">
+                      {task.clientDueDate ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full">
+                          <Lock size={9} /> {formatDate(task.clientDueDate)}
+                        </span>
+                      ) : <span className="text-xs text-gray-300">—</span>}
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -304,7 +319,10 @@ export default function TasksPage() {
 }
 
 // Shared table chrome so the loading, populated and (implicitly) empty states line up.
-function TableShell({ children }: { children: React.ReactNode }) {
+// The "Client Due" column only exists for actors allowed to see client deadlines.
+function TableShell({ children, showClientDue }: { children: React.ReactNode; showClientDue?: boolean }) {
+  const headers = ['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due (internal)',
+    ...(showClientDue ? ['Client Due'] : []), 'Progress'];
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">
@@ -312,7 +330,7 @@ function TableShell({ children }: { children: React.ReactNode }) {
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50">
               <th className="w-8 px-4 py-2.5" />
-              {['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due', 'Progress'].map(h => (
+              {headers.map(h => (
                 <th key={h} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
               ))}
             </tr>

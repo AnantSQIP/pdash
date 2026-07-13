@@ -428,7 +428,12 @@ model Project {
   projectPhase            String    @default("PLANNING")
   priority                String    @default("MEDIUM")
   startDate               DateTime?
+  // dueDate = the INTERNAL deadline (visible to everyone; drives "overdue").
   dueDate                 DateTime?
+  // clientDueDate = the date committed to the CLIENT. Restricted: only actors with
+  // deadline.client.view (or a MANAGER of this project) ever receive it — redacted
+  // server-side, never merely hidden in the UI.
+  clientDueDate           DateTime?
   completionPercentage    Int       @default(0)
   workflowId              String?
   currentWorkflowStatusId String?
@@ -507,7 +512,13 @@ model Task {
   description             String?
   priority                String    @default("MEDIUM")
   startDate               DateTime?
+  // dueDate = the INTERNAL deadline the assignee works to; drives "overdue" + alerts.
   dueDate                 DateTime?
+  // clientDueDate = the client-facing commitment. Restricted (see Project.clientDueDate).
+  clientDueDate           DateTime?
+  // Set when an overdue alert has been sent for this task; cleared when the internal
+  // deadline moves to the future, so a re-slip alerts again but a slip never spams.
+  overdueNotifiedAt       DateTime?
   estimatedHours          Float?
   actualHours             Float?
   completionPercentage    Int       @default(0)

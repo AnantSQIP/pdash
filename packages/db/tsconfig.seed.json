@@ -12,5 +12,11 @@
     "outDir": "prisma/dist",
     "rootDir": "prisma"
   },
-  "include": ["prisma/seed.ts", "prisma/permissions-catalog.ts", "prisma/reset-passwords.ts", "prisma/set-passcode.ts"]
+  "include": [
+    "prisma/seed.ts",
+    "prisma/permissions-catalog.ts",
+    "prisma/reset-passwords.ts",
+    "prisma/set-passcode.ts",
+    "prisma/regrant-roles.ts"
+  ]
 }

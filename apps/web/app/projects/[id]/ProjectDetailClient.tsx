@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar,
-  LayoutList, Flag, UserPlus, X as XIcon,
+  LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -252,11 +252,19 @@ export function ProjectDetailClient({ projectId }: Props) {
               <span><span className="font-medium text-gray-900">{project._count?.members ?? project.members?.length ?? 0}</span> members</span>
             </div>
             {project.dueDate && (
-              <div className="flex items-center gap-1.5 text-gray-500">
+              <div className="flex items-center gap-1.5 text-gray-500" title="Internal deadline — the team's date">
                 <Calendar size={14} />
-                <span>Due <span className="font-medium text-gray-900">
-                  {new Date(project.dueDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                </span></span>
+                <span>Internal <span className="font-medium text-gray-900">{formatDate(project.dueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
+              </div>
+            )}
+            {/* Only present when the API sent it — i.e. this actor may see client deadlines. */}
+            {project.clientDueDate && (
+              <div
+                className="flex items-center gap-1.5 text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full"
+                title="Client deadline — visible to managers and admins only"
+              >
+                <LockIcon size={12} />
+                <span>Client <span className="font-semibold">{formatDate(project.clientDueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
               </div>
             )}
             <div className="flex items-center gap-2 ml-auto">

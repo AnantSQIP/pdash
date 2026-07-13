@@ -13,6 +13,7 @@ import {
   api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance,
   type OrgPerformance, type OrgAttendanceSummary, type LeaveRequestItem,
   type Holiday, type RoleSummary, type Attendance, type LeaveBalance, type UserSummary,
+  type PendingApproval, type TeamCapacity,
 } from '@/lib/api';
 import { formatDate } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
@@ -535,6 +536,113 @@ export function AdminShortcutsCard() {
           </Link>
         ))}
       </div>
+    </Card>
+  );
+}
+
+// ── Project requests awaiting MY approval (project.approve) ─────────────────
+// The other half of the intern flow: a junior submits a project, and it lands here
+// for the manager they nominated.
+export function ProjectApprovalsCard() {
+  const { org } = useOrg();
+  const { can } = usePermissions();
+  const allowed = can('project.approve');
+  const qc = useQueryClient();
+  const { data: pending = [], isLoading } = useQuery<PendingApproval[]>({
+    queryKey: ['project-approvals', org?.id],
+    queryFn: () => api.projects.pendingApprovals(org!.id),
+    enabled: allowed && !!org?.id, staleTime: 30_000, placeholderData: keepPreviousData,
+  });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['project-approvals', org?.id] });
+    qc.invalidateQueries({ queryKey: ['projects'] });
+  };
+  const approve = useMutation({ mutationFn: (id: string) => api.projects.approve(id), onSuccess: invalidate });
+  const reject = useMutation({ mutationFn: (id: string) => api.projects.reject(id), onSuccess: invalidate });
+  if (!allowed) return null;
+  const busy = approve.isPending || reject.isPending;
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
+        <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+          <FolderKanban size={16} className="text-brand-600" /> Project Requests
+          {pending.length > 0 && <span className="text-xs font-semibold bg-red-100 text-red-600 px-2 py-0.5 rounded-full">{pending.length}</span>}
+        </h2>
+        <Link href="/projects" className="text-sm text-brand-600 hover:underline shrink-0">All projects →</Link>
+      </div>
+      {isLoading ? (
+        <div className="px-5 py-8"><div className="h-4 bg-gray-100 animate-pulse rounded" /></div>
+      ) : pending.length === 0 ? (
+        <EmptyHint>No project requests awaiting your approval.</EmptyHint>
+      ) : (
+        pending.slice(0, 5).map(p => (
+          <div key={p.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <Link href={`/projects/${p.id}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 truncate block">{p.title}</Link>
+              <p className="text-xs text-gray-400">
+                {p.requester ? `${p.requester.firstName} ${p.requester.lastName ?? ''}`.trim() : 'Someone'} requested this
+                {p.dueDate ? ` · due ${formatDate(p.dueDate)}` : ''}
+              </p>
+            </div>
+            <button disabled={busy} onClick={() => approve.mutate(p.id)}
+              className="p-1.5 rounded-md bg-green-50 text-green-600 hover:bg-green-100 disabled:opacity-40" title="Approve">
+              <Check size={15} />
+            </button>
+            <button disabled={busy} onClick={() => reject.mutate(p.id)}
+              className="p-1.5 rounded-md bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-40" title="Reject">
+              <X size={15} />
+            </button>
+          </div>
+        ))
+      )}
+    </Card>
+  );
+}
+
+// ── Team availability snapshot (capacity.view) ──────────────────────────────
+export function TeamAvailabilityCard() {
+  const { org } = useOrg();
+  const { can } = usePermissions();
+  const allowed = can('capacity.view');
+  const { data, isLoading } = useQuery<TeamCapacity>({
+    queryKey: ['capacity', org?.id, 7],
+    queryFn: () => api.capacity.team(org!.id, 7),
+    enabled: allowed && !!org?.id, staleTime: 60_000, placeholderData: keepPreviousData,
+  });
+  if (!allowed) return null;
+  const rows = data?.rows ?? [];
+  const freeNow = rows.filter(r => r.availableNow);
+  const soon = rows.filter(r => !r.availableNow && r.nextFreeDate).slice(0, 3);
+
+  return (
+    <Card>
+      <CardHeader title="Team Availability" icon={UserCheck} iconColor="text-emerald-600" href="/capacity" linkLabel="Capacity board" />
+      <MetricRow loading={isLoading} items={[
+        { label: 'Available now', value: freeNow.length, badge: 'bg-emerald-100 text-emerald-700' },
+        { label: 'Overloaded',   value: rows.filter(r => r.days.some(d => d.state === 'OVERLOADED')).length, badge: 'bg-red-100 text-red-600' },
+        { label: 'Spare hours',  value: `${Math.round(rows.reduce((s, r) => s + r.freeHours, 0))}h`, badge: 'bg-amber-100 text-amber-700' },
+        { label: 'Overdue',      value: rows.reduce((s, r) => s + r.overdueCount, 0), badge: 'bg-purple-100 text-purple-700' },
+      ]} />
+      {(freeNow.length > 0 || soon.length > 0) && (
+        <div className="px-5 py-3 border-t border-gray-100">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-2">Available for more work</p>
+          {freeNow.slice(0, 3).map(r => (
+            <div key={r.userId} className="flex items-center gap-2 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+              <span className="text-sm text-gray-700 flex-1 truncate">{r.name}</span>
+              <span className="text-xs text-emerald-600 font-medium">{r.freeHours}h free</span>
+            </div>
+          ))}
+          {soon.map(r => (
+            <div key={r.userId} className="flex items-center gap-2 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
+              <span className="text-sm text-gray-500 flex-1 truncate">{r.name}</span>
+              <span className="text-xs text-gray-400">free {formatDate(r.nextFreeDate!)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

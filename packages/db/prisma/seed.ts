@@ -1,6 +1,7 @@
 // SquarkIP seed — full reset. Wipes all data and rebuilds an IP/patent-services workspace.
 import { PrismaClient, Prisma } from '@prisma/client';
 import { hash as argonHash } from '@node-rs/argon2';
+import { randomBytes } from 'node:crypto';
 import { PERMISSIONS, ROLE_PRESETS, ALL_PERMISSION_CODES } from './permissions-catalog';
 
 const prisma = new PrismaClient();
@@ -62,15 +63,23 @@ async function main() {
   console.log('Done. Building SquarkIP workspace...');
 
   // ─── Organization ─────────────────────────────────────────────────────────
-  // Step-up "big change" passcode — required (on top of RBAC) for sensitive
-  // org/people/RBAC mutations. Default 'sqip@infinity'; change via Settings or
-  // the set-passcode.ts script. Override the seed default with SEED_ORG_PASSCODE.
+  // Step-up "big change" passcode — a SECOND factor, on top of RBAC, for sensitive
+  // org/people/RBAC mutations. Its whole purpose is to survive a compromised admin
+  // account, so it must never be a value that ships in this repository: anyone who can
+  // read the source would know it. With no SEED_ORG_PASSCODE we mint a random one and
+  // print it ONCE — an operator who wants a memorable passcode sets it explicitly, and
+  // an operator who forgets is not silently left with a published one.
+  const orgPasscode = process.env.SEED_ORG_PASSCODE ?? randomBytes(9).toString('base64url');
   const org = await prisma.organization.create({
     data: {
       name: 'Squark IP', code: 'pdash-demo', status: 'ACTIVE',
-      securityPasscodeHash: await argonHash(process.env.SEED_ORG_PASSCODE ?? 'sqip@infinity'),
+      securityPasscodeHash: await argonHash(orgPasscode),
     },
   });
+  if (!process.env.SEED_ORG_PASSCODE) {
+    console.log(`\n  ⚠  Org step-up passcode (shown once, store it now): ${orgPasscode}`);
+    console.log('     Change it any time with packages/db/prisma/set-passcode.ts\n');
+  }
 
   // ─── Roles ────────────────────────────────────────────────────────────────
   const superAdminRole = await prisma.role.create({ data: { id: 'role-superadmin', organizationId: org.id, name: 'Super Admin', description: 'Full system access' } });
