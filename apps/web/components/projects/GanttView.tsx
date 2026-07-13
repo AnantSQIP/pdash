@@ -19,7 +19,7 @@ const MONTH_NAMES = [
 ];
 
 /** Parse a 'YYYY-MM-DD' (or ISO) string to a day-aligned Date, or null. */
-function parseDay(value?: string): Date | null {
+function parseDay(value?: string | null): Date | null {
   if (!value) return null;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;

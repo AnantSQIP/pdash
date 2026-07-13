@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
-  ArrowLeft, Plus, CheckSquare, Users, Calendar,
+  ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -15,6 +15,7 @@ import IssuesTab from '@/components/projects/IssuesTab';
 import ActivityTab from '@/components/projects/ActivityTab';
 import TimesheetsTab from '@/components/projects/TimesheetsTab';
 import FilesTab from '@/components/projects/FilesTab';
+import { EditProjectModal } from '@/components/projects/EditProjectModal';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -48,6 +49,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
   const [deciding, setDeciding] = useState(false);
+  const [editingProject, setEditingProject] = useState(false);
 
   // #10: make the project approval workflow reachable — approvers can approve/reject
   // a project awaiting review (phase PLANNING) instead of it being stuck forever.
@@ -230,6 +232,15 @@ export function ProjectDetailClient({ projectId }: Props) {
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {can('project.update') && (
+                <button
+                  onClick={() => setEditingProject(true)}
+                  title="Edit the project's details and deadlines"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Pencil size={14} /> Edit
+                </button>
+              )}
               <button
                 onClick={() => openAddTask()}
                 disabled={!defaultTaskList}
@@ -385,6 +396,18 @@ export function ProjectDetailClient({ projectId }: Props) {
           invalidateTasks();
         }}
       />
+
+      {editingProject && (
+        <EditProjectModal
+          project={project}
+          onClose={() => setEditingProject(false)}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ['project', projectId] });
+            qc.invalidateQueries({ queryKey: ['projects'] });
+            qc.invalidateQueries({ queryKey: ['capacity'] }); // the board reads these dates
+          }}
+        />
+      )}
     </div>
   );
 }

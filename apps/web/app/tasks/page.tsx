@@ -157,6 +157,8 @@ export default function TasksPage() {
                 statusFilter === f ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500',
               )}>
                 {counts[f]}
+
+                
               </span>
             </button>
           ))}
