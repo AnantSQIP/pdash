@@ -21,6 +21,15 @@ export class CreateProjectDto {
   @IsString()
   createdBy?: string;
 
+  /**
+   * The project manager who owns this project and APPROVES it. Required when the
+   * requester cannot approve projects themselves (e.g. an Employee/intern raising a
+   * project request); defaults to the requester when they can approve.
+   */
+  @IsOptional()
+  @IsString()
+  managerId?: string;
+
   @IsOptional()
   @IsString()
   description?: string;
@@ -33,9 +42,15 @@ export class CreateProjectDto {
   @IsDateString()
   startDate?: string;
 
+  /** INTERNAL deadline — visible to everyone. */
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  /** CLIENT deadline — restricted (requires deadline.view.client). */
+  @IsOptional()
+  @IsDateString()
+  clientDueDate?: string;
 }
 
 export class UpdateProjectDto {
@@ -60,9 +75,15 @@ export class UpdateProjectDto {
   @IsDateString()
   startDate?: string;
 
+  /** INTERNAL deadline. */
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  /** CLIENT deadline — restricted. */
+  @IsOptional()
+  @IsDateString()
+  clientDueDate?: string;
 
   @IsOptional()
   @IsInt()

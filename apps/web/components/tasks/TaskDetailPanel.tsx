@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  X, Flag, Calendar, MessageCircle,
+  X, Flag, Calendar, MessageCircle, Lock,
   Clock, Plus, RefreshCw, ChevronDown, Loader, Check, Search, UserPlus, Trash2,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -167,6 +167,10 @@ function TaskDetailPanelInner({
     ? task.priority.charAt(0) + task.priority.slice(1).toLowerCase()
     : '—';
   const formattedDue = formatDate(task.dueDate, { month: 'short', day: 'numeric', year: 'numeric' });
+  // Present only when the API sent it (i.e. the actor may see client deadlines).
+  const formattedClientDue = task.clientDueDate
+    ? formatDate(task.clientDueDate, { month: 'short', day: 'numeric', year: 'numeric' })
+    : null;
 
   const assigneeUsers = assigneeIds
     .map(id => users.find(u => u.id === id))
@@ -418,10 +422,19 @@ function TaskDetailPanelInner({
               ? <AvatarStack users={stackUsers} size={24} />
               : <span className="text-sm text-gray-400 italic">Unassigned</span>}
           </button>
-          <div className="flex items-center gap-1 text-sm text-gray-500">
+          <div className="flex items-center gap-1 text-sm text-gray-500" title="Internal deadline — the team's date">
             <Calendar size={13} />
             {formattedDue}
           </div>
+          {formattedClientDue && (
+            <div
+              className="flex items-center gap-1 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full"
+              title="Client deadline — visible to managers and admins only"
+            >
+              <Lock size={11} />
+              {formattedClientDue}
+            </div>
+          )}
           {task.estimatedHours && (
             <div className="flex items-center gap-1 text-sm text-gray-500">
               <Clock size={13} />
@@ -507,13 +520,16 @@ function TaskDetailPanelInner({
                 { label: 'Status', value: statusName },
                 { label: 'Priority', value: priorityLabel },
                 { label: 'Assignees', value: assigneeIds.length ? `${assigneeIds.length} assigned` : 'Unassigned' },
-                { label: 'Due Date', value: formattedDue },
+                { label: 'Internal Deadline', value: formattedDue },
+                ...(formattedClientDue ? [{ label: 'Client Deadline', value: formattedClientDue, restricted: true }] : []),
                 { label: 'Est. Hours', value: task.estimatedHours ? `${task.estimatedHours}h` : 'Not set' },
                 { label: 'Progress', value: `${progress}%` },
-              ].map(({ label, value }) => (
+              ].map(({ label, value, restricted }: { label: string; value: string; restricted?: boolean }) => (
                 <div key={label}>
-                  <p className="text-xs text-gray-400 uppercase tracking-wide mb-0.5">{label}</p>
-                  <p className="text-gray-700 font-medium">{value}</p>
+                  <p className={clsx('text-xs uppercase tracking-wide mb-0.5 flex items-center gap-1', restricted ? 'text-amber-600' : 'text-gray-400')}>
+                    {restricted && <Lock size={9} />}{label}
+                  </p>
+                  <p className={clsx('font-medium', restricted ? 'text-amber-800' : 'text-gray-700')}>{value}</p>
                 </div>
               ))}
             </div>

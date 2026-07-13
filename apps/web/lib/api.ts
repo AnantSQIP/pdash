@@ -139,7 +139,12 @@ export type Subtask = {
 
 export type ApiTask = {
   id: string; title: string; description?: string; priority: string;
-  startDate?: string; dueDate?: string; estimatedHours?: number; actualHours?: number;
+  startDate?: string;
+  /** INTERNAL deadline — visible to everyone; drives "overdue". */
+  dueDate?: string;
+  /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
+  clientDueDate?: string;
+  estimatedHours?: number; actualHours?: number;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdBy: string; createdAt: string; updatedAt: string;
   currentStatus?: WorkflowStatus;
@@ -156,7 +161,11 @@ export type Milestone = {
 
 export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
-  priority: string; startDate?: string; dueDate?: string;
+  priority: string; startDate?: string;
+  /** INTERNAL deadline — visible to everyone. */
+  dueDate?: string;
+  /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
+  clientDueDate?: string;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
@@ -332,6 +341,32 @@ export type DepartmentSummary = {
   head?: UserSummary | null;
 };
 
+// ─── Team capacity / availability ────────────────────────────────────────────
+export type DayState = 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY' | 'OVERLOADED';
+export type CapacityDay = {
+  date: string; state: DayState; load: number; capacity: number;
+  utilization: number; free: number; note?: string;
+};
+export type CapacityOpenTask = {
+  id: string; title: string; projectId?: string; project?: string;
+  dueDate?: string | null; priority: string; completionPercentage: number;
+  remainingHours: number; overdue: boolean;
+};
+export type CapacityRow = {
+  userId: string; name: string; designation?: string; department?: string; profilePhoto?: string | null;
+  days: CapacityDay[];
+  openTasks: CapacityOpenTask[];
+  freeHours: number; committedHours: number; capacityHours: number; utilization: number;
+  nextFreeDate: string | null; freeRunDays: number; availableNow: boolean; overdueCount: number;
+};
+export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[] };
+
+// ─── Project approval queue ──────────────────────────────────────────────────
+export type PendingApproval = {
+  id: string; title: string; priority: string; dueDate?: string | null; requestedAt: string;
+  requester?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
+};
+
 // ─── Attendance & Leave types ────────────────────────────────────────────────
 export type Attendance = {
   id: string; userId: string; organizationId?: string; date: string;
@@ -412,10 +447,19 @@ export const api = {
       return req<ApiProject[]>(`/projects?${params}`);
     },
     get: (id: string) => req<ApiProject>(`/projects/${id}`),
-    create: (data: { title: string; description?: string; priority?: string; dueDate?: string; createdBy: string }) =>
-      req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'completionPercentage'>>) =>
+    create: (data: {
+      title: string; description?: string; priority?: string; startDate?: string;
+      dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
+    }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Project requests routed to me as their manager (or, for admins, any pending). */
+    pendingApprovals: (orgId: string) =>
+      req<PendingApproval[]>(`/projects/pending-approvals?organizationId=${encodeURIComponent(orgId)}`),
+    /** People who can be nominated as a project's manager (they can approve it). */
+    eligibleManagers: (orgId: string) =>
+      req<Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>[]>(
+        `/projects/eligible-managers?organizationId=${encodeURIComponent(orgId)}`),
     delete: (id: string) => req<void>(`/projects/${id}`, { method: 'DELETE' }),
     // The approver is the verified cookie actor server-side; only an optional reason is sent.
     approve: (id: string, reason?: string) =>
@@ -457,11 +501,11 @@ export const api = {
     get: (id: string) => req<ApiTask>(`/tasks/${id}`),
     create: (data: {
       title: string; projectId: string; taskListId: string; createdBy: string;
-      description?: string; priority?: string; dueDate?: string;
+      description?: string; priority?: string; startDate?: string; dueDate?: string; clientDueDate?: string;
       estimatedHours?: number; assigneeIds?: string[];
       milestoneId?: string; currentWorkflowStatusId?: string;
     }) => req<ApiTask>('/tasks', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<ApiTask, 'title' | 'description' | 'priority' | 'completionPercentage' | 'startDate' | 'dueDate' | 'estimatedHours'>>) =>
+    update: (id: string, data: Partial<Pick<ApiTask, 'title' | 'description' | 'priority' | 'completionPercentage' | 'startDate' | 'dueDate' | 'clientDueDate' | 'estimatedHours'>>) =>
       req<ApiTask>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     setStatus: (id: string, statusId: string) =>
       req<ApiTask>(`/tasks/${id}/status`, { method: 'PUT', body: JSON.stringify({ statusId }) }),
@@ -655,6 +699,17 @@ export const api = {
 
   departments: {
     list: (orgId: string) => req<DepartmentSummary[]>(`/departments?organizationId=${encodeURIComponent(orgId)}`),
+  },
+
+  capacity: {
+    /** Who is busy, who is free, and when — across every project. */
+    team: (orgId: string, days = 14) =>
+      req<TeamCapacity>(`/capacity/team?organizationId=${encodeURIComponent(orgId)}&days=${days}`),
+  },
+
+  overdue: {
+    /** Force an overdue sweep now (the hourly one still runs). */
+    sweep: () => req<{ alerted: number; digests: number }>('/overdue/sweep', { method: 'POST' }),
   },
 
   attendance: {

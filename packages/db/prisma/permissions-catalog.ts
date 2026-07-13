@@ -25,6 +25,7 @@ export const ACTION_LABELS: Record<string, string> = {
   regularize: 'Regularize',
   'view.own': 'View Own',
   'view.organization': 'View Org-wide',
+  'view.client': 'View Client Deadline',
 };
 
 export const MODULES: ModuleDef[] = [
@@ -42,6 +43,11 @@ export const MODULES: ModuleDef[] = [
   { key: 'report',      label: 'Reports',      actions: ['view', 'export'] },
   { key: 'analytics',   label: 'Analytics',    actions: ['view.own', 'view.organization'] },
   { key: 'performance', label: 'Performance',  actions: ['view.own', 'view.organization'] },
+  // Team availability / workload board — who is busy, who is free, who is overloaded.
+  { key: 'capacity',    label: 'Team Capacity', actions: ['view'] },
+  // The client-facing deadline is restricted: only these holders (plus a project's own
+  // manager, for that project) ever receive it from the API.
+  { key: 'deadline',    label: 'Client Deadlines', actions: ['view.client'] },
   { key: 'attendance',  label: 'Attendance',   actions: ['view.own', 'view.organization', 'manage', 'regularize'] },
   { key: 'leave',       label: 'Leave',        actions: ['view.own', 'view.organization', 'request', 'approve'] },
   { key: 'holiday',     label: 'Holidays',     actions: ['view', 'manage'] },
@@ -100,6 +106,8 @@ const MANAGER_CODES = [
   code('report', 'export'),
   code('analytics', 'view.organization'),
   code('performance', 'view.own'), code('performance', 'view.organization'),
+  // Delivery oversight: see who is free/overloaded, and the client-facing dates.
+  code('capacity', 'view'), code('deadline', 'view.client'),
   code('attendance', 'view.organization'), code('attendance', 'regularize'),
   code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
   code('holiday', 'manage'),
@@ -107,8 +115,12 @@ const MANAGER_CODES = [
 ];
 
 // Employee: see work, manage own contributions.
+// project.create here means "REQUEST a project": a new project always starts PENDING
+// approval (D2), and an Employee cannot approve one (no project.approve) — so an intern
+// can submit a project that the manager they nominate must approve.
 const EMPLOYEE_CODES = [
   ...VIEW_BASICS,
+  code('project', 'create'),
   code('task', 'create'), code('task', 'update'),
   code('timesheet', 'create'), code('timesheet', 'update'),
   code('issue', 'create'),
@@ -139,14 +151,17 @@ const SENIOR_CONSULTANT_CODES = [
   code('report', 'export'),
   code('analytics', 'view.organization'),
   code('performance', 'view.own'), code('performance', 'view.organization'),
+  // Delivery oversight: see who is free/overloaded, and the client-facing dates.
+  code('capacity', 'view'), code('deadline', 'view.client'),
   code('leave', 'request'),
   code('user', 'view'), code('department', 'view'),
 ];
 
-// Consultant: senior contributor — more than an Employee (can assign tasks and
-// shape milestones/issues) but cannot create or approve projects.
+// Consultant: senior contributor — can assign tasks and shape milestones/issues, and
+// REQUEST a project (approval-gated), but cannot approve projects.
 const CONSULTANT_CODES = [
   ...VIEW_BASICS,
+  code('project', 'create'),
   code('task', 'create'), code('task', 'update'), code('task', 'assign'),
   code('milestone', 'create'), code('milestone', 'update'),
   code('tasklist', 'create'), code('tasklist', 'update'),

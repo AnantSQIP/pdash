@@ -47,9 +47,15 @@ export class CreateTaskDto {
   @IsDateString()
   startDate?: string;
 
+  /** INTERNAL deadline — what the assignee works to; drives "overdue". */
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  /** CLIENT deadline — restricted (requires deadline.view.client or managing the project). */
+  @IsOptional()
+  @IsDateString()
+  clientDueDate?: string;
 
   @IsOptional()
   @IsNumber()
@@ -87,9 +93,15 @@ export class UpdateTaskDto {
   @IsDateString()
   startDate?: string;
 
+  /** INTERNAL deadline. */
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  /** CLIENT deadline — restricted. */
+  @IsOptional()
+  @IsDateString()
+  clientDueDate?: string;
 
   @IsOptional()
   @IsNumber()

@@ -33,6 +33,9 @@ function relativeDue(ts: number): string {
 
 const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: string; bg: string }> = {
   'task.assigned':    { Icon: RiUserAddLine,        color: 'text-brand-600',  bg: 'bg-brand-50' },
+  'task.overdue':        { Icon: RiAlarmWarningLine, color: 'text-red-600',    bg: 'bg-red-50' },
+  'task.overdue_digest': { Icon: RiAlarmWarningLine, color: 'text-amber-600',  bg: 'bg-amber-50' },
+  'project.approval_requested': { Icon: RiCheckboxCircleLine, color: 'text-brand-600', bg: 'bg-brand-50' },
   'leave.approved':   { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'leave.rejected':   { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
   'project.approved': { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
