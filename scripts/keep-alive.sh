@@ -20,7 +20,12 @@
 set -u
 
 ROOT="/home/sqip031/pdash"
-CF="/home/sqip031/.local/bin/cloudflared"
+# node, npx and cloudflared all live here. systemd user units start with a minimal PATH
+# that does NOT include ~/.local/bin, so without this the supervisor cannot find `node`
+# and silently fails to start anything — the demo link stays down after every reboot.
+BIN="/home/sqip031/.local/bin"
+export PATH="$BIN:$PATH"
+CF="$BIN/cloudflared"
 API_PORT=4000
 WEB_PORT=3001
 INTERVAL=15
@@ -47,7 +52,10 @@ if [ -z "${JWT_ACCESS_SECRET:-}" ] || [ "${#JWT_ACCESS_SECRET}" -lt 32 ] \
   log "WARN: production requested but JWT_ACCESS_SECRET is weak/unset — staying in development. Create $ROOT/.env.production with a strong (>=32 char) JWT_ACCESS_SECRET + CORS_ORIGINS to enable production hardening."
 fi
 
-# single instance
+# Single instance. NOTE: every process spawned below MUST close fd 9 (`9>&-`), or it
+# inherits this lock and keeps holding it after the supervisor dies — a long-lived child
+# like cloudflared then locks out every future supervisor, which silently stops anything
+# from being restarted and takes the demo down until someone notices.
 exec 9>"$LOCK" || exit 0
 if ! flock -n 9; then
   echo "$(date '+%F %T') supervisor already running; exiting" >>"$LOG"
@@ -56,21 +64,25 @@ fi
 
 start_api(){
   log "API :$API_PORT DOWN -> starting"
-  ( cd "$ROOT" && setsid nohup node apps/api/dist/main.js >>"$ROOT/.api.log" 2>&1 & ) 2>/dev/null
+  ( cd "$ROOT" && setsid nohup node apps/api/dist/main.js >>"$ROOT/.api.log" 2>&1 9>&- & ) 2>/dev/null
 }
 
 start_web(){
   log "WEB :$WEB_PORT DOWN -> starting"
   ( cd "$ROOT/apps/web" && setsid nohup env API_ORIGIN="http://localhost:$API_PORT" \
-      npx next start -p "$WEB_PORT" >>"$ROOT/.web.log" 2>&1 & ) 2>/dev/null
+      npx next start -p "$WEB_PORT" >>"$ROOT/.web.log" 2>&1 9>&- & ) 2>/dev/null
 }
 
 tunnel_running(){ pgrep -f 'cloudflared tunnel --url' >/dev/null 2>&1; }
 
 start_tunnel(){
   log "TUNNEL DOWN -> creating a NEW quick tunnel (public URL will CHANGE)"
+  # Start from an empty log. The URL is scraped back out of this file below, and a quick
+  # tunnel announces its URL exactly once at startup — so if a previous run's URL were
+  # still in the file we would scrape that DEAD url and publish it as the live link.
+  mv -f "$ROOT/.cf-tunnel.log" "$ROOT/.cf-tunnel.log.prev" 2>/dev/null || true
   ( setsid nohup "$CF" tunnel --url "http://localhost:$WEB_PORT" --no-autoupdate \
-      >>"$ROOT/.cf-tunnel.log" 2>&1 & ) 2>/dev/null
+      >>"$ROOT/.cf-tunnel.log" 2>&1 9>&- & ) 2>/dev/null
   for _ in $(seq 1 20); do
     u=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$ROOT/.cf-tunnel.log" 2>/dev/null | tail -1)
     if [ -n "$u" ]; then echo "$u" >"$URLFILE"; log "NEW TUNNEL URL: $u  (share this with the boss)"; return; fi
