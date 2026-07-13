@@ -550,7 +550,7 @@ export function ProjectApprovalsCard() {
   const qc = useQueryClient();
   const { data: pending = [], isLoading } = useQuery<PendingApproval[]>({
     queryKey: ['project-approvals', org?.id],
-    queryFn: () => api.projects.pendingApprovals(org!.id),
+    queryFn: () => api.projects.pendingApprovals(),
     enabled: allowed && !!org?.id, staleTime: 30_000, placeholderData: keepPreviousData,
   });
   const invalidate = () => {
@@ -607,7 +607,7 @@ export function TeamAvailabilityCard() {
   const allowed = can('capacity.view');
   const { data, isLoading } = useQuery<TeamCapacity>({
     queryKey: ['capacity', org?.id, 7],
-    queryFn: () => api.capacity.team(org!.id, 7),
+    queryFn: () => api.capacity.team(7),
     enabled: allowed && !!org?.id, staleTime: 60_000, placeholderData: keepPreviousData,
   });
   if (!allowed) return null;

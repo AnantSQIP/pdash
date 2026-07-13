@@ -39,7 +39,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   // the request stranded with nobody able to approve it. The server re-validates.
   const { data: eligible = [] } = useQuery({
     queryKey: ['eligible-managers', org?.id],
-    queryFn: () => api.projects.eligibleManagers(org!.id),
+    queryFn: () => api.projects.eligibleManagers(),
     enabled: !!org?.id && !canApprove,
     staleTime: 5 * 60_000,
   });

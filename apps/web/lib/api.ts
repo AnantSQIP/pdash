@@ -471,13 +471,14 @@ export const api = {
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    /** Project requests routed to me as their manager (or, for admins, any pending). */
-    pendingApprovals: (orgId: string) =>
-      req<PendingApproval[]>(`/projects/pending-approvals?organizationId=${encodeURIComponent(orgId)}`),
-    /** People who can be nominated as a project's manager (they can approve it). */
-    eligibleManagers: (orgId: string) =>
+    /** Project requests routed to me as their manager (or, for admins, any pending). Org is
+     *  taken from the session server-side. */
+    pendingApprovals: () =>
+      req<PendingApproval[]>('/projects/pending-approvals'),
+    /** People who can be nominated as a project's manager (they can approve it). Session-scoped. */
+    eligibleManagers: () =>
       req<Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>[]>(
-        `/projects/eligible-managers?organizationId=${encodeURIComponent(orgId)}`),
+        '/projects/eligible-managers'),
     delete: (id: string) => req<void>(`/projects/${id}`, { method: 'DELETE' }),
     // The approver is the verified cookie actor server-side; only an optional reason is sent.
     approve: (id: string, reason?: string) =>
@@ -720,9 +721,13 @@ export const api = {
   },
 
   capacity: {
-    /** Who is busy, who is free, and when — across every project. */
-    team: (orgId: string, days = 14) =>
-      req<TeamCapacity>(`/capacity/team?organizationId=${encodeURIComponent(orgId)}&days=${days}`),
+    /** Who is busy, who is free, and when — across every project. Org from the session. */
+    team: (days = 14) =>
+      req<TeamCapacity>(`/capacity/team?days=${days}`),
+    /** Availability of one project's members — the capacity view opened from a project. */
+    forProject: (projectId: string, days = 14) =>
+      req<TeamCapacity & { project: { id: string; title: string } }>(
+        `/capacity/project/${projectId}?days=${days}`),
   },
 
   overdue: {
