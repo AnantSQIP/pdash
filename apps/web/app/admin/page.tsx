@@ -14,6 +14,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { AddPermissionsWizard } from '@/components/admin/AddPermissionsWizard';
+import { relativePast } from '@/lib/date';
 
 type Tab = 'Users' | 'Roles' | 'Groups' | 'Permissions';
 const MGMT_TABS: { key: Tab; icon: React.ElementType }[] = [
@@ -122,6 +123,25 @@ function UsersTab({ orgId }: { orgId: string }) {
   const [search, setSearch] = useState('');
   const [desig, setDesig] = useState('');
 
+  // People who are locked out and have asked for help. There is no reset email, so this
+  // list is the only thing standing between them and being stuck indefinitely.
+  const { data: lockedOut = [] } = useQuery({
+    queryKey: ['password-reset-requests'],
+    queryFn: () => api.users.pendingPasswordResets(),
+    staleTime: 30_000,
+  });
+
+  async function resetFor(u: { id: string; firstName: string; lastName: string }) {
+    if (!window.confirm(`Reset ${u.firstName} ${u.lastName}'s password? They will be signed out and must use a new temporary password.`)) return;
+    try {
+      const r = await api.users.resetPassword(u.id);
+      setResetResult(r);
+      qc.invalidateQueries({ queryKey: ['password-reset-requests'] });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not reset password');
+    }
+  }
+
   const designations = [...new Set(users.map(u => u.designation).filter(Boolean))] as string[];
   const filtered = users.filter(u =>
     (fullName(u).toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())) &&
@@ -129,6 +149,41 @@ function UsersTab({ orgId }: { orgId: string }) {
 
   return (
     <div>
+      {lockedOut.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-center gap-2 text-amber-800">
+            <KeyRound size={15} />
+            <span className="text-sm font-semibold">
+              {lockedOut.length === 1 ? '1 person cannot sign in' : `${lockedOut.length} people cannot sign in`}
+            </span>
+          </div>
+          <p className="text-xs text-amber-700/80 mt-1">
+            They asked for a password reset. Reset it here, then give them the temporary password — they&apos;ll choose their own on first sign-in.
+          </p>
+          <div className="mt-3 space-y-1.5">
+            {lockedOut.map(u => (
+              <div key={u.id} className="flex items-center justify-between gap-3 bg-white/70 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Avatar user={u} size={26} />
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-800 truncate">{fullName(u)}</div>
+                    <div className="text-[11px] text-gray-500 truncate">
+                      {u.email} · asked {relativePast(u.passwordResetRequestedAt)}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => resetFor(u)}
+                  className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+                >
+                  Reset password
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <div className="relative">

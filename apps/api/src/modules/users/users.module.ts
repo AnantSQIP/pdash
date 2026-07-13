@@ -207,7 +207,23 @@ export class UsersService {
    * M30: admin resets another user's password to a fresh generated temp one, forces a
    * reset on next sign-in, and bumps securityVersion (invalidating that user's existing
    * access tokens). Returns the temp password ONCE so the admin can share it.
+   *
+   * The lockout counters are cleared too. login() checks lockedUntil BEFORE it checks the
+   * password, so without this a reset does not actually let the user back in — and being
+   * locked out by failed attempts is the single most common reason to ask for a reset.
    */
+  /** People who asked for a reset from the login page and are still waiting on an admin. */
+  pendingPasswordResets() {
+    return this.prisma.user.findMany({
+      where: { deletedAt: null, status: 'ACTIVE', passwordResetRequestedAt: { not: null } },
+      select: {
+        id: true, firstName: true, lastName: true, email: true, designation: true,
+        profilePhoto: true, passwordResetRequestedAt: true,
+      },
+      orderBy: { passwordResetRequestedAt: 'asc' },
+    });
+  }
+
   async resetPassword(id: string) {
     const target = await this.prisma.user.findFirst({ where: { id, deletedAt: null }, select: { id: true, email: true } });
     if (!target) throw new NotFoundException(`User ${id} not found`);
@@ -219,6 +235,9 @@ export class UsersService {
         mustResetPassword: true,
         passwordChangedAt: new Date(),
         securityVersion: { increment: 1 },
+        failedLoginCount: 0,
+        lockedUntil: null,
+        passwordResetRequestedAt: null, // their request has now been answered
       },
     });
     await this.events.emit({ action: EVENTS.USER_UPDATED, entityType: 'User', entityId: id, metadata: { op: 'password-reset' } });
@@ -306,6 +325,11 @@ class UsersController {
   list(@Query('organizationId') organizationId: string, @Query('includeInactive') includeInactive?: string) {
     return this.service.list(organizationId, { includeInactive: includeInactive === 'true' });
   }
+
+  // MUST stay above @Get(':id'), or that route captures this literal path as an id.
+  // Restricted: who is locked out is only the business of the people who can act on it.
+  @Get('password-reset-requests') @RequirePermission('user.manage_access')
+  pendingPasswordResets() { return this.service.pendingPasswordResets(); }
 
   @Get(':id')
   get(@Param('id') id: string) { return this.service.get(id); }
