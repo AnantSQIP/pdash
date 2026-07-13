@@ -16,6 +16,7 @@ import ActivityTab from '@/components/projects/ActivityTab';
 import TimesheetsTab from '@/components/projects/TimesheetsTab';
 import FilesTab from '@/components/projects/FilesTab';
 import { EditProjectModal } from '@/components/projects/EditProjectModal';
+import { ProjectCapacityTab } from '@/components/projects/ProjectCapacityTab';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -28,8 +29,8 @@ import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
 
-type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
-const TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Milestones', 'Files', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
+type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
+const BASE_TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Milestones', 'Files', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -208,6 +209,11 @@ export function ProjectDetailClient({ projectId }: Props) {
   const phase = PHASE_META[project.projectPhase as Phase] ?? PHASE_META['PLANNING'];
   const priority = PRIORITY_META[project.priority as Priority] ?? PRIORITY_META['MEDIUM'];
   const defaultTaskList = project.taskLists?.find(tl => tl.isDefault) ?? project.taskLists?.[0];
+  // Capacity is a manager-grade view, so the tab only appears for capacity.view holders —
+  // and the API enforces it regardless (the tab is a convenience, not the gate).
+  const TABS: Tab[] = can('capacity.view')
+    ? [...BASE_TABS.slice(0, 5), 'Capacity', ...BASE_TABS.slice(5)]
+    : BASE_TABS;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -292,7 +298,7 @@ export function ProjectDetailClient({ projectId }: Props) {
 
         {/* Tabs */}
         <nav className="flex items-center gap-1 px-6 overflow-x-auto">
-          {TABS.map(tab => (
+          {TABS.map((tab: Tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -363,6 +369,7 @@ export function ProjectDetailClient({ projectId }: Props) {
         )}
         {activeTab === 'Overview' && <OverviewView project={project} tasks={tasks} />}
         {activeTab === 'Milestones' && <MilestonesView project={project} />}
+        {activeTab === 'Capacity' && <ProjectCapacityTab projectId={projectId} />}
         {activeTab === 'Files' && <FilesTab projectId={projectId} />}
         {activeTab === 'Gantt' && <GanttView tasks={tasks} project={project} />}
         {activeTab === 'Issues' && <IssuesTab projectId={projectId} />}

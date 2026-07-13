@@ -3,6 +3,7 @@ import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
+import { ActorContextModule } from './common/context/actor-context.service';
 import { AuditEventsModule } from './modules/audit-events/audit-events.module';
 import { PermissionsModule } from './modules/permissions/permissions.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -43,6 +44,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     // Rate-limit primitives (applied selectively, e.g. on auth, via ThrottlerGuard).
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 200 }]),
     PrismaModule,
+    ActorContextModule, // session-derived org identity (never client-supplied)
     AuditEventsModule,
     PermissionsModule,
     DeadlinesModule,

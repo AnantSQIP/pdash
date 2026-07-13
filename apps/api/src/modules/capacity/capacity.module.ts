@@ -1,6 +1,9 @@
-import { Controller, Get, Injectable, Module, Query } from '@nestjs/common';
+import {
+  BadRequestException, Controller, Get, Injectable, Module, NotFoundException, Param, Query,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
 import { startOfUtcDay } from '../../common/dates';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
@@ -16,6 +19,20 @@ const DEFAULT_TASK_HOURS = 6;
 /** A day is "free" below this share of capacity — i.e. there's room for real work. */
 const FREE_THRESHOLD = 0.25;
 const LIGHT_THRESHOLD = 0.75;
+const MIN_DAYS = 5;
+const MAX_DAYS = 60;
+const DEFAULT_DAYS = 14;
+
+/**
+ * Coerce the `days` query parameter to a sane horizon. `parseInt('abc')` is NaN, and an
+ * un-guarded NaN flows into addDays() → an Invalid Date → the whole board silently breaks;
+ * a caller could also ask for 100000 days and force a huge computation. Clamp to a range.
+ */
+export function parseHorizon(raw: string | undefined): number {
+  const n = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(n)) return DEFAULT_DAYS;
+  return Math.max(MIN_DAYS, Math.min(MAX_DAYS, n));
+}
 
 export type DayState = 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY' | 'OVERLOADED';
 
@@ -67,7 +84,33 @@ export interface CapacityRow {
 
 @Injectable()
 export class CapacityService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly actor: ActorContextService,
+  ) {}
+
+  /** Availability of one project's active members (drives the per-project capacity view). */
+  async forProject(projectId: string, days = DEFAULT_DAYS) {
+    const organizationId = await this.actor.requireOrgId();
+    // A project has no organizationId column — its org is reached through its members, the
+    // same way ProjectsService.list scopes. Requiring an in-org member makes an id from
+    // another tenant a 404, not a leak.
+    const project = await this.prisma.project.findFirst({
+      where: {
+        id: projectId,
+        deletedAt: null,
+        members: { some: { user: { organizationId } } },
+      },
+      select: {
+        id: true, title: true,
+        members: { where: { isActive: true }, select: { userId: true } },
+      },
+    });
+    if (!project) throw new NotFoundException('Project not found');
+    const userIds = project.members.map((m: { userId: string }) => m.userId);
+    const board = await this.team(organizationId, days, userIds);
+    return { project: { id: project.id, title: project.title }, ...board };
+  }
 
   /**
    * Team availability across ALL projects: for each person, how much of each working
@@ -82,15 +125,24 @@ export class CapacityService {
    *
    * Non-working days are excluded properly: weekends, company holidays, and each
    * person's APPROVED leave (so someone on leave never looks "available").
+   *
+   * `organizationId` is the CALLER'S org, resolved from the session by the controller —
+   * it is never accepted from the client. `onlyUserIds`, when given, restricts the board
+   * to those people (used by the per-project view).
    */
-  async team(organizationId: string, days = 14): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[] }> {
+  async team(
+    organizationId: string,
+    days = DEFAULT_DAYS,
+    onlyUserIds?: string[],
+  ): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[] }> {
     const today = startOfUtcDay(new Date());
-    const horizon = Math.max(5, Math.min(60, days));
+    const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
     const to = addDays(today, horizon);
+    const userFilter = onlyUserIds ? { id: { in: onlyUserIds.length ? onlyUserIds : ['__none__'] } } : {};
 
     const [users, holidays, leaves, tasks] = await Promise.all([
       this.prisma.user.findMany({
-        where: { organizationId, deletedAt: null, status: 'ACTIVE' },
+        where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
           id: true, firstName: true, lastName: true, designation: true, profilePhoto: true,
           departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
@@ -105,11 +157,11 @@ export class CapacityService {
         where: { status: 'APPROVED', startDate: { lt: to }, endDate: { gte: today }, user: { organizationId } },
         select: { userId: true, startDate: true, endDate: true, leaveType: true },
       }),
-      // Every OPEN task assigned to anyone in the org — capacity is cross-project by design.
+      // Every OPEN task assigned to anyone in scope — capacity is cross-project by design.
       this.prisma.task.findMany({
         where: {
           deletedAt: null,
-          assignees: { some: { user: { organizationId } } },
+          assignees: { some: onlyUserIds ? { userId: { in: onlyUserIds } } : { user: { organizationId } } },
           OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
         },
         select: {
@@ -127,8 +179,12 @@ export class CapacityService {
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
     const leaveByUserDay = new Map<string, string>();
     for (const lv of leaves) {
-      for (let d = startOfUtcDay(lv.startDate); d <= startOfUtcDay(lv.endDate); d = addDays(d, 1)) {
-        if (d < today || d >= to) continue;
+      // Clamp the iteration to the visible window BEFORE looping. A leave whose endDate is
+      // years out (bad data) would otherwise spin for millions of iterations; the query only
+      // guarantees the range OVERLAPS the window, not that it fits inside it.
+      const from = startOfUtcDay(lv.startDate) < today ? today : startOfUtcDay(lv.startDate);
+      const until = startOfUtcDay(lv.endDate) >= to ? addDays(to, -1) : startOfUtcDay(lv.endDate);
+      for (let d = new Date(from); d <= until; d = addDays(d, 1)) {
         leaveByUserDay.set(`${lv.userId}|${dayKey(d)}`, lv.leaveType);
       }
     }
@@ -137,9 +193,16 @@ export class CapacityService {
     const window: Date[] = [];
     for (let d = new Date(today); d < to; d = addDays(d, 1)) window.push(new Date(d));
 
-    /** Working days for a given user (excludes weekends, holidays, their approved leave). */
-    const workingDaysFor = (userId: string) =>
-      window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d)) && !leaveByUserDay.has(`${userId}|${dayKey(d)}`));
+    /** Working days for a user (excludes weekends, holidays, their approved leave). Memoised —
+     *  this is asked once per task, and recomputing it per task is O(tasks × window). */
+    const workingDaysCache = new Map<string, Date[]>();
+    const workingDaysFor = (userId: string): Date[] => {
+      const hit = workingDaysCache.get(userId);
+      if (hit) return hit;
+      const wd = window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d)) && !leaveByUserDay.has(`${userId}|${dayKey(d)}`));
+      workingDaysCache.set(userId, wd);
+      return wd;
+    };
 
     // Per-user, per-day committed load.
     const loadByUserDay = new Map<string, number>();
@@ -171,13 +234,19 @@ export class CapacityService {
         const workable = workingDaysFor(userId);
         if (!workable.length) continue;
 
-        // The span this task occupies: from its start (never before today) to its
-        // internal deadline. No deadline → treat as "spread over the window ahead".
-        // Overdue → it lands on the first workable day: it is blocking them right now.
+        // A task that only STARTS after this window contributes nothing to it — its work is
+        // in the future. (Previously it fell through to the day-1 fallback below and dumped
+        // its whole load onto today, making people look busy for work that hasn't begun.)
+        if (task.startDate && startOfUtcDay(task.startDate) >= to) continue;
+
+        // The span this task occupies: from its start (never before today) to its internal
+        // deadline. No deadline → spread over the window ahead. Overdue, or a deadline that
+        // has already passed within the window → it lands on the first workable day: it is
+        // blocking them right now.
         const startsAt = task.startDate && startOfUtcDay(task.startDate) > today ? startOfUtcDay(task.startDate) : today;
         const endsAt = task.dueDate ? startOfUtcDay(task.dueDate) : addDays(today, horizon - 1);
         let span = workable.filter(d => d >= startsAt && d <= endsAt);
-        if (!span.length) span = overdue ? [workable[0]] : workable.slice(0, 1);
+        if (!span.length) span = [workable[0]]; // overdue / same-day: put it on the first workable day
 
         const perDay = remaining / span.length;
         for (const d of span) {
@@ -261,12 +330,28 @@ export class CapacityService {
 
 @Controller('capacity')
 class CapacityController {
-  constructor(private readonly capacity: CapacityService) {}
+  constructor(
+    private readonly capacity: CapacityService,
+    private readonly actor: ActorContextService,
+  ) {}
 
+  /**
+   * Whole-org availability. The org is taken from the SESSION, not the query — accepting a
+   * client-supplied organizationId here was a cross-tenant read (IDOR).
+   */
   @Get('team')
   @RequirePermission('capacity.view')
-  team(@Query('organizationId') organizationId: string, @Query('days') days?: string) {
-    return this.capacity.team(organizationId, days ? parseInt(days, 10) : 14);
+  async team(@Query('days') days?: string) {
+    const organizationId = await this.actor.requireOrgId();
+    return this.capacity.team(organizationId, parseHorizon(days));
+  }
+
+  /** Availability of one project's members — the capacity view opened from a project. */
+  @Get('project/:projectId')
+  @RequirePermission('capacity.view')
+  forProject(@Param('projectId') projectId: string, @Query('days') days?: string) {
+    if (!projectId?.trim()) throw new BadRequestException('projectId is required');
+    return this.capacity.forProject(projectId, parseHorizon(days));
   }
 }
 

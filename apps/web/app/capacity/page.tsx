@@ -13,67 +13,16 @@ import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Users, Loader, CalendarRange, Sparkles, AlertTriangle, Plane, Flag,
-  ArrowRight, Zap, X, Plus, Search, TrendingUp, Clock,
+  Users, Loader, CalendarRange, Sparkles, AlertTriangle,
+  ArrowRight, Zap, X, Plus, Search, Clock,
 } from 'lucide-react';
-import { api, type TeamCapacity, type CapacityRow, type CapacityDay, type DayState, type ApiProject } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { formatDate } from '@/lib/date';
-
-// ── day-cell visual language ──────────────────────────────────────────────────
-// Free reads GREEN (opportunity), overloaded reads RED (risk) — the two states a
-// manager acts on. Busy/light are calm blues so the greens and reds pop.
-const STATE_STYLE: Record<DayState, { cell: string; label: string; dot: string }> = {
-  FREE:       { cell: 'bg-emerald-100 hover:bg-emerald-200 border-emerald-200',   label: 'Free',       dot: 'bg-emerald-400' },
-  LIGHT:      { cell: 'bg-sky-100 hover:bg-sky-200 border-sky-200',               label: 'Light',      dot: 'bg-sky-300' },
-  BUSY:       { cell: 'bg-brand-500 hover:bg-brand-600 border-brand-600',         label: 'Busy',       dot: 'bg-brand-500' },
-  OVERLOADED: { cell: 'bg-red-500 hover:bg-red-600 border-red-600',               label: 'Overloaded', dot: 'bg-red-500' },
-  LEAVE:      { cell: 'bg-purple-100 border-purple-200 bg-stripes-purple',        label: 'On leave',   dot: 'bg-purple-300' },
-  HOLIDAY:    { cell: 'bg-amber-100 border-amber-200',                            label: 'Holiday',    dot: 'bg-amber-300' },
-  WEEKEND:    { cell: 'bg-gray-50 border-gray-100',                               label: 'Weekend',    dot: 'bg-gray-200' },
-};
-const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-
-function dayOfWeek(iso: string) { return new Date(`${iso}T00:00:00Z`).getUTCDay(); }
-function dayNum(iso: string) { return new Date(`${iso}T00:00:00Z`).getUTCDate(); }
-function isToday(iso: string) { return iso === new Date().toISOString().slice(0, 10); }
-
-function DayCell({ day, onClick }: { day: CapacityDay; onClick?: () => void }) {
-  const s = STATE_STYLE[day.state];
-  const working = day.capacity > 0;
-  const title = working
-    ? `${formatDate(day.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${s.label} — ${day.load}h of ${day.capacity}h committed (${day.free}h free)`
-    : `${formatDate(day.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${day.note ?? s.label}`;
-
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={working ? onClick : undefined}
-      disabled={!working}
-      className={clsx(
-        'relative h-9 w-full rounded-md border transition-all duration-150',
-        s.cell,
-        working && 'cursor-pointer hover:scale-[1.08] hover:shadow-sm hover:z-10',
-        !working && 'cursor-default',
-        isToday(day.date) && 'ring-2 ring-offset-1 ring-gray-900/70',
-      )}
-    >
-      {/* Fill bar shows how much of the day is taken — a glanceable "how full". */}
-      {working && day.utilization > 0 && (
-        <span
-          className="absolute inset-x-0 bottom-0 rounded-b-[5px] bg-black/10"
-          style={{ height: `${Math.min(100, day.utilization * 100)}%` }}
-        />
-      )}
-      {day.state === 'LEAVE' && <Plane size={11} className="absolute inset-0 m-auto text-purple-500" />}
-      {day.state === 'HOLIDAY' && <Flag size={11} className="absolute inset-0 m-auto text-amber-500" />}
-    </button>
-  );
-}
+import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
 
 export default function CapacityPage() {
   const { org } = useOrg();
@@ -89,7 +38,7 @@ export default function CapacityPage() {
 
   const { data, isLoading } = useQuery<TeamCapacity>({
     queryKey: ['capacity', org?.id, days],
-    queryFn: () => api.capacity.team(org!.id, days),
+    queryFn: () => api.capacity.team(days),
     enabled: allowed && !!org?.id,
     staleTime: 60_000,
   });

@@ -2,10 +2,14 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestj
 import { ProjectsService } from './projects.service';
 import { ApprovalDto, CreateProjectDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
 
 @Controller('projects')
 export class ProjectsController {
-  constructor(private readonly projects: ProjectsService) {}
+  constructor(
+    private readonly projects: ProjectsService,
+    private readonly actor: ActorContextService,
+  ) {}
 
   @Post() @RequirePermission('project.create')
   create(@Body() dto: CreateProjectDto) {
@@ -17,16 +21,19 @@ export class ProjectsController {
     return this.projects.list(organizationId, { phase });
   }
 
-  /** Project requests routed to me (as their manager) or, for admins, any pending one. */
+  /**
+   * Project requests routed to me (as their manager) or, for admins, any pending one.
+   * Org comes from the SESSION — a client-supplied org here would be a cross-tenant read.
+   */
   @Get('pending-approvals')
-  pendingApprovals(@Query('organizationId') organizationId: string) {
-    return this.projects.pendingApprovals(organizationId);
+  async pendingApprovals() {
+    return this.projects.pendingApprovals(await this.actor.requireOrgId());
   }
 
-  /** People who can be nominated as a project's manager (i.e. can approve it). */
+  /** People who can be nominated as a project's manager (i.e. can approve it). Session-scoped. */
   @Get('eligible-managers')
-  eligibleManagers(@Query('organizationId') organizationId: string) {
-    return this.projects.eligibleManagers(organizationId);
+  async eligibleManagers() {
+    return this.projects.eligibleManagers(await this.actor.requireOrgId());
   }
 
   @Get(':id')

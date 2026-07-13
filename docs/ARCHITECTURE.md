@@ -120,6 +120,18 @@ Full schema in `packages/db/prisma/schema.prisma`. Domain map (22 domains per fr
 | 19 | Notification | Notification |
 | 20 | Audit | AuditLog (immutable, never deleted) |
 | 21 | Integration | Integration |
+| 22 | *Capacity & deadlines* | *(no new tables — derived from Task/Project/LeaveRequest/Holiday; see §11)* |
+
+**Fields added after the frozen ERD (all additive, nullable, backward-compatible):**
+
+| Entity | Field | Purpose |
+|---|---|---|
+| Organization | `securityPasscodeHash` | argon2id hash of the org step-up "big change" passcode (2nd factor over RBAC) |
+| Project / Task | `clientDueDate` | CLIENT deadline; **redacted server-side** — `dueDate` is the INTERNAL deadline |
+| Task | `overdueNotifiedAt` | de-dupes the overdue alert; cleared when the deadline moves forward (re-arms) |
+| Document | `mimeType` (+ `DocumentBlob`) | attachments/media storage |
+| Message / Comment | `attachments` | file attachments in Discuss + comments |
+| User | `passwordResetRequestedAt` | self-service "forgot password" request (no mail transport — an admin actions it) |
 
 **Key modeling decisions:**
 
@@ -179,6 +191,36 @@ Built-in roles: Employee, Team Lead, Department Head, HR, Project Manager, Admin
 | D4 | API format | Clean greenfield REST (not Zoho V3 wire format) |
 | D5 | ORM | Prisma + raw SQL for graph queries |
 | D6 | Methodology | Waterfall WBS only |
+| D7 | Org identity | Derived from the **session** (`ActorContextService`), never a request param — see §12 |
+| D8 | Dual deadlines | `dueDate` INTERNAL (drives overdue) vs `clientDueDate` CLIENT (redacted server-side) |
+| D9 | Capacity | Derived on read from tasks/leave/holidays — no stored availability table (§11) |
+
+---
+
+## 11. Capacity, deadlines & overdue (availability engine)
+
+Purpose: let managers/admins see **who is free and when**, across every project, and reschedule work — the "boost efficiency" feature.
+
+**Team Capacity** (`GET /capacity/team`, `GET /capacity/project/:id`; perm `capacity.view`):
+- Computed on read, no stored table. For each active user, each working day's committed hours are summed from their OPEN tasks and compared to `DAILY_CAPACITY_HOURS = 48/5 = 9.6h` (same basis as Performance).
+- Per task: `remaining = (estimatedHours ?? 6) × (1 − completion%)`, spread evenly over the working days from `max(today, startDate)` → INTERNAL `dueDate`. Overdue/past-due work lands on the first workable day. A task that only *starts* after the window contributes nothing.
+- **Non-working days excluded**: weekends, org `Holiday` rows, and each user's APPROVED `LeaveRequest`. So someone on leave never reads as "available".
+- Day states: WEEKEND · HOLIDAY · LEAVE · FREE · LIGHT · BUSY · OVERLOADED. Rows expose `freeHours`, `nextFreeDate`, `freeRunDays`, `availableNow` (free on the next *workable* day), `overdueCount`.
+- The **client deadline is never in the payload** (only `dueDate` is selected). The per-project view (`/capacity/project/:id`) restricts to that project's active members, still showing their load across *all* projects.
+
+**Dual deadlines** — `DeadlineVisibilityService` (`@Global`) redacts `clientDueDate` server-side. It reaches a client date only if the actor holds `deadline.view.client` **or** is a MANAGER member of that project. Setting one is gated the same way; the internal deadline may not fall after the client one. Redaction is by *key deletion*, so an unauthorized actor's JSON has no `clientDueDate` key at all.
+
+**Overdue watchdog** — `OverdueMonitorService` sweeps hourly (in-process; single API container). First time a task passes its INTERNAL deadline while open → notify assignee + the project's managers + org admins, once (`overdueNotifiedAt`); a per-manager daily digest is DB-deduped. Editing a task's deadline forward re-arms the alert.
+
+**Project requests (intern flow)** — Employee/Consultant hold `project.create` = *request*. A requester without `project.approve` must nominate an approver (`GET /projects/eligible-managers`); the request routes only to that person (`GET /projects/pending-approvals`), who becomes the project MANAGER. Self-approval is barred.
+
+---
+
+## 12. Multi-tenancy & the org-identity rule
+
+The data model is org-scoped throughout. **The organization a request runs in is derived from the authenticated session — `ActorContextService.requireOrgId()` — never from a request body or query string.** Accepting a client-supplied `organizationId` is a cross-tenant IDOR: a user in one org could read another's data. Capacity and the project-request endpoints follow this rule.
+
+> ⚠️ **Known pre-existing gap (single-org deployments only):** several older list endpoints still accept `organizationId` as a query param (`projects.list`, `roles`, `permission-groups`, `departments`, `channels`, `audit`, `attendance`, `analytics`). This is **not currently exploitable** because production is single-org (there is no second tenant's data to reach), but it MUST be migrated to `ActorContextService` before onboarding a second organization. Track as a hardening task.
 
 ---
 
