@@ -8,6 +8,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class CreateProjectDto {
   @IsString()
@@ -38,19 +39,24 @@ export class CreateProjectDto {
   @IsString()
   priority?: string;
 
+  // An emptied form field submits "", which @IsDateString would reject with a 400. Treat it
+  // as "not supplied" so leaving an optional date blank just omits it.
   @IsOptional()
   @IsDateString()
-  startDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
 
   /** INTERNAL deadline — visible to everyone. */
   @IsOptional()
   @IsDateString()
-  dueDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  dueDate?: string | null;
 
   /** CLIENT deadline — restricted (requires deadline.view.client). */
   @IsOptional()
   @IsDateString()
-  clientDueDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
 }
 
 export class UpdateProjectDto {
@@ -71,19 +77,24 @@ export class UpdateProjectDto {
   @IsString()
   projectPhase?: string;
 
+  // `null` is meaningful on these three: it CLEARS the date. @IsOptional() lets null through
+  // validation, and the service distinguishes it from "field not sent".
   @IsOptional()
   @IsDateString()
-  startDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
 
   /** INTERNAL deadline. */
   @IsOptional()
   @IsDateString()
-  dueDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  dueDate?: string | null;
 
   /** CLIENT deadline — restricted. */
   @IsOptional()
   @IsDateString()
-  clientDueDate?: string;
+  @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
 
   @IsOptional()
   @IsInt()

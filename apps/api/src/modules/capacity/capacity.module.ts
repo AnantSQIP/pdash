@@ -1,11 +1,9 @@
 import { Controller, Get, Injectable, Module, Query } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { startOfUtcDay } from '../../common/dates';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
-function startOfUtcDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
 function addDays(d: Date, n: number): Date { const c = new Date(d); c.setUTCDate(c.getUTCDate() + n); return c; }
 function isWeekend(d: Date): boolean { const wd = d.getUTCDay(); return wd === 0 || wd === 6; }

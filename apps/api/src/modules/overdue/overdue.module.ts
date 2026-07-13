@@ -4,11 +4,8 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { startOfUtcDay } from '../../common/dates';
 
-/** Deadlines are date-only values stored at UTC midnight. */
-function startOfUtcDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
 function daysLate(due: Date, today: Date): number {
   return Math.max(0, Math.round((today.getTime() - startOfUtcDay(due).getTime()) / 86_400_000));
 }

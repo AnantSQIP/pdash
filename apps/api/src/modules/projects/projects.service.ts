@@ -12,6 +12,7 @@ import { CreateProjectDto, UpdateProjectDto, ApprovalDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { resolveDate } from '../../common/dates';
 
 @Injectable()
 export class ProjectsService {
@@ -274,15 +275,16 @@ export class ProjectsService {
     const existing = await this.getRaw(id);
     // #14: reject an inverted date range (dueDate before startDate). Compare against
     // the incoming value or the current one so a partial edit is still validated.
-    const start = dto.startDate ? new Date(dto.startDate) : existing.startDate;
-    const due = dto.dueDate ? new Date(dto.dueDate) : existing.dueDate;
+    const start = resolveDate(dto.startDate, existing.startDate);
+    const due = resolveDate(dto.dueDate, existing.dueDate);
     if (start && due && due < start) {
       throw new BadRequestException('Due date cannot be before the start date.');
     }
     // Only a client-deadline viewer (or this project's manager) may set/see the client date.
     const scope = await this.deadlines.scope();
     if (dto.clientDueDate !== undefined) await this.deadlines.assertMaySetClientDue([id], scope);
-    this.deadlines.assertOrdered(due, dto.clientDueDate ? new Date(dto.clientDueDate) : existing.clientDueDate);
+    const clientDue = resolveDate(dto.clientDueDate, existing.clientDueDate);
+    this.deadlines.assertOrdered(due, clientDue);
 
     const project = await this.prisma.project.update({
       where: { id },
@@ -291,9 +293,11 @@ export class ProjectsService {
         description: dto.description,
         priority: dto.priority,
         projectPhase: dto.projectPhase,
-        startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        clientDueDate: dto.clientDueDate ? new Date(dto.clientDueDate) : undefined,
+        // `undefined` leaves the column alone; `null` CLEARS it. Collapsing the two would
+        // make a date impossible to remove once set (the update silently no-ops).
+        ...(dto.startDate === undefined ? {} : { startDate: start }),
+        ...(dto.dueDate === undefined ? {} : { dueDate: due }),
+        ...(dto.clientDueDate === undefined ? {} : { clientDueDate: clientDue }),
         // M24: completionPercentage is DERIVED from task rollup (recomputeProjectProgress)
         // — it is the single writer. Ignore any client-supplied value to avoid the two
         // writers clobbering each other.

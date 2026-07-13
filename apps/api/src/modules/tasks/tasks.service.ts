@@ -6,11 +6,8 @@ import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateT
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { startOfUtcDay, resolveDate } from '../../common/dates';
 
-/** Deadlines are date-only values stored at UTC midnight — compare on that boundary. */
-function startOfUtcDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
 
 @Injectable()
 export class TasksService {
@@ -194,13 +191,14 @@ export class TasksService {
     // value or the stored one, so a partial edit is still validated.
     const scope = await this.deadlines.scope();
     if (dto.clientDueDate !== undefined) await this.deadlines.assertMaySetClientDue(projectIds, scope);
-    const internalDue = dto.dueDate ? new Date(dto.dueDate) : before.dueDate;
-    const clientDue = dto.clientDueDate ? new Date(dto.clientDueDate) : before.clientDueDate;
+    const internalDue = resolveDate(dto.dueDate, before.dueDate);
+    const clientDue = resolveDate(dto.clientDueDate, before.clientDueDate);
     this.deadlines.assertOrdered(internalDue, clientDue);
 
-    // Moving the internal deadline into the future re-arms the overdue alert, so a task
-    // that slips again is reported again — while never re-alerting for the same slip.
-    const rearm = !!internalDue && internalDue >= startOfUtcDay(new Date()) && !!before.overdueNotifiedAt;
+    // Re-arm the overdue alert when the task can no longer be late for the reason it was
+    // flagged — the internal deadline moved into the future, or was removed altogether — so
+    // a future slip is reported again while the same slip never alerts twice.
+    const rearm = !!before.overdueNotifiedAt && (!internalDue || internalDue >= startOfUtcDay(new Date()));
 
     const updated = await this.prisma.task.update({
       where: { id },
@@ -209,9 +207,11 @@ export class TasksService {
         description: dto.description,
         priority: dto.priority,
         completionPercentage: dto.completionPercentage,
-        startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-        dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-        clientDueDate: dto.clientDueDate ? new Date(dto.clientDueDate) : undefined,
+        // `undefined` leaves the column alone; `null` CLEARS it. Collapsing the two would
+        // make a date impossible to remove once set (the update silently no-ops).
+        ...(dto.startDate === undefined ? {} : { startDate: resolveDate(dto.startDate, null) }),
+        ...(dto.dueDate === undefined ? {} : { dueDate: internalDue }),
+        ...(dto.clientDueDate === undefined ? {} : { clientDueDate: clientDue }),
         estimatedHours: dto.estimatedHours,
         ...(rearm ? { overdueNotifiedAt: null } : {}),
       },
