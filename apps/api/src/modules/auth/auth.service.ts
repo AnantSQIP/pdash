@@ -18,6 +18,8 @@ function sha256(s: string): string { return createHash('sha256').update(s).diges
 export type AuthUser = {
   id: string; firstName: string; lastName: string; email: string;
   designation: string | null; status: string; organizationId: string; mustResetPassword: boolean;
+  /** False until the user has filled in their joining details — AppShell blocks on this. */
+  profileCompleted: boolean;
 };
 type Ctx = { ua?: string; ip?: string };
 
@@ -77,6 +79,7 @@ export class AuthService {
       id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email,
       designation: u.designation ?? null, status: u.status, organizationId: u.organizationId,
       mustResetPassword: u.mustResetPassword,
+      profileCompleted: !!u.profileCompletedAt,
     };
   }
 

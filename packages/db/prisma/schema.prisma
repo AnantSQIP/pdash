@@ -79,11 +79,15 @@ model User {
   // transport, so this — not an email — is how someone locked out reaches an admin.
   // Cleared once an admin actually resets them.
   passwordResetRequestedAt DateTime?
+  // Null until the user has filled in their joining details. AppShell blocks the app on
+  // first sign-in until this is set (after the forced password change).
+  profileCompletedAt       DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
   organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  profile                UserProfile?
   refreshTokens          RefreshToken[]
   authTokens             AuthToken[]
   managedBy              UserManager[]           @relation("UserManagers")
@@ -754,6 +758,65 @@ model ApprovalAction {
 
   @@index([approvalId])
   @@map("approval_action")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 9b. USER PROFILE DOMAIN (personal / PII)
+// ═══════════════════════════════════════════════════════════════
+
+// A person's private joining details, collected on first sign-in.
+//
+// Deliberately a SEPARATE table from User, not extra columns on it. GET /users is open to
+// every authenticated member (the app resolves people from the user list), so anything
+// living on User is one careless `select` away from being readable by the whole company.
+// Home addresses, dates of birth and emergency contacts must not sit on that path.
+//
+// Reachable only via the permission-gated profile endpoints, which strip these fields for
+// anyone without `profile.view.personal` (Admin, Super Admin, HR — plus the person
+// themselves, always).
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // ── Personal ──
+  dateOfBirth   DateTime?
+  gender        String?
+  bloodGroup    String?
+  maritalStatus String?
+  nationality   String?
+
+  // ── Private contact (the work email/phone stay on User — those are directory data) ──
+  personalEmail  String?
+  alternatePhone String?
+
+  // ── Current address ──
+  currentLine1      String?
+  currentLine2      String?
+  currentCity       String?
+  currentState      String?
+  currentPostalCode String?
+  currentCountry    String?
+
+  // ── Permanent address ──
+  permanentSameAsCurrent Boolean @default(false)
+  permanentLine1      String?
+  permanentLine2      String?
+  permanentCity       String?
+  permanentState      String?
+  permanentPostalCode String?
+  permanentCountry    String?
+
+  // ── Emergency contact ──
+  emergencyName         String?
+  emergencyRelationship String?
+  emergencyPhone        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profile")
 }
 
 // ═══════════════════════════════════════════════════════════════

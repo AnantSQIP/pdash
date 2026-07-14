@@ -7,8 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Loader, Shield, ArrowLeft, Search, Check, Plus, X, KeyRound, Layers,
-  ShieldCheck, ShieldAlert, Info, Activity as ActivityIcon, UserCog,
-} from 'lucide-react';
+  ShieldCheck, ShieldAlert, Info, Activity as ActivityIcon, UserCog, UserCircle } from 'lucide-react';
 import { RiShieldUserLine } from '@remixicon/react';
 import {
   api,
@@ -21,13 +20,15 @@ import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { avatarColor, fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { ProfileCard } from '@/components/people/ProfileCard';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function moduleOf(code: string) { return code.split('.')[0]; }
 function titleCase(s: string) { return s.charAt(0).toUpperCase() + s.slice(1).replace(/[._]/g, ' '); }
 
-type Tab = 'Permissions' | 'Roles' | 'Groups' | 'Overrides' | 'Activity';
+type Tab = 'Profile' | 'Permissions' | 'Roles' | 'Groups' | 'Overrides' | 'Activity';
 const TABS: { key: Tab; icon: React.ElementType }[] = [
+  { key: 'Profile', icon: UserCircle },
   { key: 'Permissions', icon: ShieldCheck },
   { key: 'Roles', icon: KeyRound },
   { key: 'Groups', icon: Layers },
@@ -71,7 +72,7 @@ export default function UserDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { org } = useOrg();
   const { can, isSuperAdmin, loading: permLoading } = usePermissions();
-  const [tab, setTab] = useState<Tab>('Permissions');
+  const [tab, setTab] = useState<Tab>('Profile');
 
   const orgId = org?.id;
   const { data: users = [] } = useQuery({
@@ -152,6 +153,7 @@ export default function UserDetailPage() {
       </div>
 
       <div className="p-6">
+        {tab === 'Profile' && <ProfileCard userId={id} />}
         {tab === 'Permissions' && <PermissionsTab eff={eff} loading={effLoading} />}
         {tab === 'Roles' && orgId && <RolesTab userId={id} orgId={orgId} eff={eff} canManage={isSuperAdmin || can('user.manage_access')} />}
         {tab === 'Groups' && orgId && <GroupsTab orgId={orgId} eff={eff} />}
