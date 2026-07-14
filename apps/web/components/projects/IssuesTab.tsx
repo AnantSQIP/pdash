@@ -206,7 +206,8 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
           <div className="py-12 text-center text-sm text-gray-400">Could not load issues. Check API connection.</div>
         )}
         {!isLoading && !isError && (
-          <table className="w-full text-left">
+          <div className="overflow-x-auto">
+          <table className="w-full text-left min-w-[560px]">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Issue</th>
@@ -319,6 +320,7 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
               </tr>
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

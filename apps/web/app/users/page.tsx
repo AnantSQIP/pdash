@@ -127,7 +127,33 @@ export default function UsersPage() {
               />
             </div>
 
-            <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+            {/* Mobile: member cards. The 6-column table is unreadable on a phone. */}
+            <div className="sm:hidden space-y-2.5">
+              {filtered.map(u => (
+                <Link key={u.id} href={`/admin/users/${u.id}`}
+                  className="flex items-center gap-3 bg-white rounded-xl border border-gray-200 p-3.5 active:bg-gray-50">
+                  <Avatar user={u} size={40} />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-gray-900 truncate">{fullName(u)}</p>
+                    <p className="text-xs text-gray-400 truncate">{u.email}</p>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-xs text-gray-500 truncate">{u.designation ?? '—'}</span>
+                      <span className={`shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                        u.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {u.status === 'ACTIVE' ? 'Active' : u.status}
+                      </span>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+              {filtered.length === 0 && (
+                <p className="text-center text-sm text-gray-400 py-8">No members found.</p>
+              )}
+            </div>
+
+            {/* Desktop / tablet: the table. */}
+            <div className="hidden sm:block bg-white rounded-xl border border-gray-200 overflow-x-auto">
               <table className="w-full text-sm min-w-[640px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
