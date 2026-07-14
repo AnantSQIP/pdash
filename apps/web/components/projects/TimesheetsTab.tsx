@@ -128,7 +128,8 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
           </div>
         )}
         {!isLoading && !isError && (
-          <table className="w-full text-left">
+          <div className="overflow-x-auto">
+          <table className="w-full text-left min-w-[560px]">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Task</th>
@@ -194,6 +195,7 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

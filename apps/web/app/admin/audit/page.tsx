@@ -85,8 +85,8 @@ export default function AuditPage() {
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-gray-400"><Loader className="animate-spin mr-2" size={18} />Loading audit log…</div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-left text-sm">
+          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+            <table className="w-full text-left text-sm min-w-[720px]">
               <thead><tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
                 <th className="px-5 py-2.5">Time</th><th className="px-3 py-2.5">Actor</th><th className="px-3 py-2.5">Action</th><th className="px-3 py-2.5">Entity</th><th className="px-3 py-2.5">IP</th>
               </tr></thead>

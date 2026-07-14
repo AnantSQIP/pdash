@@ -185,10 +185,10 @@ function UsersTab({ orgId }: { orgId: string }) {
       )}
 
       <div className="flex justify-between items-center mb-4 gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:flex-none min-w-[160px]">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input className="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg w-56" placeholder="Search members…" value={search} onChange={e => setSearch(e.target.value)} />
+            <input className="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg w-full sm:w-56" placeholder="Search members…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <select value={desig} onChange={e => setDesig(e.target.value)} className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white">
             <option value="">All designations</option>{designations.map(d => <option key={d} value={d}>{d}</option>)}
@@ -196,7 +196,54 @@ function UsersTab({ orgId }: { orgId: string }) {
         </div>
         <button onClick={() => setShowCreate(true)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"><Plus size={14} /> Add User</button>
       </div>
-      <div className="bg-white rounded-xl border border-gray-200 overflow-visible">
+      {/* Mobile: member cards. The table's Email/Status/actions get pushed off a phone. */}
+      <div className="sm:hidden space-y-2.5">
+        {filtered.map(u => (
+          <div key={u.id} className="bg-white rounded-xl border border-gray-200 p-3.5">
+            <div className="flex items-center gap-3">
+              <button onClick={() => router.push(`/admin/users/${u.id}`)} className="flex items-center gap-3 min-w-0 flex-1 text-left">
+                <Avatar user={u} size={38} />
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{fullName(u)}</p>
+                  <p className="text-xs text-gray-400 truncate">{u.email}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs text-gray-500 truncate">{u.designation ?? '—'}</span>
+                    <span className={clsx('shrink-0 text-[11px] px-2 py-0.5 rounded-full', u.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')}>{u.status === 'ACTIVE' ? 'Active' : u.status}</span>
+                  </div>
+                </div>
+              </button>
+              <div className="relative shrink-0">
+                <button onClick={() => setMenuFor(menuFor === u.id ? null : u.id)} className="p-1.5 rounded hover:bg-gray-100 text-gray-400"><MoreHorizontal size={18} /></button>
+                {menuFor === u.id && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setMenuFor(null)} />
+                    <div className="absolute right-0 top-9 z-20 w-44 bg-white rounded-lg shadow-xl border border-gray-100 py-1 text-left">
+                      <button onClick={() => { router.push(`/admin/users/${u.id}`); }} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Manage user</button>
+                      <button onClick={() => { setEditUser(u); setMenuFor(null); }} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Edit details…</button>
+                      <button onClick={() => { setWizardUser(u); setMenuFor(null); }} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Add permissions…</button>
+                      <button onClick={() => resetFor(u)} className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50">Reset password…</button>
+                      <button
+                        onClick={async () => {
+                          const next = u.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+                          setMenuFor(null);
+                          try { await api.users.update(u.id, { status: next }); qc.invalidateQueries({ queryKey: ['users', orgId] }); }
+                          catch (e) { alert(e instanceof Error ? e.message : 'Could not update status'); }
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 text-amber-700"
+                      >
+                        {u.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && <p className="text-center text-sm text-gray-400 py-8">No members match.</p>}
+      </div>
+
+      <div className="hidden sm:block bg-white rounded-xl border border-gray-200 overflow-visible">
         <div className="overflow-x-auto lg:overflow-visible">
         <table className="w-full text-left text-sm">
           <thead><tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide whitespace-nowrap">

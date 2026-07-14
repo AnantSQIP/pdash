@@ -190,6 +190,7 @@ export default function TasksPage() {
       {/* Content */}
       <div className="p-4 sm:p-6">
         {isLoading ? (
+          <div className="hidden sm:block">
           <TableShell showClientDue={canSeeClientDue}>
             {Array.from({ length: 6 }).map((_, i) => (
               <tr key={i} className="animate-pulse">
@@ -205,6 +206,7 @@ export default function TasksPage() {
               </tr>
             ))}
           </TableShell>
+          </div>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center py-16 text-gray-400">
             <AlertTriangle size={36} className="mb-3 text-red-300" />
@@ -226,6 +228,27 @@ export default function TasksPage() {
             </p>
           </div>
         ) : (
+          <>
+          {/* Mobile: each task as a card. A 9-column table is unusable on a phone; the card
+              keeps every control (complete, status, progress) reachable without scrolling. */}
+          <div className="sm:hidden space-y-2.5">
+            {filtered.map(task => (
+              <TaskCard
+                key={task.id}
+                task={task}
+                closed={isTaskClosed(task)}
+                overdue={isOverdue(task)}
+                statuses={statuses}
+                canSeeClientDue={canSeeClientDue}
+                onToggle={() => toggleComplete(task)}
+                onStatus={id => changeStatus(task, id)}
+                onProgress={p => changeProgress(task, p)}
+              />
+            ))}
+          </div>
+
+          {/* Desktop / tablet: the full table. */}
+          <div className="hidden sm:block">
           <TableShell showClientDue={canSeeClientDue}>
             {filtered.map(task => {
               const closed = isTaskClosed(task);
@@ -314,6 +337,8 @@ export default function TasksPage() {
               );
             })}
           </TableShell>
+          </div>
+          </>
         )}
       </div>
     </div>
@@ -339,6 +364,90 @@ function TableShell({ children, showClientDue }: { children: React.ReactNode; sh
           </thead>
           <tbody className="divide-y divide-gray-100">{children}</tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// One task as a card — the mobile layout. Every control the row has (complete, status,
+// progress) is here, but stacked so nothing is pushed off a narrow screen.
+function TaskCard({ task, closed, overdue, statuses, canSeeClientDue, onToggle, onStatus, onProgress }: {
+  task: ApiTask;
+  closed: boolean;
+  overdue: boolean;
+  statuses: WorkflowStatus[];
+  canSeeClientDue: boolean;
+  onToggle: () => void;
+  onStatus: (id: string) => void;
+  onProgress: (p: number) => void;
+}) {
+  const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
+  const project = task.projectTasks?.[0]?.project;
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-3.5">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={onToggle}
+          className={clsx('mt-0.5 shrink-0 transition-colors', closed ? 'text-green-500' : 'text-gray-300 hover:text-green-400')}
+          aria-label={closed ? 'Reopen task' : 'Mark task complete'}
+        >
+          {closed ? <CheckCircle size={20} /> : <Circle size={20} />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <p className={clsx('text-sm font-medium leading-snug', closed ? 'line-through text-gray-400' : 'text-gray-900')}>
+            {task.title}
+          </p>
+          {project && (
+            <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline block mt-0.5 truncate">
+              {project.title}
+            </Link>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 mt-2.5">
+            <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', pm.bg, pm.color)}>{pm.label}</span>
+            <select
+              value={task.currentWorkflowStatusId ?? ''}
+              onChange={e => onStatus(e.target.value)}
+              disabled={statuses.length === 0}
+              aria-label="Task status"
+              className="text-xs font-medium rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand-500/30 cursor-pointer disabled:cursor-default"
+              style={task.currentStatus ? { backgroundColor: task.currentStatus.colorHex + '22', color: task.currentStatus.colorHex } : { backgroundColor: '#f1f5f9', color: '#64748b' }}
+            >
+              {!task.currentStatus && <option value="">—</option>}
+              {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            <AvatarStack users={taskAssigneeUsers(task)} size={22} />
+          </div>
+
+          <div className="flex items-center justify-between gap-3 mt-3">
+            <div className="flex items-center gap-2 min-w-0">
+              {task.dueDate && (
+                <span className={clsx('text-xs whitespace-nowrap', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
+                  {formatDate(task.dueDate)}{overdue && ' · overdue'}
+                </span>
+              )}
+              {canSeeClientDue && task.clientDueDate && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full whitespace-nowrap">
+                  <Lock size={9} /> {formatDate(task.clientDueDate)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full bg-brand-500" style={{ width: `${task.completionPercentage}%` }} />
+              </div>
+              <select
+                value={task.completionPercentage}
+                onChange={e => onProgress(Number(e.target.value))}
+                disabled={closed}
+                aria-label="Task progress"
+                className="text-xs text-gray-500 bg-transparent focus:outline-none focus:ring-2 focus:ring-brand-500/30 rounded cursor-pointer disabled:cursor-default"
+              >
+                {progressOptions(task.completionPercentage).map(p => <option key={p} value={p}>{p}%</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

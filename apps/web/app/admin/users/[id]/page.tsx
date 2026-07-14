@@ -528,8 +528,8 @@ function ActivityTab({ userId, orgId }: { userId: string; orgId: string }) {
   return (
     <div className="max-w-3xl">
       <p className="text-sm text-gray-500 mb-3">Recent actions by or affecting this user.</p>
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <table className="w-full text-left text-sm">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+        <table className="w-full text-left text-sm min-w-[640px]">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-5 py-2.5">When</th>
