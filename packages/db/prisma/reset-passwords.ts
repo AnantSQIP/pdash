@@ -30,7 +30,7 @@ const OUT_FILE = resolve(process.cwd(), 'SquarkIP-credentials.csv');
 /**
  * "<Capitalised first name><random digits>" — always >= 9 chars so it also
  * satisfies the 8-char minimum a user faces when they later change it.
- * e.g. "Anant" -> "Anant4821", "Riya" -> "Riya83017".
+ * e.g. "Anant" -> "Anant4821", "Asha" -> "Asha83017".
  */
 function makePassword(firstName: string | null | undefined): string {
   const clean = (firstName ?? '').replace(/[^A-Za-z]/g, '');
