@@ -57,3 +57,4 @@ Thumbs.db
 !.env.example
 !.env.production.example
 SquarkIP-credentials.*
+kt-shots/
