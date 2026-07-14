@@ -62,7 +62,7 @@ export function PasscodeProvider({ children }: { children: ReactNode }) {
       {open && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Organization passcode">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => settle(null)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div className="flex items-center gap-3">
                 <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center', locked ? 'bg-red-50' : 'bg-amber-50')}>

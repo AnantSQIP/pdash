@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { X, Plus, Check, Lock } from 'lucide-react';
+import { Plus, Check, Lock } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { api, type WorkflowStatus, type Milestone } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { DateField } from '@/components/ui/DateField';
+import { Modal } from '@/components/ui/Modal';
 import { OPEN_TYPE } from '@/lib/tasks';
 
 interface AddTaskModalProps {
@@ -107,20 +108,32 @@ export function AddTaskModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="New task">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">New Task</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Fill in the details to create a task</p>
+    <Modal
+      title="New Task"
+      subtitle="Fill in the details to create a task"
+      size="lg"
+      onClose={onClose}
+      footer={
+        <div>
+          {error && <p className="text-xs text-red-600 mb-2 text-right">{error}</p>}
+          <div className="flex items-center justify-end gap-3">
+            <button type="button" onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button type="submit" form="add-task-form" disabled={loading || !title.trim()}
+              className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {loading
+                ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Creating...</>
+                : <><Plus size={15} /> Create Task</>}
+            </button>
           </div>
-          <button onClick={onClose} aria-label="Close" className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors">
-            <X size={18} />
-          </button>
         </div>
-
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
+      }
+    >
+        <form id="add-task-form" onSubmit={handleSubmit} className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Title <span className="text-red-500">*</span>
@@ -241,23 +254,7 @@ export function AddTaskModal({
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            <button type="submit" disabled={loading || !title.trim()}
-              className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading
-                ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Creating...</>
-                : <><Plus size={15} /> Create Task</>}
-            </button>
-          </div>
-          {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
