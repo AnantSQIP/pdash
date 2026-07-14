@@ -13,11 +13,13 @@ type AuthValue = {
   loading: boolean;
   login: (email: string, password: string) => Promise<Result>;
   logout: () => Promise<void>;
+  /** Re-fetch the current user — e.g. after completing the profile, so the gate lifts. */
+  refresh: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthValue>({
   user: null, email: null, isAuthed: false, loading: true,
-  login: async () => ({ ok: false }), logout: async () => {},
+  login: async () => ({ ok: false }), logout: async () => {}, refresh: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -47,9 +49,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     qc.setQueryData(['auth-me'], null);
   }, [qc]);
 
+  const refresh = useCallback(async () => {
+    await qc.invalidateQueries({ queryKey: ['auth-me'] });
+  }, [qc]);
+
   const value = useMemo<AuthValue>(() => ({
-    user, email: user?.email ?? null, isAuthed: !!user, loading: isLoading, login, logout,
-  }), [user, isLoading, login, logout]);
+    user, email: user?.email ?? null, isAuthed: !!user, loading: isLoading, login, logout, refresh,
+  }), [user, isLoading, login, logout, refresh]);
 
   return (
     <AuthContext.Provider value={value}>

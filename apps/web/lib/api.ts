@@ -116,6 +116,8 @@ export type UserSummary = {
 export type AuthUser = {
   id: string; firstName: string; lastName: string; email: string;
   designation?: string | null; status: string; organizationId: string; mustResetPassword: boolean;
+  /** False until they have filled in their joining details — AppShell blocks on this. */
+  profileCompleted: boolean;
 };
 
 export type WorkflowStatus = {
@@ -371,6 +373,45 @@ export type PendingApproval = {
   id: string; title: string; priority: string; dueDate?: string | null; requestedAt: string;
   requester?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
 };
+
+/**
+ * A person's profile. The DIRECTORY half always arrives; the PERSONAL half is present only
+ * when the viewer may see it (Admin, Super Admin, HR — or you, looking at yourself). The
+ * server does not blank these fields, it OMITS THE KEYS, so `undefined` genuinely means
+ * "not permitted", and `null` means "permitted, but not filled in yet".
+ */
+export type UserProfile = {
+  // directory
+  id: string; firstName: string; lastName: string; email: string;
+  phone?: string | null; designation?: string | null; employeeCode?: string | null;
+  joiningDate?: string | null; profilePhoto?: string | null; status: string;
+  department?: { id: string; name: string } | null;
+  profileCompleted: boolean;
+  canSeePersonal: boolean;
+  canEdit: boolean;
+  // personal — ABSENT unless permitted
+  dateOfBirth?: string | null;
+  gender?: string | null;
+  bloodGroup?: string | null;
+  maritalStatus?: string | null;
+  nationality?: string | null;
+  personalEmail?: string | null;
+  alternatePhone?: string | null;
+  currentLine1?: string | null; currentLine2?: string | null; currentCity?: string | null;
+  currentState?: string | null; currentPostalCode?: string | null; currentCountry?: string | null;
+  permanentSameAsCurrent?: boolean;
+  permanentLine1?: string | null; permanentLine2?: string | null; permanentCity?: string | null;
+  permanentState?: string | null; permanentPostalCode?: string | null; permanentCountry?: string | null;
+  emergencyName?: string | null; emergencyRelationship?: string | null; emergencyPhone?: string | null;
+};
+
+export type ProfileInput = Partial<Omit<UserProfile,
+  'id' | 'firstName' | 'lastName' | 'email' | 'designation' | 'employeeCode' | 'joiningDate' |
+  'profilePhoto' | 'status' | 'department' | 'profileCompleted' | 'canSeePersonal' | 'canEdit'>>;
+
+export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] as const;
+export const GENDERS = ['Male', 'Female', 'Other', 'Prefer not to say'] as const;
+export const MARITAL_STATUSES = ['Single', 'Married', 'Divorced', 'Widowed', 'Prefer not to say'] as const;
 
 /** Someone who is locked out and has asked an admin to reset them. */
 export type PendingPasswordReset = {
@@ -718,6 +759,19 @@ export const api = {
 
   departments: {
     list: (orgId: string) => req<DepartmentSummary[]>(`/departments?organizationId=${encodeURIComponent(orgId)}`),
+  },
+
+  profile: {
+    /** Your own profile — always fully visible to you. */
+    me: () => req<UserProfile>('/profile/me'),
+    /** Fill in / update your own details. This clears the first-sign-in gate. */
+    updateMe: (data: ProfileInput) =>
+      req<UserProfile>('/profile/me', { method: 'PUT', body: JSON.stringify(data) }),
+    /** Someone else's profile. Personal fields are ABSENT unless you may see them. */
+    get: (userId: string) => req<UserProfile>(`/profile/${userId}`),
+    /** Correct someone's details — HR/Admin only (profile.update.any). */
+    update: (userId: string, data: ProfileInput) =>
+      req<UserProfile>(`/profile/${userId}`, { method: 'PUT', body: JSON.stringify(data) }),
   },
 
   capacity: {

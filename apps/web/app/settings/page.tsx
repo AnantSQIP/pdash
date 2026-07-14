@@ -24,6 +24,7 @@ import { api, type UserSummary } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { ProfilePhotoCard } from '@/components/ProfilePhotoCard';
+import { ProfileCard } from '@/components/people/ProfileCard';
 
 // Only tabs backed by real functionality are shown. Notifications / Workflows /
 // Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
@@ -171,6 +172,7 @@ function ChangePasscodeCard() {
 // ── General Tab ────────────────────────────────────────────────────────────────
 function GeneralTab() {
   const { org } = useOrg();
+  const { user } = useAuth();
   const qc = useQueryClient();
   const COLOR_SWATCHES = [
     { id: 'brand',   bg: 'bg-brand-600',   hex: '#3d8de2' },
@@ -211,6 +213,13 @@ function GeneralTab() {
 
   return (
     <div className="space-y-6">
+      {/* Your own joining details. You always see and edit your own — no permission needed. */}
+      {user && (
+        <div>
+          <h2 className="text-base font-semibold text-gray-900 mb-3">My details</h2>
+          <ProfileCard userId={user.id} />
+        </div>
+      )}
       <ProfilePhotoCard />
       <ChangePasswordCard />
       <ChangePasscodeCard />

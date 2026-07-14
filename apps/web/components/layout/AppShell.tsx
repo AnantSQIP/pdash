@@ -7,6 +7,7 @@ import { Loader, Menu } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { Sidebar } from './Sidebar';
 import { ForcePasswordReset } from './ForcePasswordReset';
+import { CompleteProfile } from './CompleteProfile';
 
 const PUBLIC_ROUTES = ['/login', '/signup'];
 
@@ -52,6 +53,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   // A freshly-invited user must set their own password before reaching the app.
   if (user?.mustResetPassword) {
     return <ForcePasswordReset />;
+  }
+
+  // ...and then tell us who they are. Order matters: the password first (so the account is
+  // theirs alone before any personal data is typed into it), then the joining details.
+  // Existing staff were grandfathered by the migration, so this only fires for someone
+  // signing in for the very first time.
+  if (user && !user.profileCompleted) {
+    return <CompleteProfile />;
   }
 
   // Authenticated app shell. On lg+ the sidebar is static; below lg it becomes an

@@ -121,6 +121,7 @@ Full schema in `packages/db/prisma/schema.prisma`. Domain map (22 domains per fr
 | 20 | Audit | AuditLog (immutable, never deleted) |
 | 21 | Integration | Integration |
 | 22 | *Capacity & deadlines* | *(no new tables — derived from Task/Project/LeaveRequest/Holiday; see §11)* |
+| 23 | *User Profile (PII)* | UserProfile *(1:1 with User; private joining details — see §13)* |
 
 **Fields added after the frozen ERD (all additive, nullable, backward-compatible):**
 
@@ -132,6 +133,7 @@ Full schema in `packages/db/prisma/schema.prisma`. Domain map (22 domains per fr
 | Document | `mimeType` (+ `DocumentBlob`) | attachments/media storage |
 | Message / Comment | `attachments` | file attachments in Discuss + comments |
 | User | `passwordResetRequestedAt` | self-service "forgot password" request (no mail transport — an admin actions it) |
+| User | `profileCompletedAt` | null until the new joiner fills their details; AppShell blocks the app until set |
 
 **Key modeling decisions:**
 
@@ -213,6 +215,44 @@ Purpose: let managers/admins see **who is free and when**, across every project,
 **Overdue watchdog** — `OverdueMonitorService` sweeps hourly (in-process; single API container). First time a task passes its INTERNAL deadline while open → notify assignee + the project's managers + org admins, once (`overdueNotifiedAt`); a per-manager daily digest is DB-deduped. Editing a task's deadline forward re-arms the alert.
 
 **Project requests (intern flow)** — Employee/Consultant hold `project.create` = *request*. A requester without `project.approve` must nominate an approver (`GET /projects/eligible-managers`); the request routes only to that person (`GET /projects/pending-approvals`), who becomes the project MANAGER. Self-approval is barred.
+
+---
+
+## 13. User profiles & the PII boundary
+
+New joiners are created by an admin, sign in, set their own password, and are then **blocked
+by a one-time form** (`CompleteProfile`) until they record their joining details. The gate is
+`User.profileCompletedAt`; `AppShell` checks it immediately after the forced password change,
+so the account is provably theirs before any personal data is typed into it. The migration
+grandfathers anyone who has already signed in (`lastLoginAt IS NOT NULL`), so the gate only
+ever fires for genuinely new people.
+
+**Why a separate `UserProfile` table.** `GET /users` is deliberately open to every
+authenticated member — the app resolves people from the user list. Anything living on `User`
+is therefore one careless `select` away from the whole company. Home addresses, dates of
+birth and emergency contacts must not sit on that path, so they live in their own table,
+reachable only through the profile endpoints.
+
+**Two visibility tiers, enforced server-side by deleting keys** (the same discipline as
+`clientDueDate` — never UI-hiding):
+
+| Tier | Fields | Who |
+|---|---|---|
+| Directory | name, designation, department, work email/phone, employee code, joining date | `profile.view` → Manager, Senior Consultant, Admin, Super Admin, HR |
+| **Personal** | DOB, gender, blood group, marital status, nationality, personal email, alternate phone, **current + permanent address**, emergency contact | `profile.view.personal` → **Admin, Super Admin, HR only** |
+
+**You always see and edit your own profile** — that needs no permission. Correcting someone
+else's requires `profile.update.any` (Admin, Super Admin, HR); a Manager can read the
+directory tier but cannot write anything.
+
+`PERSONAL_FIELDS` in `profile.module.ts` is an explicit allow-list, so adding a column to
+`UserProfile` can never silently widen what a manager receives — a new field is invisible
+until it is named there.
+
+**Deliberately NOT collected:** government IDs (PAN/Aadhaar) and bank details. Those fall
+under India's DPDP Act and would require encryption at rest, a retention policy and a lawful
+basis; storing them in plaintext as an afterthought would make the database a far
+higher-value target. Add them only as a considered, encrypted change.
 
 ---
 

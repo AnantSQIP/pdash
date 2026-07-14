@@ -33,6 +33,7 @@ import { IssuesModule } from './modules/issues/issues.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { PerformanceModule } from './modules/performance/performance.module';
+import { ProfileModule } from './modules/profile/profile.module';
 import { CapacityModule } from './modules/capacity/capacity.module';
 import { OverdueModule } from './modules/overdue/overdue.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
@@ -66,6 +67,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     ApprovalsModule,
     // People & org
     UsersModule,
+    ProfileModule, // private joining details (PII, two-tier visibility)
     DepartmentsModule,
     // Time tracking & attendance
     TimesheetsModule,

@@ -26,6 +26,8 @@ export const ACTION_LABELS: Record<string, string> = {
   'view.own': 'View Own',
   'view.organization': 'View Org-wide',
   'view.client': 'View Client Deadline',
+  'view.personal': 'View Personal Details',
+  'update.any': 'Edit Anyone\'s',
 };
 
 export const MODULES: ModuleDef[] = [
@@ -53,6 +55,11 @@ export const MODULES: ModuleDef[] = [
   { key: 'holiday',     label: 'Holidays',     actions: ['view', 'manage'] },
   { key: 'department',  label: 'Departments',  actions: ['view', 'create', 'update', 'delete'] },
   { key: 'user',        label: 'Users',        actions: ['view', 'create', 'update', 'delete', 'manage_access'] },
+  // A person's joining details. TWO TIERS, enforced by stripping keys server-side:
+  //   profile.view          → the directory card (managers/seniors)
+  //   profile.view.personal → home addresses, DOB, emergency contact (Admin/Super Admin/HR)
+  // Everyone can always see and edit their OWN profile — that needs no permission.
+  { key: 'profile',     label: 'User Profiles', actions: ['view', 'view.personal', 'update.any'] },
   { key: 'role',        label: 'Roles',        actions: ['view', 'create', 'update', 'delete'] },
   { key: 'group',       label: 'Permission Groups', actions: ['view', 'create', 'update', 'delete', 'manage_members'] },
   { key: 'permission',  label: 'Permissions',  actions: ['view'] },
@@ -112,6 +119,8 @@ const MANAGER_CODES = [
   code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
   code('holiday', 'manage'),
   code('user', 'view'), code('department', 'view'),
+  // Directory tier only — a manager never receives someone's home address or DOB.
+  code('profile', 'view'),
 ];
 
 // Employee: see work, manage own contributions.
@@ -155,6 +164,8 @@ const SENIOR_CONSULTANT_CODES = [
   code('capacity', 'view'), code('deadline', 'view.client'),
   code('leave', 'request'),
   code('user', 'view'), code('department', 'view'),
+  // Directory tier only — a manager never receives someone's home address or DOB.
+  code('profile', 'view'),
 ];
 
 // Consultant: senior contributor — can assign tasks and shape milestones/issues, and
@@ -197,6 +208,8 @@ const HR_CODES = [
   code('holiday', 'view'), code('holiday', 'manage'),
   code('department', 'view'), code('department', 'create'), code('department', 'update'),
   code('user', 'view'), code('user', 'create'), code('user', 'update'), code('user', 'manage_access'),
+  // People-ops: HR is one of the three roles trusted with personal details.
+  code('profile', 'view'), code('profile', 'view.personal'), code('profile', 'update.any'),
 ];
 
 // Admin: everything except the most destructive RBAC delete (kept for Super Admin).
