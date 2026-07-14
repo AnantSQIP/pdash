@@ -1,10 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { X, Clock } from 'lucide-react';
 import { api, type ApiTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
+import { Modal } from '@/components/ui/Modal';
 
 interface LogTimeModalProps {
   projectId: string;
@@ -52,25 +52,32 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center">
-              <Clock size={18} className="text-brand-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">Log Time</h2>
-              <p className="text-xs text-gray-500">Record hours spent on a task</p>
-            </div>
+    <Modal
+      title="Log Time"
+      subtitle="Record hours spent on a task"
+      size="md"
+      onClose={onClose}
+      footer={
+        <div>
+          {error && <p className="text-xs text-red-600 mb-2 text-right">{error}</p>}
+          <div className="flex items-center justify-end gap-3">
+            <button type="button" onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button type="submit" form="log-time-form" disabled={loading || !taskId || !hours}
+              className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {loading
+                ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</>
+                : 'Log Time'}
+            </button>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors">
-            <X size={18} />
-          </button>
         </div>
-
-        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+      }
+    >
+        <form id="log-time-form" onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
             <select
@@ -131,23 +138,7 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
             </button>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button type="button" onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            <button type="submit" disabled={loading || !taskId || !hours}
-              className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading
-                ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</>
-                : 'Log Time'}
-            </button>
-          </div>
-          {error && <p className="text-xs text-red-600">{error}</p>}
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
