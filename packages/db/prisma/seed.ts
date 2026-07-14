@@ -154,24 +154,24 @@ async function main() {
   const nitin     = await makeUser('Nitin',     'Goel',      'nitin.goel@squarkip.com',       'Manager',                   managerRole.id,          '8826599004');
   const divyanshu = await makeUser('Divyanshu', 'Saxena',    'divyanshu.saxena@squarkip.com', 'Testing and QA',            employeeRole.id,         '6376685331');
   const ankit     = await makeUser('Ankit',     'Verma',     'ankit.verma@squarkip.com',      'Product Development',       managerRole.id,          '7217827713');
-  const anant     = await makeUser('Anant',     'Gupta',     'anant.gupta@squarkip.com',      'Product Development',       managerRole.id,          '7206390512');
-  const riya      = await makeUser('Riya',      'Bhola',     'riya.bhola@squarkip.com',       'HR',                        hrRole.id,               '9649332546');
+  const anant     = await makeUser('Anant',     'Gupta',     'anant.gupta@squarkip.com',      'Product Development and Research Intern',       managerRole.id,          '7206390512');
   const shaveta   = await makeUser('Shaveta',   'Sharma',    'shavetasharma@squarkip.com',    'HR',                        hrRole.id,               '6280149294');
   const ketan     = await makeUser('Ketan',     'Dagar',     'ketan.dagar@squarkip.com',      'Senior Research Associate', employeeRole.id,         '6284795508');
 
   // ── Wider roster — additional real team members ──
   await Promise.all([
     makeUser('Ajay',    'Sharma',     'ajay.sharma@squarkip.com',      'Research Associate', employeeRole.id, '9460639443'),
-    makeUser('Aman',    'Sharma',     'aman.sharma@squarkip.com',      'Research Associate', employeeRole.id, '6378172788'),
+    makeUser('Aman',    'Sharma',     'aman.sharma@squarkip.com',      'Research Associate Intern', employeeRole.id, '6378172788'),
     makeUser('Drishti', 'Jain',       'drishti.jain@squarkip.com',     'Associate',          employeeRole.id, '8305088898'),
+    makeUser('Geetesh', 'Rathore',    'geetesh.rathore@squarkip.com',  'Research Associate Intern', employeeRole.id),
     makeUser('HR',      'Admin',      'hr@squarkip.com',               'HR',                 hrRole.id,       '09166876696'),
     makeUser('Poorvi',  'Gupta',      'poorvi.gupta@squarkip.com',     'Research Associate', employeeRole.id, '8209218618'),
-    makeUser('Ragini',  'Kumari',     'ragini.kumari@squarkip.com',    'Associate',          employeeRole.id, '7807290342'),
-    makeUser('Rajesh',  'Joshi',      'rajesh.joshi@squarkip.com',     'Senior Associate',   employeeRole.id, '9205688453'),
+    makeUser('Ragini',  'Kumari',     'ragini.kumari@squarkip.com',    'Research Associate Intern', employeeRole.id, '7807290342'),
+    makeUser('Rajesh',  'Joshi',      'rajesh.joshi@squarkip.com',     'Research Associate Intern', employeeRole.id, '9205688453'),
     makeUser('Ritik',   'Sharma',     'ritik.sharma@squarkip.com',     'Research Associate', employeeRole.id, '8194932267'),
     makeUser('Ronak',   'Khandelwal', 'ronak.khandelwal@squarkip.com', 'Associate',          employeeRole.id, '9887145023'),
     makeUser('Sugandh', 'Raghav',     'sugandh.raghav@squarkip.com',   'Research Associate', employeeRole.id, '9456252763'),
-    makeUser('Tanisha', 'Jain',       'tanisha.jain@squarkip.com',     'Associate',          employeeRole.id, '7828717606'),
+    makeUser('Tanisha', 'Jain',       'tanisha.jain@squarkip.com',     'Research Associate Intern', employeeRole.id, '7828717606'),
     makeUser('Vandana', 'Boora',      'vandana.boora@squarkip.com',    'Research Associate', employeeRole.id, '9413541413'),
   ]);
 
@@ -203,7 +203,6 @@ async function main() {
     { departmentId: deptTM.id,     userId: anant.id  },
     { departmentId: deptOps.id,    userId: divyanshu.id },
     { departmentId: deptOps.id,    userId: nitin.id  },
-    { departmentId: deptOps.id,    userId: riya.id   },
     { departmentId: deptOps.id,    userId: shaveta.id },
   ]});
 
@@ -477,7 +476,7 @@ async function main() {
   await makeTask({ title: 'Docketing audit — upcoming deadlines',    priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: mohit.id, dueDate: '2026-07-14', assignee: nitin.id,   projectId: p3.id, taskListId: gl3.id, seq: 116 });
   await makeTask({ title: 'Practice roadmap Q4 draft',               priority: 'HIGH',     pct: 25,  statusId: sProgress.id, createdBy: mohit.id, dueDate: '2026-07-20', assignee: ankit.id,   projectId: p4.id, taskListId: gl4.id, seq: 117 });
   await makeTask({ title: 'Service spec — automated watch alerts',   priority: 'HIGH',     pct: 70,  statusId: sReview.id,   createdBy: ankit.id, dueDate: '2026-07-03', assignee: anant.id,   projectId: p4.id, taskListId: gl4.id, seq: 118 });
-  await makeTask({ title: 'Team onboarding documentation',           priority: 'LOW',      pct: 50,  statusId: sProgress.id, createdBy: mohit.id, dueDate: '2026-07-22', assignee: riya.id,    projectId: p4.id, taskListId: gl4.id, seq: 119 });
+  await makeTask({ title: 'Team onboarding documentation',           priority: 'LOW',      pct: 50,  statusId: sProgress.id, createdBy: mohit.id, dueDate: '2026-07-22', assignee: shaveta.id,    projectId: p4.id, taskListId: gl4.id, seq: 119 });
   await makeTask({ title: 'Q3 performance review cycle',             priority: 'MEDIUM',   pct: 10,  statusId: sProgress.id, createdBy: mohit.id, dueDate: '2026-07-25', assignee: shaveta.id, projectId: p4.id, taskListId: gl4.id, seq: 120 });
   await makeTask({ title: 'Landscape analytics SQL queries',         priority: 'MEDIUM',   pct: 40,  statusId: sProgress.id, createdBy: yash.id,  dueDate: '2026-07-11', assignee: ketan.id,   projectId: p5.id, taskListId: gl5.id, seq: 121 });
   console.log('✓ Extra tasks (Mohit + team)');
@@ -544,7 +543,7 @@ async function main() {
     data: {
       organizationId: org.id, name: 'docketing', type: 'PUBLIC',
       description: 'Deadlines, reminders and statutory dates', createdBy: nitin.id,
-      members: { create: [{ userId: nitin.id }, { userId: divyanshu.id }, { userId: riya.id }] },
+      members: { create: [{ userId: nitin.id }, { userId: divyanshu.id }] },
       messages: { create: [
         { userId: nitin.id,     content: 'Upcoming: PCT 12-month deadline for the AI chipset matter — please prioritise.' },
         { userId: divyanshu.id, content: 'QA on claim mapping for the SEP matter starts Monday.' },
@@ -631,7 +630,7 @@ async function main() {
   // The PerformanceService live-fallback reads these directly, so charts populate
   // even before "Rebuild snapshots" is run.
   // ══════════════════════════════════════════════════════════════════════════
-  const allUsers = [mohit, yash, arjun, vijay, basant, khushi, meetu, nehu, amrit, nitin, divyanshu, ankit, anant, riya, shaveta, ketan];
+  const allUsers = [mohit, yash, arjun, vijay, basant, khushi, meetu, nehu, amrit, nitin, divyanshu, ankit, anant, shaveta, ketan];
   // Give tasks an estimate so the "estimated vs actual" bullet chart has data.
   const estByPriority: Record<string, number> = { CRITICAL: 20, HIGH: 14, MEDIUM: 8, LOW: 4 };
   for (const [prio, est] of Object.entries(estByPriority)) {
