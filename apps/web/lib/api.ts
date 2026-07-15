@@ -445,6 +445,14 @@ export type LeaveRequestItem = {
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
   createdAt: string; user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
 };
+export type RegularizationRequest = {
+  id: string; userId: string; organizationId?: string | null; date: string; reason: string;
+  requestType: string; requestedStatus: string;
+  requestedCheckIn?: string | null; requestedCheckOut?: string | null;
+  status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
+  createdAt: string;
+  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
+};
 export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
 export type LeaveBalance = { code: string; name: string; quota: number; used: number; remaining: number; colorHex: string };
 export type Holiday = { id: string; organizationId: string; name: string; date: string; type: string; recurring: boolean };
@@ -796,12 +804,23 @@ export const api = {
     punch: () => req<Attendance>('/attendance/punch', { method: 'POST' }),
     regularize: (id: string, reason: string, newStatus?: string) =>
       req<Attendance>(`/attendance/${id}/regularize`, { method: 'POST', body: JSON.stringify({ reason, newStatus }) }),
-    regularizeDay: (data: { date: string; reason: string; status?: string; checkIn?: string; checkOut?: string }) =>
-      req<Attendance>('/attendance/me/regularize', { method: 'POST', body: JSON.stringify(data) }),
     mark: (data: { userId: string; date: string; status: string; note?: string }) =>
       req<Attendance>('/attendance/mark', { method: 'POST', body: JSON.stringify(data) }),
     orgSummary: (orgId: string, from: string, to: string) =>
       req<OrgAttendanceSummary>(`/attendance/org/summary?organizationId=${encodeURIComponent(orgId)}&from=${from}&to=${to}`),
+
+    // ── Regularisation: employee requests, HR approves/rejects ──
+    /** Raise a regularisation request for a day (missed/late/forgot punch). Goes to HR. */
+    requestRegularization: (data: { date: string; reason: string; requestType?: string; status?: string; checkIn?: string; checkOut?: string }) =>
+      req<RegularizationRequest>('/attendance/me/regularize', { method: 'POST', body: JSON.stringify(data) }),
+    myRegularizations: () => req<RegularizationRequest[]>('/attendance/regularizations/me'),
+    pendingRegularizations: () => req<RegularizationRequest[]>('/attendance/regularizations/pending'),
+    approveRegularization: (id: string, note?: string) =>
+      req<RegularizationRequest>(`/attendance/regularizations/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    rejectRegularization: (id: string, note?: string) =>
+      req<RegularizationRequest>(`/attendance/regularizations/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    cancelRegularization: (id: string) =>
+      req<RegularizationRequest>(`/attendance/regularizations/${id}/cancel`, { method: 'POST' }),
   },
 
   leave: {

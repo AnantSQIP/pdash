@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import {
   RiNotification3Line, RiAlarmWarningLine, RiCalendarEventLine, RiFlag2Line,
@@ -29,6 +29,9 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'project.approval_requested': { Icon: RiCheckboxCircleLine, color: 'text-brand-600', bg: 'bg-brand-50' },
   'leave.approved':   { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'leave.rejected':   { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
+  'attendance.regularization_requested': { Icon: RiTimeLine,           color: 'text-amber-600', bg: 'bg-amber-50' },
+  'attendance.regularization_approved':  { Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
+  'attendance.regularization_rejected':  { Icon: RiCloseCircleLine,    color: 'text-red-600',   bg: 'bg-red-50' },
   'project.approved': { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'project.rejected': { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
   'meeting.invited':  { Icon: RiCalendarEventLine,  color: 'text-brand-600',  bg: 'bg-brand-50' },
@@ -88,6 +91,22 @@ export function NotificationsPanel({ onClose, collapsed = false }: { onClose: ()
 
   const unread = notifs.filter(n => !n.isRead).length;
   const invalidate = () => { qc.invalidateQueries({ queryKey: ['notifications'] }); qc.invalidateQueries({ queryKey: ['notifications-unread'] }); };
+
+  // Opening the panel counts as reading. Mark everything read server-side and clear the
+  // unread badge — but DON'T refetch the list itself, so the "new" highlight stays visible
+  // while you're looking (it settles to read the next time you open the panel). This runs
+  // once per open: the panel is mounted only while open, so an empty-dep effect is exactly
+  // "on open".
+  const markedOnOpen = useRef(false);
+  useEffect(() => {
+    if (markedOnOpen.current) return;
+    if (notifs.some(n => !n.isRead)) {
+      markedOnOpen.current = true;
+      api.notifications.markAllRead()
+        .then(() => qc.invalidateQueries({ queryKey: ['notifications-unread'] }))
+        .catch(() => { markedOnOpen.current = false; });
+    }
+  }, [notifs, qc]);
 
   async function markRead(id: string) { await api.notifications.markRead(id); invalidate(); }
   async function markAllRead() { await api.notifications.markAllRead(); setDismissed(new Set([...dismissed, ...reminders.map(r => r.id)])); invalidate(); }

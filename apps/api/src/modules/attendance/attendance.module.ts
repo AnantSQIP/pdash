@@ -29,11 +29,27 @@ const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
 // ════════════════════════════════════════════════════════════════════════════════
 @Injectable()
 export class AttendanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   private async orgOf(userId: string): Promise<string | null> {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     return u?.organizationId ?? null;
+  }
+
+  /** Everyone who can approve regularisations (holds attendance.regularize) — HR/Admins. */
+  private async approverIds(organizationId: string | null): Promise<string[]> {
+    if (!organizationId) return [];
+    const rows = await this.prisma.user.findMany({
+      where: {
+        organizationId, deletedAt: null, status: 'ACTIVE',
+        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'attendance.regularize' } } } } } },
+      },
+      select: { id: true },
+    });
+    return rows.map(r => r.id);
   }
 
   async getToday(userId: string) {
@@ -107,43 +123,134 @@ export class AttendanceService {
     });
   }
 
+  private readonly regUserSelect = { select: { id: true, firstName: true, lastName: true, email: true, profilePhoto: true } };
+
   /**
-   * Self-service regularization keyed on a DATE (not a row id) so it works even when no
-   * punch row exists yet — the common case (missed punch / inferred-absent day). Upserts the
-   * day, stamps the audit fields, and applies an optional corrected status + check-in/out.
-   * Self-service for now; manager-approval routing via the generic Approval entity is the
-   * tracked follow-up (ATTENDANCE_BILLABLE_PLAN.md, C1).
+   * An employee RAISES a regularisation request for one day (missed / late / forgot punch).
+   * It does NOT change attendance — it goes to HR (attendance.regularize) to approve or reject.
+   * Regularisation used to be a silent self-edit; now it is reviewed, so the record is trusted.
    */
-  async regularizeDay(
+  async requestRegularization(
     userId: string,
-    data: { date: string; reason: string; status?: string; checkIn?: string; checkOut?: string },
+    data: { date: string; reason: string; requestType?: string; status?: string; checkIn?: string; checkOut?: string },
   ) {
-    if (!data?.reason?.trim()) throw new BadRequestException('reason is required');
+    if (!data?.reason?.trim()) throw new BadRequestException('A reason is required.');
     const REG_ALLOWED = ['PRESENT', 'HALF_DAY'];
     const status = data.status ?? 'PRESENT';
     if (!REG_ALLOWED.includes(status)) throw new BadRequestException(`status must be one of: ${REG_ALLOWED.join(', ')}`);
     const date = parseDay(data.date.slice(0, 10));
-    if (date > utcDay(new Date())) throw new BadRequestException('Cannot regularise a future date');
+    if (date > utcDay(new Date())) throw new BadRequestException('Cannot regularise a future date.');
     const checkIn = parseInstant(data.checkIn);
     const checkOut = parseInstant(data.checkOut);
-    if (checkIn && checkOut && checkOut <= checkIn) throw new BadRequestException('Check-out must be after check-in');
-    const totalHours = checkIn && checkOut ? round((checkOut.getTime() - checkIn.getTime()) / 3_600_000, 2) : undefined;
+    if (checkIn && checkOut && checkOut <= checkIn) throw new BadRequestException('Check-out must be after check-in.');
+
+    // One open request per day — a second would let two approvals fight over the same row.
+    const existing = await this.prisma.regularizationRequest.findFirst({
+      where: { userId, date, status: 'PENDING' },
+    });
+    if (existing) throw new BadRequestException('You already have a pending request for this day.');
+
     const organizationId = await this.orgOf(userId);
+    const req = await this.prisma.regularizationRequest.create({
+      data: {
+        userId, organizationId, date, reason: data.reason.trim(),
+        requestType: data.requestType ?? 'OTHER',
+        requestedStatus: status,
+        requestedCheckIn: checkIn ?? undefined,
+        requestedCheckOut: checkOut ?? undefined,
+        status: 'PENDING',
+      },
+      include: { user: this.regUserSelect },
+    });
+
+    const u = (req as any).user;
+    const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
+    await this.notifications.notify(await this.approverIds(organizationId), {
+      type: 'attendance.regularization_requested',
+      title: 'Attendance regularisation to review',
+      message: `${name} asked to regularise ${dayKey(date)}: ${req.reason}`,
+    });
+    return req;
+  }
+
+  myRegularizations(userId: string) {
+    return this.prisma.regularizationRequest.findMany({
+      where: { userId }, orderBy: { createdAt: 'desc' }, take: 60,
+      include: { user: this.regUserSelect },
+    });
+  }
+
+  /** The pending queue, scoped to the REVIEWER'S own org (resolved from the session actor). */
+  async pendingRegularizations(reviewerId: string) {
+    const organizationId = await this.orgOf(reviewerId);
+    if (!organizationId) return [];
+    return this.prisma.regularizationRequest.findMany({
+      where: { organizationId, status: 'PENDING' }, orderBy: { createdAt: 'asc' },
+      include: { user: this.regUserSelect },
+    });
+  }
+
+  /** HR approves: NOW the change is written to the attendance row, and the request is closed. */
+  async approveRegularization(id: string, actorId: string, note?: string) {
+    const req = await this.prisma.regularizationRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Regularisation request not found');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only pending requests can be approved.');
+    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own request.');
+
+    const checkIn = req.requestedCheckIn;
+    const checkOut = req.requestedCheckOut;
+    const totalHours = checkIn && checkOut ? round((checkOut.getTime() - checkIn.getTime()) / 3_600_000, 2) : undefined;
     const audit = {
-      status,
+      status: req.requestedStatus,
       isRegularized: true,
-      regularizeReason: data.reason.trim(),
-      regularizedBy: userId,
+      regularizeReason: req.reason,
+      regularizedBy: actorId,
       regularizedAt: new Date(),
       ...(checkIn ? { checkIn } : {}),
       ...(checkOut ? { checkOut } : {}),
       ...(totalHours != null ? { totalHours } : {}),
     };
-    return this.prisma.attendance.upsert({
-      where: { userId_date: { userId, date } },
-      create: { userId, organizationId, date, ...audit },
-      update: audit,
+    await this.prisma.$transaction([
+      this.prisma.attendance.upsert({
+        where: { userId_date: { userId: req.userId, date: req.date } },
+        create: { userId: req.userId, organizationId: req.organizationId, date: req.date, ...audit },
+        update: audit,
+      }),
+      this.prisma.regularizationRequest.update({
+        where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
+      }),
+    ]);
+    await this.notifications.notify(req.userId, {
+      type: 'attendance.regularization_approved',
+      title: 'Regularisation approved',
+      message: `Your attendance for ${dayKey(req.date)} was regularised.`,
     });
+    return this.prisma.regularizationRequest.findUnique({ where: { id }, include: { user: this.regUserSelect } });
+  }
+
+  async rejectRegularization(id: string, actorId: string, note?: string) {
+    const req = await this.prisma.regularizationRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Regularisation request not found');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only pending requests can be rejected.');
+    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own request.');
+    const updated = await this.prisma.regularizationRequest.update({
+      where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
+      include: { user: this.regUserSelect },
+    });
+    await this.notifications.notify(req.userId, {
+      type: 'attendance.regularization_rejected',
+      title: 'Regularisation rejected',
+      message: `Your regularisation for ${dayKey(req.date)} was not approved${note ? `: ${note}` : '.'}`,
+    });
+    return updated;
+  }
+
+  async cancelRegularization(id: string, actorId: string) {
+    const req = await this.prisma.regularizationRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Regularisation request not found');
+    if (req.userId !== actorId) throw new ForbiddenException('You can only cancel your own requests.');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be cancelled.');
+    return this.prisma.regularizationRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
   }
 
   /**
@@ -252,11 +359,13 @@ export class AttendanceService {
         if (tsByUserDay.has(`${u.id}|${k}`)) { present++; continue; }
         if (k < todayKey) absent++;
       }
-      const workdays = present + absent + onLeave;
+      // Approved leave is not an expected working day, so it must not drag the rate
+      // down — mirror getMonth, where the denominator excludes leave days.
+      const expectedDays = present + absent;
       return {
         userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
         present, absent, onLeave, holiday, hoursLogged: round(hours),
-        attendanceRate: workdays ? Math.round((present / workdays) * 100) : 0,
+        attendanceRate: expectedDays ? Math.round((present / expectedDays) * 100) : 0,
       };
     });
     return { from, to, rows };
@@ -467,18 +576,54 @@ class AttendanceController {
     return this.svc.punch(actorId);
   }
 
+  // An employee RAISES a regularisation request. This no longer edits attendance directly —
+  // it goes to HR to approve (see the review routes below).
   @Post('me/regularize')
-  regularizeDay(
+  requestRegularization(
     @Actor() actorId: string | null,
-    @Body() body: { date: string; reason: string; status?: string; checkIn?: string; checkOut?: string },
+    @Body() body: { date: string; reason: string; requestType?: string; status?: string; checkIn?: string; checkOut?: string },
   ) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.regularizeDay(actorId, body);
+    return this.svc.requestRegularization(actorId, body);
+  }
+
+  /** My own regularisation requests + their status. */
+  @Get('regularizations/me')
+  myRegularizations(@Actor() actorId: string | null) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.myRegularizations(actorId);
+  }
+
+  /** The pending queue for reviewers (HR/Admin). */
+  @Get('regularizations/pending')
+  @RequirePermission('attendance.regularize')
+  pendingRegularizations(@Actor() actorId: string | null) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.pendingRegularizations(actorId);
+  }
+
+  @Post('regularizations/:id/approve')
+  @RequirePermission('attendance.regularize')
+  approveRegularization(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { note?: string }) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.approveRegularization(id, actorId, body?.note);
+  }
+
+  @Post('regularizations/:id/reject')
+  @RequirePermission('attendance.regularize')
+  rejectRegularization(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { note?: string }) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.rejectRegularization(id, actorId, body?.note);
+  }
+
+  @Post('regularizations/:id/cancel')
+  cancelRegularization(@Actor() actorId: string | null, @Param('id') id: string) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.cancelRegularization(id, actorId);
   }
 
   // Regularising an ARBITRARY attendance row (by id) is a privileged action —
-  // gate it so an Employee can't rewrite anyone's attendance (IDOR). Self-service
-  // corrections go through the `me/regularize` route above.
+  // gate it so an Employee can't rewrite anyone's attendance (IDOR).
   @Post(':id/regularize') @RequirePermission('attendance.regularize')
   regularize(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { reason: string; newStatus?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
