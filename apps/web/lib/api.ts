@@ -174,6 +174,8 @@ export type ApiProject = {
   /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
   clientDueDate?: string | null;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
+  /** Set when the project reaches its lifecycle end-states (COMPLETED / CLOSED). */
+  completedAt?: string | null; closedAt?: string | null;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
@@ -368,6 +370,23 @@ export type CapacityRow = {
 };
 export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[] };
 
+// Emergency-leave coverage board.
+export type CoverageRiskTask = {
+  id: string; title: string; priority: string; dueDate: string;
+  projectId?: string; project?: string; projectPriority?: string;
+  remainingHours: number; overdue: boolean;
+};
+export type CoverageRisk = {
+  leaveId: string; userId: string; name: string; profilePhoto?: string | null;
+  leaveType: string; startDate: string; endDate: string; noticeDays: number;
+  tasks: CoverageRiskTask[];
+};
+export type CoverageSuggestion = {
+  userId: string; name: string; profilePhoto?: string | null;
+  freeHours: number; availableNow: boolean; nextFreeDate: string | null;
+};
+export type CoverageRisks = { from: string; to: string; risks: CoverageRisk[]; suggestions: CoverageSuggestion[] };
+
 // ─── Project approval queue ──────────────────────────────────────────────────
 export type PendingApproval = {
   id: string; title: string; priority: string; dueDate?: string | null; requestedAt: string;
@@ -534,6 +553,10 @@ export const api = {
       req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
     reject: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
+    // Lifecycle: Complete → Close → Reopen (distinct from delete).
+    complete: (id: string) => req<ApiProject>(`/projects/${id}/complete`, { method: 'POST' }),
+    close: (id: string) => req<ApiProject>(`/projects/${id}/close`, { method: 'POST' }),
+    reopen: (id: string) => req<ApiProject>(`/projects/${id}/reopen`, { method: 'POST' }),
     addMember: (id: string, userId: string, projectRole?: string) =>
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
@@ -790,6 +813,9 @@ export const api = {
     forProject: (projectId: string, days = 14) =>
       req<TeamCapacity & { project: { id: string; title: string } }>(
         `/capacity/project/${projectId}?days=${days}`),
+    /** Emergency-leave coverage risks: short-notice absences over HIGH/CRITICAL work. */
+    coverageRisks: (days = 14) =>
+      req<CoverageRisks>(`/capacity/coverage-risks?days=${days}`),
   },
 
   overdue: {

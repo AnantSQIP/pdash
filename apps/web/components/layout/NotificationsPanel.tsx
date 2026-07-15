@@ -5,7 +5,7 @@ import { X } from 'lucide-react';
 import {
   RiNotification3Line, RiAlarmWarningLine, RiCalendarEventLine, RiFlag2Line,
   RiCheckboxCircleLine, RiTimeLine, RiUserAddLine, RiCloseCircleLine,
-  RiShieldKeyholeLine, RiUserSettingsLine, RiChat3Line,
+  RiShieldKeyholeLine, RiUserSettingsLine, RiChat3Line, RiArchiveLine, RiRefreshLine,
 } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApiTask, type CalendarEvent, type NotificationItem } from '@/lib/api';
@@ -34,6 +34,10 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'attendance.regularization_rejected':  { Icon: RiCloseCircleLine,    color: 'text-red-600',   bg: 'bg-red-50' },
   'project.approved': { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'project.rejected': { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
+  'project.completed': { Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
+  'project.closed':    { Icon: RiArchiveLine,        color: 'text-slate-600', bg: 'bg-slate-100' },
+  'project.reopened':  { Icon: RiRefreshLine,        color: 'text-brand-600', bg: 'bg-brand-50' },
+  'coverage.at_risk':  { Icon: RiAlarmWarningLine,   color: 'text-amber-600', bg: 'bg-amber-50' },
   'meeting.invited':  { Icon: RiCalendarEventLine,  color: 'text-brand-600',  bg: 'bg-brand-50' },
   'meeting.updated':  { Icon: RiCalendarEventLine,  color: 'text-amber-600',  bg: 'bg-amber-50' },
   'access.changed':   { Icon: RiShieldKeyholeLine,  color: 'text-purple-600', bg: 'bg-purple-50' },

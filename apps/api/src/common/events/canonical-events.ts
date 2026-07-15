@@ -17,6 +17,9 @@ export const EVENTS = {
   PROJECT_UPDATED: 'project.updated',
   PROJECT_APPROVED: 'project.approved',
   PROJECT_REJECTED: 'project.rejected',
+  PROJECT_COMPLETED: 'project.completed',
+  PROJECT_CLOSED: 'project.closed',
+  PROJECT_REOPENED: 'project.reopened',
   PROJECT_DELETED: 'project.deleted',
   // Comments / discussion
   COMMENT_CREATED: 'comment.created',

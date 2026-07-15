@@ -4,6 +4,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
+import { NotificationsService } from '../notifications/notifications.module';
 import { startOfUtcDay } from '../../common/dates';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
@@ -87,6 +88,7 @@ export class CapacityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly actor: ActorContextService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
@@ -326,6 +328,167 @@ export class CapacityService {
 
     return { from: dayKey(today), to: dayKey(addDays(to, -1)), capacityPerDay: DAILY_CAPACITY_HOURS, rows };
   }
+
+  // ── Emergency-leave coverage ─────────────────────────────────────────────────
+  // Priorities that make an absence worth flagging, and how much notice counts as
+  // "short" (an emergency). Capacity already compresses an on-leave person's work
+  // into fewer days; coverage surfaces WHO that hurts so it can be reassigned.
+  private static readonly RISK_PRIORITIES = ['HIGH', 'CRITICAL'];
+  private static readonly EMERGENCY_NOTICE_DAYS = 3;
+
+  /** Short notice = booked ≤ N days before it starts, or already in progress. */
+  private isShortNotice(createdAt: Date, startDate: Date, today: Date): boolean {
+    const start = startOfUtcDay(startDate);
+    if (start <= today) return true; // already started — the ultimate short notice
+    const noticeDays = Math.floor((start.getTime() - startOfUtcDay(createdAt).getTime()) / 86_400_000);
+    return noticeDays <= CapacityService.EMERGENCY_NOTICE_DAYS;
+  }
+
+  /** Open tasks on HIGH/CRITICAL projects, due on/before `windowEnd`, for the given users. */
+  private async atRiskTasks(userIds: string[], windowEnd: Date) {
+    if (!userIds.length) return [];
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        deletedAt: null,
+        dueDate: { not: null, lt: windowEnd },
+        assignees: { some: { userId: { in: userIds } } },
+        OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
+        projectTasks: { some: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } } },
+      },
+      select: {
+        id: true, title: true, priority: true, dueDate: true,
+        estimatedHours: true, completionPercentage: true,
+        assignees: { select: { userId: true } },
+        projectTasks: {
+          where: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } },
+          select: { project: { select: { id: true, title: true, priority: true } } },
+          take: 1,
+        },
+      },
+    });
+    const today = startOfUtcDay(new Date());
+    return tasks.map(t => {
+      const project = t.projectTasks[0]?.project;
+      const estimate = t.estimatedHours ?? DEFAULT_TASK_HOURS;
+      const remaining = Math.max(0, estimate * (1 - (t.completionPercentage ?? 0) / 100));
+      return {
+        id: t.id, title: t.title, priority: t.priority,
+        dueDate: t.dueDate as Date,
+        projectId: project?.id, project: project?.title, projectPriority: project?.priority,
+        remainingHours: r1(remaining),
+        overdue: !!t.dueDate && startOfUtcDay(t.dueDate) < today,
+        userIds: t.assignees.map(a => a.userId),
+      };
+    });
+  }
+
+  /** Users who can act on a coverage risk: capacity.view holders + the affected projects' managers. */
+  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<string[]> {
+    const [viewers, managers] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          organizationId, deletedAt: null, status: 'ACTIVE',
+          userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'capacity.view' } } } } } },
+        },
+        select: { id: true },
+      }),
+      projectIds.length
+        ? this.prisma.projectMember.findMany({
+            where: { projectId: { in: projectIds }, projectRole: 'MANAGER', isActive: true },
+            select: { userId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    return [...new Set([...viewers.map(v => v.id), ...managers.map(m => m.userId)])];
+  }
+
+  private emptyCoverage(today: Date, to: Date) {
+    return { from: dayKey(today), to: dayKey(addDays(to, -1)), risks: [] as unknown[], suggestions: [] as unknown[] };
+  }
+
+  /**
+   * The whole-org coverage board: everyone on short-notice approved leave who holds
+   * open HIGH/CRITICAL tasks due while they're out, plus a pool of free teammates to
+   * reassign the work to. Drives the "Coverage at risk" panel.
+   */
+  async coverageRisks(organizationId: string, days = DEFAULT_DAYS) {
+    const today = startOfUtcDay(new Date());
+    const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
+    const to = addDays(today, horizon);
+
+    const leaves = await this.prisma.leaveRequest.findMany({
+      where: { status: 'APPROVED', startDate: { lt: to }, endDate: { gte: today }, user: { organizationId } },
+      select: {
+        id: true, userId: true, leaveType: true, startDate: true, endDate: true, createdAt: true,
+        user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
+      },
+    });
+    const emergency = leaves.filter(lv => this.isShortNotice(lv.createdAt, lv.startDate, today));
+    if (!emergency.length) return this.emptyCoverage(today, to);
+
+    const tasks = await this.atRiskTasks([...new Set(emergency.map(l => l.userId))], to);
+    if (!tasks.length) return this.emptyCoverage(today, to);
+
+    const risks = emergency.map(lv => {
+      const end = startOfUtcDay(lv.endDate);
+      const mine = tasks
+        .filter(t => t.userIds.includes(lv.userId) && startOfUtcDay(t.dueDate) <= end)
+        .map(({ userIds: _uids, ...rest }) => ({ ...rest, dueDate: dayKey(rest.dueDate) }))
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+      const u = lv.user;
+      return {
+        leaveId: lv.id,
+        userId: lv.userId,
+        name: `${u?.firstName ?? ''} ${u?.lastName ?? ''}`.trim(),
+        profilePhoto: u?.profilePhoto ?? null,
+        leaveType: lv.leaveType,
+        startDate: dayKey(lv.startDate),
+        endDate: dayKey(lv.endDate),
+        noticeDays: Math.max(0, Math.floor((startOfUtcDay(lv.startDate).getTime() - startOfUtcDay(lv.createdAt).getTime()) / 86_400_000)),
+        tasks: mine,
+      };
+    }).filter(r => r.tasks.length > 0);
+
+    if (!risks.length) return this.emptyCoverage(today, to);
+
+    // A pool of free teammates to reassign to — most free first, and never the people
+    // who are themselves on leave in this window.
+    const onLeave = new Set(risks.map(r => r.userId));
+    const board = await this.team(organizationId, horizon);
+    const suggestions = board.rows
+      .filter(row => !onLeave.has(row.userId))
+      .sort((a, b) => (b.availableNow ? 1 : 0) - (a.availableNow ? 1 : 0) || b.freeHours - a.freeHours)
+      .slice(0, 8)
+      .map(row => ({
+        userId: row.userId, name: row.name, profilePhoto: row.profilePhoto,
+        freeHours: row.freeHours, availableNow: row.availableNow, nextFreeDate: row.nextFreeDate,
+      }));
+
+    return { from: dayKey(today), to: dayKey(addDays(to, -1)), risks, suggestions };
+  }
+
+  /**
+   * Fire a one-off "coverage at risk" alert when a SHORT-NOTICE leave is approved and
+   * the person holds HIGH/CRITICAL work due while they're out. Called from LeaveService
+   * on approval; best-effort (never blocks the approval).
+   */
+  async notifyIfCoverageAtRisk(organizationId: string | null, userId: string, leave: { startDate: Date; endDate: Date; createdAt: Date; leaveType: string }, name: string) {
+    if (!organizationId) return;
+    const today = startOfUtcDay(new Date());
+    if (!this.isShortNotice(leave.createdAt, leave.startDate, today)) return;
+    const end = startOfUtcDay(leave.endDate);
+    const tasks = (await this.atRiskTasks([userId], addDays(end, 1)))
+      .filter(t => t.userIds.includes(userId) && startOfUtcDay(t.dueDate) <= end);
+    if (!tasks.length) return;
+    const projectIds = [...new Set(tasks.map(t => t.projectId).filter((x): x is string => !!x))];
+    const reviewers = (await this.coverageReviewers(organizationId, projectIds)).filter(id => id !== userId);
+    if (!reviewers.length) return;
+    await this.notifications.notify(reviewers, {
+      type: 'coverage.at_risk',
+      title: 'Coverage at risk',
+      message: `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out — reassign or extend on the Capacity board.`,
+    });
+  }
 }
 
 @Controller('capacity')
@@ -344,6 +507,17 @@ class CapacityController {
   async team(@Query('days') days?: string) {
     const organizationId = await this.actor.requireOrgId();
     return this.capacity.team(organizationId, parseHorizon(days));
+  }
+
+  /**
+   * Emergency-leave coverage board: who is on short-notice leave while holding
+   * open HIGH/CRITICAL work due in their absence, plus free teammates to reassign to.
+   */
+  @Get('coverage-risks')
+  @RequirePermission('capacity.view')
+  async coverageRisks(@Query('days') days?: string) {
+    const organizationId = await this.actor.requireOrgId();
+    return this.capacity.coverageRisks(organizationId, parseHorizon(days));
   }
 
   /** Availability of one project's members — the capacity view opened from a project. */

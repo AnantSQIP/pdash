@@ -6,6 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
+  CheckCircle2, Archive, RotateCcw,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -51,6 +52,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
 
   // #10: make the project approval workflow reachable — approvers can approve/reject
   // a project awaiting review (phase PLANNING) instead of it being stuck forever.
@@ -67,6 +69,29 @@ export function ProjectDetailClient({ projectId }: Props) {
       toast(e instanceof Error ? e.message : 'Could not update approval', 'error');
     } finally {
       setDeciding(false);
+    }
+  }
+
+  // Lifecycle: Complete → Close → Reopen.
+  async function runLifecycle(action: 'complete' | 'close' | 'reopen') {
+    if (lifecycleBusy) return;
+    const confirms: Record<typeof action, string | null> = {
+      complete: 'Mark this project complete? Its work is treated as finished.',
+      close: 'Close this project? It moves to the Closed section (you can reopen it later).',
+      reopen: null,
+    };
+    const msg = confirms[action];
+    if (msg && !window.confirm(msg)) return;
+    setLifecycleBusy(true);
+    try {
+      await api.projects[action](projectId);
+      qc.invalidateQueries({ queryKey: ['project', projectId] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast(action === 'complete' ? 'Project marked complete' : action === 'close' ? 'Project closed' : 'Project reopened', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
+    } finally {
+      setLifecycleBusy(false);
     }
   }
 
@@ -238,7 +263,37 @@ export function ProjectDetailClient({ projectId }: Props) {
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {can('project.update') && (
+              {can('project.update') && ['ACTIVE', 'ON_HOLD'].includes(project.projectPhase) && (
+                <button
+                  onClick={() => runLifecycle('complete')}
+                  disabled={lifecycleBusy}
+                  title="Mark this project as complete"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 border border-green-200 bg-green-50 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-50"
+                >
+                  <CheckCircle2 size={14} /> Mark complete
+                </button>
+              )}
+              {can('project.update') && project.projectPhase === 'COMPLETED' && (
+                <button
+                  onClick={() => runLifecycle('close')}
+                  disabled={lifecycleBusy}
+                  title="Close and archive this project to the Closed section"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-700 border border-slate-200 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors disabled:opacity-50"
+                >
+                  <Archive size={14} /> Close
+                </button>
+              )}
+              {can('project.update') && ['COMPLETED', 'CLOSED'].includes(project.projectPhase) && (
+                <button
+                  onClick={() => runLifecycle('reopen')}
+                  disabled={lifecycleBusy}
+                  title="Reopen this project and return it to Active"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
+                >
+                  <RotateCcw size={14} /> Reopen
+                </button>
+              )}
+              {can('project.update') && project.projectPhase !== 'CLOSED' && (
                 <button
                   onClick={() => setEditingProject(true)}
                   title="Edit the project's details and deadlines"
@@ -247,14 +302,19 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <Pencil size={14} /> Edit
                 </button>
               )}
-              <button
-                onClick={() => openAddTask()}
-                disabled={!defaultTaskList}
-                title={defaultTaskList ? 'Add a task' : 'This project has no task list yet'}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus size={14} /> Add Task
-              </button>
+              {(() => {
+                const locked = ['COMPLETED', 'CLOSED'].includes(project.projectPhase);
+                return (
+                  <button
+                    onClick={() => openAddTask()}
+                    disabled={!defaultTaskList || locked}
+                    title={locked ? 'This project is ' + (project.projectPhase === 'CLOSED' ? 'closed' : 'complete') + ' — reopen it to add work' : defaultTaskList ? 'Add a task' : 'This project has no task list yet'}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus size={14} /> Add Task
+                  </button>
+                );
+              })()}
             </div>
           </div>
 
