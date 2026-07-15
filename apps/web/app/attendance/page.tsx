@@ -8,7 +8,7 @@ import {
   Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil,
 } from 'lucide-react';
 import {
-  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary,
+  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -65,6 +65,9 @@ export default function AttendancePage() {
   const monthEnd = `${cursor.year}-${String(cursor.month).padStart(2, '0')}-${String(new Date(cursor.year, cursor.month, 0).getDate()).padStart(2, '0')}`;
   const { data: orgSummary } = useQuery<OrgAttendanceSummary>({ queryKey: ['attn-org', org?.id, monthStart, monthEnd], queryFn: () => api.attendance.orgSummary(org!.id, monthStart, monthEnd), enabled: !!org?.id && canTeam && tab === 'team', staleTime: 30_000 });
   const { data: pending = [] } = useQuery<LeaveRequestItem[]>({ queryKey: ['leave-pending', org?.id], queryFn: () => api.leave.orgRequests(org!.id, 'PENDING'), enabled: !!org?.id && canTeam && tab === 'team', staleTime: 15_000 });
+  const canReviewReg = can('attendance.regularize');
+  const { data: pendingReg = [] } = useQuery<RegularizationRequest[]>({ queryKey: ['reg-pending', org?.id], queryFn: () => api.attendance.pendingRegularizations(), enabled: !!org?.id && canReviewReg && tab === 'team', staleTime: 15_000 });
+  const { data: myReg = [] } = useQuery<RegularizationRequest[]>({ queryKey: ['reg-mine', currentUser?.id], queryFn: () => api.attendance.myRegularizations(), enabled: !!currentUser?.id, staleTime: 15_000 });
 
   // ── live timer while clocked-in ──
   const [, tick] = useState(0);
@@ -78,6 +81,13 @@ export default function AttendancePage() {
     if (busy) return; setBusy(true);
     try { await api.attendance.punch(); invalidate('attn-today', 'attn-month', 'attn-org'); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
+    finally { setBusy(false); }
+  }
+
+  async function cancelReg(id: string) {
+    if (busy) return; setBusy(true);
+    try { await api.attendance.cancelRegularization(id); invalidate('reg-mine', 'reg-pending'); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel the request.'); }
     finally { setBusy(false); }
   }
 
@@ -145,6 +155,29 @@ export default function AttendancePage() {
                 ))}
               </div>
             </div>
+
+            {/* My regularisation requests */}
+            {myReg.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-5 py-3 border-b border-gray-100"><h3 className="text-sm font-semibold text-gray-700">My regularisation requests</h3></div>
+                <ul className="divide-y divide-gray-50">
+                  {myReg.map(r => (
+                    <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800">{format(new Date(r.date), 'EEE, MMM d')} · <span className="text-gray-500 font-normal">{REG_TYPES.find(t => t.value === r.requestType)?.label ?? r.requestType}</span></p>
+                        <p className="text-xs text-gray-400 truncate">{r.reason}{r.reviewNote ? ` · Note: ${r.reviewNote}` : ''}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={clsx('text-[11px] px-2 py-0.5 rounded-full font-medium', REG_STATUS_STYLE[r.status] ?? 'bg-gray-100 text-gray-600')}>{r.status.charAt(0) + r.status.slice(1).toLowerCase()}</span>
+                        {r.status === 'PENDING' && (
+                          <button onClick={() => cancelReg(r.id)} disabled={busy} className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-50">Cancel</button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         )}
 
@@ -161,7 +194,13 @@ export default function AttendancePage() {
 
         {/* ───────── TEAM (admin) ───────── */}
         {tab === 'team' && canTeam && (
-          <TeamTab orgSummary={orgSummary} pending={pending} onReviewed={() => invalidate('leave-pending', 'attn-org')} />
+          <TeamTab
+            orgSummary={orgSummary}
+            pending={pending}
+            pendingReg={canReviewReg ? pendingReg : []}
+            onReviewed={() => invalidate('leave-pending', 'attn-org')}
+            onRegReviewed={() => invalidate('reg-pending', 'attn-org', 'reg-mine')}
+          />
         )}
       </div>
 
@@ -169,7 +208,7 @@ export default function AttendancePage() {
         <RegularizeModal
           date={regDate}
           onClose={() => setRegDate(null)}
-          onSuccess={() => { setRegDate(null); invalidate('attn-month', 'attn-today', 'attn-org'); }}
+          onSuccess={() => { setRegDate(null); invalidate('reg-mine', 'reg-pending'); }}
         />
       )}
     </div>
@@ -282,8 +321,25 @@ const REG_STATUSES: { value: string; label: string }[] = [
   { value: 'HALF_DAY', label: 'Half day' },
 ];
 
+const REG_TYPES = [
+  { value: 'FORGOT_IN', label: 'Forgot to punch in' },
+  { value: 'LATE_IN', label: 'Late punch-in' },
+  { value: 'FORGOT_OUT', label: 'Forgot to punch out' },
+  { value: 'WRONG_TIME', label: 'Wrong time recorded' },
+  { value: 'WFH', label: 'Worked from home / on-site' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+const REG_STATUS_STYLE: Record<string, string> = {
+  PENDING: 'bg-amber-100 text-amber-700',
+  APPROVED: 'bg-green-100 text-green-700',
+  REJECTED: 'bg-red-100 text-red-600',
+  CANCELLED: 'bg-gray-100 text-gray-500',
+};
+
 function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: () => void; onSuccess: () => void }) {
   const [reason, setReason] = useState('');
+  const [requestType, setRequestType] = useState('FORGOT_IN');
   const [status, setStatus] = useState('PRESENT');
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
@@ -294,16 +350,17 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
     if (saving || !reason.trim()) return;
     setSaving(true); setError('');
     try {
-      await api.attendance.regularizeDay({
+      await api.attendance.requestRegularization({
         date,
         reason: reason.trim(),
+        requestType,
         status,
         checkIn: checkIn ? `${date}T${checkIn}:00` : undefined,
         checkOut: checkOut ? `${date}T${checkOut}:00` : undefined,
       });
       onSuccess();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to regularise');
+      setError(e instanceof Error ? e.message : 'Could not send the request');
     } finally {
       setSaving(false);
     }
@@ -317,13 +374,22 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center"><Pencil size={18} className="text-brand-600" /></div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Regularise attendance</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Request regularisation</h2>
               <p className="text-xs text-gray-500">{format(new Date(`${date}T00:00:00`), 'EEEE, MMM d, yyyy')}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
         </div>
         <div className="px-6 py-5 space-y-4">
+          <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+            This is sent to HR for approval. Your attendance changes only once they approve it.
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">What happened?</label>
+            <select value={requestType} onChange={e => setRequestType(e.target.value)} className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+              {REG_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Mark as</label>
             <select value={status} onChange={e => setStatus(e.target.value)} className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
@@ -353,7 +419,7 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
           <div className="flex items-center justify-end gap-3 pt-1">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
             <button onClick={submit} disabled={saving || !reason.trim()} className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-              {saving ? <><Loader size={14} className="animate-spin" /> Saving…</> : 'Submit'}
+              {saving ? <><Loader size={14} className="animate-spin" /> Sending…</> : 'Send to HR'}
             </button>
           </div>
         </div>
@@ -453,7 +519,10 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
 }
 
 // ── Team tab (admin) ──────────────────────────────────────────────────────────────
-function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendanceSummary; pending: LeaveRequestItem[]; onReviewed: () => void }) {
+function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }: {
+  orgSummary?: OrgAttendanceSummary; pending: LeaveRequestItem[];
+  pendingReg: RegularizationRequest[]; onReviewed: () => void; onRegReviewed: () => void;
+}) {
   const [busyId, setBusyId] = useState('');
   async function review(id: string, action: 'approve' | 'reject') {
     setBusyId(id);
@@ -461,6 +530,23 @@ function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendan
     catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
     finally { setBusyId(''); }
   }
+  async function reviewReg(id: string, action: 'approve' | 'reject') {
+    setBusyId(id);
+    try {
+      if (action === 'reject') {
+        const note = window.prompt('Reason for rejecting (optional):') ?? undefined;
+        await api.attendance.rejectRegularization(id, note);
+      } else {
+        await api.attendance.approveRegularization(id);
+      }
+      onRegReviewed();
+    } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
+    finally { setBusyId(''); }
+  }
+  const REG_TYPE_LABEL: Record<string, string> = {
+    FORGOT_IN: 'Forgot punch-in', LATE_IN: 'Late punch-in', FORGOT_OUT: 'Forgot punch-out',
+    WRONG_TIME: 'Wrong time', WFH: 'WFH / on-site', OTHER: 'Other',
+  };
   const rows = orgSummary?.rows ?? [];
 
   return (
@@ -485,6 +571,39 @@ function TeamTab({ orgSummary, pending, onReviewed }: { orgSummary?: OrgAttendan
               <div className="flex items-center gap-1.5 shrink-0">
                 <button onClick={() => review(r.id, 'approve')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} /> Approve</button>
                 <button onClick={() => review(r.id, 'reject')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"><X size={13} /> Reject</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Pending regularisation requests */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-700">Attendance regularisations</h3>
+          {pendingReg.length > 0 && <span className="text-[11px] bg-amber-100 text-amber-700 rounded-full px-2 py-0.5 font-medium">{pendingReg.length}</span>}
+        </div>
+        <ul className="divide-y divide-gray-50">
+          {pendingReg.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">No regularisation requests to review 🎉</li>}
+          {pendingReg.map(r => (
+            <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <Avatar user={r.user} size={32} />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">
+                    {r.user?.firstName} {r.user?.lastName} · {format(new Date(r.date), 'MMM d')} · <span className="text-gray-500 font-normal">{REG_TYPE_LABEL[r.requestType] ?? r.requestType}</span>
+                  </p>
+                  <p className="text-xs text-gray-400 truncate">
+                    Mark {r.requestedStatus.toLowerCase()}
+                    {r.requestedCheckIn ? ` · in ${format(new Date(r.requestedCheckIn), 'HH:mm')}` : ''}
+                    {r.requestedCheckOut ? ` · out ${format(new Date(r.requestedCheckOut), 'HH:mm')}` : ''}
+                    {` · ${r.reason}`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button onClick={() => reviewReg(r.id, 'approve')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} /> Approve</button>
+                <button onClick={() => reviewReg(r.id, 'reject')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"><X size={13} /> Reject</button>
               </div>
             </li>
           ))}

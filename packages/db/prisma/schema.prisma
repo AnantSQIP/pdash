@@ -108,6 +108,7 @@ model User {
   timesheets             Timesheet[]
   attendance             Attendance[]
   leaveRequests          LeaveRequest[]
+  regularizationRequests RegularizationRequest[]
   ownedMilestones        Milestone[]             @relation("MilestoneOwner")
   calendarEventAttendees CalendarEventAttendee[]
   channelMemberships     ChannelMember[]
@@ -848,6 +849,36 @@ model Attendance {
   @@index([userId])
   @@index([organizationId, date])
   @@map("attendance")
+}
+
+// A request to correct one day's attendance (missed punch, late punch, forgot to punch out).
+// The employee raises it; HR (attendance.regularize) approves or rejects. Only on APPROVAL is
+// the change written to the Attendance row — regularisation is no longer a silent self-edit.
+model RegularizationRequest {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String?
+  date           DateTime
+  // What the employee is asking for.
+  reason         String
+  // FORGOT_IN | LATE_IN | FORGOT_OUT | WRONG_TIME | WFH | OTHER
+  requestType    String   @default("OTHER")
+  requestedStatus   String   @default("PRESENT") // PRESENT | HALF_DAY
+  requestedCheckIn  DateTime?
+  requestedCheckOut DateTime?
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status         String   @default("PENDING")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId, status])
+  @@map("regularization_request")
 }
 
 model LeaveRequest {

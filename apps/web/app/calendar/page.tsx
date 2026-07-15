@@ -25,16 +25,17 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
 
-type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER';
+type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY';
 const TYPE_COLORS: Record<EventType, string> = {
   EVENT:     '#3d8de2',
   MEETING:   '#fe841f',
   TASK_DUE:  '#34a853',
   MILESTONE: '#9334e6',
   REMINDER:  '#ea4335',
+  HOLIDAY:   '#d93025',
 };
 const TYPE_LABELS: Record<EventType, string> = {
-  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder',
+  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder', HOLIDAY: 'Holiday',
 };
 const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   EVENT:     RiCalendarEventLine,
@@ -42,7 +43,12 @@ const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   TASK_DUE:  RiCalendarCheckLine,
   MILESTONE: RiFlag2Line,
   REMINDER:  RiAlarmLine,
+  HOLIDAY:   RiCalendarEventLine,
 };
+
+/** A synthetic calendar event is one the calendar itself does not own (a holiday). It is
+ *  read-only — no edit/delete. */
+const isReadOnlyEvent = (id: string) => id.startsWith('holiday-');
 const ALL_TYPES = Object.keys(TYPE_LABELS) as EventType[];
 
 function asType(t: string): EventType {
@@ -271,10 +277,44 @@ export default function CalendarPage() {
     enabled: !!org?.id,
   });
 
+  // Company holidays belong on the calendar too. They live in their own store, so fetch them
+  // for every year the visible range touches (a Dec view shows into Jan) and adapt them to the
+  // event shape so all the existing rendering, filtering and "upcoming" logic just works.
+  const holidayYears = useMemo(() => {
+    const ys = new Set<number>([rangeFrom.getUTCFullYear(), rangeTo.getUTCFullYear()]);
+    return [...ys];
+  }, [rangeFrom, rangeTo]);
+  const { data: holidays = [] } = useQuery({
+    queryKey: ['calendar-holidays', org?.id, holidayYears.join(',')],
+    queryFn: async () => {
+      const lists = await Promise.all(holidayYears.map(y => api.leave.holidays(org!.id, y)));
+      return lists.flat();
+    },
+    enabled: !!org?.id,
+    staleTime: 5 * 60_000,
+  });
+
+  const holidayEvents = useMemo<CalendarEvent[]>(() =>
+    holidays.map(h => ({
+      id: `holiday-${h.id}`,
+      organizationId: org?.id ?? '',
+      title: h.name,
+      description: h.type ? `${h.type.charAt(0)}${h.type.slice(1).toLowerCase()} holiday` : 'Holiday',
+      type: 'HOLIDAY',
+      startDate: h.date,
+      endDate: h.date,
+      allDay: true,
+      color: TYPE_COLORS.HOLIDAY,
+      createdBy: 'system',
+      createdAt: h.date,
+    })),
+    [holidays, org?.id],
+  );
+
   // Live type filtering applied to every view.
   const events = useMemo(
-    () => rawEvents.filter(e => !hiddenTypes.has(asType(e.type))),
-    [rawEvents, hiddenTypes],
+    () => [...rawEvents, ...holidayEvents].filter(e => !hiddenTypes.has(asType(e.type))),
+    [rawEvents, holidayEvents, hiddenTypes],
   );
 
   function invalidate() { qc.invalidateQueries({ queryKey: ['events', org?.id] }); }
@@ -722,14 +762,18 @@ export default function CalendarPage() {
                 </div>
               )}
             </div>
-            <button
-              onClick={() => deleteEvent(selectedEvent.id)}
-              disabled={deletingId === selectedEvent.id}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full transition-colors disabled:opacity-50"
-            >
-              {deletingId === selectedEvent.id ? <Loader size={14} className="animate-spin" /> : <Trash2 size={14} />}
-              Delete event
-            </button>
+            {isReadOnlyEvent(selectedEvent.id) ? (
+              <p className="text-xs text-gray-400 px-1">Company holiday — managed under Attendance &rsaquo; Holidays.</p>
+            ) : (
+              <button
+                onClick={() => deleteEvent(selectedEvent.id)}
+                disabled={deletingId === selectedEvent.id}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full transition-colors disabled:opacity-50"
+              >
+                {deletingId === selectedEvent.id ? <Loader size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                Delete event
+              </button>
+            )}
           </div>
         ) : (
           <div className="w-full lg:w-72 border-t lg:border-t-0 lg:border-l border-gray-200 bg-white p-5 overflow-y-auto">
