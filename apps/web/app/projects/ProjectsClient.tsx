@@ -21,6 +21,7 @@ const PHASES: { value: Phase | 'ALL'; label: string }[] = [
   { value: 'ON_HOLD',   label: 'On Hold' },
   { value: 'COMPLETED', label: 'Completed' },
   { value: 'IDEA',      label: 'Idea' },
+  { value: 'CLOSED',    label: 'Closed' },
 ];
 
 const PHASE_COLOR: Record<string, string> = {
@@ -29,6 +30,7 @@ const PHASE_COLOR: Record<string, string> = {
   ON_HOLD:   '#f97316',
   COMPLETED: '#16a34a',
   IDEA:      '#9aa0a6',
+  CLOSED:    '#64748b',
   ARCHIVED:  '#6b7280',
   CANCELLED: '#ef4444',
 };
@@ -95,15 +97,19 @@ export function ProjectsClient() {
   const projects = rawProjects.map(toDisplay);
 
   const filtered = projects.filter(p => {
-    if (phase !== 'ALL' && p.projectPhase !== phase) return false;
+    // Closed projects live in their own section — keep them out of every other view
+    // (including "All Projects"); they only appear under the Closed filter.
+    if (phase === 'ALL') { if (p.projectPhase === 'CLOSED') return false; }
+    else if (p.projectPhase !== phase) return false;
     if (search && !p.title.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
   const stats = {
-    total: projects.length,
+    total: projects.filter(p => p.projectPhase !== 'CLOSED').length,
     active: projects.filter(p => p.projectPhase === 'ACTIVE').length,
     completed: projects.filter(p => p.projectPhase === 'COMPLETED').length,
+    closed: projects.filter(p => p.projectPhase === 'CLOSED').length,
     onHold: projects.filter(p => p.projectPhase === 'ON_HOLD').length,
   };
 
@@ -152,6 +158,7 @@ export function ProjectsClient() {
         <StatPill label="Active"    value={stats.active}    color="text-brand-500"  dot="bg-brand-500" />
         <StatPill label="Completed" value={stats.completed} color="text-green-600"  dot="bg-green-500" />
         <StatPill label="On Hold"   value={stats.onHold}    color="text-orange-600" dot="bg-orange-400" />
+        <StatPill label="Closed"    value={stats.closed}    color="text-slate-600"  dot="bg-slate-400" />
       </div>
 
       {/* Filters + search row */}

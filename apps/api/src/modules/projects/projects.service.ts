@@ -184,6 +184,8 @@ export class ProjectsService {
         startDate: true,
         dueDate: true,
         clientDueDate: true,
+        completedAt: true,
+        closedAt: true,
         currentStatus: { select: { id: true, name: true, colorHex: true } },
         members: {
           where: { isActive: true },
@@ -380,6 +382,87 @@ export class ProjectsService {
       message: `Your project "${project.title}" was ${approve ? 'approved' : 'rejected'}.`,
     });
     return result;
+  }
+
+  // ── Lifecycle: Complete → Close → Reopen ─────────────────────────────────────
+  // These end-states are DISTINCT from soft-delete (softDelete sets deletedAt +
+  // ARCHIVED). A CLOSED project stays fully intact and reopenable; it is merely moved
+  // out of the active list into the Closed section.
+
+  /** Notify every active member (except the person doing it) of a lifecycle change. */
+  private async notifyMembers(project: Awaited<ReturnType<ProjectsService['getRaw']>>, actorId: string | null, payload: { type: string; title: string; message: string }) {
+    const recipients = project.members.map(m => m.userId).filter(uid => uid !== actorId);
+    if (recipients.length) await this.notifications.notify(recipients, payload);
+  }
+
+  /** ACTIVE/ON_HOLD → COMPLETED. Work is done; the project stays listed but locked. */
+  async complete(id: string) {
+    const project = await this.getRaw(id);
+    const phase = (project as { projectPhase: string }).projectPhase;
+    if (phase === 'COMPLETED') return this.get(id);
+    if (phase === 'CLOSED') throw new BadRequestException('This project is closed. Reopen it before marking it complete.');
+    if (phase === 'PLANNING') throw new BadRequestException('A project still in planning cannot be completed — activate it first.');
+    const actorId = getActorId();
+    const updated = await this.prisma.project.update({
+      where: { id },
+      data: { projectPhase: 'COMPLETED', completedAt: new Date() },
+    });
+    await this.events.emit({
+      action: EVENTS.PROJECT_COMPLETED, entityType: 'PROJECT', entityId: id,
+      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
+    });
+    await this.notifyMembers(project, actorId, {
+      type: 'project.completed', title: 'Project completed',
+      message: `"${project.title}" was marked complete.`,
+    });
+    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+  }
+
+  /** COMPLETED (or active) → CLOSED. Archived to the Closed section; still reopenable. */
+  async close(id: string) {
+    const project = await this.getRaw(id);
+    const phase = (project as { projectPhase: string }).projectPhase;
+    if (phase === 'CLOSED') return this.get(id);
+    if (phase === 'PLANNING') throw new BadRequestException('A project still in planning cannot be closed.');
+    const actorId = getActorId();
+    const now = new Date();
+    const updated = await this.prisma.project.update({
+      where: { id },
+      // Closing implies completion — backfill completedAt if it was closed directly.
+      data: { projectPhase: 'CLOSED', closedAt: now, ...(project.completedAt ? {} : { completedAt: now }) },
+    });
+    await this.events.emit({
+      action: EVENTS.PROJECT_CLOSED, entityType: 'PROJECT', entityId: id,
+      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
+    });
+    await this.notifyMembers(project, actorId, {
+      type: 'project.closed', title: 'Project closed',
+      message: `"${project.title}" was closed and moved to the Closed section.`,
+    });
+    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+  }
+
+  /** COMPLETED/CLOSED → ACTIVE. Clears the end-state timestamps. */
+  async reopen(id: string) {
+    const project = await this.getRaw(id);
+    const phase = (project as { projectPhase: string }).projectPhase;
+    if (phase !== 'COMPLETED' && phase !== 'CLOSED') {
+      throw new BadRequestException('Only a completed or closed project can be reopened.');
+    }
+    const actorId = getActorId();
+    const updated = await this.prisma.project.update({
+      where: { id },
+      data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
+    });
+    await this.events.emit({
+      action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
+      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
+    });
+    await this.notifyMembers(project, actorId, {
+      type: 'project.reopened', title: 'Project reopened',
+      message: `"${project.title}" was reopened and is active again.`,
+    });
+    return this.deadlines.redactProject(updated, await this.deadlines.scope());
   }
 
   // ── Members (#11: staffing a project — add / remove teammates) ────────────────

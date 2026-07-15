@@ -14,11 +14,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle,
-  ArrowRight, Zap, X, Plus, Search, Clock,
+  ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus,
 } from 'lucide-react';
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { formatDate } from '@/lib/date';
@@ -47,6 +48,14 @@ export default function CapacityPage() {
   const { data: projects = [] } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
+    enabled: allowed && !!org?.id,
+    staleTime: 60_000,
+  });
+
+  // Emergency-leave coverage: short-notice absences over HIGH/CRITICAL work.
+  const { data: coverage } = useQuery<CoverageRisks>({
+    queryKey: ['coverage-risks', org?.id, days],
+    queryFn: () => api.capacity.coverageRisks(days),
     enabled: allowed && !!org?.id,
     staleTime: 60_000,
   });
@@ -137,7 +146,10 @@ export default function CapacityPage() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-auto p-4 sm:p-6">
+      <div className="flex-1 min-h-0 overflow-auto p-4 sm:p-6 space-y-4">
+        {coverage && coverage.risks.length > 0 && (
+          <CoveragePanel data={coverage} />
+        )}
         {isLoading ? (
           <div className="flex items-center justify-center py-20 text-gray-400">
             <Loader size={18} className="animate-spin mr-2" /> Building the availability map…
@@ -277,7 +289,223 @@ function Kpi({ label, value, Icon, tint, hint }: {
   );
 }
 
+// Extending a deadline spreads the same remaining work over more days, which lowers the
+// assignee's daily occupancy — the lever to relieve someone who is overloaded or going
+// on leave. Presets cover the common nudges; a custom date handles the rest.
+const EXTEND_PRESETS: { label: string; days: number }[] = [
+  { label: '+1 day', days: 1 }, { label: '+3 days', days: 3 }, { label: '+1 week', days: 7 },
+];
+
+/** newDeadline = max(currentDue, today) + days, as an ISO string. Never moves a deadline
+ *  into the past even if the current one is already overdue. */
+function extendedISO(currentDue: string | null | undefined, days: number): string {
+  const from = currentDue ? new Date(currentDue) : new Date();
+  const base = new Date(Math.max(from.getTime(), Date.now()));
+  base.setDate(base.getDate() + days);
+  return base.toISOString();
+}
+
+type ExtendTarget = { id: string; dueDate?: string | null; projectId?: string | null };
+
+function ExtendMenu({ task, canProject, disabled, onExtend }: {
+  task: ExtendTarget;
+  canProject: boolean;
+  disabled: boolean;
+  onExtend: (scope: 'task' | 'project', iso: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<'task' | 'project'>('task');
+  const [custom, setCustom] = useState('');
+  const applyPreset = (days: number) => { onExtend(scope, extendedISO(task.dueDate, days)); setOpen(false); };
+  const applyCustom = () => {
+    if (!custom) return;
+    onExtend(scope, new Date(`${custom}T00:00:00`).toISOString());
+    setOpen(false); setCustom('');
+  };
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-brand-600 disabled:opacity-40"
+        title="Extend the deadline to relieve the load"
+      >
+        <CalendarPlus size={12} /> Extend
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 mt-1 z-50 w-56 bg-white rounded-lg border border-gray-200 shadow-lg p-3">
+            {canProject && task.projectId && (
+              <div className="flex gap-0.5 mb-2 bg-gray-100 rounded-md p-0.5 text-[11px] font-medium">
+                <button onClick={() => setScope('task')} className={clsx('flex-1 py-1 rounded', scope === 'task' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>This task</button>
+                <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Whole project</button>
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400 mb-1.5">
+              {scope === 'project' ? 'Push the project deadline' : 'Push this task’s deadline'}
+            </p>
+            <div className="flex gap-1 mb-2">
+              {EXTEND_PRESETS.map(p => (
+                <button key={p.days} onClick={() => applyPreset(p.days)}
+                  className="flex-1 text-[11px] font-medium px-1.5 py-1.5 rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100">
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
+              <input type="date" value={custom} onChange={e => setCustom(e.target.value)}
+                className="flex-1 min-w-0 text-xs border border-gray-200 rounded-md px-2 py-1.5" />
+              <button onClick={applyCustom} disabled={!custom}
+                className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-gray-800 text-white hover:bg-black disabled:opacity-40">Set</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Emergency-leave coverage: who is on short-notice leave over HIGH/CRITICAL work, with
+// one-click reassign to a free teammate or a deadline extension to buy time.
+function CoveragePanel({ data }: { data: CoverageRisks }) {
+  const { can } = usePermissions();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const canAssign = can('task.assign');
+  const canTask = can('task.update');
+  const canProject = can('project.update');
+  const [busy, setBusy] = useState('');
+
+  function refresh() {
+    qc.invalidateQueries({ queryKey: ['coverage-risks'] });
+    qc.invalidateQueries({ queryKey: ['capacity'] });
+    qc.invalidateQueries({ queryKey: ['tasks'] });
+  }
+
+  async function reassign(taskId: string, fromUserId: string, toUserId: string) {
+    if (!toUserId) return;
+    setBusy(taskId);
+    try {
+      // Swap only the on-leave person for the chosen teammate — keep any co-assignees.
+      const full = await api.tasks.get(taskId);
+      const current = (full.assignees ?? []).map(a => a.userId);
+      const next = [...new Set([...current.filter(id => id !== fromUserId), toUserId])];
+      await api.tasks.setAssignees(taskId, next);
+      refresh();
+      toast('Task reassigned', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not reassign the task', 'error');
+    } finally { setBusy(''); }
+  }
+
+  async function extend(scope: 'task' | 'project', task: { id: string; projectId?: string }, iso: string) {
+    setBusy(task.id);
+    try {
+      if (scope === 'project') {
+        if (!task.projectId) throw new Error('This task has no project.');
+        await api.projects.update(task.projectId, { dueDate: iso });
+      } else {
+        await api.tasks.update(task.id, { dueDate: iso });
+      }
+      refresh();
+      toast(`Deadline extended to ${formatDate(iso)}`, 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
+    } finally { setBusy(''); }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-amber-200 overflow-hidden">
+      <div className="px-5 py-3 border-b border-amber-100 bg-amber-50 flex items-center gap-2 flex-wrap">
+        <AlertTriangle size={16} className="text-amber-600" />
+        <h3 className="text-sm font-semibold text-amber-800">Coverage at risk</h3>
+        <span className="text-[11px] bg-amber-200 text-amber-800 rounded-full px-2 py-0.5 font-medium">{data.risks.length}</span>
+        <span className="text-xs text-amber-600/80 ml-1">short-notice leave over high-priority work — reassign or extend</span>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {data.risks.map(risk => (
+          <div key={risk.leaveId} className="px-5 py-3">
+            <div className="flex items-center gap-2.5 mb-2">
+              <Avatar user={{ id: risk.userId, firstName: risk.name.split(' ')[0], lastName: risk.name.split(' ')[1], profilePhoto: risk.profilePhoto }} size={30} />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-800">{risk.name}</p>
+                <p className="text-[11px] text-gray-400">
+                  {risk.leaveType} leave · {formatDate(risk.startDate)}–{formatDate(risk.endDate)} · {risk.noticeDays}d notice
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1.5 sm:pl-10">
+              {risk.tasks.map(t => (
+                <div key={t.id} className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-800 truncate">{t.title}</p>
+                    <p className="text-[11px] text-gray-400 truncate">
+                      {t.projectId ? <Link href={`/projects/${t.projectId}`} className="hover:text-brand-600">{t.project}</Link> : '—'}
+                      {' · '}{t.projectPriority}{' · '}
+                      <span className={t.overdue ? 'text-red-500 font-medium' : ''}>{t.overdue ? 'overdue ' : 'due '}{formatDate(t.dueDate)}</span>
+                      {' · '}{t.remainingHours}h left
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {canTask && (
+                      <ExtendMenu task={t} canProject={canProject} disabled={busy === t.id}
+                        onExtend={(scope, iso) => extend(scope, t, iso)} />
+                    )}
+                    {canAssign && (
+                      <select
+                        disabled={busy === t.id}
+                        value=""
+                        onChange={e => reassign(t.id, risk.userId, e.target.value)}
+                        className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 max-w-[140px] text-gray-600 disabled:opacity-40"
+                        title="Reassign this task to a free teammate"
+                      >
+                        <option value="">Reassign to…</option>
+                        {data.suggestions.map(s => (
+                          <option key={s.userId} value={s.userId}>{s.name.split(' ')[0]} · {s.freeHours}h free</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PersonPanel({ row, onClose, onAssign }: { row: CapacityRow; onClose: () => void; onAssign: () => void }) {
+  const { can } = usePermissions();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [busyTaskId, setBusyTaskId] = useState('');
+  const canTask = can('task.update');
+  const canProject = can('project.update');
+
+  async function extend(scope: 'task' | 'project', task: CapacityRow['openTasks'][number], iso: string) {
+    setBusyTaskId(task.id);
+    try {
+      if (scope === 'project') {
+        if (!task.projectId) throw new Error('This task has no project.');
+        await api.projects.update(task.projectId, { dueDate: iso });
+      } else {
+        await api.tasks.update(task.id, { dueDate: iso });
+      }
+      qc.invalidateQueries({ queryKey: ['capacity'] });
+      qc.invalidateQueries({ queryKey: ['coverage-risks'] });
+      qc.invalidateQueries({ queryKey: ['tasks'] });
+      qc.invalidateQueries({ queryKey: ['project', task.projectId] });
+      toast(`Deadline extended to ${formatDate(iso)}`, 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
+    } finally {
+      setBusyTaskId('');
+    }
+  }
+
   return (
     <>
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
@@ -337,19 +565,25 @@ function PersonPanel({ row, onClose, onAssign }: { row: CapacityRow; onClose: ()
                     <p className="text-sm font-medium text-gray-800 leading-snug">{t.title}</p>
                     <span className="text-xs text-gray-400 shrink-0">{t.remainingHours}h left</span>
                   </div>
-                  <div className="flex items-center gap-2 mt-1.5 text-[11px] text-gray-400 flex-wrap">
-                    {t.projectId
-                      ? <Link href={`/projects/${t.projectId}`} className="hover:text-brand-600 truncate max-w-[160px]">{t.project}</Link>
-                      : <span>—</span>}
-                    <span>·</span>
-                    <span>{t.completionPercentage}%</span>
-                    {t.dueDate && (
-                      <>
-                        <span>·</span>
-                        <span className={t.overdue ? 'text-red-500 font-medium' : ''}>
-                          {t.overdue ? 'overdue ' : 'due '}{formatDate(t.dueDate)}
-                        </span>
-                      </>
+                  <div className="flex items-center justify-between gap-2 mt-1.5">
+                    <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap min-w-0">
+                      {t.projectId
+                        ? <Link href={`/projects/${t.projectId}`} className="hover:text-brand-600 truncate max-w-[140px]">{t.project}</Link>
+                        : <span>—</span>}
+                      <span>·</span>
+                      <span>{t.completionPercentage}%</span>
+                      {t.dueDate && (
+                        <>
+                          <span>·</span>
+                          <span className={t.overdue ? 'text-red-500 font-medium' : ''}>
+                            {t.overdue ? 'overdue ' : 'due '}{formatDate(t.dueDate)}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {canTask && (
+                      <ExtendMenu task={t} canProject={canProject} disabled={busyTaskId === t.id}
+                        onExtend={(scope, iso) => extend(scope, t, iso)} />
                     )}
                   </div>
                 </div>

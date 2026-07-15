@@ -6,6 +6,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { NotificationsService } from '../notifications/notifications.module';
+import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -378,6 +379,7 @@ export class LeaveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly capacity: CapacityService,
   ) {}
 
   private async orgOf(userId: string): Promise<string | null> {
@@ -479,6 +481,17 @@ export class LeaveService {
       title: 'Leave approved',
       message: `Your ${req.leaveType} leave (${req.numDays} day${req.numDays === 1 ? '' : 's'}) was approved.`,
     });
+
+    // Emergency-leave coverage: if this is short-notice leave and the person holds
+    // HIGH/CRITICAL work due while they're out, alert admins & the projects' managers
+    // so they can reassign or extend. Best-effort — never fail the approval over it.
+    try {
+      const u = (updated as { user?: { firstName?: string; lastName?: string } }).user;
+      const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() || 'A teammate' : 'A teammate';
+      await this.capacity.notifyIfCoverageAtRisk(req.organizationId, req.userId,
+        { startDate: req.startDate, endDate: req.endDate, createdAt: req.createdAt, leaveType: req.leaveType }, name);
+    } catch { /* coverage alert is advisory; the leave is already approved */ }
+
     return updated;
   }
 
@@ -725,6 +738,7 @@ class LeaveController {
 }
 
 @Module({
+  imports: [CapacityModule],
   controllers: [AttendanceController, LeaveController],
   providers: [AttendanceService, LeaveService],
   exports: [AttendanceService, LeaveService],
