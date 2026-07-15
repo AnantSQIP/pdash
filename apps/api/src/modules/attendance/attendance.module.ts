@@ -434,6 +434,13 @@ export class LeaveService {
     // Count business days only — weekends and holidays do not consume leave balance.
     const numDays = (await this.businessDays(organizationId, start, end)).length;
     if (numDays === 0) throw new BadRequestException('Selected dates contain no working days');
+    // Comp-off leave is spent against EARNED credits (approved comp-off claims), not a quota.
+    if (dto.leaveType === 'CO') {
+      const { available } = await this.compOffBalance(userId);
+      if (available < numDays) {
+        throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
+      }
+    }
     return this.prisma.leaveRequest.create({
       data: { userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end, numDays, reason: dto.reason ?? null, status: 'PENDING' },
       include: { user: this.userSelect },
@@ -542,10 +549,167 @@ export class LeaveService {
       _sum: { numDays: true },
     });
     const usedByCode = new Map(approved.map(a => [a.leaveType, a._sum.numDays ?? 0]));
-    return types.map(t => {
+    return Promise.all(types.map(async t => {
+      // Comp Off is not an annual quota — its "balance" is what you EARNED by working
+      // non-working days (approved comp-off claims) minus what you've already availed.
+      if (t.code === 'CO') {
+        const b = await this.compOffBalance(userId);
+        return { code: 'CO', name: t.name, quota: b.earned, used: b.used, remaining: b.available, colorHex: t.colorHex };
+      }
       const used = usedByCode.get(t.code) ?? 0;
       return { code: t.code, name: t.name, quota: t.annualQuota, used, remaining: Math.max(0, t.annualQuota - used), colorHex: t.colorHex };
+    }));
+  }
+
+  // ── comp-off (worked a non-working day → compensatory day off) ────────────────
+  /** Users who may review comp-off claims — holders of leave.approve (HR/managers). */
+  private async leaveApprovers(organizationId: string | null): Promise<string[]> {
+    if (!organizationId) return [];
+    const users = await this.prisma.user.findMany({
+      where: {
+        organizationId, deletedAt: null, status: 'ACTIVE',
+        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'leave.approve' } } } } } },
+      },
+      select: { id: true },
     });
+    return users.map(u => u.id);
+  }
+
+  /** A day is claimable for comp-off only if it was a weekend or an org holiday. */
+  private async isNonWorkingDay(organizationId: string | null, date: Date): Promise<boolean> {
+    const wd = date.getUTCDay();
+    if (wd === 0 || wd === 6) return true;
+    const h = await this.prisma.holiday.findFirst({ where: { organizationId: organizationId ?? undefined, date: utcDay(date) } });
+    return !!h;
+  }
+
+  /** Comp Off is a leave type that must exist for the org before a credit can be availed. */
+  private async ensureCompOffType(organizationId: string | null) {
+    if (!organizationId) return;
+    const existing = await this.prisma.leaveType.findFirst({ where: { organizationId, code: 'CO' } });
+    if (!existing) {
+      await this.prisma.leaveType.create({
+        data: { organizationId, name: 'Comp Off', code: 'CO', annualQuota: 0, colorHex: '#6366f1' },
+      }).catch(() => { /* raced with another approval — fine */ });
+    }
+  }
+
+  /** Earned (approved) comp-off credits minus CO leave already availed (pending + approved). */
+  async compOffBalance(userId: string): Promise<{ earned: number; used: number; available: number }> {
+    const [earned, used] = await Promise.all([
+      this.prisma.compOffRequest.count({ where: { userId, status: 'APPROVED' } }),
+      this.prisma.leaveRequest.aggregate({ where: { userId, leaveType: 'CO', status: { in: ['PENDING', 'APPROVED'] } }, _sum: { numDays: true } }),
+    ]);
+    const usedDays = used._sum.numDays ?? 0;
+    return { earned, used: usedDays, available: Math.max(0, earned - usedDays) };
+  }
+
+  async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number }) {
+    if (!data?.reason?.trim()) throw new BadRequestException('Tell us what you worked on.');
+    const workDate = parseDay(data.workDate.slice(0, 10));
+    if (workDate > utcDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
+    const organizationId = await this.orgOf(userId);
+    if (!(await this.isNonWorkingDay(organizationId, workDate))) {
+      throw new BadRequestException('Comp-off is only for working on a weekend or a company holiday.');
+    }
+    const existing = await this.prisma.compOffRequest.findFirst({ where: { userId, workDate, status: { in: ['PENDING', 'APPROVED'] } } });
+    if (existing) throw new BadRequestException('You already have a comp-off claim for this day.');
+    const req = await this.prisma.compOffRequest.create({
+      data: { userId, organizationId, workDate, reason: data.reason.trim(), hoursWorked: data.hoursWorked ?? null, status: 'PENDING' },
+      include: { user: this.userSelect },
+    });
+    const u = (req as { user?: { firstName?: string; lastName?: string } }).user;
+    const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
+    await this.notifications.notify(await this.leaveApprovers(organizationId), {
+      type: 'compoff.requested', title: 'Comp-off to review',
+      message: `${name} claims comp-off for working ${dayKey(workDate)}: ${req.reason}`,
+    });
+    return req;
+  }
+
+  myCompOffs(userId: string) {
+    return this.prisma.compOffRequest.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 60, include: { user: this.userSelect } });
+  }
+
+  /** Pending comp-off queue for the reviewer's org, each with the day's actual work as evidence. */
+  async pendingCompOffs(reviewerId: string) {
+    const organizationId = await this.orgOf(reviewerId);
+    if (!organizationId) return [];
+    const reqs = await this.prisma.compOffRequest.findMany({
+      where: { organizationId, status: 'PENDING' }, orderBy: { createdAt: 'asc' }, include: { user: this.userSelect },
+    });
+    if (!reqs.length) return [];
+    const evidence = await Promise.all(reqs.map(async r => {
+      const day = utcDay(r.workDate);
+      const next = new Date(day); next.setUTCDate(next.getUTCDate() + 1);
+      const [sheets, att] = await Promise.all([
+        this.prisma.timesheet.findMany({
+          where: { userId: r.userId, deletedAt: null, date: { gte: day, lt: next } },
+          select: { hoursLogged: true, notes: true, task: { select: { title: true } } },
+        }),
+        this.prisma.attendance.findFirst({ where: { userId: r.userId, date: day }, select: { checkIn: true, checkOut: true, totalHours: true } }),
+      ]);
+      return {
+        id: r.id,
+        timesheets: sheets.map(s => ({ task: s.task?.title ?? 'General', hours: s.hoursLogged, notes: s.notes ?? undefined })),
+        attendance: att ? { checkIn: att.checkIn, checkOut: att.checkOut, totalHours: att.totalHours } : null,
+      };
+    }));
+    const evById = new Map(evidence.map(e => [e.id, e]));
+    return reqs.map(r => ({ ...r, evidence: evById.get(r.id) ?? null }));
+  }
+
+  async approveCompOff(id: string, actorId: string, note?: string) {
+    const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be approved.');
+    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own comp-off claim.');
+    await this.ensureCompOffType(req.organizationId); // so the earned credit is availeable as CO leave
+    const updated = await this.prisma.compOffRequest.update({
+      where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
+      include: { user: this.userSelect },
+    });
+    // Record the earned comp-off on the shared calendar (the non-working day they worked).
+    if (req.organizationId) {
+      const u = (updated as { user?: { firstName?: string; lastName?: string } }).user;
+      const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'Employee';
+      await this.prisma.calendarEvent.create({
+        data: {
+          organizationId: req.organizationId, title: `${name} — Comp Off earned (worked)`,
+          type: 'COMPOFF', startDate: utcDay(req.workDate), endDate: utcDay(req.workDate),
+          allDay: true, color: '#6366f1', createdBy: req.userId,
+        },
+      });
+    }
+    await this.notifications.notify(req.userId, {
+      type: 'compoff.approved', title: 'Comp-off approved',
+      message: `Your comp-off for working ${dayKey(req.workDate)} was approved — you have a day off to use.`,
+    });
+    return updated;
+  }
+
+  async rejectCompOff(id: string, actorId: string, note?: string) {
+    const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be rejected.');
+    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own comp-off claim.');
+    const updated = await this.prisma.compOffRequest.update({
+      where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
+      include: { user: this.userSelect },
+    });
+    await this.notifications.notify(req.userId, {
+      type: 'compoff.rejected', title: 'Comp-off rejected',
+      message: `Your comp-off claim for ${dayKey(req.workDate)} was not approved${note ? `: ${note}` : '.'}`,
+    });
+    return updated;
+  }
+
+  async cancelCompOff(id: string, userId: string) {
+    const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.userId !== userId) throw new ForbiddenException('You can only cancel your own comp-off claims.');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be cancelled.');
+    return this.prisma.compOffRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
   }
 
   // ── holidays ──────────────────────────────────────────────────────────────────
@@ -710,6 +874,44 @@ class LeaveController {
   balances(@Actor() actorId: string | null) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.balances(actorId);
+  }
+
+  // ── comp-off ──────────────────────────────────────────────────────────────────
+  @Post('compoff')
+  requestCompOff(@Actor() actorId: string | null, @Body() body: { workDate: string; reason: string; hoursWorked?: number }) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.requestCompOff(actorId, body);
+  }
+
+  @Get('compoff/me')
+  myCompOffs(@Actor() actorId: string | null) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.myCompOffs(actorId);
+  }
+
+  @Get('compoff/pending')
+  @RequirePermission('leave.approve')
+  pendingCompOffs(@Actor() actorId: string | null) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.pendingCompOffs(actorId);
+  }
+
+  @Post('compoff/:id/approve')
+  @RequirePermission('leave.approve')
+  approveCompOff(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { note?: string }) {
+    return this.svc.approveCompOff(id, actorId ?? '', body?.note);
+  }
+
+  @Post('compoff/:id/reject')
+  @RequirePermission('leave.approve')
+  rejectCompOff(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { note?: string }) {
+    return this.svc.rejectCompOff(id, actorId ?? '', body?.note);
+  }
+
+  @Post('compoff/:id/cancel')
+  cancelCompOff(@Actor() actorId: string | null, @Param('id') id: string) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.cancelCompOff(id, actorId);
   }
 
   @Get('types')

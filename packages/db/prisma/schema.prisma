@@ -109,6 +109,7 @@ model User {
   attendance             Attendance[]
   leaveRequests          LeaveRequest[]
   regularizationRequests RegularizationRequest[]
+  compOffRequests        CompOffRequest[]
   ownedMilestones        Milestone[]             @relation("MilestoneOwner")
   calendarEventAttendees CalendarEventAttendee[]
   channelMemberships     ChannelMember[]
@@ -885,6 +886,32 @@ model RegularizationRequest {
   @@index([userId])
   @@index([organizationId, status])
   @@map("regularization_request")
+}
+
+// Comp-off: the employee worked on a non-working day (weekend/holiday) and claims a
+// compensatory day off. On approval it grants one CO leave credit, availed later as a
+// normal leave of type CO. Kept separate from LeaveRequest: this is the EARN side; the
+// USE side is an ordinary CO LeaveRequest.
+model CompOffRequest {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String?
+  workDate       DateTime // the non-working day they worked
+  reason         String   // what they worked on
+  hoursWorked    Float?
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status         String   @default("PENDING")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId, status])
+  @@map("comp_off_request")
 }
 
 model LeaveRequest {
