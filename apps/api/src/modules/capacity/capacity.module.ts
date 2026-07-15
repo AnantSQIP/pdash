@@ -35,7 +35,11 @@ export function parseHorizon(raw: string | undefined): number {
   return Math.max(MIN_DAYS, Math.min(MAX_DAYS, n));
 }
 
-export type DayState = 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY' | 'OVERLOADED';
+export type DayState =
+  // Forward (projected-load) states:
+  | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY'
+  // Past (actual-attendance) states — used by the history view:
+  | 'PRESENT' | 'ABSENT' | 'COMPOFF';
 
 export interface CapacityDay {
   date: string;
@@ -270,10 +274,9 @@ export class CapacityService {
         const load = loadByUserDay.get(`${u.id}|${k}`) ?? 0;
         const utilization = load / DAILY_CAPACITY_HOURS;
         const state: DayState =
-          utilization > 1 ? 'OVERLOADED'
-            : utilization >= LIGHT_THRESHOLD ? 'BUSY'
-              : utilization > FREE_THRESHOLD ? 'LIGHT'
-                : 'FREE';
+          utilization >= LIGHT_THRESHOLD ? 'BUSY'
+            : utilization > FREE_THRESHOLD ? 'LIGHT'
+              : 'FREE';
         return {
           date: k, state, load: r1(load), capacity: DAILY_CAPACITY_HOURS,
           utilization: Math.round(utilization * 100) / 100,
@@ -327,6 +330,99 @@ export class CapacityService {
     rows.sort((a, b) => b.freeHours - a.freeHours);
 
     return { from: dayKey(today), to: dayKey(addDays(to, -1)), capacityPerDay: DAILY_CAPACITY_HOURS, rows };
+  }
+
+  /**
+   * Retrospective view — what ACTUALLY happened over the last `days` (ending today).
+   * Projected "load" is meaningless for the past (the work is already done), so each day
+   * is the real attendance state: present / on-leave / holiday / weekend / absent, with
+   * days someone worked on a non-working day flagged as COMPOFF (comp-off candidates).
+   * Drives the "Past 30 days" range option.
+   */
+  async teamHistory(organizationId: string, days = 30, onlyUserIds?: string[]) {
+    const today = startOfUtcDay(new Date());
+    const span = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : 30));
+    const from = addDays(today, -(span - 1)); // inclusive window [from, today]
+    const toExcl = addDays(today, 1);
+    const userFilter = onlyUserIds ? { id: { in: onlyUserIds.length ? onlyUserIds : ['__none__'] } } : {};
+
+    const [users, holidays, leaves, attendance, sheets] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
+        select: {
+          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true,
+          departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
+        },
+        orderBy: [{ firstName: 'asc' }],
+      }),
+      this.prisma.holiday.findMany({ where: { organizationId, date: { gte: from, lt: toExcl } }, select: { date: true, name: true } }),
+      this.prisma.leaveRequest.findMany({
+        where: { status: 'APPROVED', startDate: { lt: toExcl }, endDate: { gte: from }, user: { organizationId } },
+        select: { userId: true, startDate: true, endDate: true, leaveType: true },
+      }),
+      this.prisma.attendance.findMany({
+        where: { organizationId, date: { gte: from, lt: toExcl }, ...(onlyUserIds ? { userId: { in: onlyUserIds } } : {}) },
+        select: { userId: true, date: true, status: true, checkIn: true, totalHours: true },
+      }),
+      this.prisma.timesheet.findMany({
+        where: { deletedAt: null, date: { gte: from, lt: toExcl }, user: { organizationId }, ...(onlyUserIds ? { userId: { in: onlyUserIds } } : {}) },
+        select: { userId: true, date: true, hoursLogged: true },
+      }),
+    ]);
+
+    const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
+    const leaveByUserDay = new Map<string, string>();
+    for (const lv of leaves) {
+      const lo = startOfUtcDay(lv.startDate) < from ? from : startOfUtcDay(lv.startDate);
+      const hi = startOfUtcDay(lv.endDate) >= toExcl ? today : startOfUtcDay(lv.endDate);
+      for (let d = new Date(lo); d <= hi; d = addDays(d, 1)) leaveByUserDay.set(`${lv.userId}|${dayKey(d)}`, lv.leaveType);
+    }
+    const attByUserDay = new Map(attendance.map(a => [`${a.userId}|${dayKey(a.date)}`, a]));
+    const hoursByUserDay = new Map<string, number>();
+    for (const s of sheets) {
+      const k = `${s.userId}|${dayKey(s.date)}`;
+      hoursByUserDay.set(k, (hoursByUserDay.get(k) ?? 0) + (s.hoursLogged ?? 0));
+    }
+
+    const window: Date[] = [];
+    for (let d = new Date(from); d < toExcl; d = addDays(d, 1)) window.push(new Date(d));
+
+    const rows = users.map(u => {
+      let present = 0, absent = 0, onLeave = 0, compoff = 0;
+      const days: CapacityDay[] = window.map(d => {
+        const k = dayKey(d);
+        const uk = `${u.id}|${k}`;
+        const weekend = isWeekend(d);
+        const holiday = holidayByDay.get(k);
+        const leave = leaveByUserDay.get(uk);
+        const att = attByUserDay.get(uk);
+        const loggedHours = hoursByUserDay.get(uk) ?? 0;
+        const worked = (!!att && (att.status === 'PRESENT' || att.status === 'HALF_DAY' || !!att.checkIn)) || loggedHours > 0;
+        const hours = r1(att?.totalHours ?? loggedHours);
+
+        // Worked on a non-working day → comp-off candidate (takes precedence, it's the signal).
+        if ((weekend || holiday) && worked) {
+          compoff++;
+          return { date: k, state: 'COMPOFF', load: hours, capacity: 0, utilization: 0, free: 0, note: `Worked ${holiday ? holiday : 'the weekend'}${hours ? ` · ${hours}h` : ''} — comp-off candidate` };
+        }
+        if (weekend) return { date: k, state: 'WEEKEND', load: 0, capacity: 0, utilization: 0, free: 0 };
+        if (holiday) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: holiday };
+        if (leave || att?.status === 'ON_LEAVE') { onLeave++; return { date: k, state: 'LEAVE', load: 0, capacity: 0, utilization: 0, free: 0, note: `${leave ?? 'leave'}` }; }
+        if (worked) { present++; return { date: k, state: 'PRESENT', load: hours, capacity: 0, utilization: 0, free: 0, note: hours ? `${hours}h logged` : 'Present' }; }
+        absent++;
+        return { date: k, state: 'ABSENT', load: 0, capacity: 0, utilization: 0, free: 0 };
+      });
+      return {
+        userId: u.id,
+        name: `${u.firstName} ${u.lastName ?? ''}`.trim(),
+        designation: u.designation ?? undefined,
+        department: u.departmentMemberships[0]?.department?.name ?? undefined,
+        profilePhoto: u.profilePhoto,
+        days, present, absent, onLeave, compoff,
+      };
+    });
+
+    return { from: dayKey(from), to: dayKey(today), mode: 'history' as const, rows };
   }
 
   // ── Emergency-leave coverage ─────────────────────────────────────────────────
@@ -507,6 +603,14 @@ class CapacityController {
   async team(@Query('days') days?: string) {
     const organizationId = await this.actor.requireOrgId();
     return this.capacity.team(organizationId, parseHorizon(days));
+  }
+
+  /** Retrospective: actual attendance over the past `days` (ending today). */
+  @Get('history')
+  @RequirePermission('capacity.view')
+  async history(@Query('days') days?: string) {
+    const organizationId = await this.actor.requireOrgId();
+    return this.capacity.teamHistory(organizationId, parseHorizon(days));
   }
 
   /**

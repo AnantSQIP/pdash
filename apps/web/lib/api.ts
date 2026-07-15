@@ -351,7 +351,9 @@ export type DepartmentSummary = {
 };
 
 // ─── Team capacity / availability ────────────────────────────────────────────
-export type DayState = 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY' | 'OVERLOADED';
+export type DayState =
+  | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY'
+  | 'PRESENT' | 'ABSENT' | 'COMPOFF';
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
   utilization: number; free: number; note?: string;
@@ -369,6 +371,14 @@ export type CapacityRow = {
   nextFreeDate: string | null; freeRunDays: number; availableNow: boolean; overdueCount: number;
 };
 export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[] };
+
+// Retrospective (past-window) view — actual attendance, not projected load.
+export type HistoryRow = {
+  userId: string; name: string; designation?: string; department?: string; profilePhoto?: string | null;
+  days: CapacityDay[];
+  present: number; absent: number; onLeave: number; compoff: number;
+};
+export type TeamHistory = { from: string; to: string; mode: 'history'; rows: HistoryRow[] };
 
 // Emergency-leave coverage board.
 export type CoverageRiskTask = {
@@ -471,6 +481,18 @@ export type RegularizationRequest = {
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
   createdAt: string;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
+};
+export type CompOffEvidence = {
+  id: string;
+  timesheets: { task: string; hours: number; notes?: string }[];
+  attendance: { checkIn?: string | null; checkOut?: string | null; totalHours?: number | null } | null;
+};
+export type CompOffRequest = {
+  id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
+  hoursWorked?: number | null; status: string;
+  reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null; createdAt: string;
+  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
+  evidence?: CompOffEvidence | null;
 };
 export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
 export type LeaveBalance = { code: string; name: string; quota: number; used: number; remaining: number; colorHex: string };
@@ -816,6 +838,9 @@ export const api = {
     /** Emergency-leave coverage risks: short-notice absences over HIGH/CRITICAL work. */
     coverageRisks: (days = 14) =>
       req<CoverageRisks>(`/capacity/coverage-risks?days=${days}`),
+    /** Retrospective: actual attendance over the past `days` (ending today). */
+    history: (days = 30) =>
+      req<TeamHistory>(`/capacity/history?days=${days}`),
   },
 
   overdue: {
@@ -862,6 +887,14 @@ export const api = {
     reject: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
     cancel: (id: string) => req<LeaveRequestItem>(`/leave/requests/${id}/cancel`, { method: 'POST' }),
     balances: () => req<LeaveBalance[]>('/leave/balance/me'),
+    // Comp-off: worked a non-working day → claim → HR approves → CO leave credit.
+    requestCompOff: (data: { workDate: string; reason: string; hoursWorked?: number }) =>
+      req<CompOffRequest>('/leave/compoff', { method: 'POST', body: JSON.stringify(data) }),
+    myCompOffs: () => req<CompOffRequest[]>('/leave/compoff/me'),
+    pendingCompOffs: () => req<CompOffRequest[]>('/leave/compoff/pending'),
+    approveCompOff: (id: string, note?: string) => req<CompOffRequest>(`/leave/compoff/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    rejectCompOff: (id: string, note?: string) => req<CompOffRequest>(`/leave/compoff/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    cancelCompOff: (id: string) => req<CompOffRequest>(`/leave/compoff/${id}/cancel`, { method: 'POST' }),
     types: (orgId: string) => req<LeaveType[]>(`/leave/types?organizationId=${encodeURIComponent(orgId)}`),
     holidays: (orgId: string, year?: number) => req<Holiday[]>(`/leave/holidays?organizationId=${encodeURIComponent(orgId)}${year ? `&year=${year}` : ''}`),
     createHoliday: (data: { organizationId: string; name: string; date: string; type?: string; recurring?: boolean }) =>

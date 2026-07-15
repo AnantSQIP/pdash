@@ -620,7 +620,7 @@ export function TeamAvailabilityCard() {
       <CardHeader title="Team Availability" icon={UserCheck} iconColor="text-emerald-600" href="/capacity" linkLabel="Capacity board" />
       <MetricRow loading={isLoading} items={[
         { label: 'Available now', value: freeNow.length, badge: 'bg-emerald-100 text-emerald-700' },
-        { label: 'Overloaded',   value: rows.filter(r => r.days.some(d => d.state === 'OVERLOADED')).length, badge: 'bg-red-100 text-red-600' },
+        { label: 'Freeing soon', value: rows.filter(r => !r.availableNow && r.nextFreeDate).length, badge: 'bg-sky-100 text-sky-700' },
         { label: 'Spare hours',  value: `${Math.round(rows.reduce((s, r) => s + r.freeHours, 0))}h`, badge: 'bg-amber-100 text-amber-700' },
         { label: 'Overdue',      value: rows.reduce((s, r) => s + r.overdueCount, 0), badge: 'bg-purple-100 text-purple-700' },
       ]} />

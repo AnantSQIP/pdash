@@ -14,10 +14,13 @@ export const STATE_STYLE: Record<DayState, { cell: string; label: string; dot: s
   FREE:       { cell: 'bg-emerald-100 hover:bg-emerald-200 border-emerald-200',   label: 'Free',       dot: 'bg-emerald-400' },
   LIGHT:      { cell: 'bg-sky-100 hover:bg-sky-200 border-sky-200',               label: 'Light',      dot: 'bg-sky-300' },
   BUSY:       { cell: 'bg-brand-500 hover:bg-brand-600 border-brand-600',         label: 'Busy',       dot: 'bg-brand-500' },
-  OVERLOADED: { cell: 'bg-red-500 hover:bg-red-600 border-red-600',               label: 'Overloaded', dot: 'bg-red-500' },
   LEAVE:      { cell: 'bg-purple-100 border-purple-200 bg-stripes-purple',        label: 'On leave',   dot: 'bg-purple-300' },
   HOLIDAY:    { cell: 'bg-amber-100 border-amber-200',                            label: 'Holiday',    dot: 'bg-amber-300' },
   WEEKEND:    { cell: 'bg-gray-50 border-gray-100',                               label: 'Weekend',    dot: 'bg-gray-200' },
+  // Past (actual-attendance) states:
+  PRESENT:    { cell: 'bg-emerald-200 hover:bg-emerald-300 border-emerald-300',   label: 'Present',    dot: 'bg-emerald-500' },
+  ABSENT:     { cell: 'bg-red-100 border-red-200',                                label: 'Absent',     dot: 'bg-red-300' },
+  COMPOFF:    { cell: 'bg-indigo-500 hover:bg-indigo-600 border-indigo-600',      label: 'Worked (comp-off)', dot: 'bg-indigo-500' },
 };
 
 export const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -59,11 +62,13 @@ export function DayCell({ day, onClick }: { day: CapacityDay; onClick?: () => vo
   );
 }
 
-/** The state legend, shared by the board and the project tab. */
-export function CapacityLegend() {
+/** The state legend, shared by the board and the project tab. Pass `states` to show a
+ *  subset (forward vs. history views use different vocabularies). */
+export function CapacityLegend({ states }: { states?: DayState[] } = {}) {
+  const keys = states ?? (Object.keys(STATE_STYLE) as DayState[]);
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-gray-500">
-      {(Object.keys(STATE_STYLE) as DayState[]).map(s => (
+      {keys.map(s => (
         <span key={s} className="inline-flex items-center gap-1.5">
           <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[s].dot)} />{STATE_STYLE[s].label}
         </span>

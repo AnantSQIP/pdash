@@ -8,7 +8,7 @@ import {
   Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil,
 } from 'lucide-react';
 import {
-  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest,
+  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -452,6 +452,7 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
   }
 
   return (
+    <div className="space-y-4">
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       {/* Balances */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -515,6 +516,84 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
         </ul>
       </div>
     </div>
+    <CompOffCard />
+    </div>
+  );
+}
+
+// ── Comp-off: claim a compensatory day off for working a non-working day ─────────
+const COMPOFF_STATUS: Record<string, string> = {
+  PENDING: 'bg-amber-100 text-amber-700', APPROVED: 'bg-green-100 text-green-700',
+  REJECTED: 'bg-red-100 text-red-600', CANCELLED: 'bg-gray-100 text-gray-500',
+};
+function CompOffCard() {
+  const qc = useQueryClient();
+  const { data: claims = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-mine'], queryFn: () => api.leave.myCompOffs(), staleTime: 30_000 });
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ workDate: '', reason: '' });
+  const [busy, setBusy] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+
+  async function submit() {
+    if (busy || !form.workDate || !form.reason.trim()) return;
+    setBusy(true);
+    try {
+      await api.leave.requestCompOff(form);
+      setShowForm(false); setForm({ workDate: '', reason: '' });
+      qc.invalidateQueries({ queryKey: ['compoff-mine'] });
+    } catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the comp-off claim.'); }
+    finally { setBusy(false); }
+  }
+  async function cancel(id: string) {
+    setBusy(true);
+    try { await api.leave.cancelCompOff(id); qc.invalidateQueries({ queryKey: ['compoff-mine'] }); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel.'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700">Comp-off</h3>
+          <p className="text-[11px] text-gray-400">Worked a weekend or holiday? Claim a compensatory day off — HR approves it into your Comp Off balance.</p>
+        </div>
+        <button onClick={() => setShowForm(s => !s)} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 shrink-0"><Plus size={13} /> Claim</button>
+      </div>
+      {showForm && (
+        <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/60 space-y-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Day you worked (weekend/holiday)</label>
+              <DateField type="date" value={form.workDate} max={today} onChange={e => setForm(f => ({ ...f, workDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">What did you work on?</label>
+              <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Production hotfix for Patent X filing" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowForm(false)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+            <button onClick={submit} disabled={busy || !form.workDate || !form.reason.trim()} className="text-sm font-medium px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">Submit claim</button>
+          </div>
+        </div>
+      )}
+      <ul className="divide-y divide-gray-50">
+        {claims.length === 0 && <li className="px-5 py-6 text-center text-sm text-gray-300">No comp-off claims yet</li>}
+        {claims.map(c => (
+          <li key={c.id} className="px-5 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-800">Worked {format(new Date(c.workDate), 'EEE, MMM d')}</p>
+              <p className="text-xs text-gray-400 truncate">{c.reason}{c.reviewNote ? ` · Note: ${c.reviewNote}` : ''}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={clsx('text-[11px] px-2 py-0.5 rounded-full font-medium', COMPOFF_STATUS[c.status] ?? 'bg-gray-100 text-gray-600')}>{c.status.charAt(0) + c.status.slice(1).toLowerCase()}</span>
+              {c.status === 'PENDING' && <button onClick={() => cancel(c.id)} disabled={busy} className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-50">Cancel</button>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -524,6 +603,22 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   pendingReg: RegularizationRequest[]; onReviewed: () => void; onRegReviewed: () => void;
 }) {
   const [busyId, setBusyId] = useState('');
+  const qc = useQueryClient();
+  const { data: pendingCompoff = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(), staleTime: 15_000 });
+  async function reviewCompoff(id: string, action: 'approve' | 'reject') {
+    setBusyId(id);
+    try {
+      if (action === 'reject') {
+        const note = window.prompt('Reason for rejecting (optional):') ?? undefined;
+        await api.leave.rejectCompOff(id, note);
+      } else {
+        await api.leave.approveCompOff(id);
+      }
+      qc.invalidateQueries({ queryKey: ['compoff-pending'] });
+      qc.invalidateQueries({ queryKey: ['compoff-mine'] });
+    } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the claim.`); }
+    finally { setBusyId(''); }
+  }
   async function review(id: string, action: 'approve' | 'reject') {
     setBusyId(id);
     try { await (action === 'approve' ? api.leave.approve(id) : api.leave.reject(id)); onReviewed(); }
@@ -604,6 +699,52 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
               <div className="flex items-center gap-1.5 shrink-0">
                 <button onClick={() => reviewReg(r.id, 'approve')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} /> Approve</button>
                 <button onClick={() => reviewReg(r.id, 'reject')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"><X size={13} /> Reject</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Pending comp-off claims — with the day's actual work as evidence */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-700">Comp-off claims</h3>
+          {pendingCompoff.length > 0 && <span className="text-[11px] bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-medium">{pendingCompoff.length}</span>}
+        </div>
+        <ul className="divide-y divide-gray-50">
+          {pendingCompoff.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">No comp-off claims to review 🎉</li>}
+          {pendingCompoff.map(c => (
+            <li key={c.id} className="px-5 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Avatar user={c.user} size={32} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      {c.user?.firstName} {c.user?.lastName} · worked {format(new Date(c.workDate), 'EEE, MMM d')}
+                    </p>
+                    <p className="text-xs text-gray-400 truncate">{c.reason}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button onClick={() => reviewCompoff(c.id, 'approve')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} /> Approve</button>
+                  <button onClick={() => reviewCompoff(c.id, 'reject')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"><X size={13} /> Reject</button>
+                </div>
+              </div>
+              {/* Evidence — what they actually did that day */}
+              <div className="mt-2 ml-11 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1">What they worked on</p>
+                {c.evidence?.attendance?.checkIn && (
+                  <p className="text-[11px] text-gray-500">Punched in {format(new Date(c.evidence.attendance.checkIn), 'HH:mm')}{c.evidence.attendance.checkOut ? `–${format(new Date(c.evidence.attendance.checkOut), 'HH:mm')}` : ''}{c.evidence.attendance.totalHours ? ` · ${c.evidence.attendance.totalHours}h` : ''}</p>
+                )}
+                {c.evidence && c.evidence.timesheets.length > 0 ? (
+                  <ul className="text-[11px] text-gray-600 space-y-0.5 mt-0.5">
+                    {c.evidence.timesheets.map((t, i) => (
+                      <li key={i}>• {t.task} — {t.hours}h{t.notes ? ` · ${t.notes}` : ''}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  !c.evidence?.attendance?.checkIn && <p className="text-[11px] text-gray-400 italic">No timesheet or punch logged that day — verify with the claimant.</p>
+                )}
               </div>
             </li>
           ))}

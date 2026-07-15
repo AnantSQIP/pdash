@@ -16,7 +16,15 @@ import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle,
   ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus,
 } from 'lucide-react';
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
+
+type RangeKey = 'next-7' | 'next-14' | 'next-30' | 'past-30';
+const RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
+  { value: 'next-7',  label: 'Next 7 days' },
+  { value: 'next-14', label: 'Next 14 days' },
+  { value: 'next-30', label: 'Next 30 days' },
+  { value: 'past-30', label: 'Past 30 days' },
+];
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -31,16 +39,29 @@ export default function CapacityPage() {
   const qc = useQueryClient();
   const allowed = can('capacity.view');
 
-  const [days, setDays] = useState(14);
+  const [range, setRange] = useState<RangeKey>('next-14');
   const [search, setSearch] = useState('');
   const [dept, setDept] = useState('');
   const [selected, setSelected] = useState<CapacityRow | null>(null);
   const [assignTo, setAssignTo] = useState<{ row: CapacityRow; start?: string; due?: string } | null>(null);
 
-  const { data, isLoading } = useQuery<TeamCapacity>({
+  const isPast = range === 'past-30';
+  const days = range === 'next-7' ? 7 : range === 'next-30' ? 30 : 14; // forward horizon
+  const histDays = 30;
+
+  // Forward projected-capacity board (default). Disabled while viewing the past.
+  const { data, isLoading: fwdLoading } = useQuery<TeamCapacity>({
     queryKey: ['capacity', org?.id, days],
     queryFn: () => api.capacity.team(days),
-    enabled: allowed && !!org?.id,
+    enabled: allowed && !!org?.id && !isPast,
+    staleTime: 60_000,
+  });
+
+  // Retrospective actual-attendance board (the "Past 30 days" option).
+  const { data: history, isLoading: histLoading } = useQuery<TeamHistory>({
+    queryKey: ['capacity-history', org?.id, histDays],
+    queryFn: () => api.capacity.history(histDays),
+    enabled: allowed && !!org?.id && isPast,
     staleTime: 60_000,
   });
 
@@ -56,29 +77,41 @@ export default function CapacityPage() {
   const { data: coverage } = useQuery<CoverageRisks>({
     queryKey: ['coverage-risks', org?.id, days],
     queryFn: () => api.capacity.coverageRisks(days),
-    enabled: allowed && !!org?.id,
+    enabled: allowed && !!org?.id && !isPast,
     staleTime: 60_000,
   });
 
-  const rows = data?.rows ?? [];
-  const departments = useMemo(
-    () => [...new Set(rows.map(r => r.department).filter(Boolean))].sort() as string[],
-    [rows],
-  );
-  const visible = useMemo(() => rows.filter(r =>
-    (!search || r.name.toLowerCase().includes(search.toLowerCase())) &&
-    (!dept || r.department === dept),
-  ), [rows, search, dept]);
+  const isLoading = isPast ? histLoading : fwdLoading;
+  const fwdRows = data?.rows ?? [];
+  const histRows = history?.rows ?? [];
+  const allRows: { name: string; department?: string }[] = isPast ? histRows : fwdRows;
 
-  // Headline numbers a manager acts on.
+  const departments = useMemo(
+    () => [...new Set(allRows.map(r => r.department).filter(Boolean))].sort() as string[],
+    [allRows],
+  );
+  const matches = (r: { name: string; department?: string }) =>
+    (!search || r.name.toLowerCase().includes(search.toLowerCase())) && (!dept || r.department === dept);
+  const visibleFwd = useMemo(() => fwdRows.filter(matches), [fwdRows, search, dept]);
+  const visibleHist = useMemo(() => histRows.filter(matches), [histRows, search, dept]);
+
+  // Forward headline numbers a manager acts on.
   const stats = useMemo(() => {
-    const freeNow = rows.filter(r => r.availableNow).length;
-    const freeingSoon = rows.filter(r => !r.availableNow && r.nextFreeDate).length;
-    const overloaded = rows.filter(r => r.days.some(d => d.state === 'OVERLOADED')).length;
-    const spareHours = Math.round(rows.reduce((s, r) => s + r.freeHours, 0));
-    const overdue = rows.reduce((s, r) => s + r.overdueCount, 0);
-    return { freeNow, freeingSoon, overloaded, spareHours, overdue };
-  }, [rows]);
+    const freeNow = fwdRows.filter(r => r.availableNow).length;
+    const freeingSoon = fwdRows.filter(r => !r.availableNow && r.nextFreeDate).length;
+    const spareHours = Math.round(fwdRows.reduce((s, r) => s + r.freeHours, 0));
+    const overdue = fwdRows.reduce((s, r) => s + r.overdueCount, 0);
+    return { freeNow, freeingSoon, spareHours, overdue };
+  }, [fwdRows]);
+
+  // Retrospective headline numbers.
+  const histStats = useMemo(() => {
+    const compoff = histRows.reduce((s, r) => s + r.compoff, 0);
+    const present = histRows.reduce((s, r) => s + r.present, 0);
+    const onLeave = histRows.reduce((s, r) => s + r.onLeave, 0);
+    const absent = histRows.reduce((s, r) => s + r.absent, 0);
+    return { compoff, present, onLeave, absent };
+  }, [histRows]);
 
   if (permLoading) {
     return <div className="flex items-center justify-center h-full text-gray-400"><Loader className="animate-spin mr-2" size={18} />Loading…</div>;
@@ -93,7 +126,7 @@ export default function CapacityPage() {
     );
   }
 
-  const header = data?.rows[0]?.days ?? [];
+  const header = (isPast ? histRows[0]?.days : fwdRows[0]?.days) ?? [];
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -123,25 +156,34 @@ export default function CapacityPage() {
                 {departments.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
             )}
-            <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
-              {[7, 14, 30].map(d => (
-                <button key={d} onClick={() => setDays(d)}
-                  className={clsx('px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
-                    days === d ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-                  {d}d
-                </button>
-              ))}
-            </div>
+            <select
+              value={range}
+              onChange={e => setRange(e.target.value as RangeKey)}
+              title="Time range"
+              className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white font-medium text-gray-700"
+            >
+              {RANGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
           </div>
         </div>
 
         {/* KPI strip — the four things worth acting on */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mt-4">
-          <Kpi label="Available now" value={stats.freeNow} Icon={Sparkles} tint="bg-emerald-100 text-emerald-700" hint="free on the next working day" />
-          <Kpi label="Freeing up soon" value={stats.freeingSoon} Icon={CalendarRange} tint="bg-sky-100 text-sky-700" hint="within this window" />
-          <Kpi label="Overloaded" value={stats.overloaded} Icon={AlertTriangle} tint="bg-red-100 text-red-700" hint="over 100% on a day" />
-          <Kpi label="Spare capacity" value={`${stats.spareHours}h`} Icon={Zap} tint="bg-amber-100 text-amber-700" hint="unused hours in window" />
-          <Kpi label="Overdue tasks" value={stats.overdue} Icon={Clock} tint="bg-purple-100 text-purple-700" hint="past internal deadline" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+          {isPast ? (
+            <>
+              <Kpi label="Comp-off candidates" value={histStats.compoff} Icon={CalendarPlus} tint="bg-indigo-100 text-indigo-700" hint="worked on a non-working day" />
+              <Kpi label="Days present" value={histStats.present} Icon={Sparkles} tint="bg-emerald-100 text-emerald-700" hint="across the team, past 30 days" />
+              <Kpi label="Days on leave" value={histStats.onLeave} Icon={CalendarRange} tint="bg-purple-100 text-purple-700" hint="approved leave taken" />
+              <Kpi label="Days absent" value={histStats.absent} Icon={AlertTriangle} tint="bg-red-100 text-red-700" hint="working days with no attendance" />
+            </>
+          ) : (
+            <>
+              <Kpi label="Available now" value={stats.freeNow} Icon={Sparkles} tint="bg-emerald-100 text-emerald-700" hint="free on the next working day" />
+              <Kpi label="Freeing up soon" value={stats.freeingSoon} Icon={CalendarRange} tint="bg-sky-100 text-sky-700" hint="within this window" />
+              <Kpi label="Spare capacity" value={`${stats.spareHours}h`} Icon={Zap} tint="bg-amber-100 text-amber-700" hint="unused hours in window" />
+              <Kpi label="Overdue tasks" value={stats.overdue} Icon={Clock} tint="bg-purple-100 text-purple-700" hint="past internal deadline" />
+            </>
+          )}
         </div>
       </div>
 
@@ -154,90 +196,98 @@ export default function CapacityPage() {
           <div className="flex items-center justify-center py-20 text-gray-400">
             <Loader size={18} className="animate-spin mr-2" /> Building the availability map…
           </div>
-        ) : rows.length === 0 ? (
+        ) : allRows.length === 0 ? (
           <div className="text-center py-20 text-gray-400 text-sm">No active team members.</div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            {/* Day header */}
-            <div className="flex items-end gap-3 px-4 py-3 border-b border-gray-100 bg-gray-50 sticky top-0 z-10">
+            {/* Day header — sticky so the date bar stays visible while scrolling. Org-wide
+                holidays and weekends are marked here so planning reads at a glance. */}
+            <div className="flex items-end gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50 sticky top-0 z-20 shadow-sm">
               <div className="w-56 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-500">Member</div>
               <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${header.length}, minmax(0, 1fr))` }}>
-                {header.map(d => (
-                  <div key={d.date} className={clsx('text-center', isToday(d.date) && 'text-brand-600 font-bold')}>
-                    <div className="text-[9px] uppercase text-gray-400">{DOW[dayOfWeek(d.date)]}</div>
-                    <div className="text-[11px] font-medium text-gray-600">{dayNum(d.date)}</div>
-                  </div>
-                ))}
+                {header.map(d => {
+                  const holiday = d.state === 'HOLIDAY';
+                  const weekend = d.state === 'WEEKEND';
+                  return (
+                    <div key={d.date}
+                      title={holiday ? `Holiday${d.note ? ` — ${d.note}` : ''}` : weekend ? 'Weekend' : formatDate(d.date, { weekday: 'long', month: 'short', day: 'numeric' })}
+                      className={clsx('text-center rounded-md py-0.5',
+                        holiday && 'bg-amber-100',
+                        weekend && 'bg-gray-100',
+                        isToday(d.date) && 'ring-1 ring-brand-400')}>
+                      <div className={clsx('text-[9px] uppercase', holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
+                      <div className={clsx('text-[11px] font-medium', isToday(d.date) ? 'text-brand-600 font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
+                    </div>
+                  );
+                })}
               </div>
-              <div className="w-40 shrink-0 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Availability</div>
+              <div className="w-40 shrink-0 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">{isPast ? 'Summary' : 'Availability'}</div>
             </div>
 
             {/* Rows */}
             <div className="divide-y divide-gray-50">
-              {visible.map(row => (
-                <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
-                  {/* Person */}
-                  <button onClick={() => setSelected(row)} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
-                    <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={30} />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 truncate group-hover:text-brand-600 transition-colors">{row.name}</p>
-                      <p className="text-[11px] text-gray-400 truncate">
-                        {row.designation ?? '—'}
-                        {row.overdueCount > 0 && <span className="ml-1 text-red-500 font-medium">· {row.overdueCount} overdue</span>}
-                      </p>
+              {isPast ? (
+                visibleHist.length === 0
+                  ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
+                  : visibleHist.map(row => <HistoryRowView key={row.userId} row={row} />)
+              ) : (
+                visibleFwd.length === 0
+                  ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
+                  : visibleFwd.map(row => (
+                    <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
+                      <button onClick={() => setSelected(row)} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
+                        <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={30} />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-800 truncate group-hover:text-brand-600 transition-colors">{row.name}</p>
+                          <p className="text-[11px] text-gray-400 truncate">
+                            {row.designation ?? '—'}
+                            {row.overdueCount > 0 && <span className="ml-1 text-red-500 font-medium">· {row.overdueCount} overdue</span>}
+                          </p>
+                        </div>
+                      </button>
+                      <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
+                        {row.days.map(d => (
+                          <DayCell key={d.date} day={d} onClick={() => setAssignTo({ row, start: d.date, due: d.date })} />
+                        ))}
+                      </div>
+                      <div className="w-40 shrink-0 flex items-center justify-end gap-2">
+                        <div className="text-right">
+                          {row.availableNow ? (
+                            <p className="text-xs font-semibold text-emerald-600">Available now</p>
+                          ) : row.nextFreeDate ? (
+                            <p className="text-xs font-medium text-gray-600">Free {formatDate(row.nextFreeDate)}</p>
+                          ) : (
+                            <p className="text-xs font-medium text-red-500">Fully booked</p>
+                          )}
+                          <p className="text-[10px] text-gray-400">
+                            {row.freeHours}h free · {row.utilization}% used
+                            {row.freeRunDays > 1 && <span className="text-emerald-600 font-medium"> · {row.freeRunDays}d window</span>}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setAssignTo({ row, start: row.nextFreeDate ?? undefined, due: row.nextFreeDate ?? undefined })}
+                          title={`Assign a task to ${row.name}`}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-brand-600 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
                     </div>
-                  </button>
-
-                  {/* Day cells */}
-                  <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
-                    {row.days.map(d => (
-                      <DayCell
-                        key={d.date}
-                        day={d}
-                        onClick={() => setAssignTo({ row, start: d.date, due: d.date })}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Availability summary + the action this board exists for */}
-                  <div className="w-40 shrink-0 flex items-center justify-end gap-2">
-                    <div className="text-right">
-                      {row.availableNow ? (
-                        <p className="text-xs font-semibold text-emerald-600">Available now</p>
-                      ) : row.nextFreeDate ? (
-                        <p className="text-xs font-medium text-gray-600">Free {formatDate(row.nextFreeDate)}</p>
-                      ) : (
-                        <p className="text-xs font-medium text-red-500">Fully booked</p>
-                      )}
-                      <p className="text-[10px] text-gray-400">
-                        {row.freeHours}h free · {row.utilization}% used
-                        {row.freeRunDays > 1 && <span className="text-emerald-600 font-medium"> · {row.freeRunDays}d window</span>}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setAssignTo({ row, start: row.nextFreeDate ?? undefined, due: row.nextFreeDate ?? undefined })}
-                      title={`Assign a task to ${row.name}`}
-                      className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-brand-600 opacity-0 group-hover:opacity-100 transition-all shrink-0"
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {visible.length === 0 && (
-                <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
+                  ))
               )}
             </div>
 
             {/* Legend */}
             <div className="flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50">
-              {(['FREE', 'LIGHT', 'BUSY', 'OVERLOADED', 'LEAVE', 'HOLIDAY', 'WEEKEND'] as DayState[]).map(s => (
+              {((isPast
+                ? ['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT']
+                : ['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'HOLIDAY', 'WEEKEND']) as DayState[]).map(s => (
                 <span key={s} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
                   <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[s].dot)} />{STATE_STYLE[s].label}
                 </span>
               ))}
               <span className="text-[11px] text-gray-400 ml-auto">
-                Capacity {data?.capacityPerDay}h/day · leave &amp; holidays excluded
+                {isPast ? 'Actual attendance over the past 30 days' : `Capacity ${data?.capacityPerDay}h/day · leave & holidays excluded`}
               </span>
             </div>
           </div>
@@ -472,6 +522,32 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// One person's row in the retrospective (past-30-days) view — read-only actual attendance,
+// with the comp-off count surfaced so managers can see who worked on non-working days.
+function HistoryRowView({ row }: { row: HistoryRow }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors">
+      <div className="w-56 shrink-0 flex items-center gap-2.5">
+        <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={30} />
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-gray-800 truncate">{row.name}</p>
+          <p className="text-[11px] text-gray-400 truncate">{row.designation ?? '—'}</p>
+        </div>
+      </div>
+      <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
+        {row.days.map(d => <DayCell key={d.date} day={d} />)}
+      </div>
+      <div className="w-40 shrink-0 text-right">
+        <p className="text-xs font-medium text-gray-700">{row.present} present · {row.absent} absent</p>
+        <p className="text-[10px] text-gray-400">
+          {row.onLeave} on leave
+          {row.compoff > 0 && <span className="ml-1 text-indigo-600 font-semibold">· ⚑ {row.compoff} comp-off</span>}
+        </p>
       </div>
     </div>
   );

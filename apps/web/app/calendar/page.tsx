@@ -17,6 +17,8 @@ import {
   RiArrowRightSLine,
   RiFilterLine,
   RiCalendarScheduleLine,
+  RiFlightTakeoffLine,
+  RiExchangeLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import clsx from 'clsx';
@@ -25,7 +27,7 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
 
-type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY';
+type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY' | 'LEAVE' | 'COMPOFF';
 const TYPE_COLORS: Record<EventType, string> = {
   EVENT:     '#3d8de2',
   MEETING:   '#fe841f',
@@ -33,9 +35,11 @@ const TYPE_COLORS: Record<EventType, string> = {
   MILESTONE: '#9334e6',
   REMINDER:  '#ea4335',
   HOLIDAY:   '#d93025',
+  LEAVE:     '#fe841f',
+  COMPOFF:   '#6366f1',
 };
 const TYPE_LABELS: Record<EventType, string> = {
-  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder', HOLIDAY: 'Holiday',
+  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off',
 };
 const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   EVENT:     RiCalendarEventLine,
@@ -44,6 +48,8 @@ const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   MILESTONE: RiFlag2Line,
   REMINDER:  RiAlarmLine,
   HOLIDAY:   RiCalendarEventLine,
+  LEAVE:     RiFlightTakeoffLine,
+  COMPOFF:   RiExchangeLine,
 };
 
 /** A synthetic calendar event is one the calendar itself does not own (a holiday). It is
