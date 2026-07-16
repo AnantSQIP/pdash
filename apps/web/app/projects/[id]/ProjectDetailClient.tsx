@@ -328,13 +328,14 @@ export function ProjectDetailClient({ projectId }: Props) {
               <Users size={14} />
               <span><span className="font-medium text-gray-900">{project._count?.members ?? project.members?.length ?? 0}</span> members</span>
             </div>
+            {/* The client date is only present when the actor may see it. When they can,
+                we distinguish "Internal" vs "Client"; otherwise it's just "Deadline". */}
             {project.dueDate && (
-              <div className="flex items-center gap-1.5 text-gray-500" title="Internal deadline — the team's date">
+              <div className="flex items-center gap-1.5 text-gray-500" title="Deadline">
                 <Calendar size={14} />
-                <span>Internal <span className="font-medium text-gray-900">{formatDate(project.dueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
+                <span>{'clientDueDate' in project ? 'Internal ' : 'Deadline '}<span className="font-medium text-gray-900">{formatDate(project.dueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
               </div>
             )}
-            {/* Only present when the API sent it — i.e. this actor may see client deadlines. */}
             {project.clientDueDate && (
               <div
                 className="flex items-center gap-1.5 text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full"

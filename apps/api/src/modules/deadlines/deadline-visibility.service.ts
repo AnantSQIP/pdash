@@ -63,22 +63,6 @@ export class DeadlineVisibilityService {
   }
 
   /**
-   * Strip clientDueDate from a task payload unless the actor may see it. A task is
-   * visible-by-management when the actor manages ANY project the task belongs to
-   * (tasks are M2M with projects via ProjectTask).
-   */
-  redactTask<T extends WithClientDue & { projectTasks?: { projectId: string }[] }>(task: T, scope: DeadlineScope): T {
-    const projectIds = (task.projectTasks ?? []).map(pt => pt.projectId);
-    if (this.canSee(scope, projectIds)) return task;
-    const { clientDueDate: _hidden, ...rest } = task;
-    return rest as T;
-  }
-
-  redactTasks<T extends WithClientDue & { projectTasks?: { projectId: string }[] }>(tasks: T[], scope: DeadlineScope): T[] {
-    return tasks.map(t => this.redactTask(t, scope));
-  }
-
-  /**
    * Guard a WRITE of clientDueDate: only someone who may see the client deadline for
    * these projects may set one. `projectIds` is empty for a brand-new project (no
    * management relationship exists yet), so only the global permission qualifies.

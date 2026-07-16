@@ -1,13 +1,12 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, Lock } from 'lucide-react';
+import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
-import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
@@ -34,10 +33,6 @@ const isOverdue = (t: ApiTask) => isPastDue(t.dueDate) && !isTaskClosed(t);
 
 export default function TasksPage() {
   const { currentUser, loading: orgLoading } = useOrg();
-  const { can } = usePermissions();
-  // The client deadline is redacted server-side for anyone without this; the column is
-  // only rendered for those who can actually receive it.
-  const canSeeClientDue = can('deadline.view.client');
   const qc = useQueryClient();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -191,7 +186,7 @@ export default function TasksPage() {
       <div className="p-4 sm:p-6">
         {isLoading ? (
           <div className="hidden sm:block">
-          <TableShell showClientDue={canSeeClientDue}>
+          <TableShell>
             {Array.from({ length: 6 }).map((_, i) => (
               <tr key={i} className="animate-pulse">
                 <td className="px-4 py-3 w-8"><div className="w-4 h-4 rounded-full bg-gray-200" /></td>
@@ -201,7 +196,6 @@ export default function TasksPage() {
                 <td className="px-4 py-3"><div className="h-5 bg-gray-100 rounded-full w-20" /></td>
                 <td className="px-4 py-3"><div className="h-6 bg-gray-100 rounded-full w-16" /></td>
                 <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>
-                {canSeeClientDue && <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>}
                 <td className="px-4 py-3"><div className="h-1.5 bg-gray-100 rounded-full w-16" /></td>
               </tr>
             ))}
@@ -239,7 +233,6 @@ export default function TasksPage() {
                 closed={isTaskClosed(task)}
                 overdue={isOverdue(task)}
                 statuses={statuses}
-                canSeeClientDue={canSeeClientDue}
                 onToggle={() => toggleComplete(task)}
                 onStatus={id => changeStatus(task, id)}
                 onProgress={p => changeProgress(task, p)}
@@ -249,7 +242,7 @@ export default function TasksPage() {
 
           {/* Desktop / tablet: the full table. */}
           <div className="hidden sm:block">
-          <TableShell showClientDue={canSeeClientDue}>
+          <TableShell>
             {filtered.map(task => {
               const closed = isTaskClosed(task);
               const overdue = isOverdue(task);
@@ -307,15 +300,6 @@ export default function TasksPage() {
                       </span>
                     ) : <span className="text-xs text-gray-400">—</span>}
                   </td>
-                  {canSeeClientDue && (
-                    <td className="px-4 py-3">
-                      {task.clientDueDate ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full">
-                          <Lock size={9} /> {formatDate(task.clientDueDate)}
-                        </span>
-                      ) : <span className="text-xs text-gray-300">—</span>}
-                    </td>
-                  )}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -346,10 +330,8 @@ export default function TasksPage() {
 }
 
 // Shared table chrome so the loading, populated and (implicitly) empty states line up.
-// The "Client Due" column only exists for actors allowed to see client deadlines.
-function TableShell({ children, showClientDue }: { children: React.ReactNode; showClientDue?: boolean }) {
-  const headers = ['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due (internal)',
-    ...(showClientDue ? ['Client Due'] : []), 'Progress'];
+function TableShell({ children }: { children: React.ReactNode }) {
+  const headers = ['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due', 'Progress'];
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">
@@ -371,12 +353,11 @@ function TableShell({ children, showClientDue }: { children: React.ReactNode; sh
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, statuses, canSeeClientDue, onToggle, onStatus, onProgress }: {
+function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgress }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
   statuses: WorkflowStatus[];
-  canSeeClientDue: boolean;
   onToggle: () => void;
   onStatus: (id: string) => void;
   onProgress: (p: number) => void;
@@ -424,11 +405,6 @@ function TaskCard({ task, closed, overdue, statuses, canSeeClientDue, onToggle, 
               {task.dueDate && (
                 <span className={clsx('text-xs whitespace-nowrap', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
                   {formatDate(task.dueDate)}{overdue && ' · overdue'}
-                </span>
-              )}
-              {canSeeClientDue && task.clientDueDate && (
-                <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  <Lock size={9} /> {formatDate(task.clientDueDate)}
                 </span>
               )}
             </div>

@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Check, Lock } from 'lucide-react';
+import { Plus, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { api, type WorkflowStatus, type Milestone } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
-import { usePermissions } from '@/lib/permissions-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 import { OPEN_TYPE } from '@/lib/tasks';
@@ -31,16 +30,12 @@ export function AddTaskModal({
 }: AddTaskModalProps) {
   const [milestoneId, setMilestoneId] = useState('');
   const { currentUser, users } = useOrg();
-  const { can } = usePermissions();
-  // The client-facing deadline is restricted — only offer the field to those who may set it.
-  const canSetClientDue = can('deadline.view.client');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
   const [statusId, setStatusId] = useState<string>(initialStatusId ?? '');
   const [startDate, setStartDate] = useState(initialStartDate ?? '');
   const [dueDate, setDueDate] = useState(initialDueDate ?? '');
-  const [clientDueDate, setClientDueDate] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(initialAssigneeIds ?? []);
   const [loading, setLoading] = useState(false);
@@ -89,7 +84,6 @@ export function AddTaskModal({
         priority,
         startDate: startDate || undefined,
         dueDate: dueDate || undefined,
-        clientDueDate: (canSetClientDue && clientDueDate) ? clientDueDate : undefined,
         estimatedHours: estimatedHours ? parseFloat(estimatedHours) : undefined,
         projectId,
         taskListId,
@@ -193,29 +187,12 @@ export function AddTaskModal({
             </div>
           </div>
 
-          {/* Dual deadlines: the internal date is what the team works to; the client date
-              is the promised delivery and is only offered to those allowed to set it. */}
-          <div className={clsx('grid gap-4', canSetClientDue ? 'grid-cols-2' : 'grid-cols-1')}>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Internal Deadline
-                <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>
-              </label>
-              <DateField type="date" value={dueDate} max={clientDueDate || undefined} onChange={e => setDueDate(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
-              />
-            </div>
-            {canSetClientDue && (
-              <div>
-                <label className="block text-sm font-medium text-amber-700 mb-1.5 flex items-center gap-1">
-                  <Lock size={11} /> Client Deadline
-                  <span className="text-xs font-normal text-amber-600/70">· managers only</span>
-                </label>
-                <DateField type="date" value={clientDueDate} min={dueDate || undefined} onChange={e => setClientDueDate(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-sm border border-amber-300 bg-amber-50/40 rounded-lg focus:outline-none focus:border-amber-500 transition"
-                />
-              </div>
-            )}
+          {/* A task has a single deadline. Client-facing dates live on the project only. */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Deadline</label>
+            <DateField type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+            />
           </div>
 
           {milestones && milestones.length > 0 && (
