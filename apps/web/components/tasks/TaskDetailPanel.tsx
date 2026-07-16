@@ -32,7 +32,6 @@ function planOf(t: ApiTask) {
     priority: t.priority ?? 'MEDIUM',
     startDate: day(t.startDate),
     dueDate: day(t.dueDate),
-    clientDueDate: day(t.clientDueDate),
     estimatedHours: t.estimatedHours != null ? String(t.estimatedHours) : '',
   };
 }
@@ -210,10 +209,6 @@ function TaskDetailPanelInner({
     ? task.priority.charAt(0) + task.priority.slice(1).toLowerCase()
     : '—';
   const formattedDue = formatDate(task.dueDate, { month: 'short', day: 'numeric', year: 'numeric' });
-  // Present only when the API sent it (i.e. the actor may see client deadlines).
-  const formattedClientDue = task.clientDueDate
-    ? formatDate(task.clientDueDate, { month: 'short', day: 'numeric', year: 'numeric' })
-    : null;
 
   const assigneeUsers = assigneeIds
     .map(id => users.find(u => u.id === id))
@@ -290,11 +285,9 @@ function TaskDetailPanelInner({
    * Persist one field of the plan. An emptied date is sent as `null`, which CLEARS it —
    * omitting the field would leave the old value in place.
    *
-   * The server owns the rules (only a client-deadline viewer may set that date; the internal
-   * deadline may not fall after it), so a rejection just reverts the field and shows why.
-   * Moving the internal deadline forward also re-arms the overdue alert, server-side.
+   * Moving the deadline forward re-arms the overdue alert, server-side.
    */
-  async function savePlan(patch: Partial<Pick<ApiTask, 'priority' | 'startDate' | 'dueDate' | 'clientDueDate' | 'estimatedHours'>>) {
+  async function savePlan(patch: Partial<Pick<ApiTask, 'priority' | 'startDate' | 'dueDate' | 'estimatedHours'>>) {
     setSavingPlan(true);
     try {
       const updated = await api.tasks.update(task.id, patch);
@@ -488,19 +481,10 @@ function TaskDetailPanelInner({
               ? <AvatarStack users={stackUsers} size={24} />
               : <span className="text-sm text-gray-400 italic">Unassigned</span>}
           </button>
-          <div className="flex items-center gap-1 text-sm text-gray-500" title="Internal deadline — the team's date">
+          <div className="flex items-center gap-1 text-sm text-gray-500" title="Deadline">
             <Calendar size={13} />
             {formattedDue}
           </div>
-          {formattedClientDue && (
-            <div
-              className="flex items-center gap-1 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full"
-              title="Client deadline — visible to managers and admins only"
-            >
-              <Lock size={11} />
-              {formattedClientDue}
-            </div>
-          )}
           {task.estimatedHours && (
             <div className="flex items-center gap-1 text-sm text-gray-500">
               <Clock size={13} />
@@ -636,12 +620,11 @@ function TaskDetailPanelInner({
                   />
                 </Field>
 
-                <Field label="Internal Deadline" hint="what the team works to">
+                <Field label="Deadline" hint="what the team works to">
                   <input
                     type="date"
                     value={plan.dueDate}
                     min={plan.startDate || undefined}
-                    max={plan.clientDueDate || undefined}
                     onChange={e => {
                       const dueDate = e.target.value;
                       setPlan(p => ({ ...p, dueDate }));
@@ -650,30 +633,11 @@ function TaskDetailPanelInner({
                     className={planInput}
                   />
                 </Field>
-
-                {/* The server OMITS clientDueDate entirely unless this actor may see it — so
-                    the key's presence is the exact permission signal, and it correctly
-                    includes a project manager who lacks the org-wide permission. */}
-                {'clientDueDate' in task && (
-                  <Field label="Client Deadline" restricted hint="managers only">
-                    <input
-                      type="date"
-                      value={plan.clientDueDate}
-                      min={plan.dueDate || undefined}
-                      onChange={e => {
-                        const clientDueDate = e.target.value;
-                        setPlan(p => ({ ...p, clientDueDate }));
-                        savePlan({ clientDueDate: clientDueDate || null });
-                      }}
-                      className={clsx(planInput, 'border-amber-200 bg-amber-50/60 text-amber-900')}
-                    />
-                  </Field>
-                )}
               </div>
 
               {isPastDue(task.dueDate) && !closed && (
                 <p className="mt-3 text-xs text-red-600">
-                  This task is past its internal deadline. Moving the date forward re-arms the overdue alert.
+                  This task is past its deadline. Moving the date forward re-arms the overdue alert.
                 </p>
               )}
             </div>
@@ -683,10 +647,23 @@ function TaskDetailPanelInner({
         {/* ── ASSIGNEES ───────────────────────────────────────────── */}
         {panelTab === 'assignees' && (
           <div className="px-4 sm:px-6 py-5 space-y-4">
-            {/* Current assignees as removable chips */}
+            {/* Assigned by — who delegated the task (distinct from the assignees below). */}
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Assigned by</p>
+              {task.assignedBy ? (
+                <span className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-sm">
+                  <Avatar user={task.assignedBy} size={20} />
+                  {task.assignedBy.firstName} {task.assignedBy.lastName}
+                </span>
+              ) : (
+                <p className="text-sm text-gray-400 italic">Not recorded.</p>
+              )}
+            </div>
+
+            {/* Assigned to — the people who do the work. */}
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-2">
-                Assigned
+                Assigned to
                 {savingAssignees && <span className="normal-case text-gray-300 flex items-center gap-1"><Loader size={11} className="animate-spin" /> saving</span>}
               </p>
               {stackUsers.length === 0 ? (

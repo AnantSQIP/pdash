@@ -125,8 +125,8 @@ export function EditProjectModal({ project, onClose, onSaved }: {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Internal deadline
-                <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>
+                {mayEditClientDue ? 'Internal deadline' : 'Deadline'}
+                {mayEditClientDue && <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>}
               </label>
               <input
                 type="date" value={dueDate}
@@ -140,7 +140,6 @@ export function EditProjectModal({ project, onClose, onSaved }: {
             <div>
               <label className="flex items-center gap-1 text-sm font-medium text-amber-700 mb-1.5">
                 <Lock size={12} /> Client deadline
-                <span className="text-xs font-normal text-amber-600/70">· managers only</span>
               </label>
               <input
                 type="date" value={clientDueDate} min={dueDate || undefined}

@@ -145,14 +145,15 @@ export type ApiTask = {
   // the date, while omitting the field leaves it alone. `undefined` on clientDueDate means
   // something different again: the server redacted it because this actor may not see it.
   startDate?: string | null;
-  /** INTERNAL deadline — visible to everyone; drives "overdue". */
+  /** The task's single deadline; drives "overdue". Tasks have no client deadline. */
   dueDate?: string | null;
-  /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
-  clientDueDate?: string | null;
   estimatedHours?: number | null; actualHours?: number;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdBy: string; createdAt: string; updatedAt: string;
   currentStatus?: WorkflowStatus;
+  /** Who delegated the task — distinct from the assignees who do it. Null when unassigned. */
+  assignedById?: string | null;
+  assignedBy?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
   assignees?: AssigneeRef[];
   subtasks?: Subtask[];
   projectTasks?: { projectId: string; taskListId?: string; milestoneId?: string; sequence: number; project?: { id: string; title: string } }[];
@@ -614,11 +615,11 @@ export const api = {
     get: (id: string) => req<ApiTask>(`/tasks/${id}`),
     create: (data: {
       title: string; projectId: string; taskListId: string; createdBy: string;
-      description?: string; priority?: string; startDate?: string; dueDate?: string; clientDueDate?: string;
+      description?: string; priority?: string; startDate?: string; dueDate?: string;
       estimatedHours?: number; assigneeIds?: string[];
       milestoneId?: string; currentWorkflowStatusId?: string;
     }) => req<ApiTask>('/tasks', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<ApiTask, 'title' | 'description' | 'priority' | 'completionPercentage' | 'startDate' | 'dueDate' | 'clientDueDate' | 'estimatedHours'>>) =>
+    update: (id: string, data: Partial<Pick<ApiTask, 'title' | 'description' | 'priority' | 'completionPercentage' | 'startDate' | 'dueDate' | 'estimatedHours'>>) =>
       req<ApiTask>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     setStatus: (id: string, statusId: string) =>
       req<ApiTask>(`/tasks/${id}/status`, { method: 'PUT', body: JSON.stringify({ statusId }) }),

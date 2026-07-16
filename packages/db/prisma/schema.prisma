@@ -96,6 +96,7 @@ model User {
   teamMemberships        TeamMember[]
   projectMemberships     ProjectMember[]
   taskAssignments        TaskAssignee[]
+  tasksAssignedByMe      Task[]                  @relation("TaskAssignedBy")
   subtaskAssignments     SubtaskAssignee[]
   userRoles              UserRole[]
   userPermissions        UserPermission[]
@@ -528,10 +529,9 @@ model Task {
   description             String?
   priority                String    @default("MEDIUM")
   startDate               DateTime?
-  // dueDate = the INTERNAL deadline the assignee works to; drives "overdue" + alerts.
+  // dueDate = the task's single deadline the assignee works to; drives "overdue" + alerts.
+  // Tasks have no client-facing deadline — that lives only on the Project.
   dueDate                 DateTime?
-  // clientDueDate = the client-facing commitment. Restricted (see Project.clientDueDate).
-  clientDueDate           DateTime?
   // Set when an overdue alert has been sent for this task; cleared when the internal
   // deadline moves to the future, so a re-slip alerts again but a slip never spams.
   overdueNotifiedAt       DateTime?
@@ -541,12 +541,16 @@ model Task {
   workflowId              String?
   currentWorkflowStatusId String?
   createdBy               String
+  // Who assigned this task to its assignee(s) — the person who delegated the work, kept
+  // DISTINCT from the assignees (who do it). Set to the actor when assignees are changed.
+  assignedById            String?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
   deletedAt               DateTime?
 
   workflow      Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
   currentStatus WorkflowStatus?  @relation("TaskCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
+  assignedBy    User?            @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
   projectTasks  ProjectTask[]
   assignees     TaskAssignee[]
   subtasks      Subtask[]

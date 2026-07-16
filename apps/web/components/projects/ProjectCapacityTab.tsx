@@ -10,12 +10,14 @@ import clsx from 'clsx';
 import { Users, Loader, ArrowRight, CalendarRange } from 'lucide-react';
 import { api, type CapacityRow } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
-import { STATE_STYLE, DOW, DayCell, CapacityLegend, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
+import { DOW, DayCell, CapacityLegend, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
+import { PersonPanel } from '@/components/capacity/PersonPanel';
 
 const RANGES = [7, 14, 30] as const;
 
 export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const [days, setDays] = useState<number>(14);
+  const [selected, setSelected] = useState<CapacityRow | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['capacity', 'project', projectId, days],
@@ -90,13 +92,13 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
                 {rows.map((row: CapacityRow) => (
                   <tr key={row.userId} className="border-t border-gray-50">
                     <td className="sticky left-0 z-10 bg-white px-4 py-2">
-                      <div className="flex items-center gap-2">
+                      <button onClick={() => setSelected(row)} className="flex items-center gap-2 text-left group/member" title={`See what ${row.name.split(' ')[0]} is working on`}>
                         <Avatar user={{ firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={28} />
                         <div className="min-w-0">
-                          <div className="text-sm font-medium text-gray-800 truncate">{row.name}</div>
+                          <div className="text-sm font-medium text-gray-800 truncate group-hover/member:text-brand-600 transition-colors">{row.name}</div>
                           {row.designation && <div className="text-[11px] text-gray-400 truncate">{row.designation}{row.overdueCount > 0 && <span className="text-red-500"> · {row.overdueCount} overdue</span>}</div>}
                         </div>
-                      </div>
+                      </button>
                     </td>
                     {row.days.map(d => (
                       <td key={d.date} className="px-0.5 py-2 w-9"><DayCell day={d} /></td>
@@ -115,7 +117,10 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <CapacityLegend />
+      <CapacityLegend states={['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'HOLIDAY', 'WEEKEND']} />
+
+      {/* Click a member to see what they're working on — same drill-down as the full board. */}
+      {selected && <PersonPanel row={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }

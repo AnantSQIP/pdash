@@ -18,11 +18,6 @@ export class TasksService {
     private readonly deadlines: DeadlineVisibilityService,
   ) {}
 
-  /** Strip the client deadline from a single task unless this actor may see it. */
-  private async redact<T extends { clientDueDate?: Date | null; projectTasks?: { projectId: string }[] }>(task: T): Promise<T> {
-    return this.deadlines.redactTask(task, await this.deadlines.scope());
-  }
-
   /**
    * Create a task and link it to a project via ProjectTask.
    * Task has no projectId — ProjectTask is the join record that also
@@ -66,13 +61,9 @@ export class TasksService {
       workflowId = wf?.id;
     }
 
-    // Dual deadlines: the internal date is open to all; setting the CLIENT date needs
-    // deadline.view.client (or managing this project), and it must not precede it.
-    const scope = await this.deadlines.scope();
+    // A task has a single deadline (dueDate). Client-facing deadlines live only on the
+    // project now — tasks no longer carry one.
     const internalDue = dto.dueDate ? new Date(dto.dueDate) : undefined;
-    const clientDue = dto.clientDueDate ? new Date(dto.clientDueDate) : undefined;
-    if (clientDue) await this.deadlines.assertMaySetClientDue([dto.projectId], scope);
-    this.deadlines.assertOrdered(internalDue, clientDue);
 
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
@@ -82,9 +73,11 @@ export class TasksService {
           priority: dto.priority ?? 'MEDIUM',
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
           dueDate: internalDue,
-          clientDueDate: clientDue,
           estimatedHours: dto.estimatedHours,
           createdBy: getActorId() ?? dto.createdBy ?? 'system',
+          // Creating a task WITH assignees means the creator delegated it — record them as
+          // the assigner (distinct from the assignees who will do the work).
+          assignedById: dto.assigneeIds?.length ? (getActorId() ?? dto.createdBy ?? null) : null,
           workflowId,
           currentWorkflowStatusId: dto.currentWorkflowStatusId,
           assignees: dto.assigneeIds?.length
@@ -123,7 +116,7 @@ export class TasksService {
     });
     await this.recomputeProjectProgress(dto.projectId); // new task dilutes/updates progress
     if (dto.milestoneId) await this.recomputeMilestoneProgress(dto.milestoneId);
-    return this.deadlines.redactTask(task, scope);
+    return task;
   }
 
   async list(projectId: string, opts: { taskListId?: string; milestoneId?: string } = {}) {
@@ -141,7 +134,7 @@ export class TasksService {
       orderBy: { createdAt: 'asc' },
       include: this.taskInclude(),
     });
-    return this.deadlines.redactTasks(tasks, await this.deadlines.scope());
+    return tasks;
   }
 
   async listForUser(userId: string) {
@@ -165,7 +158,7 @@ export class TasksService {
         },
       },
     });
-    return this.deadlines.redactTasks(tasks, await this.deadlines.scope());
+    return tasks;
   }
 
   /** Unredacted read for internal callers (progress rollups, guards). */
@@ -179,21 +172,13 @@ export class TasksService {
   }
 
   async get(id: string) {
-    return this.redact(await this.getRaw(id));
+    return this.getRaw(id);
   }
 
   async update(id: string, dto: UpdateTaskDto) {
     const before = await this.getRaw(id);
-    const projectIds = (before.projectTasks ?? []).map(pt => pt.projectId);
 
-    // Dual deadlines: only a client-deadline viewer (or this project's manager) may set
-    // one, and the internal date must not fall after it. Compare against the incoming
-    // value or the stored one, so a partial edit is still validated.
-    const scope = await this.deadlines.scope();
-    if (dto.clientDueDate !== undefined) await this.deadlines.assertMaySetClientDue(projectIds, scope);
     const internalDue = resolveDate(dto.dueDate, before.dueDate);
-    const clientDue = resolveDate(dto.clientDueDate, before.clientDueDate);
-    this.deadlines.assertOrdered(internalDue, clientDue);
 
     // Re-arm the overdue alert when the task can no longer be late for the reason it was
     // flagged — the internal deadline moved into the future, or was removed altogether — so
@@ -211,7 +196,6 @@ export class TasksService {
         // make a date impossible to remove once set (the update silently no-ops).
         ...(dto.startDate === undefined ? {} : { startDate: resolveDate(dto.startDate, null) }),
         ...(dto.dueDate === undefined ? {} : { dueDate: internalDue }),
-        ...(dto.clientDueDate === undefined ? {} : { clientDueDate: clientDue }),
         estimatedHours: dto.estimatedHours,
         ...(rearm ? { overdueNotifiedAt: null } : {}),
       },
@@ -223,9 +207,9 @@ export class TasksService {
       action: EVENTS.TASK_UPDATED,
       entityType: 'TASK',
       entityId: id,
-      metadata: { projectId: projectIds[0], title: updated.title },
+      metadata: { projectId: (before.projectTasks ?? [])[0]?.projectId, title: updated.title },
     });
-    return this.deadlines.redactTask(updated, scope);
+    return updated;
   }
 
   /**
@@ -280,18 +264,22 @@ export class TasksService {
       metadata: { projectId, title: task.title },
     });
     await this.recomputeForTask(id); // status change → progress bar re-syncs
-    return this.redact(updated);
+    return updated;
   }
 
   async setAssignees(id: string, dto: SetAssigneesDto) {
     const before = await this.getRaw(id);
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
+    // Whoever changes the assignees is the "assigned by" — the person delegating the work.
+    // Clear it when the task is left unassigned.
+    const assignedById = dto.assigneeIds.length ? (getActorId() ?? null) : null;
     await this.prisma.$transaction([
       this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
       this.prisma.taskAssignee.createMany({
         data: dto.assigneeIds.map((userId) => ({ taskId: id, userId })),
         skipDuplicates: true,
       }),
+      this.prisma.task.update({ where: { id }, data: { assignedById } }),
     ]);
     // Notify the NEWLY-added assignees only.
     const added = dto.assigneeIds.filter(uid => !prev.has(uid));
@@ -424,6 +412,7 @@ export class TasksService {
   private taskInclude() {
     return {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
+      assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
         select: { userId: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
@@ -443,6 +432,7 @@ export class TasksService {
   private taskIncludeFull() {
     return {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
+      assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
         select: { userId: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },

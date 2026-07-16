@@ -57,12 +57,6 @@ export class CreateTaskDto {
   @Transform(({ value }) => (value === '' ? null : value))
   dueDate?: string | null;
 
-  /** CLIENT deadline — restricted (requires deadline.view.client or managing the project). */
-  @IsOptional()
-  @IsDateString()
-  @Transform(({ value }) => (value === '' ? null : value))
-  clientDueDate?: string | null;
-
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -107,12 +101,6 @@ export class UpdateTaskDto {
   @IsDateString()
   @Transform(({ value }) => (value === '' ? null : value))
   dueDate?: string | null;
-
-  /** CLIENT deadline — restricted. */
-  @IsOptional()
-  @IsDateString()
-  @Transform(({ value }) => (value === '' ? null : value))
-  clientDueDate?: string | null;
 
   @IsOptional()
   @IsNumber()

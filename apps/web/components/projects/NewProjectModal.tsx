@@ -181,12 +181,12 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </div>
           </div>
 
-          {/* Dual deadlines */}
+          {/* Deadline(s). Someone who can't set the client date sees just "Deadline". */}
           <div className={clsx('grid gap-4', canSetClientDue ? 'grid-cols-2' : 'grid-cols-1')}>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Internal Deadline
-                <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>
+                {canSetClientDue ? 'Internal Deadline' : 'Deadline'}
+                {canSetClientDue && <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>}
               </label>
               <DateField
                 type="date"
@@ -200,7 +200,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               <div>
                 <label className="block text-sm font-medium text-amber-700 mb-1.5 flex items-center gap-1">
                   <Lock size={11} /> Client Deadline
-                  <span className="text-xs font-normal text-amber-600/70">· managers only</span>
                 </label>
                 <DateField
                   type="date"
