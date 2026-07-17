@@ -92,36 +92,23 @@ export class ProjectsService {
       ? [{ userId: creator.id, projectRole: 'MANAGER' }]
       : [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }];
 
-    const project = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.project.create({
-        data: {
-          title: dto.title,
-          description: dto.description,
-          projectPhase: 'PLANNING',
-          priority: dto.priority ?? 'MEDIUM',
-          startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-          dueDate: internalDue,
-          clientDueDate: clientDue,
-          createdBy: creator.id,
-          members: { create: members },
-          taskLists: {
-            create: { name: 'General', isDefault: true, sequence: 0 },
-          },
+    // Projects are usable immediately — they are created ACTIVE, with no approval gate.
+    const project = await this.prisma.project.create({
+      data: {
+        title: dto.title,
+        description: dto.description,
+        projectPhase: 'ACTIVE',
+        priority: dto.priority ?? 'MEDIUM',
+        startDate: dto.startDate ? new Date(dto.startDate) : undefined,
+        dueDate: internalDue,
+        clientDueDate: clientDue,
+        createdBy: creator.id,
+        members: { create: members },
+        taskLists: {
+          create: { name: 'General', isDefault: true, sequence: 0 },
         },
-        include: { taskLists: true },
-      });
-
-      // D2: create generic Approval record for this project
-      await tx.approval.create({
-        data: {
-          entityType: 'PROJECT',
-          entityId: created.id,
-          status: 'PENDING',
-          requestedBy: creator.id,
-        },
-      });
-
-      return created;
+      },
+      include: { taskLists: true },
     });
 
     await this.events.emit({
@@ -133,17 +120,7 @@ export class ProjectsService {
       metadata: { projectId: project.id, title: project.title, managerId },
     });
 
-    // Route the approval request to the DESIGNATED manager (not a broadcast to every
-    // approver). Org admins are copied so nothing can stall unnoticed; notify() drops
-    // the actor, so a self-managed project doesn't ping its own creator.
     const admins = await this.orgAdmins(organizationId);
-    const recipients = [...new Set([managerId, ...admins])];
-    await this.notifications.notify(recipients, {
-      type: 'project.approval_requested',
-      title: 'Project awaiting your approval',
-      message: `${creator.firstName} ${creator.lastName ?? ''}`.trim()
-        + ` requested "${project.title}" — you are its project manager and need to approve it.`,
-    });
 
     // Billable review — ONLY org admins/super-admins decide whether the new project's
     // work is billable. They can click through to the project (link) and set it there.

@@ -51,27 +51,8 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [showAddTask, setShowAddTask] = useState(false);
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
-  const [deciding, setDeciding] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
-
-  // #10: make the project approval workflow reachable — approvers can approve/reject
-  // a project awaiting review (phase PLANNING) instead of it being stuck forever.
-  async function decideProject(approve: boolean) {
-    if (deciding) return;
-    if (!approve && !window.confirm('Reject this project?')) return;
-    setDeciding(true);
-    try {
-      await (approve ? api.projects.approve(projectId) : api.projects.reject(projectId));
-      qc.invalidateQueries({ queryKey: ['project', projectId] });
-      qc.invalidateQueries({ queryKey: ['projects'] });
-      toast(approve ? 'Project approved' : 'Project rejected', 'success');
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not update approval', 'error');
-    } finally {
-      setDeciding(false);
-    }
-  }
 
   // Lifecycle: Complete → Close → Reopen.
   async function runLifecycle(action: 'complete' | 'close' | 'reopen') {
@@ -409,33 +390,6 @@ export function ProjectDetailClient({ projectId }: Props) {
         </nav>
       </header>
 
-      {/* #10: approval banner — a project in PLANNING is awaiting review. */}
-      {project.projectPhase === 'PLANNING' && (
-        <div className="flex items-center gap-3 px-5 py-3 bg-amber-50 border-b border-amber-200">
-          <Flag size={15} className="text-amber-600 shrink-0" />
-          <p className="text-sm text-amber-800 flex-1">
-            This project is <span className="font-semibold">awaiting approval</span> before it becomes active.
-          </p>
-          {can('project.approve') && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => decideProject(false)}
-                disabled={deciding}
-                className="px-3 py-1.5 text-sm font-medium text-red-700 bg-white border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => decideProject(true)}
-                disabled={deciding}
-                className="px-3 py-1.5 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50"
-              >
-                {deciding ? 'Working…' : 'Approve'}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Tab content */}
       <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-4 sm:p-6')}>
