@@ -17,6 +17,7 @@
     "prisma/permissions-catalog.ts",
     "prisma/reset-passwords.ts",
     "prisma/set-passcode.ts",
-    "prisma/regrant-roles.ts"
+    "prisma/regrant-roles.ts",
+    "prisma/update-designations-2026-07.ts"
   ]
 }
