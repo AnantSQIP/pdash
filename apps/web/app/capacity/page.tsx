@@ -14,7 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge,
-  ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus,
+  ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus, Plane, Flag,
 } from 'lucide-react';
 import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
 
@@ -114,6 +114,23 @@ export default function CapacityPage() {
     return { compoff, present, onLeave, absent };
   }, [histRows]);
 
+  // Who's on approved leave, and which company holidays fall in this window — synced from
+  // the same leave/holiday data the Calendar uses, surfaced up front so it's unmissable
+  // when planning. (Forward view only.)
+  const leaveHoliday = useMemo(() => {
+    const people: { name: string; from: string; to: string }[] = [];
+    for (const r of fwdRows) {
+      const ds = r.days.filter(d => d.state === 'LEAVE').map(d => d.date).sort();
+      if (ds.length) people.push({ name: r.name, from: ds[0], to: ds[ds.length - 1] });
+    }
+    const holidays: { date: string; name: string }[] = [];
+    const seen = new Set<string>();
+    for (const d of fwdRows[0]?.days ?? []) {
+      if (d.state === 'HOLIDAY' && !seen.has(d.date)) { seen.add(d.date); holidays.push({ date: d.date, name: d.note ?? 'Holiday' }); }
+    }
+    return { people, holidays };
+  }, [fwdRows]);
+
   if (permLoading) {
     return <div className="flex items-center justify-center h-full text-gray-400"><Loader className="animate-spin mr-2" size={18} />Loading…</div>;
   }
@@ -190,6 +207,30 @@ export default function CapacityPage() {
 
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-auto p-4 sm:p-6 space-y-4">
+        {!isPast && (leaveHoliday.people.length > 0 || leaveHoliday.holidays.length > 0) && (
+          <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex flex-wrap items-start gap-x-6 gap-y-2">
+            {leaveHoliday.people.length > 0 && (
+              <div className="flex items-start gap-2 min-w-0">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-100 px-2 py-0.5 rounded-full shrink-0 mt-0.5"><Plane size={12} /> On leave</span>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
+                  {leaveHoliday.people.map(p => (
+                    <span key={p.name}><span className="font-medium text-gray-800">{p.name}</span> · {formatDate(p.from)}{p.to !== p.from ? `–${formatDate(p.to)}` : ''}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {leaveHoliday.holidays.length > 0 && (
+              <div className="flex items-start gap-2 min-w-0">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full shrink-0 mt-0.5"><Flag size={12} /> Holidays</span>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
+                  {leaveHoliday.holidays.map(h => (
+                    <span key={h.date}><span className="font-medium text-gray-800">{h.name}</span> · {formatDate(h.date)}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {coverage && coverage.risks.length > 0 && (
           <CoveragePanel data={coverage} />
         )}

@@ -6,7 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw, DollarSign,
+  CheckCircle2, Archive, RotateCcw, Receipt,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -356,22 +356,25 @@ export function ProjectDetailClient({ projectId }: Props) {
             {/* Billable status — admin/super-admin only. Undecided = a prompt to set it. */}
             {isAdmin && (
               project.billable == null ? (
-                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 rounded-full pl-2.5 pr-1 py-0.5" title="An admin needs to set whether this project is billable">
-                  <DollarSign size={12} className="text-emerald-600" />
-                  <span className="text-xs text-emerald-700 font-medium">Billable?</span>
-                  <button onClick={() => runBillable(true)} disabled={lifecycleBusy} className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">Yes</button>
-                  <button onClick={() => runBillable(false)} disabled={lifecycleBusy} className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 disabled:opacity-50">No</button>
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg pl-2.5 pr-1.5 py-1" title="Only an admin sets whether this project's work is billable">
+                  <Receipt size={13} className="text-amber-600" />
+                  <span className="text-xs text-amber-700 font-medium">Billable?</span>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => runBillable(true)} disabled={lifecycleBusy} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">Yes</button>
+                    <button onClick={() => runBillable(false)} disabled={lifecycleBusy} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 disabled:opacity-50">No</button>
+                  </div>
                 </div>
               ) : (
                 <button
                   onClick={() => runBillable(!project.billable)}
                   disabled={lifecycleBusy}
-                  title="Click to change billable status"
-                  className={clsx('flex items-center gap-1.5 border px-2 py-0.5 rounded-full text-xs font-medium disabled:opacity-50',
-                    project.billable ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-600 bg-gray-50 border-gray-200')}
+                  title="Billable status — click to switch"
+                  className={clsx('group inline-flex items-center gap-1.5 border px-2.5 py-1 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors',
+                    project.billable ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100' : 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100')}
                 >
-                  <DollarSign size={12} />
+                  <Receipt size={13} />
                   {project.billable ? 'Billable' : 'Non-billable'}
+                  <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity" />
                 </button>
               )
             )}

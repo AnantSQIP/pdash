@@ -40,16 +40,16 @@ function Field({ label, hint, restricted, children }: {
   label: string; hint?: string; restricted?: boolean; children: ReactNode;
 }) {
   return (
-    <div>
+    <div className="flex flex-col">
+      {/* The hint line is ALWAYS rendered (blank when absent) so every field's label block
+          is the same height — otherwise inputs in a 2-column row don't line up. */}
       <div className={clsx('mb-1', restricted ? 'text-amber-600' : 'text-gray-400')}>
         <label className="text-xs uppercase tracking-wide flex items-center gap-1">
           {restricted && <Lock size={9} />}{label}
         </label>
-        {/* Hint sits on its own line: at this panel width it otherwise collides with the
-            next column's label. */}
-        {hint && <p className="text-[10px] leading-tight text-gray-300 truncate">{hint}</p>}
+        <p className="text-[10px] leading-tight text-gray-300 truncate">{hint || ' '}</p>
       </div>
-      {children}
+      <div className="mt-auto">{children}</div>
     </div>
   );
 }
@@ -303,9 +303,10 @@ function TaskDetailPanelInner({
   }
 
   async function toggleSubtask(subtaskId: string, subtaskStatus: string) {
-    if (subtaskStatus === CLOSED_TYPE) return;
+    // Toggle both ways — a subtask ticked off by mistake can be reopened.
+    const done = subtaskStatus === CLOSED_TYPE;
     try {
-      await api.tasks.closeSubtask(task.id, subtaskId);
+      await (done ? api.tasks.reopenSubtask(task.id, subtaskId) : api.tasks.closeSubtask(task.id, subtaskId));
       refetchSubtasks();
     } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
@@ -418,7 +419,9 @@ function TaskDetailPanelInner({
             </button>
 
             {showStatusMenu && statuses.length > 0 && (
-              <div role="menu" className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl border border-gray-200 shadow-lg z-10 overflow-hidden py-1">
+              // z-30 so it sits above the sticky tab bar below it (which is z-10) — otherwise
+              // the menu is painted UNDER the tabs and reads as "disappearing behind them".
+              <div role="menu" className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl border border-gray-200 shadow-lg z-30 overflow-hidden py-1">
                 {statuses.map(s => (
                   <button
                     key={s.id}
@@ -649,7 +652,8 @@ function TaskDetailPanelInner({
           <div className="px-4 sm:px-6 py-5 space-y-4">
             {/* Assigned by — who delegated the task (distinct from the assignees below). */}
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Assigned by</p>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Assigned by</p>
+              <p className="text-[11px] text-gray-400 mb-2">The person who gave out this task</p>
               {task.assignedBy ? (
                 <span className="inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-sm">
                   <Avatar user={task.assignedBy} size={20} />
@@ -662,10 +666,11 @@ function TaskDetailPanelInner({
 
             {/* Assigned to — the people who do the work. */}
             <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-2">
                 Assigned to
                 {savingAssignees && <span className="normal-case text-gray-300 flex items-center gap-1"><Loader size={11} className="animate-spin" /> saving</span>}
               </p>
+              <p className="text-[11px] text-gray-400 mb-2">Who&apos;s doing the work</p>
               {stackUsers.length === 0 ? (
                 <p className="text-sm text-gray-400 italic">No one is assigned yet.</p>
               ) : (
@@ -746,12 +751,12 @@ function TaskDetailPanelInner({
                   <div key={s.id} className="flex items-center gap-3 py-2.5 border-b last:border-0 group">
                     <button
                       onClick={() => toggleSubtask(s.id, s.status)}
-                      disabled={done}
                       role="checkbox" aria-checked={done}
-                      aria-label={done ? `${s.title} done` : `Mark ${s.title} done`}
+                      aria-label={done ? `Reopen ${s.title}` : `Mark ${s.title} done`}
+                      title={done ? 'Completed — click to reopen' : 'Mark done'}
                       className={clsx(
-                        'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
-                        done ? 'bg-green-500 border-green-500 cursor-default' : 'border-gray-300 hover:border-green-400',
+                        'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors cursor-pointer',
+                        done ? 'bg-green-500 border-green-500 hover:bg-green-600' : 'border-gray-300 hover:border-green-400',
                       )}
                     >
                       {done && (
@@ -884,25 +889,32 @@ function TaskDetailPanelInner({
       </div>
 
       {/* ── FOOTER ─────────────────────────────────────────────────── */}
-      <div className="shrink-0 border-t border-gray-100 px-4 sm:px-6 py-4 flex items-center gap-3">
+      <div className="shrink-0 border-t border-gray-100 px-4 sm:px-6 py-3.5 flex items-center gap-2 flex-wrap">
         <button
           onClick={toggleComplete}
           title={closed ? 'Click to reopen' : 'Mark this task complete'}
           className={clsx(
-            'rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+            'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors',
             closed
               ? 'bg-green-600 text-white hover:bg-green-700'
               : 'border border-green-400 text-green-600 hover:bg-green-50',
           )}
         >
-          {closed ? 'Completed' : 'Mark Complete'}
+          <Check size={14} />{closed ? 'Completed' : 'Mark Complete'}
         </button>
-        <div className="flex-1" />
         <button
           onClick={deleteTask}
-          className="text-xs text-red-400 hover:text-red-600 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
         >
-          Delete
+          <Trash2 size={14} /> Delete
+        </button>
+        <div className="flex-1" />
+        <span className="text-[11px] text-gray-400 hidden sm:inline">Changes save automatically</span>
+        <button
+          onClick={async () => { await flushAssignees(); onClose(); }}
+          className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+        >
+          Save &amp; close
         </button>
       </div>
     </div>
