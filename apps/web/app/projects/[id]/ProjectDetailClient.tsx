@@ -6,7 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw,
+  CheckCircle2, Archive, RotateCcw, DollarSign,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -27,11 +27,12 @@ import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
-import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
+import { isTaskClosed, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
-const BASE_TABS: Tab[] = ['Overview', 'Task List', 'Board', 'Gantt', 'Milestones', 'Files', 'Issues', 'Activity', 'Timesheets', 'Discussions'];
+// Timesheets is a core, frequently-used tab, so it sits up front (3rd) rather than buried.
+const BASE_TABS: Tab[] = ['Overview', 'Task List', 'Timesheets', 'Board', 'Gantt', 'Milestones', 'Files', 'Issues', 'Activity', 'Discussions'];
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -90,6 +91,24 @@ export function ProjectDetailClient({ projectId }: Props) {
       toast(action === 'complete' ? 'Project marked complete' : action === 'close' ? 'Project closed' : 'Project reopened', 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  // Only admins/super-admins set whether a project is billable (mirrors the server gate).
+  const isAdmin = can('project.approve') && can('user.manage_access');
+  async function runBillable(billable: boolean) {
+    if (lifecycleBusy) return;
+    setLifecycleBusy(true);
+    try {
+      await api.projects.setBillable(projectId, billable);
+      qc.invalidateQueries({ queryKey: ['project', projectId] });
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+      qc.invalidateQueries({ queryKey: ['notifications-unread'] });
+      toast(billable ? 'Marked billable' : 'Marked non-billable', 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not set billable status', 'error');
     } finally {
       setLifecycleBusy(false);
     }
@@ -155,17 +174,6 @@ export function ProjectDetailClient({ projectId }: Props) {
     }
   }
 
-  async function handleProgress(taskId: string, pct: number) {
-    qc.setQueryData<ApiTask[]>(['tasks', projectId], old =>
-      (old ?? []).map(t => (t.id === taskId ? { ...t, completionPercentage: pct } : t)));
-    try {
-      await api.tasks.update(taskId, { completionPercentage: pct });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not update progress', 'error');
-    } finally {
-      invalidateTasks();
-    }
-  }
 
   if (projLoading) {
     return (
@@ -328,12 +336,12 @@ export function ProjectDetailClient({ projectId }: Props) {
               <Users size={14} />
               <span><span className="font-medium text-gray-900">{project._count?.members ?? project.members?.length ?? 0}</span> members</span>
             </div>
-            {/* The client date is only present when the actor may see it. When they can,
-                we distinguish "Internal" vs "Client"; otherwise it's just "Deadline". */}
+            {/* The client date is only present when the actor may see it; the team's own
+                deadline is always just "Deadline". */}
             {project.dueDate && (
               <div className="flex items-center gap-1.5 text-gray-500" title="Deadline">
                 <Calendar size={14} />
-                <span>{'clientDueDate' in project ? 'Internal ' : 'Deadline '}<span className="font-medium text-gray-900">{formatDate(project.dueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
+                <span>Deadline <span className="font-medium text-gray-900">{formatDate(project.dueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
               </div>
             )}
             {project.clientDueDate && (
@@ -344,6 +352,28 @@ export function ProjectDetailClient({ projectId }: Props) {
                 <LockIcon size={12} />
                 <span>Client <span className="font-semibold">{formatDate(project.clientDueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
               </div>
+            )}
+            {/* Billable status — admin/super-admin only. Undecided = a prompt to set it. */}
+            {isAdmin && (
+              project.billable == null ? (
+                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 rounded-full pl-2.5 pr-1 py-0.5" title="An admin needs to set whether this project is billable">
+                  <DollarSign size={12} className="text-emerald-600" />
+                  <span className="text-xs text-emerald-700 font-medium">Billable?</span>
+                  <button onClick={() => runBillable(true)} disabled={lifecycleBusy} className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">Yes</button>
+                  <button onClick={() => runBillable(false)} disabled={lifecycleBusy} className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 disabled:opacity-50">No</button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => runBillable(!project.billable)}
+                  disabled={lifecycleBusy}
+                  title="Click to change billable status"
+                  className={clsx('flex items-center gap-1.5 border px-2 py-0.5 rounded-full text-xs font-medium disabled:opacity-50',
+                    project.billable ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-600 bg-gray-50 border-gray-200')}
+                >
+                  <DollarSign size={12} />
+                  {project.billable ? 'Billable' : 'Non-billable'}
+                </button>
+              )
             )}
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-xs text-gray-500">{project.completionPercentage}% complete</span>
@@ -416,7 +446,6 @@ export function ProjectDetailClient({ projectId }: Props) {
             onTaskClick={task => setSelectedTask(task)}
             onAddTask={() => openAddTask()}
             onStatusChange={handleMove}
-            onProgressChange={handleProgress}
           />
         )}
         {activeTab === 'Board' && (
@@ -564,7 +593,7 @@ function MilestonesView({ project }: { project: ApiProject }) {
 // ── Task List View ─────────────────────────────────────────────────────────────
 
 function TaskListView({
-  tasks, loading, statuses, canAddTask, listName, onTaskClick, onAddTask, onStatusChange, onProgressChange,
+  tasks, loading, statuses, canAddTask, listName, onTaskClick, onAddTask, onStatusChange,
 }: {
   tasks: ApiTask[];
   loading: boolean;
@@ -574,7 +603,6 @@ function TaskListView({
   onTaskClick: (task: ApiTask) => void;
   onAddTask: () => void;
   onStatusChange: (taskId: string, statusId: string) => void;
-  onProgressChange: (taskId: string, pct: number) => void;
 }) {
   // Toggle done↔open from the row checkbox, via the workflow (reversible).
   function toggleComplete(task: ApiTask) {
@@ -616,7 +644,6 @@ function TaskListView({
         <span className="w-4 shrink-0" />
         <span className="flex-1">Task</span>
         <span className="w-32 hidden sm:block">Status</span>
-        <span className="w-32 hidden lg:block">Progress</span>
         <span className="w-20 hidden lg:block">Priority</span>
         <span className="w-20 hidden sm:block">Assignees</span>
         <span className="w-24 hidden lg:block text-right">Due Date</span>
@@ -679,22 +706,6 @@ function TaskListView({
               </select>
             </div>
 
-            {/* Progress control */}
-            <div className="hidden lg:flex items-center gap-2 w-32 shrink-0" onClick={e => e.stopPropagation()}>
-              <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full rounded-full bg-brand-500" style={{ width: `${task.completionPercentage}%` }} />
-              </div>
-              <select
-                value={task.completionPercentage}
-                onChange={e => onProgressChange(task.id, Number(e.target.value))}
-                disabled={closed}
-                aria-label="Task progress"
-                title={closed ? 'Reopen to change progress' : 'Set progress'}
-                className="text-xs text-gray-500 bg-transparent focus:outline-none focus:ring-2 focus:ring-brand-500/30 rounded cursor-pointer disabled:cursor-default"
-              >
-                {progressOptions(task.completionPercentage).map(p => <option key={p} value={p}>{p}%</option>)}
-              </select>
-            </div>
 
             <div className="hidden lg:block w-20 shrink-0">
               <span className={clsx('text-xs font-medium', PRIORITY_FLAG[task.priority] ?? 'text-gray-400')}>

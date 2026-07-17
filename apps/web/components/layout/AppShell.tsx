@@ -73,8 +73,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button onClick={() => setDrawerOpen(true)} aria-label="Open menu" className="p-1.5 -ml-1.5 rounded-md hover:bg-white/10">
             <Menu size={22} />
           </button>
-          <Image src="/fav.png" alt="SquarkIP" width={26} height={26} className="rounded-md" />
-          <span className="font-bold tracking-tight">SquarkIP</span>
+          <Image src="/fav.png" alt="Squark Dashboard" width={26} height={26} className="rounded-md" />
+          <span className="font-bold tracking-tight">Squark Dashboard</span>
         </header>
         <div className="flex-1 overflow-y-auto min-h-0">{children}</div>
       </div>

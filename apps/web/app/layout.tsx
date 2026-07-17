@@ -17,8 +17,8 @@ const geistSans = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'PDash — Project Dashboard',
-  description: 'Internal project management system',
+  title: 'Squark Dashboard',
+  description: 'Squark Dashboard — project, people & performance management',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

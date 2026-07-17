@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { X } from 'lucide-react';
 import {
   RiNotification3Line, RiAlarmWarningLine, RiCalendarEventLine, RiFlag2Line,
   RiCheckboxCircleLine, RiTimeLine, RiUserAddLine, RiCloseCircleLine,
   RiShieldKeyholeLine, RiUserSettingsLine, RiChat3Line, RiArchiveLine, RiRefreshLine,
+  RiMoneyDollarCircleLine,
 } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApiTask, type CalendarEvent, type NotificationItem } from '@/lib/api';
@@ -27,6 +29,7 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'task.overdue':        { Icon: RiAlarmWarningLine, color: 'text-red-600',    bg: 'bg-red-50' },
   'task.overdue_digest': { Icon: RiAlarmWarningLine, color: 'text-amber-600',  bg: 'bg-amber-50' },
   'project.approval_requested': { Icon: RiCheckboxCircleLine, color: 'text-brand-600', bg: 'bg-brand-50' },
+  'project.billable_review': { Icon: RiMoneyDollarCircleLine, color: 'text-emerald-600', bg: 'bg-emerald-50' },
   'leave.approved':   { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'leave.rejected':   { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
   'attendance.regularization_requested': { Icon: RiTimeLine,           color: 'text-amber-600', bg: 'bg-amber-50' },
@@ -59,6 +62,7 @@ const KIND_META: Record<Reminder['kind'], { Icon: typeof RiAlarmWarningLine; col
 export function NotificationsPanel({ onClose, collapsed = false }: { onClose: () => void; collapsed?: boolean }) {
   const { org, currentUser } = useOrg();
   const qc = useQueryClient();
+  const router = useRouter();
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
   // Real, DB-backed notifications — polled every 15s for near-realtime sync.
@@ -118,6 +122,12 @@ export function NotificationsPanel({ onClose, collapsed = false }: { onClose: ()
   async function markRead(id: string) { await api.notifications.markRead(id); invalidate(); }
   async function markAllRead() { await api.notifications.markAllRead(); setDismissed(new Set([...dismissed, ...reminders.map(r => r.id)])); invalidate(); }
 
+  // Clicking a notification marks it read and, if it carries a destination, navigates there.
+  function openNotif(n: NotificationItem) {
+    if (!n.isRead) markRead(n.id);
+    if (n.link) { onClose(); router.push(n.link); }
+  }
+
   const empty = notifs.length === 0 && reminders.length === 0;
 
   return (
@@ -154,7 +164,7 @@ export function NotificationsPanel({ onClose, collapsed = false }: { onClose: ()
                 return (
                   <div
                     key={n.id}
-                    onClick={() => !n.isRead && markRead(n.id)}
+                    onClick={() => openNotif(n)}
                     className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors border-b border-gray-50 relative ${n.isRead ? 'bg-white' : 'bg-blue-50/50'}`}
                   >
                     {!n.isRead && <span className="absolute left-0 top-0 bottom-0 w-1 bg-brand-600 rounded-r-sm" />}
@@ -162,7 +172,7 @@ export function NotificationsPanel({ onClose, collapsed = false }: { onClose: ()
                     <div className="flex-1 min-w-0 pl-1">
                       <p className={`text-sm leading-snug ${n.isRead ? 'text-gray-700' : 'text-gray-900 font-semibold'}`}>{n.title}</p>
                       <p className="text-xs text-gray-500 leading-snug mt-0.5">{n.message}</p>
-                      <p className="text-[11px] text-gray-400 mt-0.5">{relativePast(n.createdAt)}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{relativePast(n.createdAt)}{n.link ? ' · click to open' : ''}</p>
                     </div>
                   </div>
                 );
