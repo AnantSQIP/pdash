@@ -125,7 +125,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                {mayEditClientDue ? 'Internal deadline' : 'Deadline'}
+                Deadline
                 {mayEditClientDue && <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>}
               </label>
               <input

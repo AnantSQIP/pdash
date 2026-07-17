@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Users, Loader, CalendarRange, Sparkles, AlertTriangle,
+  Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge,
   ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus,
 } from 'lucide-react';
 import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
@@ -136,7 +136,7 @@ export default function CapacityPage() {
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Users size={20} className="text-brand-600" /> Team Capacity
+              <Gauge size={20} className="text-brand-600" /> Team Capacity
             </h1>
             <p className="text-sm text-gray-500 mt-0.5">
               Who is busy, who is free, and when — across every project. Click any free day to assign work into it.

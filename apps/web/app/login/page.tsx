@@ -56,8 +56,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Brand */}
         <div className="flex flex-col items-center mb-8">
-          <Image src="/fav.png" alt="SquarkIP" width={48} height={48} className="rounded-xl mb-3" />
-          <h1 className="text-2xl font-bold text-gray-900">SquarkIP</h1>
+          <Image src="/fav.png" alt="Squark Dashboard" width={48} height={48} className="rounded-xl mb-3" />
+          <h1 className="text-2xl font-bold text-gray-900">Squark Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">Sign in to your workspace</p>
         </div>
 
@@ -208,7 +208,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-[11px] text-gray-400 mt-6">
-          © {new Date().getFullYear()} SquarkIP · Intellectual Property Management
+          © {new Date().getFullYear()} Squark Dashboard · Intellectual Property Management
         </p>
       </div>
     </div>

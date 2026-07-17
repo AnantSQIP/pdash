@@ -185,7 +185,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
           <div className={clsx('grid gap-4', canSetClientDue ? 'grid-cols-2' : 'grid-cols-1')}>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                {canSetClientDue ? 'Internal Deadline' : 'Deadline'}
+                Deadline
                 {canSetClientDue && <span className="ml-1 text-xs font-normal text-gray-400">· the team&apos;s date</span>}
               </label>
               <DateField

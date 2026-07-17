@@ -2,7 +2,7 @@ import { Controller, Get, Global, Injectable, Module, Param, Post, Query } from 
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
 
-export type NotifyInput = { type: string; title: string; message: string };
+export type NotifyInput = { type: string; title: string; message: string; link?: string };
 
 @Injectable()
 export class NotificationsService {
@@ -19,7 +19,7 @@ export class NotificationsService {
     if (!ids.length) return;
     try {
       await this.prisma.notification.createMany({
-        data: ids.map(userId => ({ userId, type: input.type, title: input.title, message: input.message })),
+        data: ids.map(userId => ({ userId, type: input.type, title: input.title, message: input.message, link: input.link ?? null })),
       });
     } catch { /* swallow — notifications are non-critical */ }
   }

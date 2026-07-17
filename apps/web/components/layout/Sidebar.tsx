@@ -5,9 +5,9 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard, FolderKanban, CheckSquare, BarChart2, Calendar, Clock,
-  MessageSquare, Users, Users2, Settings, Bell, ChevronDown, TrendingUp,
-  Shield, ScrollText, PanelLeftClose, PanelLeftOpen, X, type LucideIcon,
+  LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
+  MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
@@ -26,14 +26,14 @@ type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | 
 const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
   { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view' },
-  { href: '/tasks',       icon: CheckSquare,     label: 'My Tasks',    perm: 'task.view' },
-  // Delivery-lead view: who is free, who is overloaded, who can take more work.
-  { href: '/capacity',    icon: Users2,          label: 'Team Capacity', perm: 'capacity.view' },
-  { href: '/performance', icon: TrendingUp,      label: 'Performance', perm: 'performance.view.own' },
-  { href: '/calendar',    icon: Calendar,        label: 'Calendar',    perm: 'calendar.view' },
-  { href: '/attendance',  icon: Clock,           label: 'Attendance',  perm: 'attendance.view.own' },
-  { href: '/reports',     icon: BarChart2,       label: 'Reports',     perm: ['report.view', 'report.export'] },
-  { href: '/discuss',     icon: MessageSquare,   label: 'Discuss',     perm: 'channel.view' },
+  { href: '/tasks',       icon: ListTodo,        label: 'My Tasks',    perm: 'task.view' },
+  // Delivery-lead view: who is free, who is overloaded, who can take more work — a load gauge.
+  { href: '/capacity',    icon: Gauge,           label: 'Team Capacity', perm: 'capacity.view' },
+  { href: '/performance', icon: LineChart,       label: 'Performance', perm: 'performance.view.own' },
+  { href: '/calendar',    icon: CalendarDays,    label: 'Calendar',    perm: 'calendar.view' },
+  { href: '/attendance',  icon: Fingerprint,     label: 'Attendance',  perm: 'attendance.view.own' },
+  { href: '/reports',     icon: FileBarChart,    label: 'Reports',     perm: ['report.view', 'report.export'] },
+  { href: '/discuss',     icon: MessagesSquare,  label: 'Discuss',     perm: 'channel.view' },
   { href: '/users',       icon: Users,           label: 'People',      perm: 'user.view' },
 ];
 
@@ -41,8 +41,8 @@ const NAV: NavItem[] = [
 const ADMIN_NAV = [
   // "Admin" = RBAC/system administration (roles, groups, permission matrix) — gated on
   // RBAC perms, NOT user.create (HR has user.create for people-ops but isn't an RBAC admin).
-  { href: '/admin',       icon: Shield,     label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
-  { href: '/admin/audit', icon: ScrollText, label: 'Audit Log', perm: ['audit.view'] },
+  { href: '/admin',       icon: ShieldCheck, label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
+  { href: '/admin/audit', icon: History,     label: 'Audit Log', perm: ['audit.view'] },
 ];
 
 const STORAGE_KEY = 'sidebar-collapsed';
@@ -111,8 +111,8 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
       >
       {/* Logo + collapse toggle */}
       <div className={clsx('flex items-center border-b border-white/10 py-5', collapsed ? 'justify-center px-0' : 'gap-2.5 px-4')}>
-        <Image src="/fav.png" alt="SquarkIP" width={32} height={32} className="rounded-lg shrink-0" />
-        {!collapsed && <span className="font-bold text-lg tracking-tight flex-1">SquarkIP</span>}
+        <Image src="/fav.png" alt="Squark Dashboard" width={32} height={32} className="rounded-lg shrink-0" />
+        {!collapsed && <span className="font-bold text-lg tracking-tight flex-1">Squark Dashboard</span>}
         {!collapsed && (
           <>
             <button

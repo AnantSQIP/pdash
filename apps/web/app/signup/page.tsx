@@ -11,9 +11,9 @@ export default function SignupPage() {
     <div className="min-h-full w-full flex items-center justify-center bg-gradient-to-br from-gray-50 via-white to-brand-50 px-4 py-10">
       <div className="w-full max-w-md">
         <div className="flex flex-col items-center mb-8">
-          <Image src="/fav.png" alt="SquarkIP" width={48} height={48} className="rounded-xl mb-3" />
+          <Image src="/fav.png" alt="Squark Dashboard" width={48} height={48} className="rounded-xl mb-3" />
           <h1 className="text-2xl font-bold text-gray-900">Accounts are invite-only</h1>
-          <p className="text-sm text-gray-500 mt-1">SquarkIP is an internal workspace</p>
+          <p className="text-sm text-gray-500 mt-1">Squark Dashboard is an internal workspace</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-7 text-center">
@@ -34,7 +34,7 @@ export default function SignupPage() {
         </div>
 
         <p className="text-center text-[11px] text-gray-400 mt-6">
-          © {new Date().getFullYear()} SquarkIP · Intellectual Property Management
+          © {new Date().getFullYear()} Squark Dashboard · Intellectual Property Management
         </p>
       </div>
     </div>
