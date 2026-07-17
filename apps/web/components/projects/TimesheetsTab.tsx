@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Plus, Clock, DollarSign, Users, Trash2, Loader } from 'lucide-react';
-import { api, type Timesheet, type ApiTask } from '@/lib/api';
+import { api, type Timesheet, type ApiTask, type ApiProject } from '@/lib/api';
 import { LogTimeModal } from './LogTimeModal';
 import { Avatar } from '@/components/Avatar';
 
@@ -28,6 +28,14 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
   const { data: tasks = [] } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.tasks.list(projectId),
+  });
+
+  // The project's billable decision (set by an admin) — when made, timesheets inherit it
+  // and the per-entry billable toggle is hidden from the person logging time.
+  const { data: project } = useQuery<ApiProject>({
+    queryKey: ['project', projectId],
+    queryFn: () => api.projects.get(projectId),
+    staleTime: 30_000,
   });
 
   function invalidate() {
@@ -203,6 +211,7 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
         <LogTimeModal
           projectId={projectId}
           tasks={tasks}
+          projectBillable={project?.billable ?? null}
           onClose={() => setShowLogModal(false)}
           onSuccess={invalidate}
         />

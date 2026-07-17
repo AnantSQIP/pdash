@@ -75,15 +75,23 @@ export class TimesheetsService {
     // SECURITY: the owner is the authenticated actor — never the client-supplied
     // dto.userId (which is ignored). Prevents logging/inflating others' hours.
     const actorId = await this.actor();
-    const task = await this.prisma.task.findFirst({ where: { id: dto.taskId, deletedAt: null }, select: { id: true } });
+    const task = await this.prisma.task.findFirst({
+      where: { id: dto.taskId, deletedAt: null },
+      select: { id: true, projectTasks: { select: { project: { select: { billable: true } } }, take: 1 } },
+    });
     if (!task) throw new NotFoundException(`Task ${dto.taskId} not found`);
+    // If an admin has decided billability at the PROJECT level, every timesheet on it
+    // inherits that decision — the logger's own choice is ignored. Only when the project
+    // is undecided (null) does the logged value (default billable) apply.
+    const projectBillable = task.projectTasks[0]?.project?.billable;
+    const billable = projectBillable != null ? projectBillable : (dto.billable ?? true);
     const entry = await this.prisma.timesheet.create({
       data: {
         userId: actorId,
         taskId: dto.taskId,
         date: new Date(dto.date),
         hoursLogged: dto.hoursLogged,
-        billable: dto.billable ?? true,
+        billable,
         notes: dto.notes,
       },
       include: INCLUDE,
