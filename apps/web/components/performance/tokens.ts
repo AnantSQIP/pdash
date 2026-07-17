@@ -34,6 +34,30 @@ export function rateColor(v: number): string {
   return v >= 80 ? C.green : v >= 50 ? C.amber : C.red;
 }
 
+// Plain-language definitions of every performance metric — the single source used for
+// the info tooltips and the "How these are calculated" legend. Kept in sync with the
+// server-side formulas in performance.service.ts.
+export const METRIC_HELP: Record<string, string> = {
+  score: 'Contribution score = 4×tasks completed + 3×issues resolved + 1×hour logged + 0.5×on-time% + 0.5×activity. A single weighted number to rank delivered, timely work.',
+  tasksCompleted: 'Tasks moved to a Done/Closed status within the selected period.',
+  hoursLogged: 'Total hours booked to timesheets in the period.',
+  onTimeRate: 'Of the completed tasks that HAD a deadline, the share finished on or before it. Tasks with no due date are not counted.',
+  activityVolume: 'Number of tracked actions in the period — task & issue updates, status changes and comments. A proxy for how active someone was.',
+  completionRate: 'Share of assigned tasks that are completed.',
+  billablePct: 'Share of logged hours marked billable.',
+  cycleTime: 'Average days from a task starting to being completed.',
+};
+
+// Rows for the "How these are calculated" legend (ordered).
+export const METRIC_GLOSSARY: { label: string; help: string }[] = [
+  { label: 'Score', help: METRIC_HELP.score },
+  { label: 'On-time rate', help: METRIC_HELP.onTimeRate },
+  { label: 'Activity', help: METRIC_HELP.activityVolume },
+  { label: 'Tasks completed', help: METRIC_HELP.tasksCompleted },
+  { label: 'Hours logged', help: METRIC_HELP.hoursLogged },
+  { label: 'Contribution heatmap', help: 'Each square is one day; darker = more actions that day (buckets: 0, 1–2, 3–5, 6–9, 10+).' },
+];
+
 export function round1(n: number): number {
   return Math.round((n ?? 0) * 10) / 10;
 }

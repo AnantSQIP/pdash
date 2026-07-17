@@ -18,12 +18,12 @@ import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import {
   ChartCard, KpiTile, GaugeCard, DonutCard, PieCard, LineCard, AreaCard, BarCard, ColumnCard, BulletChart, DataGrid,
-  type GridColumn,
+  MetricsLegend, ColorKey, type GridColumn,
 } from './charts';
 import { ContributionHeatmap } from './ContributionHeatmap';
 import { UserPerfPanel } from './UserPerfPanel';
 import { MultiSelectFilter, FilterBar } from './controls';
-import { C, DONUT_COLORS, STATUS_COLORS, SEVERITY_COLORS, rateColor, round1 } from './tokens';
+import { C, DONUT_COLORS, STATUS_COLORS, SEVERITY_COLORS, rateColor, round1, METRIC_HELP } from './tokens';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
 
 type Metric = 'tasksCompleted' | 'hoursLogged' | 'onTimeRate' | 'activityVolume';
@@ -190,10 +190,10 @@ export function OrgView({ days = 30 }: { days?: number }) {
       {/* Org KPI strip — clickable cross-filter */}
       <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3">
         <KpiTile label="Team Members" value={t.users} Icon={RiTeamLine} tint="bg-brand-50 text-brand-600" />
-        <KpiTile label={METRIC_LABEL.tasksCompleted} value={t.tasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-green-100 text-green-600" active={focus === 'tasksCompleted'} onClick={() => setFocus('tasksCompleted')} delta={t.tasksCompleted - orgPerf.previousTotals.tasksCompleted} spark={trendSpark('completed')} sparkColor={C.green} />
-        <KpiTile label={METRIC_LABEL.hoursLogged} value={`${t.hoursLogged}h`} Icon={RiTimeLine} tint="bg-blue-50 text-blue-600" active={focus === 'hoursLogged'} onClick={() => setFocus('hoursLogged')} delta={round1(t.hoursLogged - orgPerf.previousTotals.hoursLogged)} spark={trendSpark('hours')} sparkColor={C.brand} />
+        <KpiTile label={METRIC_LABEL.tasksCompleted} value={t.tasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-green-100 text-green-600" active={focus === 'tasksCompleted'} onClick={() => setFocus('tasksCompleted')} delta={t.tasksCompleted - orgPerf.previousTotals.tasksCompleted} spark={trendSpark('completed')} sparkColor={C.green} info={METRIC_HELP.tasksCompleted} />
+        <KpiTile label={METRIC_LABEL.hoursLogged} value={`${t.hoursLogged}h`} Icon={RiTimeLine} tint="bg-blue-50 text-blue-600" active={focus === 'hoursLogged'} onClick={() => setFocus('hoursLogged')} delta={round1(t.hoursLogged - orgPerf.previousTotals.hoursLogged)} spark={trendSpark('hours')} sparkColor={C.brand} info={METRIC_HELP.hoursLogged} />
         <KpiTile label="Active Projects" value={t.activeProjects} Icon={RiFolder3Line} tint="bg-amber-50 text-amber-600" />
-        <KpiTile label={METRIC_LABEL.onTimeRate} value={`${t.avgOnTimeRate}%`} Icon={RiTrophyLine} tint="bg-teal-50 text-teal-600" hero active={focus === 'onTimeRate'} onClick={() => setFocus('onTimeRate')} />
+        <KpiTile label={METRIC_LABEL.onTimeRate} value={`${t.avgOnTimeRate}%`} Icon={RiTrophyLine} tint="bg-teal-50 text-teal-600" hero active={focus === 'onTimeRate'} onClick={() => setFocus('onTimeRate')} info={METRIC_HELP.onTimeRate} />
       </div>
       <p className="text-xs text-gray-400 -mt-3">Tip: click a metric tile to re-rank the comparison charts & table{filterActive ? ' · filters applied to ranking & table' : ''}.</p>
 
@@ -217,45 +217,58 @@ export function OrgView({ days = 30 }: { days?: number }) {
         </ChartCard>
       </div>
 
-      {/* Per-user comparison: column (top-N) + horizontal bar ranking (click → drill) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ChartCard title={`Top members — ${METRIC_LABEL[focus]}`}>
-          <ColumnCard data={topRanked} categoryKey="name" series={[{ key: 'value', name: METRIC_LABEL[focus], color: C.brand }]} />
-        </ChartCard>
-        <ChartCard title={`Ranking — ${METRIC_LABEL[focus]}`} subtitle="Click a bar to open that member's detail">
-          <BarCard data={topRanked} categoryKey="name" valueKey="value" onBarClick={(row) => row?.userId && setSelectedUser(row.userId)} highlightKey="userId" highlightValue={selectedUser} labelWidth={72} />
-        </ChartCard>
-      </div>
+      {/* Top members — full-width column chart (the metric follows the selected KPI tile) */}
+      <ChartCard
+        title={`Top members — ${METRIC_LABEL[focus]}`}
+        subtitle="Highest contributors in the selected period"
+        action={<ColorKey items={[{ color: C.brand, label: METRIC_LABEL[focus] }]} />}
+      >
+        <ColumnCard data={topRanked} categoryKey="name" series={[{ key: 'value', name: METRIC_LABEL[focus], color: C.brand }]} height={280} showValues />
+      </ChartCard>
 
-      {/* Distributions: donut + pie ×2 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Ranking — full-width, click a bar to drill into that member */}
+      <ChartCard
+        title={`Ranking — ${METRIC_LABEL[focus]}`}
+        subtitle="Click a bar to open that member's detail"
+        action={<ColorKey items={[{ color: C.brand, label: 'Member' }, { color: C.accent, label: 'Selected' }]} />}
+      >
+        <BarCard data={topRanked} categoryKey="name" valueKey="value" onBarClick={(row) => row?.userId && setSelectedUser(row.userId)} highlightKey="userId" highlightValue={selectedUser} labelWidth={96} showValues height={Math.max(240, topRanked.length * 46)} />
+      </ChartCard>
+
+      {/* Distributions: four interactive donuts */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <ChartCard title="Hours by designation"><DonutCard data={desigDonut} centerValue={`${t.hoursLogged}h`} centerLabel="Total" /></ChartCard>
         <ChartCard title="Hours by department"><PieCard data={deptPie} /></ChartCard>
         <ChartCard title="Tasks by status"><DonutCard data={statusDonut} centerValue={t.tasksCompleted} centerLabel="Completed" /></ChartCard>
         <ChartCard title="Issues by severity"><PieCard data={severityPie} /></ChartCard>
       </div>
 
-      {/* Gauges + capacity bullets + project progress */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <ChartCard title="Org rates">
-          <div className="flex flex-wrap items-center justify-around gap-3">
+      {/* Gauges + capacity bullets */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ChartCard title="Org rates" subtitle="On-time · avg project completion · capacity used">
+          <div className="flex flex-wrap items-center justify-around gap-3 py-2">
             <GaugeCard value={t.avgOnTimeRate} label="On-time" />
             <GaugeCard value={avgCompletion} label="Avg completion" color={C.brand} />
             <GaugeCard value={capUsed} label="Capacity used" color={C.teal} />
           </div>
         </ChartCard>
-        <ChartCard title="Capacity vs logged — by department" subtitle="Bar = logged · marker = capacity">
+        <ChartCard title="Capacity vs logged — by department" subtitle="Bar = logged hours · marker = capacity">
           <BulletChart items={bullets} unit="h" />
-        </ChartCard>
-        <ChartCard title="Project progress">
-          <BarCard data={projectBars} categoryKey="name" valueKey="value" color={C.brand} labelWidth={150} />
         </ChartCard>
       </div>
 
+      {/* Project progress — full-width */}
+      <ChartCard title="Project progress" subtitle="Completion % per active project" action={<ColorKey items={[{ color: C.brand, label: '% complete' }]} />}>
+        <BarCard data={projectBars} categoryKey="name" valueKey="value" color={C.brand} labelWidth={190} showValues height={Math.max(220, projectBars.length * 40)} />
+      </ChartCard>
+
       {/* Org heatmap */}
-      <ChartCard title="Team contribution — last year">
+      <ChartCard title="Team contribution — last year" subtitle="Each square is one day · darker = more actions across the team">
         {orgHeat ? <ContributionHeatmap days={orgHeat.days} /> : <div className="text-sm text-gray-400">Loading…</div>}
       </ChartCard>
+
+      {/* How the numbers are calculated */}
+      <MetricsLegend />
 
       {/* All-users data grid (sort/search/filter/export, row → drill) */}
       <DataGrid
