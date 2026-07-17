@@ -520,6 +520,9 @@ export const api = {
     passcodeStatus: () => req<{ configured: boolean }>('/auth/passcode/status'),
     changePasscode: (currentPasscode: string, newPasscode: string) =>
       req<{ ok: boolean }>('/auth/passcode', { method: 'POST', body: JSON.stringify({ currentPasscode, newPasscode }) }),
+    // Recover a forgotten passcode: reset it using the admin's own account password.
+    resetPasscode: (password: string, newPasscode: string) =>
+      req<{ ok: boolean }>('/auth/passcode/reset', { method: 'POST', body: JSON.stringify({ password, newPasscode }) }),
   },
 
   orgs: {

@@ -110,4 +110,25 @@ export class PasscodeService {
     this.reset(orgId);
     return { ok: true };
   }
+
+  /**
+   * Recover a FORGOTTEN passcode: set a new one without the current passcode, proving
+   * identity with the actor's own ACCOUNT PASSWORD instead. The passcode is an argon2
+   * hash and can never be read back, so "recovery" always means resetting it. The
+   * caller must already be an admin/super-admin (enforced in the controller); here we
+   * re-verify the account password so a merely hijacked session cannot do it.
+   */
+  async resetWithPassword(orgId: string, actorId: string, accountPassword: string, next: string): Promise<{ ok: true }> {
+    if (!next || next.length < MIN_PASSCODE_LEN) {
+      throw new BadRequestException(`New passcode must be at least ${MIN_PASSCODE_LEN} characters.`);
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: actorId }, select: { passwordHash: true } });
+    if (!user?.passwordHash) throw new ForbiddenException('Your account has no password set.');
+    let valid = false;
+    try { valid = await argonVerify(user.passwordHash, accountPassword ?? ''); } catch { valid = false; }
+    if (!valid) throw new ForbiddenException('Your account password is incorrect.');
+    await this.prisma.organization.update({ where: { id: orgId }, data: { securityPasscodeHash: await argonHash(next) } });
+    this.reset(orgId); // clear any lockout so the new passcode works immediately
+    return { ok: true };
+  }
 }
