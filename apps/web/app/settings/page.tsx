@@ -103,19 +103,27 @@ function ChangePasswordCard() {
   );
 }
 
-// ── Change Organization Passcode (Super Admin only) ──────────────────────────────
+// ── Organization Passcode (admins & super admins) ────────────────────────────────
 // The org "big change" passcode is a second factor required on top of RBAC for
-// sensitive org/people/RBAC actions. Only a Super Admin can rotate it, and the
-// current passcode is required to set a new one.
+// sensitive org/people/RBAC actions. A Super Admin can rotate it with the CURRENT
+// passcode; a forgotten passcode is RESET by any admin/super-admin using their own
+// ACCOUNT PASSWORD instead (the passcode is hashed, so it can never be shown — only
+// reset). Normal employees have no passcode; forgotten account passwords are reset by
+// an admin from the People page.
 function ChangePasscodeCard() {
-  const { isSuperAdmin } = usePermissions();
+  const { isSuperAdmin, can } = usePermissions();
+  const isAdmin = isSuperAdmin || (can('user.manage_access') && can('project.approve'));
   const { data: status } = useQuery({
     queryKey: ['passcode-status'],
     queryFn: () => api.auth.passcodeStatus(),
-    enabled: isSuperAdmin,
+    enabled: isAdmin,
     staleTime: 60_000,
   });
-  const [current, setCurrent] = useState('');
+  // Derive the mode from role until the user picks one — avoids capturing "reset" while
+  // permissions are still loading. Super Admins default to "change"; other admins reset.
+  const [pickedMode, setPickedMode] = useState<'change' | 'reset' | null>(null);
+  const mode: 'change' | 'reset' = pickedMode ?? (isSuperAdmin ? 'change' : 'reset');
+  const [current, setCurrent] = useState(''); // current passcode (change) OR account password (reset)
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [err, setErr] = useState('');
@@ -124,7 +132,9 @@ function ChangePasscodeCard() {
 
   const inputCls = 'w-full max-w-md px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition';
 
-  if (!isSuperAdmin) return null;
+  if (!isAdmin) return null;
+
+  function switchMode(m: 'change' | 'reset') { setPickedMode(m); setCurrent(''); setNext(''); setConfirm(''); setErr(''); setOk(false); }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -133,7 +143,8 @@ function ChangePasscodeCard() {
     if (next !== confirm) { setErr('New passcodes do not match.'); return; }
     setBusy(true);
     try {
-      await api.auth.changePasscode(current, next);
+      if (mode === 'reset') await api.auth.resetPasscode(current, next);
+      else await api.auth.changePasscode(current, next);
       setOk(true); setCurrent(''); setNext(''); setConfirm('');
       setTimeout(() => setOk(false), 2500);
     } catch (e) {
@@ -155,15 +166,33 @@ function ChangePasscodeCard() {
           </p>
         </div>
       </div>
+
+      {mode === 'reset' && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          Forgot the passcode? It can&apos;t be shown (it&apos;s encrypted) — set a new one by confirming your own account password below.
+        </p>
+      )}
+
       <form onSubmit={submit} className="space-y-3">
-        <input type="password" autoComplete="off" placeholder="Current passcode" value={current} onChange={e => setCurrent(e.target.value)} className={inputCls} />
+        {mode === 'reset' ? (
+          <input type="password" autoComplete="current-password" placeholder="Your account password" value={current} onChange={e => setCurrent(e.target.value)} className={inputCls} />
+        ) : (
+          <input type="password" autoComplete="off" placeholder="Current passcode" value={current} onChange={e => setCurrent(e.target.value)} className={inputCls} />
+        )}
         <input type="password" autoComplete="off" placeholder="New passcode (min 6 characters)" value={next} onChange={e => setNext(e.target.value)} className={inputCls} />
         <input type="password" autoComplete="off" placeholder="Confirm new passcode" value={confirm} onChange={e => setConfirm(e.target.value)} className={inputCls} />
         {err && <p className="text-xs text-red-600">{err}</p>}
-        {ok && <p className="text-xs text-green-600 font-medium">✓ Passcode updated.</p>}
-        <button type="submit" disabled={busy || !current || !next || !confirm} className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
-          {busy ? 'Updating…' : 'Update Passcode'}
-        </button>
+        {ok && <p className="text-xs text-green-600 font-medium">✓ Passcode {mode === 'reset' ? 'reset' : 'updated'}.</p>}
+        <div className="flex items-center gap-4 pt-0.5">
+          <button type="submit" disabled={busy || !current || !next || !confirm} className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
+            {busy ? (mode === 'reset' ? 'Resetting…' : 'Updating…') : (mode === 'reset' ? 'Reset Passcode' : 'Update Passcode')}
+          </button>
+          {isSuperAdmin && (
+            mode === 'change'
+              ? <button type="button" onClick={() => switchMode('reset')} className="text-xs font-medium text-amber-700 hover:underline">Forgot the passcode?</button>
+              : <button type="button" onClick={() => switchMode('change')} className="text-xs font-medium text-gray-500 hover:underline">← Change with current passcode</button>
+          )}
+        </div>
       </form>
     </div>
   );

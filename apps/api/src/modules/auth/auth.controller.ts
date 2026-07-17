@@ -132,4 +132,23 @@ export class AuthController {
     if (!orgId) throw new ForbiddenException('No organization to configure.');
     return this.passcode.change(orgId, body?.currentPasscode, body?.newPasscode ?? '');
   }
+
+  /**
+   * Recover a FORGOTTEN org passcode: an admin/super-admin sets a new one by proving
+   * identity with their own account password (the current passcode is not required —
+   * that's the whole point). Throttled hard; the account-password check is the gate.
+   */
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('passcode/reset')
+  async resetPasscode(@Actor() actorId: string | null, @Body() body: { password?: string; newPasscode?: string }) {
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    const perms = await this.permissions.getEffectivePermissions(actorId);
+    const isAdmin = perms.isSuperAdmin
+      || (perms.codes.includes('user.manage_access') && perms.codes.includes('project.approve'));
+    if (!isAdmin) throw new ForbiddenException('Only an admin or super admin may reset the organization passcode.');
+    const orgId = await this.passcode.orgIdOf(actorId);
+    if (!orgId) throw new ForbiddenException('No organization to configure.');
+    return this.passcode.resetWithPassword(orgId, actorId, body?.password ?? '', body?.newPasscode ?? '');
+  }
 }
