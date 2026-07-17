@@ -206,7 +206,7 @@ export default function CapacityPage() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-auto p-4 sm:p-6 space-y-4">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col p-4 sm:p-6 gap-4">
         {!isPast && (leaveHoliday.people.length > 0 || leaveHoliday.holidays.length > 0) && (
           <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex flex-wrap items-start gap-x-6 gap-y-2">
             {leaveHoliday.people.length > 0 && (
@@ -241,12 +241,13 @@ export default function CapacityPage() {
         ) : allRows.length === 0 ? (
           <div className="text-center py-20 text-gray-400 text-sm">No active team members.</div>
         ) : (
-          // NB: no overflow-hidden on this card — it would become the sticky containing
-          // block and the header would scroll away. The body div is the scroll container.
-          <div className="bg-white rounded-xl border border-gray-200">
-            {/* Day header — sticky so the date bar stays visible while scrolling. Org-wide
-                holidays and weekends are marked here so planning reads at a glance. */}
-            <div className="flex items-end gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50 sticky top-0 z-20 shadow-sm rounded-t-xl">
+          // The board is a fixed date-header ABOVE an independently-scrolling rows region:
+          // the dates never move and rows scroll strictly BELOW them (never behind).
+          <div className="bg-white rounded-xl border border-gray-200 flex-1 min-h-0 flex flex-col overflow-hidden">
+            {/* Day header — pinned (not sticky): it sits outside the scroll area entirely.
+                scrollbar-gutter reserves the same space the rows' scrollbar takes, so the
+                date columns stay aligned with the cells below. */}
+            <div className="flex items-end gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50 shrink-0 rounded-t-xl overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
               <div className="w-56 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-500">Member</div>
               <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${header.length}, minmax(0, 1fr))` }}>
                 {header.map(d => {
@@ -268,8 +269,8 @@ export default function CapacityPage() {
               <div className="w-40 shrink-0 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">{isPast ? 'Summary' : 'Availability'}</div>
             </div>
 
-            {/* Rows */}
-            <div className="divide-y divide-gray-50">
+            {/* Rows — the ONLY scrolling region; the header above and legend below stay put. */}
+            <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-50" style={{ scrollbarGutter: 'stable' }}>
               {isPast ? (
                 visibleHist.length === 0
                   ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
@@ -322,7 +323,7 @@ export default function CapacityPage() {
             </div>
 
             {/* Legend */}
-            <div className="flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+            <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
               {((isPast
                 ? ['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT']
                 : ['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'HOLIDAY', 'WEEKEND']) as DayState[]).map(s => (
