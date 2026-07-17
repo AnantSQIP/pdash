@@ -582,7 +582,6 @@ async function main() {
     { organizationId: org.id, name: 'Casual Leave',   code: 'CL',  annualQuota: 12, colorHex: '#3d8de2' },
     { organizationId: org.id, name: 'Sick Leave',     code: 'SL',  annualQuota: 8,  colorHex: '#ef4444' },
     { organizationId: org.id, name: 'Earned Leave',   code: 'EL',  annualQuota: 15, colorHex: '#22c55e' },
-    { organizationId: org.id, name: 'Work From Home', code: 'WFH', annualQuota: 24, colorHex: '#9334e6' },
   ]});
 
   await prisma.holiday.createMany({ data: [
@@ -601,7 +600,6 @@ async function main() {
     { userId: anant.id,  organizationId: org.id, leaveType: 'EL',  startDate: new Date('2026-07-21'), endDate: new Date('2026-07-25'), numDays: 5, reason: 'Family vacation',  status: 'APPROVED', reviewedBy: mohit.id, reviewedAt: new Date('2026-06-20') },
     { userId: khushi.id, organizationId: org.id, leaveType: 'SL',  startDate: new Date('2026-06-18'), endDate: new Date('2026-06-19'), numDays: 2, reason: 'Fever',            status: 'APPROVED', reviewedBy: yash.id,  reviewedAt: new Date('2026-06-17') },
     { userId: vijay.id,  organizationId: org.id, leaveType: 'CL',  startDate: new Date('2026-07-02'), endDate: new Date('2026-07-03'), numDays: 2, reason: 'Personal work',    status: 'PENDING'  },
-    { userId: meetu.id,  organizationId: org.id, leaveType: 'WFH', startDate: new Date('2026-06-30'), endDate: new Date('2026-06-30'), numDays: 1, reason: 'Remote work day',  status: 'PENDING'  },
     { userId: nehu.id,   organizationId: org.id, leaveType: 'CL',  startDate: new Date('2026-05-12'), endDate: new Date('2026-05-12'), numDays: 1, reason: 'Appointment',      status: 'REJECTED', reviewedBy: mohit.id, reviewedAt: new Date('2026-05-10'), reviewNote: 'Critical deadline week' },
   ]});
 

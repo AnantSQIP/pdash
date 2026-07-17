@@ -27,6 +27,13 @@ function parseInstant(s?: string | null): Date | null {
 
 const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
 
+// A day is a full "present" only if at least this many hours were worked; below it,
+// the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
+const HALF_DAY_HOURS = 4;
+function statusForHours(totalHours: number): string {
+  return totalHours >= HALF_DAY_HOURS ? 'PRESENT' : 'HALF_DAY';
+}
+
 // ════════════════════════════════════════════════════════════════════════════════
 @Injectable()
 export class AttendanceService {
@@ -60,14 +67,16 @@ export class AttendanceService {
 
   /**
    * Daily punch with exactly ONE check-in and ONE check-out:
-   *   1. no check-in yet        → clock in (PRESENT)
-   *   2. clocked in, not out    → clock out + compute totalHours
+   *   1. no check-in yet        → clock in (workMode OFFICE or WFH)
+   *   2. clocked in, not out    → clock out; status is DERIVED from hours worked
+   *      (< HALF_DAY_HOURS ⇒ HALF_DAY) so an immediate in→out is not a full present day
    *   3. already clocked out    → REJECT — the day is locked so a stray third
    *      punch can never overwrite/erase the real check-out time.
    */
-  async punch(userId: string) {
+  async punch(userId: string, mode: 'OFFICE' | 'WFH' = 'OFFICE') {
     const today = utcDay(new Date());
     const now = new Date();
+    const workMode = mode === 'WFH' ? 'WFH' : 'OFFICE';
     const existing = await this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
 
     if (!existing || !existing.checkIn) {
@@ -87,21 +96,23 @@ export class AttendanceService {
         });
         if (openPrior?.checkIn && now.getTime() - openPrior.checkIn.getTime() < 24 * 3_600_000) {
           const totalHours = round((now.getTime() - openPrior.checkIn.getTime()) / 3_600_000, 2);
-          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: now, totalHours } });
+          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours) } });
         }
       }
       const organizationId = await this.orgOf(userId);
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
-        create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT' },
-        update: { checkIn: now, status: 'PRESENT' },
+        create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode },
+        update: { checkIn: now, status: 'PRESENT', workMode },
       });
     }
     if (existing.checkOut) {
       throw new BadRequestException('You have already clocked out for today. The day is complete.');
     }
     const totalHours = round((now.getTime() - existing.checkIn.getTime()) / 3_600_000, 2);
-    return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours } });
+    // Validate the day by hours: below a half day, mark HALF_DAY (a punch-in then an
+    // immediate punch-out must not count as a full present day).
+    return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours) } });
   }
 
   /** Admin/manual mark for a specific user+date. */
@@ -207,6 +218,8 @@ export class AttendanceService {
       regularizeReason: req.reason,
       regularizedBy: actorId,
       regularizedAt: new Date(),
+      // A "worked from home" regularisation records the work MODE on the day.
+      ...(req.requestType === 'WFH' ? { workMode: 'WFH' } : {}),
       ...(checkIn ? { checkIn } : {}),
       ...(checkOut ? { checkOut } : {}),
       ...(totalHours != null ? { totalHours } : {}),
@@ -277,7 +290,7 @@ export class AttendanceService {
     const onLeave = (k: string) => leaves.some(l => dayKey(l.startDate) <= k && k <= dayKey(l.endDate));
     const todayKey = dayKey(utcDay(new Date()));
 
-    type DayCell = { date: string; status: string; checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean; note: string | null };
+    type DayCell = { date: string; status: string; workMode?: string; checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean; note: string | null };
     const days: DayCell[] = [];
     for (let i = 1; i <= daysInMonth; i++) {
       const d = new Date(Date.UTC(year, month - 1, i));
@@ -285,7 +298,7 @@ export class AttendanceService {
       const wd = d.getUTCDay();
       const ex = byDay.get(k);
       if (ex) {
-        days.push({ date: k, status: ex.status, checkIn: ex.checkIn, checkOut: ex.checkOut, totalHours: ex.totalHours, isRegularized: ex.isRegularized, note: ex.note });
+        days.push({ date: k, status: ex.status, workMode: ex.workMode, checkIn: ex.checkIn, checkOut: ex.checkOut, totalHours: ex.totalHours, isRegularized: ex.isRegularized, note: ex.note });
       } else if (holidayByDay.has(k)) {
         days.push({ date: k, status: 'HOLIDAY', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: holidayByDay.get(k)!.name });
       } else if (wd === 0 || wd === 6) {
@@ -748,9 +761,9 @@ class AttendanceController {
   }
 
   @Post('punch')
-  punch(@Actor() actorId: string | null) {
+  punch(@Actor() actorId: string | null, @Body() body: { mode?: 'OFFICE' | 'WFH' }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.punch(actorId);
+    return this.svc.punch(actorId, body?.mode === 'WFH' ? 'WFH' : 'OFFICE');
   }
 
   // An employee RAISES a regularisation request. This no longer edits attendance directly —

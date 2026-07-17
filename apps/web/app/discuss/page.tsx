@@ -167,6 +167,8 @@ export default function DiscussPage() {
   const [draft, setDraft] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
   const [sending, setSending] = useState(false);
   const attachments = useAttachmentUploads();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -208,6 +210,14 @@ export default function DiscussPage() {
     catch (e) { alert(e instanceof Error ? e.message : 'Failed to delete'); }
   }
 
+  async function renameChannel(id: string, nextName: string) {
+    const name = nextName.trim();
+    setEditingName(false);
+    if (!name || name === activeChannel?.name) return;
+    try { await api.channels.update(id, { name }); invalidateChannels(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not rename the discussion'); }
+  }
+
   return (
     <div className="flex flex-col lg:flex-row h-full">
       {/* Sidebar */}
@@ -242,7 +252,27 @@ export default function DiscussPage() {
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200 bg-white">
               <div className="flex items-center gap-2 min-w-0">
                 <Lock size={15} className="text-gray-400 shrink-0" />
-                <span className="font-semibold text-gray-900 truncate">{activeChannel.name}</span>
+                {editingName ? (
+                  <input
+                    autoFocus
+                    defaultValue={activeChannel.name}
+                    onChange={e => setNameDraft(e.target.value)}
+                    onBlur={() => renameChannel(activeChannel.id, nameDraft || activeChannel.name)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') renameChannel(activeChannel.id, (e.target as HTMLInputElement).value);
+                      if (e.key === 'Escape') setEditingName(false);
+                    }}
+                    className="font-semibold text-gray-900 border border-brand-300 rounded-md px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-brand-200 min-w-0"
+                  />
+                ) : (
+                  <button
+                    onClick={() => { if (isOwner) { setNameDraft(activeChannel.name); setEditingName(true); } }}
+                    title={isOwner ? 'Click to rename' : undefined}
+                    className={clsx('font-semibold text-gray-900 truncate rounded-md px-1 -mx-1', isOwner && 'hover:bg-gray-100 cursor-pointer')}
+                  >
+                    {activeChannel.name}
+                  </button>
+                )}
                 <span className="text-xs text-gray-400 ml-1 shrink-0">· {activeChannel._count?.members ?? 0} members</span>
               </div>
               <div className="flex items-center gap-1">
