@@ -7,12 +7,55 @@
 import { useId, useMemo, useState, type ReactNode, type ElementType } from 'react';
 import clsx from 'clsx';
 import {
-  AreaChart, Area, LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  AreaChart, Area, LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, Sector, LabelList,
   RadialBarChart, RadialBar, PolarAngleAxis,
   XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer,
 } from 'recharts';
-import { RiArrowUpSLine, RiArrowDownSLine, RiArrowRightSLine } from '@remixicon/react';
-import { C, DONUT_COLORS, rateColor, round1, toCSV, downloadCSV } from './tokens';
+import { RiArrowUpSLine, RiArrowDownSLine, RiArrowRightSLine, RiInformationLine } from '@remixicon/react';
+import { C, DONUT_COLORS, rateColor, round1, toCSV, downloadCSV, METRIC_GLOSSARY } from './tokens';
+
+/** Compact colour key (legend) for a chart — a row of swatch+label pairs. */
+export function ColorKey({ items }: { items: { color: string; label: string }[] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {items.map((it, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+          <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: it.color }} />{it.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** A small info affordance with a native tooltip — used to explain a metric inline. */
+export function InfoDot({ text, className }: { text: string; className?: string }) {
+  return (
+    <span title={text} className={clsx('inline-flex text-gray-300 hover:text-gray-500 cursor-help align-middle', className)}>
+      <RiInformationLine size={13} />
+    </span>
+  );
+}
+
+/** Collapsible "how these numbers are calculated" glossary, shown at the foot of a view. */
+export function MetricsLegend() {
+  return (
+    <details className="bg-white rounded-xl border border-gray-200 group">
+      <summary className="flex items-center gap-2 px-5 py-3 cursor-pointer select-none text-sm font-medium text-gray-600 hover:text-gray-800">
+        <RiInformationLine size={16} className="text-gray-400" />
+        How these numbers are calculated
+        <RiArrowRightSLine size={16} className="ml-auto text-gray-400 transition-transform group-open:rotate-90" />
+      </summary>
+      <dl className="px-5 pb-4 pt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+        {METRIC_GLOSSARY.map(m => (
+          <div key={m.label}>
+            <dt className="text-xs font-semibold text-gray-700">{m.label}</dt>
+            <dd className="text-xs text-gray-500 leading-snug mt-0.5">{m.help}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
 
 // ── primitives ──────────────────────────────────────────────────────────────────
 export type Datum = { name: string; value: number; color?: string };
@@ -76,11 +119,11 @@ export function Sparkline({ data, color = C.brand, type = 'area', width = 56, he
 
 // ── KPI tile (optional sparkline + Δ + cross-filter click) ───────────────────────
 export function KpiTile({
-  label, value, Icon, tint, active, hero, delta, deltaSuffix, spark, sparkColor, onClick,
+  label, value, Icon, tint, active, hero, delta, deltaSuffix, spark, sparkColor, onClick, info,
 }: {
   label: string; value: string | number; Icon: ElementType; tint: string;
   active?: boolean; hero?: boolean; delta?: number; deltaSuffix?: string;
-  spark?: number[]; sparkColor?: string; onClick?: () => void;
+  spark?: number[]; sparkColor?: string; onClick?: () => void; info?: string;
 }) {
   const Comp: any = onClick ? 'button' : 'div';
   return (
@@ -99,6 +142,7 @@ export function KpiTile({
         <p className={clsx('font-bold text-gray-900 leading-none truncate', hero ? 'text-2xl' : 'text-xl')}>{value}</p>
         <p className="text-xs text-gray-500 mt-1 flex items-center gap-1 min-w-0">
           <span className="truncate">{label}</span>
+          {info && <span title={info} className="text-gray-300 hover:text-gray-500 cursor-help shrink-0"><RiInformationLine size={12} /></span>}
           {delta != null && delta !== 0 && (
             <span className={clsx('inline-flex items-center shrink-0', delta > 0 ? 'text-green-600' : 'text-red-500')}>
               {delta > 0 ? <RiArrowUpSLine size={12} /> : <RiArrowDownSLine size={12} />}{Math.abs(delta)}{deltaSuffix ?? ''}
@@ -135,73 +179,105 @@ export function GaugeCard({ value, label, color, size = 112 }: { value: number; 
   );
 }
 
-// Custom legend rendered BELOW the chart (Recharts' in-chart <Legend> floats and
-// overlaps the donut/center text when there are many series).
-function ChartLegend({ data, colors = DONUT_COLORS }: { data: Datum[]; colors?: string[] }) {
-  const items = data.filter(d => d.value > 0);
+// The active (hovered) donut slice grows outward with a thin outer ring — a subtle,
+// modern "lift" that reads as interactive without being noisy.
+function activeSlice(props: any) {
+  const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
+  return (
+    <g>
+      <Sector cx={cx} cy={cy} innerRadius={innerRadius} outerRadius={outerRadius + 5} startAngle={startAngle} endAngle={endAngle} fill={fill} />
+      <Sector cx={cx} cy={cy} innerRadius={outerRadius + 7} outerRadius={outerRadius + 9} startAngle={startAngle} endAngle={endAngle} fill={fill} opacity={0.35} />
+    </g>
+  );
+}
+
+// Rich legend: colour · name · value · share%. Hovering a row lifts the matching slice
+// (and vice-versa), so the reader can tie a segment to its number precisely.
+function DonutLegend({ items, total, colors, active, onHover }: {
+  items: Datum[]; total: number; colors: string[]; active: number | null; onHover: (i: number | null) => void;
+}) {
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-1 justify-center mt-3 px-1">
+    <div className="mt-3 space-y-0.5">
       {items.map((d, i) => (
-        <span key={i} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500 max-w-[150px]">
+        <div
+          key={i}
+          onMouseEnter={() => onHover(i)}
+          onMouseLeave={() => onHover(null)}
+          className={clsx('flex items-center gap-2 text-[11px] px-1.5 py-1 rounded-md transition-colors cursor-default', active === i ? 'bg-gray-50' : '')}
+        >
           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color ?? colors[i % colors.length] }} />
-          <span className="truncate">{d.name}</span>
-        </span>
+          <span className="truncate flex-1 text-gray-600">{d.name}</span>
+          <span className="text-gray-500 font-medium tabular-nums">{round1(d.value)}</span>
+          <span className="text-gray-300 tabular-nums w-9 text-right">{total ? Math.round((d.value / total) * 100) : 0}%</span>
+        </div>
       ))}
     </div>
   );
 }
 
-// ── Donut (hollow) ───────────────────────────────────────────────────────────────
-export function DonutCard({ data, centerValue, centerLabel, colors = DONUT_COLORS, height = 176 }: {
+/** Shared interactive donut (hover-lift slice + synced legend + center readout). */
+function InteractiveDonut({ data, centerValue, centerLabel, colors = DONUT_COLORS, height = 176 }: {
   data: Datum[]; centerValue: string | number; centerLabel: string; colors?: string[]; height?: number;
 }) {
-  const has = data.some(d => d.value > 0);
+  const [active, setActive] = useState<number | null>(null);
+  const items = useMemo(() => data.filter(d => d.value > 0), [data]);
+  const total = useMemo(() => items.reduce((s, d) => s + d.value, 0), [items]);
+  const has = total > 0;
+  const shown = active != null ? items[active] : null;
   return (
     <div>
       <div className="relative w-full" style={{ height }}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
-              data={has ? data : [{ name: 'No data', value: 1 }]}
-              dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={54} outerRadius={78} paddingAngle={2} stroke="none"
+              data={has ? items : [{ name: 'No data', value: 1 }]}
+              dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={56} outerRadius={80}
+              paddingAngle={has ? 2 : 0} stroke="none" cornerRadius={4}
+              // activeIndex/activeShape are valid runtime props but missing from this
+              // recharts version's Pie types — pass them through an any-cast spread.
+              {...({ activeIndex: active ?? undefined, activeShape: activeSlice } as any)}
+              onMouseEnter={(_: any, i: number) => setActive(i)}
+              onMouseLeave={() => setActive(null)}
+              isAnimationActive={false}
             >
-              {(has ? data : [{ name: 'x', value: 1 }]).map((d: any, i) => (
+              {(has ? items : [{ value: 1 }]).map((d: any, i) => (
                 <Cell key={i} fill={has ? (d.color ?? colors[i % colors.length]) : '#e5e7eb'} />
               ))}
             </Pie>
-            {has && <Tooltip />}
           </PieChart>
         </ResponsiveContainer>
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="text-2xl font-bold text-gray-900">{centerValue}</span>
-          <span className="text-[10px] text-gray-400 uppercase tracking-wide">{centerLabel}</span>
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none px-6 text-center">
+          {shown ? (
+            <>
+              <span className="text-xl font-bold text-gray-900 tabular-nums">{round1(shown.value)}</span>
+              <span className="text-[10px] text-gray-400 mt-0.5 truncate max-w-full">{shown.name} · {total ? Math.round((shown.value / total) * 100) : 0}%</span>
+            </>
+          ) : (
+            <>
+              <span className="text-2xl font-bold text-gray-900">{centerValue}</span>
+              <span className="text-[10px] text-gray-400 uppercase tracking-wide mt-0.5">{centerLabel}</span>
+            </>
+          )}
         </div>
       </div>
-      <ChartLegend data={data} colors={colors} />
+      <DonutLegend items={items} total={total} colors={colors} active={active} onHover={setActive} />
     </div>
   );
 }
 
-// ── Pie (filled) ─────────────────────────────────────────────────────────────────
+// ── Donut (hollow, with explicit center readout) ─────────────────────────────────
+export function DonutCard(props: {
+  data: Datum[]; centerValue: string | number; centerLabel: string; colors?: string[]; height?: number;
+}) {
+  return <InteractiveDonut {...props} />;
+}
+
+// ── Pie → rendered as a consistent donut with a "Total" center. ──────────────────
 export function PieCard({ data, colors = DONUT_COLORS, height = 176 }: { data: Datum[]; colors?: string[]; height?: number }) {
-  const has = data.some(d => d.value > 0);
-  if (!has) return <Empty height={height} />;
-  return (
-    <div>
-      <div className="w-full" style={{ height }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} paddingAngle={1} stroke="none">
-              {data.map((d, i) => <Cell key={i} fill={d.color ?? colors[i % colors.length]} />)}
-            </Pie>
-            <Tooltip />
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
-      <ChartLegend data={data} colors={colors} />
-    </div>
-  );
+  const total = data.filter(d => d.value > 0).reduce((s, d) => s + d.value, 0);
+  if (!total) return <Empty height={height} />;
+  return <InteractiveDonut data={data} centerValue={round1(total)} centerLabel="Total" colors={colors} height={height} />;
 }
 
 // ── Line (time-series) ───────────────────────────────────────────────────────────
@@ -255,26 +331,28 @@ export function AreaCard({ data, xKey, series, stacked, height = 220, xFmt }: {
 }
 
 // ── Bar (horizontal comparison; clickable) ───────────────────────────────────────
-export function BarCard({ data, categoryKey, valueKey, color = C.brand, height, onBarClick, highlightKey, highlightValue, labelWidth = 112 }: {
+export function BarCard({ data, categoryKey, valueKey, color = C.brand, height, onBarClick, highlightKey, highlightValue, labelWidth = 112, showValues, barSize = 18 }: {
   data: any[]; categoryKey: string; valueKey: string; color?: string; height?: number;
   onBarClick?: (row: any) => void; highlightKey?: string; highlightValue?: string; labelWidth?: number;
+  showValues?: boolean; barSize?: number;
 }) {
   if (!data?.length) return <Empty height={height ?? 200} />;
-  const h = height ?? Math.max(180, data.length * 34);
+  const h = height ?? Math.max(180, data.length * 40);
   const maxChars = Math.max(8, Math.floor(labelWidth / 7));
   const truncTick = (v: any) => (typeof v === 'string' && v.length > maxChars ? `${v.slice(0, maxChars - 1)}…` : v);
   return (
     <ResponsiveContainer width="100%" height={h}>
-      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 16, top: 0, bottom: 0 }}>
+      <BarChart data={data} layout="vertical" margin={{ left: 8, right: showValues ? 32 : 16, top: 4, bottom: 4 }} barCategoryGap={12}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
         <XAxis type="number" tick={{ fontSize: 10, fill: C.slate }} allowDecimals={false} />
         <YAxis type="category" dataKey={categoryKey} tick={{ fontSize: 11, fill: '#334155' }} width={labelWidth} tickFormatter={truncTick} interval={0} />
-        <Tooltip />
-        <Bar dataKey={valueKey} radius={[0, 4, 4, 0]} cursor={onBarClick ? 'pointer' : undefined}
+        <Tooltip cursor={{ fill: '#f8fafc' }} />
+        <Bar dataKey={valueKey} radius={[0, 4, 4, 0]} barSize={barSize} cursor={onBarClick ? 'pointer' : undefined}
           onClick={onBarClick ? (d: any) => onBarClick(d?.payload ?? d) : undefined}>
           {data.map((row, i) => (
             <Cell key={i} fill={highlightKey && row[highlightKey] === highlightValue ? C.accent : (row.color ?? color)} />
           ))}
+          {showValues && <LabelList dataKey={valueKey} position="right" style={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} />}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -282,22 +360,23 @@ export function BarCard({ data, categoryKey, valueKey, color = C.brand, height, 
 }
 
 // ── Column (vertical comparison; single or stacked series) ───────────────────────
-export function ColumnCard({ data, categoryKey, series, stacked, height = 220, xFmt }: {
-  data: any[]; categoryKey: string; series: Series[]; stacked?: boolean; height?: number; xFmt?: (v: string) => string;
+export function ColumnCard({ data, categoryKey, series, stacked, height = 220, xFmt, showValues }: {
+  data: any[]; categoryKey: string; series: Series[]; stacked?: boolean; height?: number; xFmt?: (v: string) => string; showValues?: boolean;
 }) {
   if (!data?.length) return <Empty height={height} />;
   const single = series.length === 1;
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={data} margin={{ left: -16, right: 8, top: 4, bottom: 0 }}>
+      <BarChart data={data} margin={{ left: -16, right: 8, top: showValues ? 18 : 4, bottom: 0 }} barCategoryGap={data.length > 6 ? '18%' : '30%'}>
         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
         <XAxis dataKey={categoryKey} tickFormatter={xFmt} tick={{ fontSize: 10, fill: C.slate }} interval={0} />
         <YAxis tick={{ fontSize: 10, fill: C.slate }} allowDecimals={false} />
-        <Tooltip />
+        <Tooltip cursor={{ fill: '#f8fafc' }} />
         {!single && <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />}
-        {series.map(s => (
-          <Bar key={s.key} dataKey={s.key} name={s.name} stackId={stacked ? 's' : undefined} fill={s.color} radius={stacked ? undefined : [4, 4, 0, 0]}>
+        {series.map((s, si) => (
+          <Bar key={s.key} dataKey={s.key} name={s.name} stackId={stacked ? 's' : undefined} fill={s.color} radius={stacked ? undefined : [4, 4, 0, 0]} maxBarSize={48}>
             {single && data.map((row, i) => <Cell key={i} fill={row.color ?? s.color} />)}
+            {showValues && single && si === 0 && <LabelList dataKey={s.key} position="top" style={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} />}
           </Bar>
         ))}
       </BarChart>

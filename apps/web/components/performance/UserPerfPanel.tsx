@@ -15,9 +15,9 @@ import { api, type UserPerformance, type UserBreakdowns, type HeatmapDay, type A
 import { ContributionHeatmap } from './ContributionHeatmap';
 import {
   ChartCard, KpiTile, GaugeCard, DonutCard, PieCard, LineCard, AreaCard, BarCard, ColumnCard, BulletChart, DataGrid,
-  type GridColumn,
+  MetricsLegend, type GridColumn,
 } from './charts';
-import { C, PRIORITY_COLORS, SEVERITY_COLORS, STATUS_COLORS } from './tokens';
+import { C, PRIORITY_COLORS, SEVERITY_COLORS, STATUS_COLORS, METRIC_HELP } from './tokens';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
 
 function withColors(data: NameValue[], map: Record<string, string>): NameValue[] {
@@ -126,11 +126,11 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
       </div>
       {/* KPI strip with deltas + sparklines */}
       <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-6 gap-3">
-        <KpiTile label="Completed" value={perf.periodTasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-green-100 text-green-600" delta={delta(perf.periodTasksCompleted, p.tasksCompleted)} spark={sparkOf('completed')} sparkColor={C.green} />
-        <KpiTile label="Hours" value={`${k.hoursLogged}h`} Icon={RiTimeLine} tint="bg-blue-50 text-blue-600" delta={delta(k.hoursLogged, p.hoursLogged)} spark={sparkOf('hours')} sparkColor={C.brand} />
-        <KpiTile label="Activity" value={k.activityVolume} Icon={RiPulseLine} tint="bg-purple-50 text-purple-600" delta={delta(k.activityVolume, p.activityVolume)} spark={sparkOf('activity')} sparkColor={C.purple} />
-        <KpiTile label="Resolved" value={k.issuesResolved} Icon={RiBugLine} tint="bg-orange-50 text-orange-600" delta={delta(k.issuesResolved, p.issuesResolved)} />
-        <KpiTile label="On-time" value={`${k.onTimeCompletionRate}%`} Icon={RiBarChartBoxLine} tint="bg-teal-50 text-teal-600" />
+        <KpiTile label="Completed" value={perf.periodTasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-green-100 text-green-600" delta={delta(perf.periodTasksCompleted, p.tasksCompleted)} spark={sparkOf('completed')} sparkColor={C.green} info={METRIC_HELP.tasksCompleted} />
+        <KpiTile label="Hours" value={`${k.hoursLogged}h`} Icon={RiTimeLine} tint="bg-blue-50 text-blue-600" delta={delta(k.hoursLogged, p.hoursLogged)} spark={sparkOf('hours')} sparkColor={C.brand} info={METRIC_HELP.hoursLogged} />
+        <KpiTile label="Activity" value={k.activityVolume} Icon={RiPulseLine} tint="bg-purple-50 text-purple-600" delta={delta(k.activityVolume, p.activityVolume)} spark={sparkOf('activity')} sparkColor={C.purple} info={METRIC_HELP.activityVolume} />
+        <KpiTile label="Resolved" value={k.issuesResolved} Icon={RiBugLine} tint="bg-orange-50 text-orange-600" delta={delta(k.issuesResolved, p.issuesResolved)} info="Issues you moved to a resolved/closed state in the period." />
+        <KpiTile label="On-time" value={`${k.onTimeCompletionRate}%`} Icon={RiBarChartBoxLine} tint="bg-teal-50 text-teal-600" info={METRIC_HELP.onTimeRate} />
         <KpiTile label="Open · Overdue" value={`${k.tasksOpen} · ${k.tasksOverdue}`} Icon={RiInboxLine} tint="bg-sky-50 text-sky-600" />
       </div>
 
@@ -195,7 +195,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
       </div>
 
       {/* Heatmap */}
-      <ChartCard title="Contribution heatmap — last year">
+      <ChartCard title="Contribution heatmap — last year" subtitle="Each square is one day · darker = more actions that day">
         {heat ? <ContributionHeatmap days={heat.days} /> : <div className="text-sm text-gray-400">Loading…</div>}
       </ChartCard>
 
@@ -210,6 +210,9 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
         initialSort={{ key: 'dueDate', dir: 'asc' }}
         emptyLabel="No assigned tasks"
       />
+
+      {/* How the numbers are calculated */}
+      <MetricsLegend />
     </div>
   );
 }
