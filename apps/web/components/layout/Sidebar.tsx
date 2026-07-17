@@ -6,7 +6,7 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
-  MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart,
+  MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
   ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -32,6 +32,7 @@ const NAV: NavItem[] = [
   { href: '/performance', icon: LineChart,       label: 'Performance', perm: 'performance.view.own' },
   { href: '/calendar',    icon: CalendarDays,    label: 'Calendar',    perm: 'calendar.view' },
   { href: '/attendance',  icon: Fingerprint,     label: 'Attendance',  perm: 'attendance.view.own' },
+  { href: '/expenses',    icon: Receipt,         label: 'Expenses',    perm: 'expense.view.own' },
   { href: '/reports',     icon: FileBarChart,    label: 'Reports',     perm: ['report.view', 'report.export'] },
   { href: '/discuss',     icon: MessagesSquare,  label: 'Discuss',     perm: 'channel.view' },
   { href: '/users',       icon: Users,           label: 'People',      perm: 'user.view' },

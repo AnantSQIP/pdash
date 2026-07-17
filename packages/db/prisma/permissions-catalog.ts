@@ -52,6 +52,7 @@ export const MODULES: ModuleDef[] = [
   { key: 'deadline',    label: 'Client Deadlines', actions: ['view.client'] },
   { key: 'attendance',  label: 'Attendance',   actions: ['view.own', 'view.organization', 'manage', 'regularize'] },
   { key: 'leave',       label: 'Leave',        actions: ['view.own', 'view.organization', 'request', 'approve'] },
+  { key: 'expense',     label: 'Expenses',     actions: ['view.own', 'view.organization', 'submit', 'approve'] },
   { key: 'holiday',     label: 'Holidays',     actions: ['view', 'manage'] },
   { key: 'department',  label: 'Departments',  actions: ['view', 'create', 'update', 'delete'] },
   { key: 'user',        label: 'Users',        actions: ['view', 'create', 'update', 'delete', 'manage_access'] },
@@ -95,6 +96,8 @@ const VIEW_BASICS = [
   code('calendar', 'view'),
   code('channel', 'view'), code('report', 'view'),
   code('attendance', 'view.own'), code('leave', 'view.own'), code('holiday', 'view'),
+  // Everyone can record their own business expenses and see them.
+  code('expense', 'view.own'), code('expense', 'submit'),
 ];
 
 // Manager: full operational control over delivery work + org analytics, no system admin.
@@ -117,6 +120,7 @@ const MANAGER_CODES = [
   code('capacity', 'view'), code('deadline', 'view.client'),
   code('attendance', 'view.organization'), code('attendance', 'regularize'),
   code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
+  code('expense', 'view.organization'), code('expense', 'approve'),
   code('holiday', 'manage'),
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
@@ -205,6 +209,8 @@ const HR_CODES = [
   code('attendance', 'manage'), code('attendance', 'regularize'),
   code('leave', 'view.own'), code('leave', 'view.organization'),
   code('leave', 'request'), code('leave', 'approve'),
+  code('expense', 'view.own'), code('expense', 'submit'),
+  code('expense', 'view.organization'), code('expense', 'approve'),
   code('holiday', 'view'), code('holiday', 'manage'),
   code('department', 'view'), code('department', 'create'), code('department', 'update'),
   code('user', 'view'), code('user', 'create'), code('user', 'update'), code('user', 'manage_access'),

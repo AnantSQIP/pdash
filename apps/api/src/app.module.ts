@@ -37,6 +37,7 @@ import { ProfileModule } from './modules/profile/profile.module';
 import { CapacityModule } from './modules/capacity/capacity.module';
 import { OverdueModule } from './modules/overdue/overdue.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
+import { ExpensesModule } from './modules/expenses/expenses.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
@@ -72,6 +73,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     // Time tracking & attendance
     TimesheetsModule,
     AttendanceModule,
+    ExpensesModule,
     // Calendar, Discuss, Issues, Analytics
     EventsModule,
     ChannelsModule,

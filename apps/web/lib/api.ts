@@ -458,7 +458,7 @@ export type PendingPasswordReset = {
 export type Attendance = {
   id: string; userId: string; organizationId?: string; date: string;
   checkIn?: string | null; checkOut?: string | null; totalHours?: number | null;
-  status: string; note?: string | null; isRegularized: boolean;
+  status: string; workMode?: string; note?: string | null; isRegularized: boolean;
 };
 export type AttendanceDay = {
   date: string; status: string; checkIn?: string | null; checkOut?: string | null;
@@ -502,6 +502,15 @@ export type CompOffRequest = {
 export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
 export type LeaveBalance = { code: string; name: string; quota: number; used: number; remaining: number; colorHex: string };
 export type Holiday = { id: string; organizationId: string; name: string; date: string; type: string; recurring: boolean };
+
+export type Expense = {
+  id: string; userId: string; organizationId?: string | null;
+  category: string; amount: number; currency: string; spentOn: string; description: string;
+  receiptDocumentId?: string | null; status: string;
+  reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null; reimbursedAt?: string | null;
+  createdAt: string;
+  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
+};
 
 // ─── API Methods ──────────────────────────────────────────────────────────────
 
@@ -863,7 +872,7 @@ export const api = {
     today: () => req<Attendance | null>('/attendance/me/today'),
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
-    punch: () => req<Attendance>('/attendance/punch', { method: 'POST' }),
+    punch: (mode?: 'OFFICE' | 'WFH') => req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(mode ? { mode } : {}) }),
     regularize: (id: string, reason: string, newStatus?: string) =>
       req<Attendance>(`/attendance/${id}/regularize`, { method: 'POST', body: JSON.stringify({ reason, newStatus }) }),
     mark: (data: { userId: string; date: string; status: string; note?: string }) =>
@@ -911,5 +920,16 @@ export const api = {
     createHoliday: (data: { organizationId: string; name: string; date: string; type?: string; recurring?: boolean }) =>
       req<Holiday>('/leave/holidays', { method: 'POST', body: JSON.stringify(data) }),
     removeHoliday: (id: string) => req<void>(`/leave/holidays/${id}`, { method: 'DELETE' }),
+  },
+
+  expenses: {
+    submit: (data: { category: string; amount: number; currency?: string; spentOn: string; description: string; receiptDocumentId?: string }) =>
+      req<Expense>('/expenses', { method: 'POST', body: JSON.stringify(data) }),
+    mine: () => req<Expense[]>('/expenses/me'),
+    forOrg: (status?: string) => req<Expense[]>(`/expenses/org${status ? `?status=${status}` : ''}`),
+    approve: (id: string, note?: string) => req<Expense>(`/expenses/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    reject: (id: string, note?: string) => req<Expense>(`/expenses/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    reimburse: (id: string) => req<Expense>(`/expenses/${id}/reimburse`, { method: 'POST' }),
+    cancel: (id: string) => req<Expense>(`/expenses/${id}/cancel`, { method: 'POST' }),
   },
 };

@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { format } from 'date-fns';
 import {
-  Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil,
+  Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil, Home,
 } from 'lucide-react';
 import {
   api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest,
@@ -77,9 +77,9 @@ export default function AttendancePage() {
 
   function invalidate(...keys: string[]) { keys.forEach(k => qc.invalidateQueries({ queryKey: [k] })); }
 
-  async function punch() {
+  async function punch(mode?: 'OFFICE' | 'WFH') {
     if (busy) return; setBusy(true);
-    try { await api.attendance.punch(); invalidate('attn-today', 'attn-month', 'attn-org'); }
+    try { await api.attendance.punch(mode); invalidate('attn-today', 'attn-month', 'attn-org'); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
     finally { setBusy(false); }
   }
@@ -118,16 +118,34 @@ export default function AttendancePage() {
               <div className="sm:col-span-2 lg:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
                 <div className="flex items-center justify-between flex-wrap gap-4">
                   <div>
-                    <p className="text-xs text-gray-400 uppercase tracking-wide">Today · {format(new Date(), 'EEE, MMM d')}</p>
+                    <p className="text-xs text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                      Today · {format(new Date(), 'EEE, MMM d')}
+                      {today?.workMode === 'WFH' && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full"><Home size={10} /> WFH</span>}
+                    </p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{clockedIn ? fmtElapsed(elapsed) : (today?.checkOut ? 'Day complete' : 'Not clocked in')}</p>
                     <p className="text-xs text-gray-500 mt-1">In {timeOf(today?.checkIn)} · Out {timeOf(today?.checkOut)}{today?.totalHours != null ? ` · ${today.totalHours}h` : ''}</p>
                   </div>
-                  <button onClick={punch} disabled={busy || dayComplete}
-                    title={dayComplete ? 'You have clocked in and out — the day is complete.' : undefined}
-                    className={clsx('inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white disabled:opacity-60 disabled:cursor-not-allowed', dayComplete ? 'bg-gray-400' : clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}>
-                    {busy ? <Loader size={16} className="animate-spin" /> : dayComplete ? <Check size={16} /> : clockedIn ? <LogOut size={16} /> : <LogIn size={16} />}
-                    {dayComplete ? 'Completed' : clockedIn ? 'Punch Out' : 'Punch In'}
-                  </button>
+                  {clockedIn || dayComplete ? (
+                    <button onClick={() => punch()} disabled={busy || dayComplete}
+                      title={dayComplete ? 'You have clocked in and out — the day is complete.' : undefined}
+                      className={clsx('inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white disabled:opacity-60 disabled:cursor-not-allowed', dayComplete ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600')}>
+                      {busy ? <Loader size={16} className="animate-spin" /> : dayComplete ? <Check size={16} /> : <LogOut size={16} />}
+                      {dayComplete ? 'Completed' : 'Punch Out'}
+                    </button>
+                  ) : (
+                    // Two ways to clock in — from the office, or working from home (a work MODE).
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => punch('OFFICE')} disabled={busy}
+                        className="inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
+                        {busy ? <Loader size={16} className="animate-spin" /> : <LogIn size={16} />} Punch In
+                      </button>
+                      <button onClick={() => punch('WFH')} disabled={busy}
+                        title="Clock in for a work-from-home day"
+                        className="inline-flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold text-purple-700 border border-purple-200 bg-purple-50 hover:bg-purple-100 disabled:opacity-60">
+                        <Home size={16} /> WFH
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
               {/* Month summary */}
@@ -204,13 +222,22 @@ export default function AttendancePage() {
         )}
       </div>
 
-      {regDate && (
-        <RegularizeModal
-          date={regDate}
-          onClose={() => setRegDate(null)}
-          onSuccess={() => { setRegDate(null); invalidate('reg-mine', 'reg-pending'); }}
-        />
-      )}
+      {regDate && (() => {
+        // A weekend or company holiday isn't a normal working day — regularising it means
+        // claiming comp-off, so route the modal into a comp-off claim instead.
+        const d = new Date(`${regDate}T00:00:00`);
+        const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+        const holiday = holidays.find(h => h.date.slice(0, 10) === regDate);
+        const nonWorking = isWeekend ? 'the weekend' : holiday ? holiday.name : null;
+        return (
+          <RegularizeModal
+            date={regDate}
+            nonWorking={nonWorking}
+            onClose={() => setRegDate(null)}
+            onSuccess={() => { setRegDate(null); invalidate('reg-mine', 'reg-pending', 'compoff-mine'); }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -279,7 +306,9 @@ function SummaryTile({ label, value, tint, sub }: { label: string; value: string
   );
 }
 
-const REGULARIZABLE = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LATE', 'NONE'];
+// WEEKEND/HOLIDAY are clickable too: clicking one opens a comp-off claim (you worked a
+// non-working day), while the working-day statuses open a normal regularisation.
+const REGULARIZABLE = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LATE', 'NONE', 'WEEKEND', 'HOLIDAY'];
 
 function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth; year: number; monthNum: number; onPick?: (key: string) => void }) {
   const byDate = useMemo(() => new Map((month?.days ?? []).map(d => [d.date, d])), [month]);
@@ -337,7 +366,7 @@ const REG_STATUS_STYLE: Record<string, string> = {
   CANCELLED: 'bg-gray-100 text-gray-500',
 };
 
-function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: () => void; onSuccess: () => void }) {
+function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: string; nonWorking?: string | null; onClose: () => void; onSuccess: () => void }) {
   const [reason, setReason] = useState('');
   const [requestType, setRequestType] = useState('FORGOT_IN');
   const [status, setStatus] = useState('PRESENT');
@@ -345,19 +374,24 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
   const [checkOut, setCheckOut] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const compOff = !!nonWorking; // a weekend/holiday → claim comp-off, not a normal regularisation
 
   async function submit() {
     if (saving || !reason.trim()) return;
     setSaving(true); setError('');
     try {
-      await api.attendance.requestRegularization({
-        date,
-        reason: reason.trim(),
-        requestType,
-        status,
-        checkIn: checkIn ? `${date}T${checkIn}:00` : undefined,
-        checkOut: checkOut ? `${date}T${checkOut}:00` : undefined,
-      });
+      if (compOff) {
+        await api.leave.requestCompOff({ workDate: date, reason: reason.trim() });
+      } else {
+        await api.attendance.requestRegularization({
+          date,
+          reason: reason.trim(),
+          requestType,
+          status,
+          checkIn: checkIn ? `${date}T${checkIn}:00` : undefined,
+          checkOut: checkOut ? `${date}T${checkOut}:00` : undefined,
+        });
+      }
       onSuccess();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not send the request');
@@ -372,18 +406,25 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center"><Pencil size={18} className="text-brand-600" /></div>
+            <div className={clsx('w-9 h-9 rounded-xl flex items-center justify-center', compOff ? 'bg-indigo-50' : 'bg-brand-50')}><Pencil size={18} className={compOff ? 'text-indigo-600' : 'text-brand-600'} /></div>
             <div>
-              <h2 className="text-lg font-semibold text-gray-900">Request regularisation</h2>
+              <h2 className="text-lg font-semibold text-gray-900">{compOff ? 'Claim comp-off' : 'Request regularisation'}</h2>
               <p className="text-xs text-gray-500">{format(new Date(`${date}T00:00:00`), 'EEEE, MMM d, yyyy')}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
         </div>
         <div className="px-6 py-5 space-y-4">
-          <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-            This is sent to HR for approval. Your attendance changes only once they approve it.
-          </p>
+          {compOff ? (
+            <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+              This is {nonWorking} — a non-working day. Worked anyway? Claim <b>comp-off</b> and HR will review it. On approval you get a compensatory day off to use later.
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+              This is sent to HR for approval. Your attendance changes only once they approve it.
+            </p>
+          )}
+          {!compOff && (<>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">What happened?</label>
             <select value={requestType} onChange={e => setRequestType(e.target.value)} className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
@@ -406,8 +447,9 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
               <DateField type="time" value={checkOut} onChange={e => setCheckOut(e.target.value)} className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
           </div>
+          </>)}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Reason <span className="text-red-500">*</span></label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">{compOff ? 'What did you work on?' : 'Reason'} <span className="text-red-500">*</span></label>
             <div className="flex flex-wrap gap-1.5 mb-2">
               {REG_REASONS.map(r => (
                 <button key={r} type="button" onClick={() => setReason(r)} className={clsx('text-[11px] px-2 py-1 rounded-full border', reason === r ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50')}>{r}</button>
@@ -418,8 +460,8 @@ function RegularizeModal({ date, onClose, onSuccess }: { date: string; onClose: 
           {error && <p className="text-xs text-red-600">{error}</p>}
           <div className="flex items-center justify-end gap-3 pt-1">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
-            <button onClick={submit} disabled={saving || !reason.trim()} className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-              {saving ? <><Loader size={14} className="animate-spin" /> Sending…</> : 'Send to HR'}
+            <button onClick={submit} disabled={saving || !reason.trim()} className={clsx('flex items-center gap-2 px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50', compOff ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-brand-600 hover:bg-brand-700')}>
+              {saving ? <><Loader size={14} className="animate-spin" /> Sending…</> : (compOff ? 'Claim comp-off' : 'Send to HR')}
             </button>
           </div>
         </div>
