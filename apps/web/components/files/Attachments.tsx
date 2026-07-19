@@ -7,7 +7,7 @@
 import { useRef, useState, useCallback, type ChangeEvent, type ElementType } from 'react';
 import clsx from 'clsx';
 import {
-  Paperclip, X, Loader, FileText, FileSpreadsheet, FileArchive, Film, Music, File as FileIcon, Download,
+  Paperclip, X, Loader, FileText, FileSpreadsheet, FileArchive, Film, Music, File as FileIcon, Download, Mic,
 } from 'lucide-react';
 import { api, type AttachmentRef, type DocumentRef } from '@/lib/api';
 import { formatBytes, isImageMime, fileKind, MAX_FILE_BYTES, type FileKind } from '@/lib/files';
@@ -89,6 +89,98 @@ export function AttachButton({ onPick, disabled, title = 'Attach files' }: {
   );
 }
 
+/**
+ * Record a short voice note in the browser (MediaRecorder) and hand it to the composer
+ * as a normal file upload — so it flows through the same attachment pipeline. No server
+ * change: a voice clip is just an audio/webm attachment, rendered with an <audio> player.
+ */
+export function VoiceRecorderButton({ onRecorded, disabled }: {
+  onRecorded: (files: File[]) => void; disabled?: boolean;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const [error, setError] = useState('');
+  const recRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const MAX_SECONDS = 300; // 5-minute cap
+
+  const stopTimer = () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
+
+  async function start() {
+    setError('');
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('Recording is not supported in this browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const type = rec.mimeType || 'audio/webm';
+        const blob = new Blob(chunksRef.current, { type });
+        if (blob.size > 0) {
+          const ext = type.includes('ogg') ? 'ogg' : 'webm';
+          const file = new File([blob], `voice-message-${Date.now()}.${ext}`, { type });
+          onRecorded([file]);
+        }
+      };
+      recRef.current = rec;
+      rec.start();
+      setRecording(true);
+      setSeconds(0);
+      timerRef.current = setInterval(() => setSeconds(s => {
+        if (s + 1 >= MAX_SECONDS) { stop(); return MAX_SECONDS; }
+        return s + 1;
+      }), 1000);
+    } catch {
+      setError('Microphone access was denied.');
+    }
+  }
+
+  function stop() {
+    stopTimer();
+    setRecording(false);
+    recRef.current?.state !== 'inactive' && recRef.current?.stop();
+  }
+
+  const mmss = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  return (
+    <>
+      {recording ? (
+        <button
+          type="button"
+          onClick={stop}
+          title="Stop and attach recording"
+          aria-label="Stop recording"
+          className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 transition-colors shrink-0"
+        >
+          <span className="w-2 h-2 rounded-sm bg-red-600 animate-pulse" />
+          <span className="tabular-nums">{mmss}</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={start}
+          title={error || 'Record a voice message'}
+          aria-label="Record a voice message"
+          className={clsx(
+            'p-1.5 rounded-lg transition-colors disabled:opacity-40 shrink-0',
+            error ? 'text-red-500 hover:bg-red-50' : 'text-gray-400 hover:text-teal-600 hover:bg-teal-50',
+          )}
+        >
+          <Mic size={16} />
+        </button>
+      )}
+    </>
+  );
+}
+
 /** Chips for staged (not yet sent) attachments in a composer. */
 export function PendingAttachmentChips({ items, onRemove }: {
   items: PendingAttachment[]; onRemove: (localKey: string) => void;
@@ -114,14 +206,23 @@ export function PendingAttachmentChips({ items, onRemove }: {
   );
 }
 
+const isAudioMime = (mime?: string | null) => !!mime && mime.startsWith('audio/');
+
 /** Rendered attachments on a sent message/comment: inline image previews + file chips. */
 export function AttachmentList({ attachments, className }: { attachments?: AttachmentRef[]; className?: string }) {
   const docs = (attachments ?? []).map(a => a.document).filter(Boolean);
   if (!docs.length) return null;
   const images = docs.filter(d => isImageMime(d.mimeType));
-  const files = docs.filter(d => !isImageMime(d.mimeType));
+  const audios = docs.filter(d => isAudioMime(d.mimeType));
+  const files = docs.filter(d => !isImageMime(d.mimeType) && !isAudioMime(d.mimeType));
   return (
     <div className={clsx('mt-1.5 space-y-1.5', className)}>
+      {audios.map(d => (
+        <div key={d.id} className="flex items-center gap-2 w-fit max-w-full pl-2.5 pr-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+          <Mic size={16} className="text-teal-600 shrink-0" />
+          <audio controls preload="metadata" src={d.fileUrl} className="h-9 max-w-[280px]" />
+        </div>
+      ))}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {images.map(d => (

@@ -13,6 +13,10 @@ import {
   Plus,
   CheckCircle,
   ShieldAlert,
+  AtSign,
+  Trash2,
+  Loader,
+  Check,
 } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
@@ -20,7 +24,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOrg } from '@/lib/org-context';
 import { useAuth } from '@/lib/auth-context';
 import { Can, usePermissions } from '@/lib/permissions-context';
-import { api, type UserSummary } from '@/lib/api';
+import { api, type UserSummary, type Tag } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { ProfilePhotoCard } from '@/components/ProfilePhotoCard';
@@ -559,7 +563,110 @@ function NotificationsTab() {
   );
 }
 
+// ── Tags Tab (admin) ─────────────────────────────────────────────────────────
+// Named, @mentionable groups (e.g. "@attorneys"). Mentioning a tag in a discussion
+// notifies its members who are also in that discussion.
+function TagsTab() {
+  const { users } = useOrg();
+  const qc = useQueryClient();
+  const [newName, setNewName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+
+  const { data: tags = [], isLoading } = useQuery<Tag[]>({ queryKey: ['tags'], queryFn: () => api.tags.list() });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['tags'] });
+
+  async function create() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true); setError('');
+    try { await api.tags.create(name); setNewName(''); invalidate(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not create the tag'); }
+    finally { setBusy(false); }
+  }
+  async function remove(id: string) {
+    if (!confirm('Delete this tag? People stay; only the group goes away.')) return;
+    try { await api.tags.remove(id); invalidate(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not delete'); }
+  }
+  async function toggleMember(tag: Tag, userId: string) {
+    const has = tag.memberIds.includes(userId);
+    const next = has ? tag.memberIds.filter(id => id !== userId) : [...tag.memberIds, userId];
+    try { await api.tags.setMembers(tag.id, next); invalidate(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not update members'); }
+  }
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">Mention tags</h2>
+        <p className="text-sm text-gray-500 mt-0.5">Create named groups people can @mention in discussions — e.g. <span className="font-mono text-teal-600">@attorneys</span>. A tag only pings members who are also in that discussion.</p>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 flex-1 border border-gray-300 rounded-lg px-3 py-2 focus-within:border-brand-400">
+          <AtSign size={15} className="text-gray-400 shrink-0" />
+          <input value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') create(); }}
+            placeholder="new-tag-name" className="flex-1 text-sm focus:outline-none" />
+        </div>
+        <button onClick={create} disabled={!newName.trim() || busy}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+          {busy ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Add tag
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600 -mt-3">{error}</p>}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-10"><Loader size={18} className="animate-spin text-gray-400" /></div>
+      ) : tags.length === 0 ? (
+        <p className="text-sm text-gray-400 py-6 text-center border border-dashed border-gray-200 rounded-lg">No tags yet. Add one above.</p>
+      ) : (
+        <div className="space-y-2">
+          {tags.map(tag => (
+            <div key={tag.id} className="border border-gray-200 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 bg-gray-50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="inline-flex items-center gap-1 font-medium text-teal-700"><AtSign size={14} />{tag.name}</span>
+                  <span className="text-xs text-gray-400">· {tag.memberCount} {tag.memberCount === 1 ? 'person' : 'people'}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setEditing(editing === tag.id ? null : tag.id)}
+                    className={clsx('inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg', editing === tag.id ? 'bg-brand-50 text-brand-700' : 'text-gray-600 hover:bg-gray-100')}>
+                    <Users size={13} /> Members
+                  </button>
+                  <button onClick={() => remove(tag.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Delete tag"><Trash2 size={14} /></button>
+                </div>
+              </div>
+              {editing === tag.id && (
+                <div className="max-h-64 overflow-y-auto p-2 space-y-0.5">
+                  {users.map(u => {
+                    const on = tag.memberIds.includes(u.id);
+                    return (
+                      <button key={u.id} onClick={() => toggleMember(tag, u.id)}
+                        className={clsx('w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left transition-colors', on ? 'bg-brand-50 text-brand-700' : 'hover:bg-gray-50 text-gray-700')}>
+                        <span className={clsx('w-4 h-4 rounded border flex items-center justify-center shrink-0', on ? 'bg-brand-600 border-brand-600' : 'border-gray-300')}>
+                          {on && <Check size={11} className="text-white" />}
+                        </span>
+                        <Avatar user={u} size={24} className="shrink-0" />
+                        {fullName(u)}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
+  const { can, isSuperAdmin } = usePermissions();
+  const canManageTags = isSuperAdmin || can('user.manage_access');
+  const tabs = [...TABS, ...(canManageTags ? [{ id: 'tags', label: 'Mention Tags', icon: AtSign }] : [])];
   const [activeTab, setActiveTab] = useState('general');
 
   return (
@@ -575,7 +682,7 @@ export default function SettingsPage() {
         {/* Left nav */}
         <aside className="w-full lg:w-56 shrink-0 bg-white border-b lg:border-b-0 lg:border-r lg:min-h-[calc(100vh-73px)] p-4">
           <nav className="flex gap-1 overflow-x-auto lg:flex-col lg:gap-0 lg:space-y-0.5">
-            {TABS.map(tab => {
+            {tabs.map(tab => {
               const Icon = tab.icon;
               return (
                 <button
@@ -601,6 +708,7 @@ export default function SettingsPage() {
           {activeTab === 'general'       && <GeneralTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'members'       && <MembersTab />}
+          {activeTab === 'tags'          && canManageTags && <TagsTab />}
         </main>
       </div>
     </div>

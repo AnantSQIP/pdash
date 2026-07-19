@@ -47,6 +47,7 @@ model Organization {
   channels         Channel[]
   holidays         Holiday[]
   leaveTypes       LeaveType[]
+  mentionTags      MentionTag[]
 
   @@map("organization")
 }
@@ -122,6 +123,8 @@ model User {
   pollsCreated           Poll[]                  @relation("PollCreator")
   pollVotes              PollVote[]
   savedMessages          SavedMessage[]
+  mentionTagMemberships  MentionTagMember[]
+  channelReads           ChannelRead[]
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
   metricsDaily           UserMetricDaily[]
@@ -1542,14 +1545,68 @@ model Channel {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
+  // Governance (owner-managed). Archiving makes the channel read-only; retentionDays,
+  // when set, auto-tombstones messages older than that many days via a periodic sweep.
+  archivedAt     DateTime?
+  archivedBy     String?
+  retentionDays  Int?
 
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   messages     Message[]
   members      ChannelMember[]
   polls        Poll[]
+  reads        ChannelRead[]
 
   @@index([organizationId])
   @@map("channel")
+}
+
+// A per-user read position in a channel. Powers unread badges (messages after
+// lastReadAt) and "seen by" receipts (a member has seen a message if their
+// lastReadAt is at/after that message's createdAt).
+model ChannelRead {
+  id                String   @id @default(cuid())
+  channelId         String
+  userId            String
+  lastReadAt        DateTime @default(now())
+  lastReadMessageId String?
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@index([channelId])
+  @@map("channel_read")
+}
+
+// A named, @mentionable group of people (e.g. "@attorneys"), managed by an admin.
+// Mentioning it in a channel notifies its members who are also channel members.
+// (Named MentionTag to avoid clashing with the metadata `Tag` label model above.)
+model MentionTag {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  createdBy      String
+  createdAt      DateTime @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members      MentionTagMember[]
+
+  @@unique([organizationId, name])
+  @@map("mention_tag")
+}
+
+model MentionTagMember {
+  id     String @id @default(cuid())
+  tagId  String
+  userId String
+
+  tag  MentionTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tagId, userId])
+  @@index([userId])
+  @@map("mention_tag_member")
 }
 
 model ChannelMember {

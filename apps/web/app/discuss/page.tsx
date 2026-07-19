@@ -4,16 +4,23 @@ import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
   Send, Hash, Plus, Lock, X, Loader, Trash2, Users, UserPlus, Crown, Check,
   Smile, Pin, PinOff, Pencil, Link2, Bell, BellOff, BarChart3, Bookmark, BookmarkCheck,
+  AtSign, Archive, ArchiveRestore, Settings2, Clock,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Channel, type Message, type ChannelMembers, type UserSummary, type MessagePoll, type SavedMessage } from '@/lib/api';
+import { api, type Channel, type Message, type ChannelMembers, type UserSummary, type MessagePoll, type SavedMessage, type Tag, type ChannelRead } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePresence } from '@/lib/presence-context';
 import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
-import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
+import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads, VoiceRecorderButton } from '@/components/files/Attachments';
+
+// Reserved group mentions offered in the composer alongside people and tags.
+const GROUP_MENTIONS = [
+  { key: 'channel', label: '@channel', hint: 'Notify everyone in this discussion' },
+  { key: 'everyone', label: '@everyone', hint: 'Notify everyone in this discussion' },
+];
 
 const EMOJI = ['👍', '❤️', '😄', '🎉', '👀', '🙏', '✅', '🔥'];
 
@@ -56,17 +63,35 @@ function renderContent(content: string, mentionRe: RegExp | null, mentionSet: Se
   });
 }
 
+// A composer autocomplete suggestion: a group mention, a named tag, or a person.
+type Suggestion =
+  | { kind: 'group'; key: string; token: string; label: string; hint: string }
+  | { kind: 'tag'; id: string; token: string; label: string; hint: string }
+  | { kind: 'user'; user: MiniUser; token: string; label: string };
+
 // ── @mention-aware composer input ──────────────────────────────────────────────
-function MentionInput({ value, onChange, onEnter, members, placeholder, disabled }: {
+function MentionInput({ value, onChange, onEnter, members, tags, placeholder, disabled }: {
   value: string; onChange: (v: string) => void; onEnter: () => void;
-  members: MiniUser[]; placeholder: string; disabled?: boolean;
+  members: MiniUser[]; tags: Tag[]; placeholder: string; disabled?: boolean;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState<{ text: string; start: number } | null>(null);
   const [hi, setHi] = useState(0);
-  const matches = query
-    ? members.filter(m => fullName(m).toLowerCase().includes(query.text.toLowerCase())).slice(0, 6)
-    : [];
+
+  const matches: Suggestion[] = useMemo(() => {
+    if (!query) return [];
+    const q = query.text.toLowerCase();
+    const groups: Suggestion[] = GROUP_MENTIONS
+      .filter(g => g.key.startsWith(q))
+      .map(g => ({ kind: 'group', key: g.key, token: `@${g.key} `, label: g.label, hint: g.hint }));
+    const tagHits: Suggestion[] = tags
+      .filter(t => t.name.toLowerCase().includes(q))
+      .map(t => ({ kind: 'tag', id: t.id, token: `@${t.name} `, label: `@${t.name}`, hint: `${t.memberCount} ${t.memberCount === 1 ? 'person' : 'people'}` }));
+    const users: Suggestion[] = members
+      .filter(m => fullName(m).toLowerCase().includes(q))
+      .map(m => ({ kind: 'user', user: m, token: `@${fullName(m)} `, label: fullName(m) }));
+    return [...groups, ...tagHits, ...users].slice(0, 8);
+  }, [query, members, tags]);
 
   function recompute(val: string, caret: number) {
     const m = val.slice(0, caret).match(/@([^\s@]*)$/);
@@ -77,17 +102,16 @@ function MentionInput({ value, onChange, onEnter, members, placeholder, disabled
     onChange(e.target.value);
     recompute(e.target.value, e.target.selectionStart ?? e.target.value.length);
   }
-  function pick(u: MiniUser) {
+  function pick(s: Suggestion) {
     if (!query) return;
     const caret = ref.current?.selectionStart ?? value.length;
     const before = value.slice(0, query.start);
     const after = value.slice(caret);
-    const token = `@${fullName(u)} `;
-    onChange(before + token + after);
+    onChange(before + s.token + after);
     setQuery(null);
     requestAnimationFrame(() => {
       const el = ref.current;
-      if (el) { el.focus(); const pos = (before + token).length; el.setSelectionRange(pos, pos); }
+      if (el) { el.focus(); const pos = (before + s.token).length; el.setSelectionRange(pos, pos); }
     });
   }
   function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -103,13 +127,23 @@ function MentionInput({ value, onChange, onEnter, members, placeholder, disabled
   return (
     <div className="relative flex-1 min-w-0">
       {query && matches.length > 0 && (
-        <div className="absolute bottom-full mb-2 left-0 w-64 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-20">
-          {matches.map((u, i) => (
-            <button type="button" key={u.id} onMouseDown={e => { e.preventDefault(); pick(u); }}
-              className={clsx('w-full flex items-center gap-2 px-2 py-1.5 text-sm text-left', i === hi ? 'bg-brand-50 text-brand-700' : 'hover:bg-gray-50 text-gray-700')}>
-              <Avatar user={u} size={22} className="shrink-0" /> {fullName(u)}
-            </button>
-          ))}
+        <div className="absolute bottom-full mb-2 left-0 w-72 max-h-60 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-20">
+          {matches.map((s, i) => {
+            const active = i === hi;
+            const key = s.kind === 'user' ? s.user.id : s.kind === 'tag' ? s.id : s.key;
+            return (
+              <button type="button" key={`${s.kind}-${key}`} onMouseDown={e => { e.preventDefault(); pick(s); }}
+                className={clsx('w-full flex items-center gap-2 px-2 py-1.5 text-sm text-left', active ? 'bg-brand-50 text-brand-700' : 'hover:bg-gray-50 text-gray-700')}>
+                {s.kind === 'user'
+                  ? <Avatar user={s.user} size={22} className="shrink-0" />
+                  : <span className={clsx('w-[22px] h-[22px] rounded-full flex items-center justify-center shrink-0', s.kind === 'group' ? 'bg-brand-100 text-brand-600' : 'bg-teal-100 text-teal-600')}>{s.kind === 'group' ? <Users size={12} /> : <AtSign size={12} />}</span>}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{s.label}</span>
+                  {s.kind !== 'user' && <span className="block text-[10px] text-gray-400 truncate">{s.hint}</span>}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
       <input ref={ref} value={value} onChange={handleChange} onKeyDown={handleKey} placeholder={placeholder} disabled={disabled}
@@ -395,10 +429,10 @@ function CreatePollModal({ onClose, onSubmit }: { onClose: () => void; onSubmit:
     </div>
   );
 }
-function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, mentionSet, usersById, highlight, authorStatus, saved, h }: {
+function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, mentionSet, usersById, highlight, authorStatus, saved, seenBy, h }: {
   msg: Message; sameAuthor: boolean; currentUserId?: string; canModerate: boolean;
   mentionRe: RegExp | null; mentionSet: Set<string>; usersById: Map<string, UserSummary>;
-  highlight: boolean; authorStatus?: string | null; saved: boolean; h: MsgHandlers;
+  highlight: boolean; authorStatus?: string | null; saved: boolean; seenBy?: number | null; h: MsgHandlers;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.content);
@@ -472,6 +506,11 @@ function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, m
             )}
           </>
         )}
+        {seenBy != null && seenBy > 0 && (
+          <p className="mt-0.5 flex items-center gap-1 text-[10px] text-gray-400">
+            <Check size={11} className="text-brand-500" /> Seen by {seenBy}
+          </p>
+        )}
       </div>
 
       {/* hover toolbar */}
@@ -528,6 +567,54 @@ function SavedModal({ saved, onClose, onJump }: { saved: SavedMessage[]; onClose
   );
 }
 
+// Owner-only settings popover: message retention + archive + delete.
+const RETENTION_OPTIONS = [
+  { value: null, label: 'Keep forever' },
+  { value: 30, label: '30 days' },
+  { value: 90, label: '90 days' },
+  { value: 180, label: '180 days' },
+  { value: 365, label: '1 year' },
+];
+function ChannelSettingsMenu({ channel, onClose, onArchive, onUnarchive, onRetention, onDelete }: {
+  channel: Channel; onClose: () => void;
+  onArchive: () => void; onUnarchive: () => void; onRetention: (days: number | null) => void; onDelete: () => void;
+}) {
+  const archived = !!channel.archivedAt;
+  return (
+    <>
+      <div className="fixed inset-0 z-20" onClick={onClose} />
+      <div className="absolute right-0 top-full mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-30 p-3 space-y-3">
+        <div>
+          <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+            <Clock size={12} /> Message retention
+          </label>
+          <select
+            value={channel.retentionDays == null ? '' : String(channel.retentionDays)}
+            onChange={e => onRetention(e.target.value === '' ? null : Number(e.target.value))}
+            className="w-full text-sm border border-gray-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-200">
+            {RETENTION_OPTIONS.map(o => <option key={o.label} value={o.value == null ? '' : o.value}>{o.label}</option>)}
+          </select>
+          <p className="text-[10px] text-gray-400 mt-1">Older messages are automatically deleted.</p>
+        </div>
+        <div className="border-t border-gray-100 pt-2 space-y-1">
+          {archived ? (
+            <button onClick={onUnarchive} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 hover:bg-gray-50">
+              <ArchiveRestore size={14} className="text-brand-600" /> Reopen discussion
+            </button>
+          ) : (
+            <button onClick={onArchive} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-gray-700 hover:bg-gray-50">
+              <Archive size={14} className="text-gray-500" /> Archive (read-only)
+            </button>
+          )}
+          <button onClick={onDelete} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-red-600 hover:bg-red-50">
+            <Trash2 size={14} /> Delete discussion
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function DiscussPage() {
   const { org, currentUser, users } = useOrg();
   const { presenceOf } = usePresence();
@@ -540,6 +627,7 @@ export default function DiscussPage() {
   const [showPinned, setShowPinned] = useState(false);
   const [showPoll, setShowPoll] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -581,14 +669,39 @@ export default function DiscussPage() {
   }
   const { data: savedList = [] } = useQuery<SavedMessage[]>({ queryKey: ['saved-messages'], queryFn: () => api.channels.saved(), enabled: !!currentUser?.id, staleTime: 30_000 });
   const savedIds = useMemo(() => new Set(savedList.map(m => m.id)), [savedList]);
+  // Named tags for @mention autocomplete + message highlighting.
+  const { data: tags = [] } = useQuery<Tag[]>({ queryKey: ['tags'], queryFn: () => api.tags.list(), staleTime: 60_000 });
+  // Per-member read positions for the active channel — powers "seen by" on own messages.
+  const { data: reads = [] } = useQuery<ChannelRead[]>({
+    queryKey: ['channel-reads', activeChannel?.id], queryFn: () => api.channels.reads(activeChannel!.id),
+    enabled: !!activeChannel?.id, refetchInterval: 15000,
+  });
+  const archived = !!activeChannel?.archivedAt;
 
-  // Mention rendering data (highlight any "@Full Name" of an org member, longest first).
+  // Mention rendering data: highlight member names, group mentions, and tag names (longest first).
   const usersById = useMemo(() => new Map(users.map(u => [u.id, u])), [users]);
-  const mentionNames = useMemo(() => users.map(u => `@${fullName(u)}`).filter(n => n.length > 1), [users]);
+  const mentionNames = useMemo(() => [
+    ...users.map(u => `@${fullName(u)}`),
+    '@channel', '@everyone',
+    ...tags.map(t => `@${t.name}`),
+  ].filter(n => n.length > 1), [users, tags]);
   const mentionRe = useMemo(() => mentionNames.length
     ? new RegExp('(' + mentionNames.map(escapeRegex).sort((a, b) => b.length - a.length).join('|') + ')', 'g')
     : null, [mentionNames]);
   const mentionSet = useMemo(() => new Set(mentionNames), [mentionNames]);
+
+  // Mark the channel read when it's opened or receives new messages (drives unread + seen-by).
+  useEffect(() => {
+    if (!activeChannel?.id || messagesLoading) return;
+    const chId = activeChannel.id;
+    api.channels.markRead(chId)
+      .then(() => {
+        qc.invalidateQueries({ queryKey: ['channels', org?.id] });
+        qc.invalidateQueries({ queryKey: ['channel-reads', chId] });
+      })
+      .catch(() => { /* non-critical */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChannel?.id, messages.length, messagesLoading]);
 
   // Keep pinned to the bottom on new messages — unless we're jumping to a deep-linked one.
   useEffect(() => { if (!highlightId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, highlightId]);
@@ -597,6 +710,20 @@ export default function DiscussPage() {
     const el = document.getElementById(`msg-${highlightId}`);
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); const t = setTimeout(() => setHighlightId(null), 2500); return () => clearTimeout(t); }
   }, [highlightId, messages]);
+
+  // "Seen by" is shown only on the actor's own latest message (as in most chat apps).
+  const lastOwnMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].userId === currentUser?.id && !messages[i].deletedAt) return messages[i].id;
+    }
+    return null;
+  }, [messages, currentUser?.id]);
+  const seenByCount = useMemo(() => {
+    const own = messages.find(m => m.id === lastOwnMessageId);
+    if (!own) return 0;
+    const ts = new Date(own.createdAt).getTime();
+    return reads.filter(r => r.userId !== currentUser?.id && new Date(r.lastReadAt).getTime() >= ts).length;
+  }, [messages, lastOwnMessageId, reads, currentUser?.id]);
 
   const invalidateChannels = () => qc.invalidateQueries({ queryKey: ['channels', org?.id] });
   const invalidateMessages = () => { qc.invalidateQueries({ queryKey: ['messages', activeChannel?.id] }); qc.invalidateQueries({ queryKey: ['pinned', activeChannel?.id] }); };
@@ -672,6 +799,20 @@ export default function DiscussPage() {
     catch (e) { alert(e instanceof Error ? e.message : 'Could not rename the discussion'); }
   }
 
+  async function archiveChannel(id: string) {
+    if (!confirm('Archive this discussion? It becomes read-only until reopened.')) return;
+    try { await api.channels.archive(id); invalidateChannels(); toast('Discussion archived'); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not archive'); }
+  }
+  async function unarchiveChannel(id: string) {
+    try { await api.channels.unarchive(id); invalidateChannels(); toast('Discussion reopened'); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not reopen'); }
+  }
+  async function setRetention(id: string, retentionDays: number | null) {
+    try { await api.channels.update(id, { retentionDays }); invalidateChannels(); toast(retentionDays ? `Messages auto-delete after ${retentionDays} days` : 'Retention turned off'); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not update retention'); }
+  }
+
   return (
     <div className="flex flex-col lg:flex-row h-full">
       {/* Sidebar */}
@@ -682,15 +823,22 @@ export default function DiscussPage() {
             <div className="flex items-center justify-center py-8"><Loader size={16} className="animate-spin text-gray-400" /></div>
           ) : channels.length === 0 ? (
             <p className="px-4 py-6 text-xs text-gray-400 text-center">No discussions yet. Create one — only the people you add will see it.</p>
-          ) : channels.map(ch => (
-            <button key={ch.id} onClick={() => setActiveChannelId(ch.id)}
-              className={clsx('w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors',
-                (activeChannel?.id === ch.id) ? 'bg-brand-50 text-brand-700 font-medium' : 'text-gray-600 hover:bg-gray-100')}>
-              <Lock size={12} className="shrink-0 text-gray-400" />
-              <span className="flex-1 truncate">{ch.name}</span>
-              {ch._count && ch._count.messages > 0 && <span className="text-xs text-gray-400">{ch._count.messages}</span>}
-            </button>
-          ))}
+          ) : channels.map(ch => {
+            const active = activeChannel?.id === ch.id;
+            const unread = ch.unreadCount ?? 0;
+            const isArchived = !!ch.archivedAt;
+            return (
+              <button key={ch.id} onClick={() => setActiveChannelId(ch.id)}
+                className={clsx('w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors',
+                  active ? 'bg-brand-50 text-brand-700 font-medium' : clsx('hover:bg-gray-100', unread > 0 ? 'text-gray-900 font-semibold' : 'text-gray-600'))}>
+                {isArchived ? <Archive size={12} className="shrink-0 text-gray-400" /> : <Lock size={12} className="shrink-0 text-gray-400" />}
+                <span className="flex-1 truncate">{ch.name}</span>
+                {unread > 0 && !active
+                  ? <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-brand-600 text-white text-[10px] font-semibold flex items-center justify-center tabular-nums">{unread > 99 ? '99+' : unread}</span>
+                  : ch._count && ch._count.messages > 0 ? <span className="text-xs text-gray-400">{ch._count.messages}</span> : null}
+              </button>
+            );
+          })}
         </div>
         <div className="px-4 py-3 border-t border-gray-200 space-y-2">
           <button onClick={() => setShowSaved(true)} className="flex items-center gap-2 text-sm text-gray-500 hover:text-brand-600 w-full transition-colors">
@@ -741,9 +889,21 @@ export default function DiscussPage() {
                   <Users size={13} /> {isOwner ? 'Manage' : 'Members'}
                 </button>
                 {isOwner && (
-                  <button onClick={() => deleteChannel(activeChannel.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg" title="Delete discussion">
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="relative">
+                    <button onClick={() => setShowSettings(v => !v)} className={clsx('p-1.5 border rounded-lg', showSettings ? 'bg-gray-100 border-gray-300 text-gray-700' : 'text-gray-400 border-gray-200 hover:bg-gray-50')} title="Discussion settings">
+                      <Settings2 size={14} />
+                    </button>
+                    {showSettings && (
+                      <ChannelSettingsMenu
+                        channel={activeChannel}
+                        onClose={() => setShowSettings(false)}
+                        onArchive={() => { setShowSettings(false); archiveChannel(activeChannel.id); }}
+                        onUnarchive={() => { setShowSettings(false); unarchiveChannel(activeChannel.id); }}
+                        onRetention={(d) => setRetention(activeChannel.id, d)}
+                        onDelete={() => { setShowSettings(false); deleteChannel(activeChannel.id); }}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -777,26 +937,35 @@ export default function DiscussPage() {
                 return (
                   <MessageItem key={msg.id} msg={msg} sameAuthor={sameAuthor} currentUserId={currentUser?.id}
                     canModerate={isOwner} mentionRe={mentionRe} mentionSet={mentionSet} usersById={usersById}
-                    highlight={highlightId === msg.id} authorStatus={presenceOf(msg.userId)?.status} saved={savedIds.has(msg.id)} h={handlers} />
+                    highlight={highlightId === msg.id} authorStatus={presenceOf(msg.userId)?.status} saved={savedIds.has(msg.id)}
+                    seenBy={msg.id === lastOwnMessageId ? seenByCount : null} h={handlers} />
                 );
               })}
               <div ref={messagesEndRef} />
             </div>
 
-            <form onSubmit={sendMessage} className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-white space-y-2">
-              {attachments.error && <p className="text-xs text-red-600">{attachments.error}</p>}
-              <PendingAttachmentChips items={attachments.pending} onRemove={attachments.remove} />
-              <div className="flex items-center gap-2 bg-gray-50 rounded-xl border border-gray-200 px-3 py-2.5 focus-within:border-brand-400 transition-colors">
-                <AttachButton onPick={attachments.add} disabled={sending} />
-                <button type="button" onClick={() => setShowPoll(true)} disabled={sending} title="Create a poll"
-                  className="p-1 text-gray-400 hover:text-brand-600 disabled:opacity-50 shrink-0"><BarChart3 size={18} /></button>
-                <MentionInput value={draft} onChange={setDraft} onEnter={sendMessage} members={channelMembers} placeholder={`Message ${activeChannel.name}  ·  @ to mention`} disabled={sending} />
-                <button type="submit" disabled={(!draft.trim() && attachments.documentIds.length === 0) || attachments.uploading || sending}
-                  className="p-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 shrink-0">
-                  {sending ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
-                </button>
+            {archived ? (
+              <div className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-center gap-2 text-sm text-gray-500">
+                <Archive size={15} /> This discussion is archived and read-only.
+                {isOwner && <button onClick={() => unarchiveChannel(activeChannel.id)} className="text-brand-600 hover:underline font-medium">Reopen</button>}
               </div>
-            </form>
+            ) : (
+              <form onSubmit={sendMessage} className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-white space-y-2">
+                {attachments.error && <p className="text-xs text-red-600">{attachments.error}</p>}
+                <PendingAttachmentChips items={attachments.pending} onRemove={attachments.remove} />
+                <div className="flex items-center gap-2 bg-gray-50 rounded-xl border border-gray-200 px-3 py-2.5 focus-within:border-brand-400 transition-colors">
+                  <AttachButton onPick={attachments.add} disabled={sending} />
+                  <VoiceRecorderButton onRecorded={attachments.add} disabled={sending} />
+                  <button type="button" onClick={() => setShowPoll(true)} disabled={sending} title="Create a poll"
+                    className="p-1 text-gray-400 hover:text-brand-600 disabled:opacity-50 shrink-0"><BarChart3 size={18} /></button>
+                  <MentionInput value={draft} onChange={setDraft} onEnter={sendMessage} members={channelMembers} tags={tags} placeholder={`Message ${activeChannel.name}  ·  @ to mention`} disabled={sending} />
+                  <button type="submit" disabled={(!draft.trim() && attachments.documentIds.length === 0) || attachments.uploading || sending}
+                    className="p-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 shrink-0">
+                    {sending ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
+                  </button>
+                </div>
+              </form>
+            )}
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400">

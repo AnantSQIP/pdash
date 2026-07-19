@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateChannelDto, UpdateChannelDto, CreateMessageDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
@@ -51,9 +51,9 @@ export class ChannelsService {
   }
 
   /** Verify the channel exists and the actor is a member; otherwise 404/403. No admin bypass. */
-  private async assertMember(channelId: string): Promise<{ channel: { id: string; createdBy: string }; actorId: string }> {
+  private async assertMember(channelId: string): Promise<{ channel: { id: string; createdBy: string; archivedAt: Date | null }; actorId: string }> {
     const actorId = this.actor();
-    const channel = await this.prisma.channel.findFirst({ where: { id: channelId, deletedAt: null }, select: { id: true, createdBy: true } });
+    const channel = await this.prisma.channel.findFirst({ where: { id: channelId, deletedAt: null }, select: { id: true, createdBy: true, archivedAt: true } });
     if (!channel) throw new NotFoundException(`Channel ${channelId} not found`);
     const member = await this.prisma.channelMember.findUnique({ where: { channelId_userId: { channelId, userId: actorId } } });
     if (!member) throw new ForbiddenException('You are not a member of this discussion.');
@@ -74,7 +74,9 @@ export class ChannelsService {
    * Find which channel members a message text @mentions. Mentions are detected by
    * scanning for "@First Last" against the CHANNEL's own members (never the whole
    * org), so a mention always resolves to someone who can actually see the message.
-   * The author is excluded — you don't notify yourself.
+   * Also recognises the group mentions "@channel"/"@everyone" (all members) and any
+   * named tag ("@attorneys") — a tag resolves only to its members who are ALSO in
+   * this channel. The author is always excluded — you don't notify yourself.
    */
   private async scanMentions(channelId: string, content: string, excludeUserId: string): Promise<string[]> {
     if (!content.includes('@')) return [];
@@ -82,13 +84,35 @@ export class ChannelsService {
       where: { channelId },
       include: { user: { select: { id: true, firstName: true, lastName: true } } },
     });
-    const hits: string[] = [];
+    const memberIds = new Set(members.map(m => m.userId));
+    const hits = new Set<string>();
+
+    // Group mention: "@channel" or "@everyone" pings everyone in the channel.
+    if (/@(channel|everyone)\b/i.test(content)) {
+      for (const m of members) if (m.userId !== excludeUserId) hits.add(m.userId);
+    }
+
+    // Named tags: an org tag "@attorneys" resolves to its members present in this channel.
+    const ch = await this.prisma.channel.findUnique({ where: { id: channelId }, select: { organizationId: true } });
+    if (ch) {
+      const tags = await this.prisma.mentionTag.findMany({
+        where: { organizationId: ch.organizationId },
+        include: { members: { select: { userId: true } } },
+      });
+      for (const t of tags) {
+        if (content.includes(`@${t.name}`)) {
+          for (const tm of t.members) if (tm.userId !== excludeUserId && memberIds.has(tm.userId)) hits.add(tm.userId);
+        }
+      }
+    }
+
+    // Individual "@First Last" mentions.
     for (const m of members) {
       if (m.userId === excludeUserId) continue;
       const name = `${m.user.firstName} ${m.user.lastName ?? ''}`.trim();
-      if (name && content.includes(`@${name}`)) hits.push(m.userId);
+      if (name && content.includes(`@${name}`)) hits.add(m.userId);
     }
-    return hits;
+    return [...hits];
   }
 
   private normalize<T extends { mentions?: { userId: string }[] }>(m: T) {
@@ -101,10 +125,10 @@ export class ChannelsService {
     return m ? this.normalize(m) : null;
   }
 
-  /** Only the discussions the actor has been added to. */
-  listChannels(organizationId: string) {
+  /** Only the discussions the actor has been added to, each with the actor's unread count. */
+  async listChannels(organizationId: string) {
     const actorId = this.actor();
-    return this.prisma.channel.findMany({
+    const channels = await this.prisma.channel.findMany({
       where: { organizationId, deletedAt: null, members: { some: { userId: actorId } } },
       include: {
         _count: { select: { messages: true, members: true } },
@@ -112,6 +136,21 @@ export class ChannelsService {
       },
       orderBy: { createdAt: 'asc' },
     });
+    // Unread = messages (from other people) newer than where the actor last read.
+    const reads = await this.prisma.channelRead.findMany({
+      where: { userId: actorId, channelId: { in: channels.map(c => c.id) } },
+      select: { channelId: true, lastReadAt: true },
+    });
+    const readAt = new Map(reads.map(r => [r.channelId, r.lastReadAt]));
+    const counts = await Promise.all(channels.map(c =>
+      this.prisma.message.count({
+        where: {
+          channelId: c.id, deletedAt: null, userId: { not: actorId },
+          ...(readAt.has(c.id) ? { createdAt: { gt: readAt.get(c.id)! } } : {}),
+        },
+      }),
+    ));
+    return channels.map((c, i) => ({ ...c, unreadCount: counts[i] }));
   }
 
   async getChannel(id: string) {
@@ -186,7 +225,8 @@ export class ChannelsService {
 
   async createMessage(channelId: string, dto: CreateMessageDto) {
     // Posting requires membership — there is NO auto-join (that would defeat privacy).
-    const { actorId } = await this.assertMember(channelId);
+    const { channel, actorId } = await this.assertMember(channelId);
+    if (channel.archivedAt) throw new BadRequestException('This discussion is archived and read-only.');
     const content = dto.content?.trim() ?? '';
     // Attachments must be the actor's own, still-unattached uploads.
     const documentIds = await this.documents.assertAttachable(dto.documentIds ?? [], actorId);
@@ -291,7 +331,8 @@ export class ChannelsService {
 
   /** Post a poll into a channel — it becomes a message whose content is the question. */
   async createPoll(channelId: string, dto: { question: string; options: string[]; multiple?: boolean }) {
-    const { actorId } = await this.assertMember(channelId);
+    const { channel, actorId } = await this.assertMember(channelId);
+    if (channel.archivedAt) throw new BadRequestException('This discussion is archived and read-only.');
     const question = dto.question?.trim() ?? '';
     const opts = (dto.options ?? []).map(o => (o ?? '').trim()).filter(Boolean);
     if (!question) throw new BadRequestException('A poll needs a question.');
@@ -379,6 +420,42 @@ export class ChannelsService {
     return rows.map(r => ({ ...this.normalize(r.message), channel: (r.message as { channel: unknown }).channel, savedAt: r.createdAt }));
   }
 
+  // ── read receipts ───────────────────────────────────────────────────────────
+  /** Mark the channel read up to its latest message for the actor (drives unread + seen-by). */
+  async markRead(channelId: string) {
+    const { actorId } = await this.assertMember(channelId);
+    const latest = await this.prisma.message.findFirst({
+      where: { channelId, deletedAt: null }, orderBy: { createdAt: 'desc' }, select: { id: true },
+    });
+    await this.prisma.channelRead.upsert({
+      where: { channelId_userId: { channelId, userId: actorId } },
+      create: { channelId, userId: actorId, lastReadMessageId: latest?.id ?? null },
+      update: { lastReadAt: new Date(), lastReadMessageId: latest?.id ?? null },
+    });
+    return { ok: true };
+  }
+
+  /** Per-member read state for this channel — the client derives "seen by" for own messages. */
+  async listReads(channelId: string) {
+    await this.assertMember(channelId);
+    const reads = await this.prisma.channelRead.findMany({
+      where: { channelId },
+      select: { userId: true, lastReadAt: true },
+    });
+    return reads.map(r => ({ userId: r.userId, lastReadAt: r.lastReadAt }));
+  }
+
+  // ── governance: archive (owner-only) ────────────────────────────────────────
+  /** Archive/unarchive a channel — owner only. Archived channels are read-only. */
+  async setArchived(channelId: string, archived: boolean) {
+    const { channel, actorId } = await this.assertOwner(channelId);
+    await this.prisma.channel.update({
+      where: { id: channel.id },
+      data: archived ? { archivedAt: new Date(), archivedBy: actorId } : { archivedAt: null, archivedBy: null },
+    });
+    return { ok: true, archived };
+  }
+
   // ── Member management (owner-only) ──────────────────────────────────────────
   async getMembers(channelId: string) {
     const { channel } = await this.assertMember(channelId);
@@ -410,5 +487,55 @@ export class ChannelsService {
     if (userId === channel.createdBy) throw new ForbiddenException('The owner cannot be removed from their own discussion.');
     await this.prisma.channelMember.deleteMany({ where: { channelId, userId } });
     return { ok: true };
+  }
+}
+
+/**
+ * Retention sweep: for channels with a retentionDays policy, tombstone messages older
+ * than the window (same soft-delete shape as a manual delete — content/pin/reactions/
+ * mentions cleared, attachments soft-deleted, polls removed — so the thread and any
+ * deep links stay intact). Runs in-process on a timer, like the meeting reminder sweep.
+ */
+@Injectable()
+export class ChannelRetentionService implements OnModuleInit {
+  private readonly logger = new Logger(ChannelRetentionService.name);
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly documents: DocumentsService,
+  ) {}
+
+  onModuleInit() {
+    setTimeout(() => this.safeSweep(), 60_000);
+    setInterval(() => this.safeSweep(), 6 * 60 * 60_000);
+  }
+  private async safeSweep() {
+    try { await this.sweep(); } catch (e) { this.logger.warn(`channel retention sweep failed: ${String(e)}`); }
+  }
+  async sweep() {
+    const channels = await this.prisma.channel.findMany({
+      where: { deletedAt: null, retentionDays: { not: null } },
+      select: { id: true, retentionDays: true },
+    });
+    const now = Date.now();
+    let purged = 0;
+    for (const c of channels) {
+      const cutoff = new Date(now - (c.retentionDays ?? 0) * 24 * 60 * 60_000);
+      const stale = await this.prisma.message.findMany({
+        where: { channelId: c.id, deletedAt: null, createdAt: { lt: cutoff } },
+        select: { id: true, pollId: true, attachments: { select: { documentId: true } } },
+      });
+      for (const m of stale) {
+        await this.prisma.$transaction([
+          this.prisma.messageReaction.deleteMany({ where: { messageId: m.id } }),
+          this.prisma.messageMention.deleteMany({ where: { messageId: m.id } }),
+          this.prisma.message.update({ where: { id: m.id }, data: { deletedAt: new Date(), content: '', pinnedAt: null, pinnedBy: null } }),
+        ]);
+        if (m.attachments.length) await this.documents.softDeleteAttached(m.attachments.map(a => a.documentId));
+        if (m.pollId) await this.prisma.poll.delete({ where: { id: m.pollId } }).catch(() => { /* already gone */ });
+        purged++;
+      }
+    }
+    if (purged) this.logger.log(`retention: tombstoned ${purged} message(s) across ${channels.length} channel(s)`);
+    return { purged };
   }
 }

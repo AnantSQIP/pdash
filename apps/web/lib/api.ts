@@ -230,10 +230,16 @@ export type SavedMessage = Message & { channel: { id: string; name: string }; sa
 export type Channel = {
   id: string; organizationId: string; name: string; description?: string;
   type: string; createdBy: string; createdAt: string;
+  archivedAt?: string | null; retentionDays?: number | null;
+  unreadCount?: number;
   _count?: { messages: number; members: number };
   messages?: Message[];
   members?: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
 };
+// Per-member read position in a channel (drives "seen by" on own messages).
+export type ChannelRead = { userId: string; lastReadAt: string };
+// A named, @mentionable group of people.
+export type Tag = { id: string; name: string; memberIds: string[]; memberCount: number };
 export type ChannelMembers = {
   ownerId: string;
   members: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
@@ -774,9 +780,11 @@ export const api = {
     get: (id: string) => req<Channel>(`/channels/${id}`),
     create: (data: { organizationId: string; name: string; description?: string; memberIds?: string[] }) =>
       req<Channel>('/channels', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: { name?: string; description?: string }) =>
+    update: (id: string, data: { name?: string; description?: string; retentionDays?: number | null }) =>
       req<Channel>(`/channels/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/channels/${id}`, { method: 'DELETE' }),
+    archive: (id: string) => req<{ ok: boolean; archived: boolean }>(`/channels/${id}/archive`, { method: 'POST' }),
+    unarchive: (id: string) => req<{ ok: boolean; archived: boolean }>(`/channels/${id}/unarchive`, { method: 'POST' }),
     messages: (channelId: string, limit?: number) =>
       req<Message[]>(`/channels/${channelId}/messages${limit ? `?limit=${limit}` : ''}`),
     // Author is the verified cookie actor — no userId sent.
@@ -804,6 +812,8 @@ export const api = {
     unsaveMessage: (channelId: string, messageId: string) =>
       req<{ saved: boolean }>(`/channels/${channelId}/messages/${messageId}/unsave`, { method: 'POST' }),
     saved: () => req<SavedMessage[]>('/channels/me/saved'),
+    markRead: (channelId: string) => req<{ ok: boolean }>(`/channels/${channelId}/read`, { method: 'POST' }),
+    reads: (channelId: string) => req<ChannelRead[]>(`/channels/${channelId}/reads`),
     members: (channelId: string) => req<ChannelMembers>(`/channels/${channelId}/members`),
     addMembers: (channelId: string, userIds: string[]) =>
       req<{ ok: boolean }>(`/channels/${channelId}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
@@ -811,6 +821,14 @@ export const api = {
       req<void>(`/channels/${channelId}/members/${userId}`, { method: 'DELETE' }),
   },
   search: (q: string) => req<SearchResults>(`/search?q=${encodeURIComponent(q)}`),
+  tags: {
+    list: () => req<Tag[]>('/tags'),
+    create: (name: string) => req<Tag>('/tags', { method: 'POST', body: JSON.stringify({ name }) }),
+    rename: (id: string, name: string) => req<Tag>(`/tags/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+    remove: (id: string) => req<void>(`/tags/${id}`, { method: 'DELETE' }),
+    setMembers: (id: string, userIds: string[]) =>
+      req<{ ok: boolean; count: number }>(`/tags/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
+  },
   presence: {
     org: () => req<PresenceEntry[]>('/presence/org'),
     me: () => req<MyPresence>('/presence/me'),

@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 
 export class CreateChannelDto {
   @IsString()
@@ -46,6 +46,14 @@ export class UpdateChannelDto {
   @IsString()
   @MaxLength(300)
   description?: string;
+
+  // Auto-delete messages older than this many days (null clears the policy = keep forever).
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsInt()
+  @Min(1)
+  @Max(3650)
+  retentionDays?: number | null;
 }
 
 export class CreateMessageDto {

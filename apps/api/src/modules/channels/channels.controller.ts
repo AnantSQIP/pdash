@@ -44,6 +44,28 @@ export class ChannelsController {
     return this.channels.listPinned(id);
   }
 
+  // ── read receipts ────────────────────────────────────────────────────────────
+  @Post(':id/read')
+  markRead(@Param('id') id: string) {
+    return this.channels.markRead(id);
+  }
+
+  @Get(':id/reads')
+  listReads(@Param('id') id: string) {
+    return this.channels.listReads(id);
+  }
+
+  // ── governance: archive (owner-only, enforced in the service) ────────────────
+  @Post(':id/archive')
+  archive(@Param('id') id: string) {
+    return this.channels.setArchived(id, true);
+  }
+
+  @Post(':id/unarchive')
+  unarchive(@Param('id') id: string) {
+    return this.channels.setArchived(id, false);
+  }
+
   // ── saved messages ─────────────────────────────────────────────────────────
   @Get('me/saved')
   listSaved() {
