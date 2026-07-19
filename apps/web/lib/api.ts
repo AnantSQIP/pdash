@@ -260,6 +260,23 @@ export type HrLetter = {
   issuedBy: string; issuedAt: string; acknowledgedAt?: string | null;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
 };
+
+// ── Company comms & knowledge (announcements / policies / celebrations / org chart) ──
+type PersonLite = Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto' | 'designation'>;
+export type Announcement = {
+  id: string; organizationId: string; authorId: string; title: string; body: string;
+  pinnedAt?: string | null; createdAt: string; updatedAt: string; author?: PersonLite | null;
+};
+export type Celebration = { user: PersonLite; inDays: number; month: number; day: number; years?: number };
+export type Celebrations = { anniversaries: (Celebration & { years: number })[]; birthdays: Celebration[] };
+export type OrgChartNode = PersonLite & { managerIds: string[] };
+export type PolicyDoc = { id: string; name: string; fileUrl: string; mimeType?: string | null; fileSize?: number | null };
+export type Policy = {
+  id: string; organizationId: string; title: string; description?: string | null; category?: string | null;
+  body?: string | null; documentId?: string | null; requiresAck: boolean; publishedBy: string;
+  createdAt: string; updatedAt: string; document?: PolicyDoc | null; ackCount: number; acknowledgedByMe: boolean;
+};
+export type PolicyAckStatus = { user: PersonLite; acknowledgedAt: string | null };
 export type ChannelMembers = {
   ownerId: string;
   members: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
@@ -878,6 +895,25 @@ export const api = {
     issueLetter: (data: { userId: string; type: string; title: string; body: string }) =>
       req<HrLetter>('/lifecycle/letters', { method: 'POST', body: JSON.stringify(data) }),
     deleteLetter: (id: string) => req<void>(`/lifecycle/letters/${id}`, { method: 'DELETE' }),
+  },
+  company: {
+    announcements: () => req<Announcement[]>('/company/announcements'),
+    createAnnouncement: (data: { title: string; body: string; pinned?: boolean }) =>
+      req<Announcement>('/company/announcements', { method: 'POST', body: JSON.stringify(data) }),
+    updateAnnouncement: (id: string, data: { title: string; body: string; pinned?: boolean }) =>
+      req<Announcement>(`/company/announcements/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    pinAnnouncement: (id: string) => req<Announcement>(`/company/announcements/${id}/pin`, { method: 'POST' }),
+    deleteAnnouncement: (id: string) => req<void>(`/company/announcements/${id}`, { method: 'DELETE' }),
+    celebrations: () => req<Celebrations>('/company/celebrations'),
+    orgChart: () => req<OrgChartNode[]>('/company/org-chart'),
+    policies: () => req<Policy[]>('/company/policies'),
+    createPolicy: (data: { title: string; description?: string; category?: string; body?: string; documentId?: string; requiresAck?: boolean }) =>
+      req<Policy>('/company/policies', { method: 'POST', body: JSON.stringify(data) }),
+    updatePolicy: (id: string, data: { title: string; description?: string; category?: string; body?: string; documentId?: string; requiresAck?: boolean }) =>
+      req<Policy>(`/company/policies/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    deletePolicy: (id: string) => req<void>(`/company/policies/${id}`, { method: 'DELETE' }),
+    acknowledgePolicy: (id: string) => req<{ ok: boolean }>(`/company/policies/${id}/acknowledge`, { method: 'POST' }),
+    policyAckStatus: (id: string) => req<PolicyAckStatus[]>(`/company/policies/${id}/acknowledgements`),
   },
   presence: {
     org: () => req<PresenceEntry[]>('/presence/org'),

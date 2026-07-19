@@ -65,6 +65,10 @@ export const MODULES: ModuleDef[] = [
   // `manage` = HR/Admin run the processes and issue letters; `view` sees the boards.
   // (A person always sees their OWN onboarding tasks + letters without any permission.)
   { key: 'lifecycle',   label: 'Employee Lifecycle', actions: ['view', 'manage'] },
+  // Company feed + HR policy library. Reading is open to everyone (no permission);
+  // `manage` = HR/Admin post announcements / publish policies.
+  { key: 'announcement', label: 'Announcements', actions: ['manage'] },
+  { key: 'policy',       label: 'HR Policies',   actions: ['manage'] },
   { key: 'role',        label: 'Roles',        actions: ['view', 'create', 'update', 'delete'] },
   { key: 'group',       label: 'Permission Groups', actions: ['view', 'create', 'update', 'delete', 'manage_members'] },
   { key: 'permission',  label: 'Permissions',  actions: ['view'] },
@@ -224,6 +228,8 @@ const HR_CODES = [
   code('profile', 'view'), code('profile', 'view.personal'), code('profile', 'update.any'),
   // People-ops owns onboarding/offboarding and issues HR letters.
   code('lifecycle', 'view'), code('lifecycle', 'manage'),
+  // People-ops posts company announcements and publishes HR policies.
+  code('announcement', 'manage'), code('policy', 'manage'),
 ];
 
 // Admin: everything except the most destructive RBAC delete (kept for Super Admin).

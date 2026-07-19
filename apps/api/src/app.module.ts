@@ -43,6 +43,7 @@ import { PresenceModule } from './modules/presence/presence.module';
 import { SearchModule } from './modules/search/search.module';
 import { TagsModule } from './modules/tags/tags.module';
 import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
+import { CompanyModule } from './modules/company/company.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
     SearchModule,
     TagsModule,
     LifecycleModule,
+    CompanyModule,
   ],
   providers: [
     // 0) Global error mapping: Prisma/unknown errors → correct HTTP status (not 500).

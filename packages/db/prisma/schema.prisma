@@ -51,6 +51,8 @@ model Organization {
   lifecycleProcesses LifecycleProcess[]
   checklistTemplates ChecklistTemplate[]
   hrLetters          HrLetter[]
+  announcements      Announcement[]
+  policies           Policy[]
 
   @@map("organization")
 }
@@ -1110,6 +1112,7 @@ model Document {
   blob               DocumentBlob?
   messageAttachments MessageAttachment[]
   commentAttachments CommentAttachment[]
+  policies           Policy[]
 
   @@index([uploadedBy])
   @@index([deletedAt])
@@ -1901,4 +1904,62 @@ model HrLetter {
   @@index([userId])
   @@index([organizationId])
   @@map("hr_letter")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 18. COMPANY COMMS & KNOWLEDGE DOMAIN (TeamNest port — announcements + HR policies)
+// ═══════════════════════════════════════════════════════════════
+
+// An org-wide announcement on the Company feed (broadcast — distinct from the
+// membership-gated Discuss channels). Everyone in the org can read; HR/Admin post.
+model Announcement {
+  id             String    @id @default(cuid())
+  organizationId String
+  authorId       String
+  title          String
+  body           String
+  pinnedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("announcement")
+}
+
+// A policy/handbook in the central HR library. Has an optional attached file (Document)
+// and/or inline body; can require every employee to acknowledge that they've read it.
+model Policy {
+  id             String   @id @default(cuid())
+  organizationId String
+  title          String
+  description    String?
+  category       String?
+  body           String?
+  documentId     String?
+  requiresAck    Boolean  @default(false)
+  publishedBy    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document        Document?              @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  acknowledgements PolicyAcknowledgement[]
+
+  @@index([organizationId])
+  @@map("policy")
+}
+
+model PolicyAcknowledgement {
+  id             String   @id @default(cuid())
+  policyId       String
+  userId         String
+  acknowledgedAt DateTime @default(now())
+
+  policy Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([policyId, userId])
+  @@index([policyId])
+  @@map("policy_acknowledgement")
 }

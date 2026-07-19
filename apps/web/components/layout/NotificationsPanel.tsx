@@ -7,7 +7,7 @@ import {
   RiNotification3Line, RiAlarmWarningLine, RiCalendarEventLine, RiFlag2Line,
   RiCheckboxCircleLine, RiTimeLine, RiUserAddLine, RiCloseCircleLine,
   RiShieldKeyholeLine, RiUserSettingsLine, RiChat3Line, RiArchiveLine, RiRefreshLine,
-  RiMoneyDollarCircleLine,
+  RiMoneyDollarCircleLine, RiMegaphoneLine,
 } from '@remixicon/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApiTask, type CalendarEvent, type NotificationItem } from '@/lib/api';
@@ -60,6 +60,7 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'lifecycle.started':  { Icon: RiUserAddLine,       color: 'text-teal-600',   bg: 'bg-teal-50' },
   'lifecycle.completed':{ Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
   'letter.issued':      { Icon: RiUserSettingsLine,  color: 'text-brand-600',  bg: 'bg-brand-50' },
+  'announcement.posted':{ Icon: RiMegaphoneLine,     color: 'text-amber-600',  bg: 'bg-amber-50' },
 };
 function typeMeta(t: string) { return TYPE_META[t] ?? { Icon: RiNotification3Line, color: 'text-gray-600', bg: 'bg-gray-100' }; }
 
