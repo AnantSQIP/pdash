@@ -219,8 +219,10 @@ export type CalendarEvent = {
   id: string; organizationId: string; title: string; description?: string;
   type: string; startDate: string; endDate?: string; allDay: boolean;
   color: string; createdBy: string; projectId?: string; createdAt: string;
-  attendees?: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> }[];
+  location?: string | null; joinUrl?: string | null; reminderMinutes?: number | null;
+  attendees?: { userId: string; response?: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> }[];
 };
+export type FreeBusy = { userId: string; busy: { start: string; end: string; title: string; allDay: boolean }[] };
 
 export type Channel = {
   id: string; organizationId: string; name: string; description?: string;
@@ -234,10 +236,37 @@ export type ChannelMembers = {
   members: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
 };
 
+// Global-search results, each set permission-scoped server-side.
+export type SearchResults = {
+  people: { id: string; firstName: string; lastName?: string | null; email: string; profilePhoto?: string | null; designation?: string | null }[];
+  projects: { id: string; title: string; code?: string | null; projectPhase: string }[];
+  tasks: { id: string; title: string; status: string | null; projectId: string | null }[];
+  channels: { id: string; name: string }[];
+  messages: { id: string; channelId: string; channelName: string; author: string; content: string; createdAt: string }[];
+};
+// Per-user notification preferences. `types` maps a category → enabled.
+export type NotificationPrefs = {
+  types: Record<string, boolean>;
+  mutedChannels: string[];
+  quietStart: number | null;
+  quietEnd: number | null;
+  soundEnabled: boolean;
+};
+// Effective presence for one person (computed server-side).
+export type PresenceEntry = { userId: string; status: string; workMode: string; statusMessage?: string | null };
+// The signed-in user's own presence (manual choice + resolved effective).
+export type MyPresence = { status: string | null; statusMessage: string | null; statusExpiresAt: string | null; effective: string; workMode: string };
+export type MessageReaction = { emoji: string; userId: string };
 export type Message = {
   id: string; channelId: string; userId: string; content: string; createdAt: string;
+  editedAt?: string | null; deletedAt?: string | null;
+  pinnedAt?: string | null; pinnedBy?: string | null;
   user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
   attachments?: AttachmentRef[];
+  // Emoji reactions on this message (raw rows; the UI groups them).
+  reactions?: MessageReaction[];
+  // User ids this message @mentioned (resolved server-side from channel members).
+  mentions?: string[];
 };
 
 export type Issue = {
@@ -461,7 +490,7 @@ export type Attendance = {
   status: string; workMode?: string; note?: string | null; isRegularized: boolean;
 };
 export type AttendanceDay = {
-  date: string; status: string; checkIn?: string | null; checkOut?: string | null;
+  date: string; status: string; workMode?: string; checkIn?: string | null; checkOut?: string | null;
   totalHours?: number | null; isRegularized: boolean; note?: string | null;
 };
 export type AttendanceMonth = {
@@ -491,6 +520,15 @@ export type CompOffEvidence = {
   id: string;
   timesheets: { task: string; hours: number; notes?: string }[];
   attendance: { checkIn?: string | null; checkOut?: string | null; totalHours?: number | null } | null;
+};
+// WFH is agreed in advance: request a date range → HR/Admin (attendance.manage) approves →
+// punching on a covered day records workMode WFH automatically. No WFH button on punch.
+export type WfhRequestItem = {
+  id: string; userId: string; organizationId?: string | null;
+  startDate: string; endDate: string; reason: string;
+  status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
+  createdAt: string;
+  user?: { id: string; firstName: string; lastName: string; email: string; profilePhoto?: string | null };
 };
 export type CompOffRequest = {
   id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
@@ -705,10 +743,15 @@ export const api = {
       organizationId: string; title: string; description?: string; type?: string;
       startDate: string; endDate?: string; allDay?: boolean; color?: string;
       createdBy: string; projectId?: string; attendeeIds?: string[];
+      location?: string; joinUrl?: string; reminderMinutes?: number;
     }) => req<CalendarEvent>('/calendar-events', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<CalendarEvent, 'title' | 'description' | 'type' | 'startDate' | 'endDate' | 'allDay' | 'color'>>) =>
+    update: (id: string, data: Partial<Pick<CalendarEvent, 'title' | 'description' | 'type' | 'startDate' | 'endDate' | 'allDay' | 'color' | 'location' | 'joinUrl' | 'reminderMinutes'>>) =>
       req<CalendarEvent>(`/calendar-events/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/calendar-events/${id}`, { method: 'DELETE' }),
+    respond: (id: string, response: string) =>
+      req<CalendarEvent>(`/calendar-events/${id}/respond`, { method: 'POST', body: JSON.stringify({ response }) }),
+    freeBusy: (userIds: string[], from: string, to: string) =>
+      req<FreeBusy[]>(`/calendar-events/free-busy?userIds=${userIds.join(',')}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   },
 
   channels: {
@@ -724,13 +767,31 @@ export const api = {
     // Author is the verified cookie actor — no userId sent.
     sendMessage: (channelId: string, data: { content: string; documentIds?: string[] }) =>
       req<Message>(`/channels/${channelId}/messages`, { method: 'POST', body: JSON.stringify(data) }),
+    editMessage: (channelId: string, messageId: string, content: string) =>
+      req<Message>(`/channels/${channelId}/messages/${messageId}`, { method: 'PATCH', body: JSON.stringify({ content }) }),
     deleteMessage: (channelId: string, messageId: string) =>
       req<void>(`/channels/${channelId}/messages/${messageId}`, { method: 'DELETE' }),
+    toggleReaction: (channelId: string, messageId: string, emoji: string) =>
+      req<MessageReaction[]>(`/channels/${channelId}/messages/${messageId}/react`, { method: 'POST', body: JSON.stringify({ emoji }) }),
+    pinMessage: (channelId: string, messageId: string) =>
+      req<Message>(`/channels/${channelId}/messages/${messageId}/pin`, { method: 'POST' }),
+    unpinMessage: (channelId: string, messageId: string) =>
+      req<Message>(`/channels/${channelId}/messages/${messageId}/unpin`, { method: 'POST' }),
+    pinned: (channelId: string) => req<Message[]>(`/channels/${channelId}/pinned`),
     members: (channelId: string) => req<ChannelMembers>(`/channels/${channelId}/members`),
     addMembers: (channelId: string, userIds: string[]) =>
       req<{ ok: boolean }>(`/channels/${channelId}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
     removeMember: (channelId: string, userId: string) =>
       req<void>(`/channels/${channelId}/members/${userId}`, { method: 'DELETE' }),
+  },
+  search: (q: string) => req<SearchResults>(`/search?q=${encodeURIComponent(q)}`),
+  presence: {
+    org: () => req<PresenceEntry[]>('/presence/org'),
+    me: () => req<MyPresence>('/presence/me'),
+    heartbeat: () => req<{ ok: boolean }>('/presence/heartbeat', { method: 'POST', body: JSON.stringify({}) }),
+    setStatus: (data: { status: string; message?: string; expiryMinutes?: number }) =>
+      req<MyPresence>('/presence', { method: 'POST', body: JSON.stringify(data) }),
+    clearStatus: () => req<MyPresence>('/presence/clear', { method: 'POST' }),
   },
 
   issues: {
@@ -775,6 +836,11 @@ export const api = {
     unreadCount: () => req<{ count: number }>('/notifications/unread-count'),
     markRead: (id: string) => req<{ ok: boolean }>(`/notifications/${id}/read`, { method: 'POST' }),
     markAllRead: () => req<{ ok: boolean }>('/notifications/read-all', { method: 'POST' }),
+    preferences: () => req<NotificationPrefs>('/notifications/preferences'),
+    setPreferences: (data: Partial<Pick<NotificationPrefs, 'types' | 'quietStart' | 'quietEnd' | 'soundEnabled'>>) =>
+      req<NotificationPrefs>('/notifications/preferences', { method: 'PUT', body: JSON.stringify(data) }),
+    muteChannel: (channelId: string, muted: boolean) =>
+      req<{ muted: boolean; mutedChannels: string[] }>(`/notifications/channels/${channelId}/${muted ? 'mute' : 'unmute'}`, { method: 'POST' }),
   },
 
   permissions: {
@@ -872,7 +938,19 @@ export const api = {
     today: () => req<Attendance | null>('/attendance/me/today'),
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
-    punch: (mode?: 'OFFICE' | 'WFH') => req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(mode ? { mode } : {}) }),
+    // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
+    punch: () => req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify({}) }),
+    // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
+    requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
+      req<WfhRequestItem>('/attendance/wfh', { method: 'POST', body: JSON.stringify(data) }),
+    myWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/me'),
+    pendingWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/pending'),
+    approveWfh: (id: string, note?: string) =>
+      req<WfhRequestItem>(`/attendance/wfh/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    rejectWfh: (id: string, note?: string) =>
+      req<WfhRequestItem>(`/attendance/wfh/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    cancelWfh: (id: string) =>
+      req<WfhRequestItem>(`/attendance/wfh/${id}/cancel`, { method: 'POST' }),
     regularize: (id: string, reason: string, newStatus?: string) =>
       req<Attendance>(`/attendance/${id}/regularize`, { method: 'POST', body: JSON.stringify({ reason, newStatus }) }),
     mark: (data: { userId: string; date: string; status: string; note?: string }) =>

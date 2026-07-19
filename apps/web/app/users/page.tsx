@@ -6,6 +6,7 @@ import { UserPlus, Search, Loader } from 'lucide-react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type UserSummary, type ApiProject } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { usePresence, presenceMeta } from '@/lib/presence-context';
 import { Can } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 
@@ -31,8 +32,18 @@ function departmentOf(designation?: string): string {
 
 type Tab = 'All Members' | 'Departments';
 
+// Small chip shown next to a person when they're working from home / on leave today.
+function WorkChip({ userId }: { userId: string }) {
+  const { presenceOf } = usePresence();
+  const p = presenceOf(userId);
+  if (p?.workMode === 'WFH') return <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">WFH</span>;
+  if (p?.status === 'ON_LEAVE') return <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">On leave</span>;
+  return null;
+}
+
 export default function UsersPage() {
   const { org, loading: orgLoading } = useOrg();
+  const { presenceOf } = usePresence();
   const [tab, setTab] = useState<Tab>('All Members');
   const [search, setSearch] = useState('');
 
@@ -132,9 +143,9 @@ export default function UsersPage() {
               {filtered.map(u => (
                 <Link key={u.id} href={`/admin/users/${u.id}`}
                   className="flex items-center gap-3 bg-white rounded-xl border border-gray-200 p-3.5 active:bg-gray-50">
-                  <Avatar user={u} size={40} />
+                  <Avatar user={u} size={40} status={presenceOf(u.id)?.status} />
                   <div className="min-w-0 flex-1">
-                    <p className="font-medium text-gray-900 truncate">{fullName(u)}</p>
+                    <p className="font-medium text-gray-900 truncate flex items-center gap-1.5">{fullName(u)} <WorkChip userId={u.id} /></p>
                     <p className="text-xs text-gray-400 truncate">{u.email}</p>
                     <div className="flex items-center gap-2 mt-1.5">
                       <span className="text-xs text-gray-500 truncate">{u.designation ?? '—'}</span>
@@ -170,9 +181,9 @@ export default function UsersPage() {
                     <tr key={u.id} className={`${idx < filtered.length - 1 ? 'border-b border-gray-50' : ''} hover:bg-gray-50 transition-colors`}>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">
-                          <Avatar user={u} size={36} />
+                          <Avatar user={u} size={36} status={presenceOf(u.id)?.status} />
                           <div>
-                            <p className="font-medium text-gray-900">{fullName(u)}</p>
+                            <p className="font-medium text-gray-900 flex items-center gap-1.5">{fullName(u)} <WorkChip userId={u.id} /></p>
                             <p className="text-xs text-gray-400">{u.email}</p>
                           </div>
                         </div>

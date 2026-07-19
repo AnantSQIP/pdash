@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Patch, Put, Query } from '@nestjs/common';
 import { ChannelsService } from './channels.service';
-import { CreateChannelDto, UpdateChannelDto, CreateMessageDto, SetChannelMembersDto } from './dto';
+import { CreateChannelDto, UpdateChannelDto, CreateMessageDto, SetChannelMembersDto, EditMessageDto, ReactionDto } from './dto';
 
 // Discussions are PRIVATE + member-gated. Authorization is enforced in the service by
 // CHANNEL MEMBERSHIP / OWNERSHIP — not by RBAC permissions — so a Super Admin who was
@@ -39,14 +39,39 @@ export class ChannelsController {
     return this.channels.listMessages(id, limit ? parseInt(limit, 10) : 50);
   }
 
+  @Get(':id/pinned')
+  listPinned(@Param('id') id: string) {
+    return this.channels.listPinned(id);
+  }
+
   @Post(':id/messages')
   createMessage(@Param('id') channelId: string, @Body() dto: CreateMessageDto) {
     return this.channels.createMessage(channelId, dto);
   }
 
+  @Patch(':channelId/messages/:messageId')
+  editMessage(@Param('channelId') channelId: string, @Param('messageId') messageId: string, @Body() dto: EditMessageDto) {
+    return this.channels.editMessage(channelId, messageId, dto.content);
+  }
+
   @Delete(':channelId/messages/:messageId')
   deleteMessage(@Param('channelId') channelId: string, @Param('messageId') messageId: string) {
     return this.channels.deleteMessage(channelId, messageId);
+  }
+
+  @Post(':channelId/messages/:messageId/react')
+  react(@Param('channelId') channelId: string, @Param('messageId') messageId: string, @Body() dto: ReactionDto) {
+    return this.channels.toggleReaction(channelId, messageId, dto.emoji);
+  }
+
+  @Post(':channelId/messages/:messageId/pin')
+  pin(@Param('channelId') channelId: string, @Param('messageId') messageId: string) {
+    return this.channels.setPinned(channelId, messageId, true);
+  }
+
+  @Post(':channelId/messages/:messageId/unpin')
+  unpin(@Param('channelId') channelId: string, @Param('messageId') messageId: string) {
+    return this.channels.setPinned(channelId, messageId, false);
   }
 
   // ── Member management (owner-only, enforced in the service) ──────────────────

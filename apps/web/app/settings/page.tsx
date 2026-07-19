@@ -30,6 +30,7 @@ import { ProfileCard } from '@/components/people/ProfileCard';
 // Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
 const TABS = [
   { id: 'general',       label: 'General',           icon: Settings2  },
+  { id: 'notifications', label: 'Notifications',     icon: Bell       },
   { id: 'members',       label: 'Members & Roles',   icon: Users      },
 ];
 
@@ -458,8 +459,105 @@ function MembersTab() {
 }
 
 // ── Notifications Tab ──────────────────────────────────────────────────────────
-// (Removed dead Settings tab stubs — Notifications/Workflows/Integrations/Billing (L25);
-//  they were unbacked mock UIs, already hidden from the tab bar.)
+const NOTIF_CATS = [
+  { id: 'mentions',   label: 'Mentions',            desc: 'When someone @mentions you in a discussion' },
+  { id: 'discussions', label: 'Discussions',        desc: 'Being added to a discussion channel' },
+  { id: 'tasks',      label: 'Tasks',               desc: 'Task assignments and updates' },
+  { id: 'projects',   label: 'Projects',            desc: 'Approvals, billable decisions, lifecycle' },
+  { id: 'attendance', label: 'Attendance & Leave',  desc: 'Leave, WFH, comp-off and regularisation' },
+  { id: 'expenses',   label: 'Expenses',            desc: 'Expense approvals and reimbursements' },
+  { id: 'other',      label: 'Everything else',     desc: 'Any other notification' },
+];
+const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const fromHHMM = (s: string) => { const [h, m] = s.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+
+function NotificationsTab() {
+  const qc = useQueryClient();
+  const { data: prefs } = useQuery({ queryKey: ['notif-prefs'], queryFn: () => api.notifications.preferences(), staleTime: 30_000 });
+  const [types, setTypes] = useState<Record<string, boolean>>({});
+  const [quietOn, setQuietOn] = useState(false);
+  const [quietStart, setQuietStart] = useState('22:00');
+  const [quietEnd, setQuietEnd] = useState('08:00');
+  const [sound, setSound] = useState(true);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!prefs) return;
+    setTypes(prefs.types);
+    setSound(prefs.soundEnabled);
+    setQuietOn(prefs.quietStart != null && prefs.quietEnd != null);
+    if (prefs.quietStart != null) setQuietStart(toHHMM(prefs.quietStart));
+    if (prefs.quietEnd != null) setQuietEnd(toHHMM(prefs.quietEnd));
+  }, [prefs]);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await api.notifications.setPreferences({
+        types,
+        soundEnabled: sound,
+        quietStart: quietOn ? fromHHMM(quietStart) : null,
+        quietEnd: quietOn ? fromHHMM(quietEnd) : null,
+      });
+      qc.invalidateQueries({ queryKey: ['notif-prefs'] });
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) { alert(e instanceof Error ? e.message : 'Could not save'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div className="bg-white rounded-xl border p-4 sm:p-6">
+        <h2 className="text-base font-semibold text-gray-900">What you're notified about</h2>
+        <p className="text-xs text-gray-500 mt-0.5 mb-4">Turn a category off and you'll stop receiving those notifications entirely.</p>
+        <div className="divide-y divide-gray-100">
+          {NOTIF_CATS.map(c => (
+            <div key={c.id} className="flex items-center justify-between py-3">
+              <div>
+                <p className="text-sm font-medium text-gray-800">{c.label}</p>
+                <p className="text-xs text-gray-400">{c.desc}</p>
+              </div>
+              <Toggle on={types[c.id] !== false} onToggle={() => setTypes(t => ({ ...t, [c.id]: t[c.id] === false }))} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Quiet hours</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Silence notification alerts during these hours (they still arrive in your list).</p>
+          </div>
+          <Toggle on={quietOn} onToggle={() => setQuietOn(v => !v)} />
+        </div>
+        {quietOn && (
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-gray-600">From</label>
+            <input type="time" value={quietStart} onChange={e => setQuietStart(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5" />
+            <label className="text-sm text-gray-600">to</label>
+            <input type="time" value={quietEnd} onChange={e => setQuietEnd(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2.5 py-1.5" />
+          </div>
+        )}
+        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Notification sound</p>
+            <p className="text-xs text-gray-400">Play a sound for new notifications</p>
+          </div>
+          <Toggle on={sound} onToggle={() => setSound(v => !v)} />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button onClick={save} disabled={busy} className="px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+          {busy ? 'Saving…' : 'Save preferences'}
+        </button>
+        {saved && <span className="text-sm text-green-600 font-medium">✓ Saved</span>}
+      </div>
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('general');
@@ -501,6 +599,7 @@ export default function SettingsPage() {
         {/* Content */}
         <main className="flex-1 p-4 sm:p-6 space-y-6">
           {activeTab === 'general'       && <GeneralTab />}
+          {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'members'       && <MembersTab />}
         </main>
       </div>

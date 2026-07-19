@@ -68,3 +68,16 @@ export class CreateMessageDto {
   @IsString({ each: true })
   documentIds?: string[];
 }
+
+export class EditMessageDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4000)
+  content!: string;
+}
+
+export class ReactionDto {
+  @IsString()
+  @MaxLength(16)
+  emoji!: string;
+}

@@ -8,7 +8,7 @@ import {
   Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil, Home,
 } from 'lucide-react';
 import {
-  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest,
+  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest, type WfhRequestItem,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -68,6 +68,7 @@ export default function AttendancePage() {
   const canReviewReg = can('attendance.regularize');
   const { data: pendingReg = [] } = useQuery<RegularizationRequest[]>({ queryKey: ['reg-pending', org?.id], queryFn: () => api.attendance.pendingRegularizations(), enabled: !!org?.id && canReviewReg && tab === 'team', staleTime: 15_000 });
   const { data: myReg = [] } = useQuery<RegularizationRequest[]>({ queryKey: ['reg-mine', currentUser?.id], queryFn: () => api.attendance.myRegularizations(), enabled: !!currentUser?.id, staleTime: 15_000 });
+  const { data: myWfh = [] } = useQuery<WfhRequestItem[]>({ queryKey: ['wfh-mine'], queryFn: () => api.attendance.myWfhRequests(), enabled: !!currentUser?.id, staleTime: 15_000 });
 
   // ── live timer while clocked-in ──
   const [, tick] = useState(0);
@@ -77,9 +78,9 @@ export default function AttendancePage() {
 
   function invalidate(...keys: string[]) { keys.forEach(k => qc.invalidateQueries({ queryKey: [k] })); }
 
-  async function punch(mode?: 'OFFICE' | 'WFH') {
+  async function punch() {
     if (busy) return; setBusy(true);
-    try { await api.attendance.punch(mode); invalidate('attn-today', 'attn-month', 'attn-org'); }
+    try { await api.attendance.punch(); invalidate('attn-today', 'attn-month', 'attn-org'); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
     finally { setBusy(false); }
   }
@@ -94,6 +95,9 @@ export default function AttendancePage() {
   const clockedIn = !!today?.checkIn && !today?.checkOut;
   const dayComplete = !!today?.checkIn && !!today?.checkOut; // clocked in AND out — locked for the day
   const elapsed = today?.checkIn ? Date.now() - new Date(today.checkIn).getTime() : 0;
+  // An approved WFH request covering today — the punch will be recorded as WFH.
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const wfhApprovedToday = myWfh.some(w => w.status === 'APPROVED' && w.startDate.slice(0, 10) <= todayKey && todayKey <= w.endDate.slice(0, 10));
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -120,7 +124,7 @@ export default function AttendancePage() {
                   <div>
                     <p className="text-xs text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
                       Today · {format(new Date(), 'EEE, MMM d')}
-                      {today?.workMode === 'WFH' && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full"><Home size={10} /> WFH</span>}
+                      {(today?.workMode === 'WFH' || wfhApprovedToday) && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full" title="You have approved work-from-home today"><Home size={10} /> WFH approved</span>}
                     </p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{clockedIn ? fmtElapsed(elapsed) : (today?.checkOut ? 'Day complete' : 'Not clocked in')}</p>
                     <p className="text-xs text-gray-500 mt-1">In {timeOf(today?.checkIn)} · Out {timeOf(today?.checkOut)}{today?.totalHours != null ? ` · ${today.totalHours}h` : ''}</p>
@@ -133,18 +137,13 @@ export default function AttendancePage() {
                       {dayComplete ? 'Completed' : 'Punch Out'}
                     </button>
                   ) : (
-                    // Two ways to clock in — from the office, or working from home (a work MODE).
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => punch('OFFICE')} disabled={busy}
-                        className="inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
-                        {busy ? <Loader size={16} className="animate-spin" /> : <LogIn size={16} />} Punch In
-                      </button>
-                      <button onClick={() => punch('WFH')} disabled={busy}
-                        title="Clock in for a work-from-home day"
-                        className="inline-flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold text-purple-700 border border-purple-200 bg-purple-50 hover:bg-purple-100 disabled:opacity-60">
-                        <Home size={16} /> WFH
-                      </button>
-                    </div>
+                    // One button — where you work is not chosen here. A WFH day comes from
+                    // an APPROVED request (raised under Leaves); the punch derives the mode.
+                    <button onClick={punch} disabled={busy}
+                      title={wfhApprovedToday ? 'Clock in — today is recorded as work-from-home (approved)' : 'Clock in for the day. Working from home? Request it under Leaves first.'}
+                      className="inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
+                      {busy ? <Loader size={16} className="animate-spin" /> : <LogIn size={16} />} Punch In
+                    </button>
                   )}
                 </div>
               </div>
@@ -171,6 +170,9 @@ export default function AttendancePage() {
                     <span className={clsx('w-2.5 h-2.5 rounded-sm', STATUS_STYLE[s].dot)} />{STATUS_STYLE[s].label}
                   </span>
                 ))}
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />WFH
+                </span>
               </div>
             </div>
 
@@ -325,7 +327,7 @@ function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth;
         if (!c) return <div key={i} />;
         const rec = byDate.get(c.key);
         const st = STATUS_STYLE[rec?.status ?? 'FUTURE'] ?? STATUS_STYLE.FUTURE;
-        const title = rec ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}` : c.key;
+        const title = rec ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}` : c.key;
         const canReg = !!onPick && REGULARIZABLE.includes(rec?.status ?? '');
         const cls = clsx('aspect-square rounded-lg border flex flex-col items-center justify-center relative', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
         const inner = (
@@ -333,6 +335,7 @@ function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth;
             <span className="text-sm font-medium">{c.day}</span>
             {rec?.totalHours != null && <span className="text-[9px] opacity-70">{rec.totalHours}h</span>}
             {rec?.isRegularized && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
+            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
           </>
         );
         return canReg
@@ -558,7 +561,96 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
         </ul>
       </div>
     </div>
+    <WfhCard />
     <CompOffCard />
+    </div>
+  );
+}
+
+// ── Work from home: request a WFH period — HR/Admin approves; punch then records WFH ──
+const WFH_STATUS: Record<string, string> = {
+  PENDING: 'bg-amber-100 text-amber-700', APPROVED: 'bg-green-100 text-green-700',
+  REJECTED: 'bg-red-100 text-red-600', CANCELLED: 'bg-gray-100 text-gray-500',
+};
+function WfhCard() {
+  const qc = useQueryClient();
+  const { data: requests = [] } = useQuery<WfhRequestItem[]>({ queryKey: ['wfh-mine'], queryFn: () => api.attendance.myWfhRequests(), staleTime: 15_000 });
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ startDate: '', endDate: '', reason: '' });
+  const [busy, setBusy] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+  const inv = () => { qc.invalidateQueries({ queryKey: ['wfh-mine'] }); qc.invalidateQueries({ queryKey: ['wfh-pending'] }); };
+
+  async function submit() {
+    if (busy || !form.startDate || !form.endDate || !form.reason.trim()) return;
+    setBusy(true);
+    try {
+      await api.attendance.requestWfh({ startDate: form.startDate, endDate: form.endDate, reason: form.reason.trim() });
+      setShowForm(false); setForm({ startDate: '', endDate: '', reason: '' });
+      inv();
+    } catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the WFH request.'); }
+    finally { setBusy(false); }
+  }
+  async function cancel(id: string) {
+    setBusy(true);
+    try { await api.attendance.cancelWfh(id); inv(); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel.'); }
+    finally { setBusy(false); }
+  }
+  const range = (r: WfhRequestItem) => {
+    const s = format(new Date(r.startDate), 'EEE, MMM d');
+    const e = format(new Date(r.endDate), 'EEE, MMM d');
+    return s === e ? s : `${s} – ${e}`;
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Home size={14} className="text-purple-600" /> Work from home</h3>
+          <p className="text-[11px] text-gray-400">Planning to work from home? Request it here — HR/Admin approves, and your punch on those days is recorded as WFH automatically.</p>
+        </div>
+        <button onClick={() => setShowForm(s => !s)} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 shrink-0"><Plus size={13} /> Request</button>
+      </div>
+      {showForm && (
+        <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/60 space-y-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">From</label>
+              <DateField type="date" value={form.startDate} min={today} onChange={e => setForm(f => ({ ...f, startDate: e.target.value, endDate: f.endDate && f.endDate < e.target.value ? e.target.value : f.endDate }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">To</label>
+              <DateField type="date" value={form.endDate} min={form.startDate || today} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Why work from home?</label>
+              <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Awaiting a delivery / medical appointment nearby" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowForm(false)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+            <button onClick={submit} disabled={busy || !form.startDate || !form.endDate || !form.reason.trim()} className="text-sm font-medium px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50">Submit request</button>
+          </div>
+        </div>
+      )}
+      <ul className="divide-y divide-gray-50">
+        {requests.length === 0 && <li className="px-5 py-6 text-center text-sm text-gray-300">No WFH requests yet</li>}
+        {requests.map(r => (
+          <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-800">{range(r)}</p>
+              <p className="text-xs text-gray-400 truncate">{r.reason}{r.reviewNote ? ` · Note: ${r.reviewNote}` : ''}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={clsx('text-[11px] px-2 py-0.5 rounded-full font-medium', WFH_STATUS[r.status] ?? 'bg-gray-100 text-gray-600')}>{r.status.charAt(0) + r.status.slice(1).toLowerCase()}</span>
+              {['PENDING', 'APPROVED'].includes(r.status) && (
+                <button onClick={() => cancel(r.id)} disabled={busy} className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-50">Cancel</button>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -646,7 +738,25 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
 }) {
   const [busyId, setBusyId] = useState('');
   const qc = useQueryClient();
+  const { can } = usePermissions();
   const { data: pendingCompoff = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(), staleTime: 15_000 });
+  // WFH review is HR/Admin only (attendance.manage) — don't even query without it.
+  const canReviewWfh = can('attendance.manage');
+  const { data: pendingWfh = [] } = useQuery<WfhRequestItem[]>({ queryKey: ['wfh-pending'], queryFn: () => api.attendance.pendingWfhRequests(), enabled: canReviewWfh, staleTime: 15_000 });
+  async function reviewWfh(id: string, action: 'approve' | 'reject') {
+    setBusyId(id);
+    try {
+      if (action === 'reject') {
+        const note = window.prompt('Reason for rejecting (optional):') ?? undefined;
+        await api.attendance.rejectWfh(id, note);
+      } else {
+        await api.attendance.approveWfh(id);
+      }
+      qc.invalidateQueries({ queryKey: ['wfh-pending'] });
+      qc.invalidateQueries({ queryKey: ['wfh-mine'] });
+    } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
+    finally { setBusyId(''); }
+  }
   async function reviewCompoff(id: string, action: 'approve' | 'reject') {
     setBusyId(id);
     try {
@@ -746,6 +856,36 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
           ))}
         </ul>
       </div>
+
+      {/* Pending work-from-home requests — HR/Admin decide where people work */}
+      {canReviewWfh && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Home size={14} className="text-purple-600" /> Work-from-home requests</h3>
+            {pendingWfh.length > 0 && <span className="text-[11px] bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 font-medium">{pendingWfh.length}</span>}
+          </div>
+          <ul className="divide-y divide-gray-50">
+            {pendingWfh.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">No WFH requests to review 🎉</li>}
+            {pendingWfh.map(w => (
+              <li key={w.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <Avatar user={w.user} size={32} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      {w.user?.firstName} {w.user?.lastName} · {format(new Date(w.startDate), 'MMM d')}{w.startDate.slice(0, 10) !== w.endDate.slice(0, 10) ? ` – ${format(new Date(w.endDate), 'MMM d')}` : ''}
+                    </p>
+                    <p className="text-xs text-gray-400 truncate">{w.reason}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button onClick={() => reviewWfh(w.id, 'approve')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} /> Approve</button>
+                  <button onClick={() => reviewWfh(w.id, 'reject')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"><X size={13} /> Reject</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Pending comp-off claims — with the day's actual work as evidence */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

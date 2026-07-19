@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, ChevronLeft, ChevronRight, Loader, X, Trash2, Calendar } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Loader, X, Trash2, Calendar, Check, Video, MapPin } from 'lucide-react';
 import {
   RiCalendarEventLine,
   RiTeamLine,
@@ -19,15 +19,18 @@ import {
   RiCalendarScheduleLine,
   RiFlightTakeoffLine,
   RiExchangeLine,
+  RiHomeOfficeLine,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import clsx from 'clsx';
-import { api, type CalendarEvent } from '@/lib/api';
+import { api, type CalendarEvent, type FreeBusy } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
+import { Avatar } from '@/components/Avatar';
+import { fullName } from '@/lib/avatar';
 
-type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY' | 'LEAVE' | 'COMPOFF';
+type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY' | 'LEAVE' | 'COMPOFF' | 'WFH';
 const TYPE_COLORS: Record<EventType, string> = {
   EVENT:     '#3d8de2',
   MEETING:   '#fe841f',
@@ -37,9 +40,10 @@ const TYPE_COLORS: Record<EventType, string> = {
   HOLIDAY:   '#d93025',
   LEAVE:     '#fe841f',
   COMPOFF:   '#6366f1',
+  WFH:       '#8b5cf6',
 };
 const TYPE_LABELS: Record<EventType, string> = {
-  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off',
+  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off', WFH: 'WFH',
 };
 const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   EVENT:     RiCalendarEventLine,
@@ -50,6 +54,7 @@ const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   HOLIDAY:   RiCalendarEventLine,
   LEAVE:     RiFlightTakeoffLine,
   COMPOFF:   RiExchangeLine,
+  WFH:       RiHomeOfficeLine,
 };
 
 /** A synthetic calendar event is one the calendar itself does not own (a holiday). It is
@@ -104,7 +109,7 @@ interface AddEventModalProps {
 }
 
 function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) {
-  const { org, currentUser } = useOrg();
+  const { org, currentUser, users } = useOrg();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<EventType>('EVENT');
@@ -113,8 +118,23 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
   const [endDate, setEndDate] = useState(defaultDate ?? new Date().toISOString().split('T')[0]);
   const [endTime, setEndTime] = useState('10:00');
   const [allDay, setAllDay] = useState(false);
+  const [attendees, setAttendees] = useState<Set<string>>(new Set());
+  const [location, setLocation] = useState('');
+  const [joinUrl, setJoinUrl] = useState('');
+  const [reminder, setReminder] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const isMeeting = type === 'MEETING';
+
+  // Scheduling assistant: who among the invitees is busy on the chosen day.
+  const attendeeList = [...attendees];
+  const { data: freeBusy = [] } = useQuery<FreeBusy[]>({
+    queryKey: ['freebusy', attendeeList.sort().join(','), startDate],
+    queryFn: () => api.events.freeBusy(attendeeList, `${startDate}T00:00:00`, `${startDate}T23:59:59`),
+    enabled: attendees.size > 0 && !!startDate,
+    staleTime: 15_000,
+  });
+  const busyById = new Map(freeBusy.map(f => [f.userId, f.busy]));
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -132,6 +152,10 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
         allDay,
         color: TYPE_COLORS[type],
         createdBy: currentUser.id,
+        attendeeIds: attendeeList,
+        location: location.trim() || undefined,
+        joinUrl: joinUrl.trim() || undefined,
+        reminderMinutes: reminder || undefined,
       });
       onSuccess();
       onClose();
@@ -216,6 +240,59 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 resize-none" />
           </div>
 
+          {/* Invitees + scheduling assistant */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Invite people {attendees.size > 0 && <span className="text-gray-400 font-normal">({attendees.size})</span>}
+            </label>
+            <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg p-1.5 space-y-0.5">
+              {users.filter(u => u.id !== currentUser?.id).map(u => {
+                const on = attendees.has(u.id);
+                const busy = busyById.get(u.id) ?? [];
+                return (
+                  <button key={u.id} type="button"
+                    onClick={() => setAttendees(prev => { const n = new Set(prev); n.has(u.id) ? n.delete(u.id) : n.add(u.id); return n; })}
+                    className={clsx('w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left', on ? 'bg-brand-50 text-brand-700' : 'hover:bg-gray-50 text-gray-700')}>
+                    <span className={clsx('w-4 h-4 rounded border flex items-center justify-center shrink-0', on ? 'bg-brand-600 border-brand-600' : 'border-gray-300')}>
+                      {on && <Check size={11} className="text-white" />}
+                    </span>
+                    <Avatar user={u} size={22} className="shrink-0" />
+                    <span className="flex-1 truncate">{fullName(u)}</span>
+                    {on && busy.length > 0 && <span className="text-[10px] font-medium text-amber-600 shrink-0" title={busy.map(b => b.title).join(', ')}>busy ({busy.length})</span>}
+                    {on && attendees.size > 0 && busy.length === 0 && <span className="text-[10px] font-medium text-green-600 shrink-0">free</span>}
+                  </button>
+                );
+              })}
+            </div>
+            {attendees.size > 0 && (
+              <p className="text-[11px] text-gray-400 mt-1">Free/busy shown for {new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} — pick a time when invitees are free.</p>
+            )}
+          </div>
+
+          {/* Meeting logistics */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Location</label>
+              <input value={location} onChange={e => setLocation(e.target.value)} placeholder="Room / place"
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Reminder</label>
+              <select value={reminder} onChange={e => setReminder(Number(e.target.value))}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white">
+                <option value={0}>None</option>
+                <option value={10}>10 minutes before</option>
+                <option value={30}>30 minutes before</option>
+                <option value={60}>1 hour before</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Video link {isMeeting && <span className="text-gray-400 font-normal">(Meet / Zoom / Teams)</span>}</label>
+            <input value={joinUrl} onChange={e => setJoinUrl(e.target.value)} placeholder="https://…"
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+          </div>
+
           {error && <p className="text-xs text-red-600">{error}</p>}
 
           <div className="flex items-center justify-end gap-3 pt-2">
@@ -249,7 +326,7 @@ function EventChip({ ev, onSelect }: { ev: CalendarEvent; onSelect: (ev: Calenda
 }
 
 export default function CalendarPage() {
-  const { org } = useOrg();
+  const { org, currentUser } = useOrg();
   const qc = useQueryClient();
   const { toast } = useToast();
   const today = new Date();
@@ -335,6 +412,16 @@ export default function CalendarPage() {
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Failed to delete event', 'error');
     } finally { setDeletingId(null); }
+  }
+
+  async function respond(id: string, response: string) {
+    try {
+      const updated = await api.events.respond(id, response);
+      setSelectedEvent(updated);
+      invalidate();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Could not RSVP', 'error');
+    }
   }
 
   function toggleType(t: EventType) {
@@ -767,7 +854,62 @@ export default function CalendarPage() {
                   <p className="mt-1 text-gray-600">{selectedEvent.description}</p>
                 </div>
               )}
+              {selectedEvent.location && (
+                <div className="flex items-start gap-2"><MapPin size={15} className="text-gray-400 mt-0.5 shrink-0" /><span>{selectedEvent.location}</span></div>
+              )}
+              {selectedEvent.joinUrl && (
+                <a href={selectedEvent.joinUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 w-full justify-center">
+                  <Video size={15} /> Join
+                </a>
+              )}
+              {selectedEvent.reminderMinutes ? (
+                <div className="flex items-center gap-2 text-xs text-gray-400"><RiAlarmLine size={14} /> Reminder {selectedEvent.reminderMinutes} min before</div>
+              ) : null}
             </div>
+
+            {/* Attendees + RSVP */}
+            {!isReadOnlyEvent(selectedEvent.id) && selectedEvent.attendees && selectedEvent.attendees.length > 0 && (() => {
+              const RESP: Record<string, { label: string; cls: string }> = {
+                ACCEPTED: { label: 'Going', cls: 'text-green-600' },
+                DECLINED: { label: 'Declined', cls: 'text-red-500' },
+                TENTATIVE: { label: 'Maybe', cls: 'text-amber-600' },
+                PENDING: { label: 'No reply', cls: 'text-gray-400' },
+              };
+              const mine = selectedEvent.attendees!.find(a => a.userId === currentUser?.id);
+              return (
+                <div className="mb-4">
+                  <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Attendees ({selectedEvent.attendees!.length})</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {selectedEvent.attendees!.map(a => {
+                      const r = RESP[a.response ?? 'PENDING'] ?? RESP.PENDING;
+                      return (
+                        <li key={a.userId} className="flex items-center gap-2 text-sm">
+                          <Avatar user={a.user} size={22} />
+                          <span className="text-gray-700 flex-1 truncate">{a.user.firstName} {a.user.lastName}</span>
+                          <span className={clsx('text-[11px] font-medium', r.cls)}>{r.label}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {mine && (
+                    <div className="mt-3">
+                      <span className="text-xs text-gray-500">Your response:</span>
+                      <div className="flex gap-1.5 mt-1.5">
+                        {(['ACCEPTED', 'TENTATIVE', 'DECLINED'] as const).map(r => (
+                          <button key={r} onClick={() => respond(selectedEvent.id, r)}
+                            className={clsx('flex-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                              mine.response === r ? 'bg-brand-600 border-brand-600 text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+                            {r === 'ACCEPTED' ? 'Going' : r === 'TENTATIVE' ? 'Maybe' : 'Decline'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {isReadOnlyEvent(selectedEvent.id) ? (
               <p className="text-xs text-gray-400 px-1">Company holiday — managed under Attendance &rsaquo; Holidays.</p>
             ) : (

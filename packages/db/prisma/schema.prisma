@@ -111,14 +111,19 @@ model User {
   leaveRequests          LeaveRequest[]
   regularizationRequests RegularizationRequest[]
   compOffRequests        CompOffRequest[]
+  wfhRequests            WfhRequest[]
   expenses               Expense[]
   ownedMilestones        Milestone[]             @relation("MilestoneOwner")
   calendarEventAttendees CalendarEventAttendee[]
   channelMemberships     ChannelMember[]
   messages               Message[]
+  messageReactions       MessageReaction[]
+  messageMentions        MessageMention[]
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
   metricsDaily           UserMetricDaily[]
+  presence               Presence?
+  notificationPreference NotificationPreference?
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -953,6 +958,33 @@ model CompOffRequest {
   @@map("comp_off_request")
 }
 
+// Work-from-home request: WFH is a WORK MODE (the person still works, it is not
+// absence), but working it must be AGREED, not self-declared. The employee raises a
+// request for a date range from the Leaves section; HR/Admin (attendance.manage)
+// approves or rejects. Punch then derives workMode=WFH automatically on days covered
+// by an approved request — there is no WFH button on the punch screen.
+model WfhRequest {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  startDate      DateTime
+  endDate        DateTime
+  reason         String
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status         String    @default("PENDING")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId, status])
+  @@map("wfh_request")
+}
+
 model LeaveRequest {
   id             String    @id @default(cuid())
   userId         String
@@ -1367,6 +1399,28 @@ model Notification {
   @@map("notification")
 }
 
+// One row per user holding how they want to be notified. Consulted by
+// NotificationsService.notify() BEFORE a notification is written, so a muted
+// category or channel means the row is never created for that person.
+//   types:         category → boolean (missing = enabled). Categories:
+//                  mentions | discussions | tasks | projects | attendance | expenses | other
+//   mutedChannels: channel ids whose discussion notifications are suppressed
+//   quietStart/End: local minutes-of-day (0..1439) for quiet hours (client alerting)
+model NotificationPreference {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  types         Json?
+  mutedChannels Json?
+  quietStart    Int?
+  quietEnd      Int?
+  soundEnabled  Boolean  @default(true)
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preference")
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 20. AUDIT DOMAIN
 // Immutable — AuditLog records are NEVER deleted (NFR §9).
@@ -1426,6 +1480,14 @@ model CalendarEvent {
   endDate        DateTime?
   allDay         Boolean   @default(false)
   color          String    @default("#3d8de2")
+  // Where a meeting happens: a room/place and/or an external video link (Meet/Zoom/Teams).
+  // pdash schedules and reminds; the call itself runs on whatever tool the link points to.
+  location       String?
+  joinUrl        String?
+  // Optional reminder: notify attendees this many minutes before start. reminderSentAt
+  // stops the reminder sweep from firing twice for the same meeting.
+  reminderMinutes Int?
+  reminderSentAt  DateTime?
   createdBy      String
   projectId      String?
   createdAt      DateTime  @default(now())
@@ -1443,6 +1505,8 @@ model CalendarEventAttendee {
   id      String @id @default(cuid())
   eventId String
   userId  String
+  // The attendee's RSVP: PENDING | ACCEPTED | DECLINED | TENTATIVE.
+  response String @default("PENDING")
 
   event CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
   user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1489,19 +1553,84 @@ model ChannelMember {
 }
 
 model Message {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   channelId String
   userId    String
   content   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // Set when the author edits the message (renders an "edited" hint).
+  editedAt  DateTime?
+  // Soft-delete: the row stays so the thread doesn't reflow and links still resolve,
+  // but content is cleared and it renders as a "message deleted" tombstone.
+  deletedAt DateTime?
+  // Pinning: any member may pin a message to the channel's pinned pane.
+  pinnedAt  DateTime?
+  pinnedBy  String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   channel     Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   attachments MessageAttachment[]
+  reactions   MessageReaction[]
+  mentions    MessageMention[]
 
   @@index([channelId])
   @@map("message")
+}
+
+// One emoji reaction by one person on one message. The (message,user,emoji) unique
+// makes toggling idempotent — re-reacting the same emoji removes it.
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@map("message_reaction")
+}
+
+// A record that a message @mentioned a person. Written server-side by scanning the
+// message text against the channel's members, so a mention always notifies a real
+// member (never a stranger). Indexed by user for a future "mentions of me" view.
+model MessageMention {
+  id        String @id @default(cuid())
+  messageId String
+  userId    String
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_mention")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 23b. PRESENCE DOMAIN
+// One row per user. `status` is the MANUAL availability the person chose
+// (AVAILABLE | BUSY | DND | BRB | OFFLINE=appear offline), null = auto. The
+// EFFECTIVE presence shown to others is computed on read from this row's
+// lastSeenAt (a heartbeat) plus approved leave/WFH for today — never stored.
+// ═══════════════════════════════════════════════════════════════
+
+model Presence {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  status          String?
+  statusMessage   String?
+  statusExpiresAt DateTime?
+  lastSeenAt      DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("presence")
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -5,6 +5,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { QueryProvider } from '@/providers/query-provider';
 import { OrgProvider } from '@/lib/org-context';
 import { AuthProvider } from '@/lib/auth-context';
+import { PresenceProvider } from '@/lib/presence-context';
 import { PermissionsProvider } from '@/lib/permissions-context';
 import { PasscodeProvider } from '@/lib/passcode-context';
 import { ToastProvider } from '@/components/ui/Toast';
@@ -28,13 +29,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <QueryProvider>
           <AuthProvider>
             <OrgProvider>
-              <PermissionsProvider>
-                <ToastProvider>
-                  <PasscodeProvider>
-                    <AppShell>{children}</AppShell>
-                  </PasscodeProvider>
-                </ToastProvider>
-              </PermissionsProvider>
+              <PresenceProvider>
+                <PermissionsProvider>
+                  <ToastProvider>
+                    <PasscodeProvider>
+                      <AppShell>{children}</AppShell>
+                    </PasscodeProvider>
+                  </ToastProvider>
+                </PermissionsProvider>
+              </PresenceProvider>
             </OrgProvider>
           </AuthProvider>
         </QueryProvider>

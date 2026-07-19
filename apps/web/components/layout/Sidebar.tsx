@@ -7,8 +7,9 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, type LucideIcon,
 } from 'lucide-react';
+import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { NotificationsPanel } from './NotificationsPanel';
@@ -149,6 +150,19 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
 
       {/* Nav */}
       <nav className="flex-1 py-3 px-2 space-y-0.5">
+        {/* Global search (⌘K) */}
+        <button
+          onClick={() => window.dispatchEvent(new Event(OPEN_SEARCH_EVENT))}
+          title={collapsed ? 'Search (⌘K)' : undefined}
+          className={clsx(
+            'w-full flex items-center rounded-lg text-sm font-medium text-white/60 hover:bg-sidebar-hover hover:text-white transition-colors mb-1',
+            collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
+          )}
+        >
+          <Search size={17} className="shrink-0" />
+          {!collapsed && <span className="flex-1 text-left">Search</span>}
+          {!collapsed && <kbd className="text-[10px] font-mono text-white/30 border border-white/10 rounded px-1 py-0.5">⌘K</kbd>}
+        </button>
         {NAV.filter(n => !n.perm || can(n.perm)).map(({ href, icon: Icon, label }) => {
           const active = href === '/home' ? path === '/home' : path.startsWith(href);
           return (

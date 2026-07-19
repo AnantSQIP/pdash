@@ -2,9 +2,12 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsIn,
+  IsInt,
   IsOptional,
   IsString,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 
@@ -52,9 +55,29 @@ export class CreateEventDto {
   projectId?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  location?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  joinUrl?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  reminderMinutes?: number;
+
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   attendeeIds?: string[];
+}
+
+export class RespondDto {
+  @IsIn(['ACCEPTED', 'DECLINED', 'TENTATIVE', 'PENDING'])
+  response!: string;
 }
 
 export class UpdateEventDto {
@@ -87,4 +110,19 @@ export class UpdateEventDto {
   @IsOptional()
   @IsString()
   color?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  location?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  joinUrl?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  reminderMinutes?: number;
 }

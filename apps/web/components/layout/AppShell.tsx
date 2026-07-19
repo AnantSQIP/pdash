@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth-context';
 import { Sidebar } from './Sidebar';
 import { ForcePasswordReset } from './ForcePasswordReset';
 import { CompleteProfile } from './CompleteProfile';
+import { GlobalSearch } from '@/components/GlobalSearch';
 
 const PUBLIC_ROUTES = ['/login', '/signup'];
 
@@ -78,6 +79,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <div className="flex-1 overflow-y-auto min-h-0">{children}</div>
       </div>
+      <GlobalSearch />
     </>
   );
 }

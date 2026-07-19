@@ -39,6 +39,8 @@ import { OverdueModule } from './modules/overdue/overdue.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { PresenceModule } from './modules/presence/presence.module';
+import { SearchModule } from './modules/search/search.module';
 
 @Module({
   imports: [
@@ -85,6 +87,8 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     CapacityModule,
     OverdueModule,
     NotificationsModule,
+    PresenceModule,
+    SearchModule,
   ],
   providers: [
     // 0) Global error mapping: Prisma/unknown errors → correct HTTP status (not 500).

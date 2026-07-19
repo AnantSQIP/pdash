@@ -38,6 +38,9 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'compoff.requested': { Icon: RiTimeLine,           color: 'text-indigo-600', bg: 'bg-indigo-50' },
   'compoff.approved':  { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'compoff.rejected':  { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
+  'wfh.requested':     { Icon: RiTimeLine,           color: 'text-purple-600', bg: 'bg-purple-50' },
+  'wfh.approved':      { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
+  'wfh.rejected':      { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
   'project.approved': { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'project.rejected': { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
   'project.completed': { Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
@@ -53,6 +56,7 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'access.changed':   { Icon: RiShieldKeyholeLine,  color: 'text-purple-600', bg: 'bg-purple-50' },
   'account.updated':  { Icon: RiUserSettingsLine,   color: 'text-slate-600',  bg: 'bg-slate-100' },
   'discussion.added': { Icon: RiChat3Line,          color: 'text-brand-600',  bg: 'bg-brand-50' },
+  'discussion.mention': { Icon: RiChat3Line,        color: 'text-brand-600',  bg: 'bg-brand-50' },
 };
 function typeMeta(t: string) { return TYPE_META[t] ?? { Icon: RiNotification3Line, color: 'text-gray-600', bg: 'bg-gray-100' }; }
 
