@@ -57,6 +57,9 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'account.updated':  { Icon: RiUserSettingsLine,   color: 'text-slate-600',  bg: 'bg-slate-100' },
   'discussion.added': { Icon: RiChat3Line,          color: 'text-brand-600',  bg: 'bg-brand-50' },
   'discussion.mention': { Icon: RiChat3Line,        color: 'text-brand-600',  bg: 'bg-brand-50' },
+  'lifecycle.started':  { Icon: RiUserAddLine,       color: 'text-teal-600',   bg: 'bg-teal-50' },
+  'lifecycle.completed':{ Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
+  'letter.issued':      { Icon: RiUserSettingsLine,  color: 'text-brand-600',  bg: 'bg-brand-50' },
 };
 function typeMeta(t: string) { return TYPE_META[t] ?? { Icon: RiNotification3Line, color: 'text-gray-600', bg: 'bg-gray-100' }; }
 

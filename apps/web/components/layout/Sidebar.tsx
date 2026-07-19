@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, UserPlus, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -37,6 +37,9 @@ const NAV: NavItem[] = [
   { href: '/reports',     icon: FileBarChart,    label: 'Reports',     perm: ['report.view', 'report.export'] },
   { href: '/discuss',     icon: MessagesSquare,  label: 'Discuss',     perm: 'channel.view' },
   { href: '/users',       icon: Users,           label: 'People',      perm: 'user.view' },
+  // Employee lifecycle — onboarding/offboarding boards (HR/managers). Own tasks/letters
+  // live under "My HR" in the user menu for everyone.
+  { href: '/lifecycle',   icon: UserPlus,        label: 'Onboarding',  perm: 'lifecycle.view' },
 ];
 
 // Permission-gated admin entries (shown only when the actor can access them).

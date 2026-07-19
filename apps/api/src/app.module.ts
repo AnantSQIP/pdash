@@ -42,6 +42,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { PresenceModule } from './modules/presence/presence.module';
 import { SearchModule } from './modules/search/search.module';
 import { TagsModule } from './modules/tags/tags.module';
+import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { TagsModule } from './modules/tags/tags.module';
     PresenceModule,
     SearchModule,
     TagsModule,
+    LifecycleModule,
   ],
   providers: [
     // 0) Global error mapping: Prisma/unknown errors → correct HTTP status (not 500).

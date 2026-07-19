@@ -48,6 +48,9 @@ model Organization {
   holidays         Holiday[]
   leaveTypes       LeaveType[]
   mentionTags      MentionTag[]
+  lifecycleProcesses LifecycleProcess[]
+  checklistTemplates ChecklistTemplate[]
+  hrLetters          HrLetter[]
 
   @@map("organization")
 }
@@ -125,6 +128,8 @@ model User {
   savedMessages          SavedMessage[]
   mentionTagMemberships  MentionTagMember[]
   channelReads           ChannelRead[]
+  lifecycleProcesses     LifecycleProcess[]      @relation("LifecycleSubject")
+  hrLetters              HrLetter[]              @relation("LetterRecipient")
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
   metricsDaily           UserMetricDaily[]
@@ -1799,4 +1804,101 @@ model Issue {
   @@index([assigneeId])
   @@index([reportedBy])
   @@map("issue")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 17. EMPLOYEE LIFECYCLE DOMAIN (TeamNest port — onboarding/offboarding + HR letters)
+// ═══════════════════════════════════════════════════════════════
+
+// An onboarding or offboarding process for one person. The set of IN_PROGRESS
+// ONBOARDING processes is effectively the "new-joiner / candidate grid"; completing
+// an OFFBOARDING process deactivates the user (status INACTIVE), giving pdash a real
+// exit route (previously roster removals were manual hard-deletes).
+model LifecycleProcess {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  type           String    // ONBOARDING | OFFBOARDING
+  status         String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | CANCELLED
+  notes          String?
+  reason         String?   // offboarding: resignation/exit reason
+  lastWorkingDay DateTime? // offboarding
+  startedBy      String
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User            @relation("LifecycleSubject", fields: [userId], references: [id], onDelete: Cascade)
+  tasks        LifecycleTask[]
+
+  @@index([organizationId, type, status])
+  @@index([userId])
+  @@map("lifecycle_process")
+}
+
+model LifecycleTask {
+  id          String    @id @default(cuid())
+  processId   String
+  title       String
+  description String?
+  dueDate     DateTime?
+  done        Boolean   @default(false)
+  doneAt      DateTime?
+  doneBy      String?
+  sequence    Int       @default(0)
+
+  process LifecycleProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@index([processId])
+  @@map("lifecycle_task")
+}
+
+// Reusable checklist template (HR configures once, applied when a process starts).
+model ChecklistTemplate {
+  id             String @id @default(cuid())
+  organizationId String
+  type           String // ONBOARDING | OFFBOARDING
+  name           String
+  createdAt      DateTime @default(now())
+
+  organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items        ChecklistTemplateItem[]
+
+  @@index([organizationId, type])
+  @@map("checklist_template")
+}
+
+model ChecklistTemplateItem {
+  id          String  @id @default(cuid())
+  templateId  String
+  title       String
+  description String?
+  dueDays     Int?    // task due N days after the process starts
+  sequence    Int     @default(0)
+
+  template ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+  @@map("checklist_template_item")
+}
+
+// An HR letter issued to an employee. Body is stored text (rendered read-only);
+// the recipient can acknowledge receipt.
+model HrLetter {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  type           String    // OFFER | APPOINTMENT | CONFIRMATION | RELIEVING | EXPERIENCE | OTHER
+  title          String
+  body           String
+  issuedBy       String
+  issuedAt       DateTime  @default(now())
+  acknowledgedAt DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation("LetterRecipient", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@map("hr_letter")
 }

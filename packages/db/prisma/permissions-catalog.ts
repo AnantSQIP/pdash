@@ -61,6 +61,10 @@ export const MODULES: ModuleDef[] = [
   //   profile.view.personal → home addresses, DOB, emergency contact (Admin/Super Admin/HR)
   // Everyone can always see and edit their OWN profile — that needs no permission.
   { key: 'profile',     label: 'User Profiles', actions: ['view', 'view.personal', 'update.any'] },
+  // Employee lifecycle: onboarding + offboarding processes, checklists, and HR letters.
+  // `manage` = HR/Admin run the processes and issue letters; `view` sees the boards.
+  // (A person always sees their OWN onboarding tasks + letters without any permission.)
+  { key: 'lifecycle',   label: 'Employee Lifecycle', actions: ['view', 'manage'] },
   { key: 'role',        label: 'Roles',        actions: ['view', 'create', 'update', 'delete'] },
   { key: 'group',       label: 'Permission Groups', actions: ['view', 'create', 'update', 'delete', 'manage_members'] },
   { key: 'permission',  label: 'Permissions',  actions: ['view'] },
@@ -125,6 +129,8 @@ const MANAGER_CODES = [
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
   code('profile', 'view'),
+  // See onboarding/offboarding status of the team (HR still owns running them).
+  code('lifecycle', 'view'),
 ];
 
 // Employee: see work, manage own contributions.
@@ -216,6 +222,8 @@ const HR_CODES = [
   code('user', 'view'), code('user', 'create'), code('user', 'update'), code('user', 'manage_access'),
   // People-ops: HR is one of the three roles trusted with personal details.
   code('profile', 'view'), code('profile', 'view.personal'), code('profile', 'update.any'),
+  // People-ops owns onboarding/offboarding and issues HR letters.
+  code('lifecycle', 'view'), code('lifecycle', 'manage'),
 ];
 
 // Admin: everything except the most destructive RBAC delete (kept for Super Admin).
