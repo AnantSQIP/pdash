@@ -3,11 +3,11 @@
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
   Send, Hash, Plus, Lock, X, Loader, Trash2, Users, UserPlus, Crown, Check,
-  Smile, Pin, PinOff, Pencil, Link2, Bell, BellOff,
+  Smile, Pin, PinOff, Pencil, Link2, Bell, BellOff, BarChart3, Bookmark, BookmarkCheck,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Channel, type Message, type ChannelMembers, type UserSummary } from '@/lib/api';
+import { api, type Channel, type Message, type ChannelMembers, type UserSummary, type MessagePoll, type SavedMessage } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePresence } from '@/lib/presence-context';
 import { useToast } from '@/components/ui/Toast';
@@ -268,11 +268,137 @@ type MsgHandlers = {
   onDelete: (messageId: string) => void;
   onPin: (messageId: string, pinned: boolean) => void;
   onCopyLink: (messageId: string) => void;
+  onVote: (pollId: string, optionIds: string[]) => void;
+  onClosePoll: (pollId: string) => void;
+  onSave: (messageId: string, save: boolean) => void;
 };
-function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, mentionSet, usersById, highlight, authorStatus, h }: {
+
+// A poll rendered inside a discussion message (the message content is the question).
+function PollCard({ poll, currentUserId, canClose, onVote, onClose }: {
+  poll: MessagePoll; currentUserId?: string; canClose: boolean;
+  onVote: (optionIds: string[]) => void; onClose: () => void;
+}) {
+  const closed = !!poll.closedAt;
+  const myVotes = new Set(poll.votes.filter(v => v.userId === currentUserId).map(v => v.optionId));
+  const total = poll.votes.length;
+  const voters = new Set(poll.votes.map(v => v.userId)).size;
+  const countOf = (id: string) => poll.votes.filter(v => v.optionId === id).length;
+
+  function click(optionId: string) {
+    if (closed) return;
+    if (poll.multiple) {
+      const next = new Set(myVotes);
+      next.has(optionId) ? next.delete(optionId) : next.add(optionId);
+      if (next.size === 0) return; // must keep at least one choice
+      onVote([...next]);
+    } else {
+      onVote([optionId]);
+    }
+  }
+
+  return (
+    <div className="border border-gray-200 rounded-xl p-3 max-w-md bg-white">
+      <div className="flex items-center gap-1.5 mb-2">
+        <BarChart3 size={14} className="text-brand-600 shrink-0" />
+        <p className="text-sm font-semibold text-gray-800">{poll.question}</p>
+      </div>
+      <div className="space-y-1.5">
+        {poll.options.map(o => {
+          const c = countOf(o.id);
+          const pct = total ? Math.round((c / total) * 100) : 0;
+          const mine = myVotes.has(o.id);
+          return (
+            <button key={o.id} disabled={closed} onClick={() => click(o.id)}
+              className={clsx('relative w-full text-left rounded-lg border overflow-hidden transition-colors', mine ? 'border-brand-300' : 'border-gray-200', !closed && 'hover:border-brand-300', closed && 'cursor-default')}>
+              <span className="absolute inset-y-0 left-0 bg-brand-50" style={{ width: `${pct}%` }} />
+              <span className="relative flex items-center justify-between px-3 py-1.5 text-sm">
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className={clsx('w-3.5 h-3.5 border flex items-center justify-center shrink-0', poll.multiple ? 'rounded' : 'rounded-full', mine ? 'bg-brand-600 border-brand-600' : 'border-gray-300')}>
+                    {mine && <Check size={9} className="text-white" />}
+                  </span>
+                  <span className="truncate text-gray-700">{o.text}</span>
+                </span>
+                <span className="text-xs text-gray-500 tabular-nums shrink-0 ml-2">{pct}% · {c}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center justify-between mt-2 text-[11px] text-gray-400">
+        <span>{voters} vote{voters !== 1 ? 's' : ''}{poll.multiple ? ' · multiple choice' : ''}{closed ? ' · closed' : ''}</span>
+        {canClose && <button onClick={onClose} className="font-medium hover:text-brand-600">{closed ? 'Reopen' : 'Close poll'}</button>}
+      </div>
+    </div>
+  );
+}
+
+function CreatePollModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (question: string, options: string[], multiple: boolean) => Promise<void> }) {
+  const [question, setQuestion] = useState('');
+  const [options, setOptions] = useState<string[]>(['', '']);
+  const [multiple, setMultiple] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const valid = question.trim().length > 0 && options.filter(o => o.trim()).length >= 2;
+
+  function setOpt(i: number, v: string) { setOptions(o => o.map((x, j) => (j === i ? v : x))); }
+  async function submit() {
+    if (!valid || busy) return;
+    setBusy(true); setError('');
+    try { await onSubmit(question.trim(), options.map(o => o.trim()).filter(Boolean), multiple); onClose(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Could not create the poll'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center"><BarChart3 size={17} className="text-brand-600" /></div>
+            <h2 className="text-lg font-semibold text-gray-900">New poll</h2>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
+        </div>
+        <div className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Question <span className="text-red-500">*</span></label>
+            <input autoFocus value={question} onChange={e => setQuestion(e.target.value)} placeholder="e.g. Which filing strategy for the SEP matter?"
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Options</label>
+            <div className="space-y-2">
+              {options.map((o, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input value={o} onChange={e => setOpt(i, e.target.value)} placeholder={`Option ${i + 1}`}
+                    className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                  {options.length > 2 && <button onClick={() => setOptions(opts => opts.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500"><X size={15} /></button>}
+                </div>
+              ))}
+            </div>
+            {options.length < 10 && <button onClick={() => setOptions(o => [...o, ''])} className="mt-2 text-xs font-medium text-brand-600 hover:underline inline-flex items-center gap-1"><Plus size={13} /> Add option</button>}
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={multiple} onChange={e => setMultiple(e.target.checked)} className="rounded" />
+            <span className="text-sm text-gray-700">Allow multiple choices</span>
+          </label>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            <button onClick={submit} disabled={!valid || busy} className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              {busy ? <><Loader size={14} className="animate-spin" /> Posting…</> : 'Post poll'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, mentionSet, usersById, highlight, authorStatus, saved, h }: {
   msg: Message; sameAuthor: boolean; currentUserId?: string; canModerate: boolean;
   mentionRe: RegExp | null; mentionSet: Set<string>; usersById: Map<string, UserSummary>;
-  highlight: boolean; authorStatus?: string | null; h: MsgHandlers;
+  highlight: boolean; authorStatus?: string | null; saved: boolean; h: MsgHandlers;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.content);
@@ -319,12 +445,15 @@ function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, m
           </div>
         ) : (
           <>
-            {msg.content && (
+            {msg.poll ? (
+              <PollCard poll={msg.poll} currentUserId={currentUserId} canClose={msg.poll.createdBy === currentUserId || canModerate}
+                onVote={ids => h.onVote(msg.poll!.id, ids)} onClose={() => h.onClosePoll(msg.poll!.id)} />
+            ) : msg.content ? (
               <p className="text-sm text-gray-700 leading-relaxed break-words whitespace-pre-wrap">
                 {renderContent(msg.content, mentionRe, mentionSet)}
                 {msg.editedAt && <span className="text-[10px] text-gray-400 ml-1">(edited)</span>}
               </p>
-            )}
+            ) : null}
             <AttachmentList attachments={msg.attachments} />
             {groups.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1">
@@ -365,10 +494,36 @@ function MessageItem({ msg, sameAuthor, currentUserId, canModerate, mentionRe, m
             {msg.pinnedAt ? <PinOff size={14} /> : <Pin size={14} />}
           </button>
           <button onClick={() => h.onCopyLink(msg.id)} className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600" title="Copy link"><Link2 size={14} /></button>
+          <button onClick={() => h.onSave(msg.id, !saved)} className={clsx('p-1.5 rounded-md hover:bg-gray-100', saved ? 'text-brand-600' : 'text-gray-400 hover:text-gray-600')} title={saved ? 'Remove from saved' : 'Save message'}>
+            {saved ? <BookmarkCheck size={14} /> : <Bookmark size={14} />}
+          </button>
           {isAuthor && <button onClick={() => { setDraft(msg.content); setEditing(true); }} className="p-1.5 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600" title="Edit"><Pencil size={14} /></button>}
           {(isAuthor || canModerate) && <button onClick={() => h.onDelete(msg.id)} className="p-1.5 rounded-md text-gray-400 hover:bg-red-50 hover:text-red-500" title="Delete"><Trash2 size={14} /></button>}
         </div>
       )}
+    </div>
+  );
+}
+
+function SavedModal({ saved, onClose, onJump }: { saved: SavedMessage[]; onClose: () => void; onJump: (channelId: string, messageId: string) => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[calc(100dvh-4rem)] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2"><Bookmark size={17} className="text-brand-600" /> Saved messages</h2>
+          <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
+        </div>
+        <div className="overflow-y-auto divide-y divide-gray-50">
+          {saved.length === 0 && <p className="px-6 py-10 text-center text-sm text-gray-400">No saved messages yet. Hover a message and tap the bookmark to save it.</p>}
+          {saved.map(m => (
+            <button key={m.id} onClick={() => onJump(m.channelId, m.id)} className="w-full text-left px-6 py-3 hover:bg-gray-50">
+              <p className="text-[11px] text-gray-400 mb-0.5"><Lock size={9} className="inline mr-1" />{m.channel.name} · {fullName(m.user)} · {fmtTime(m.createdAt)}</p>
+              <p className="text-sm text-gray-700 line-clamp-2">{m.poll ? `📊 ${m.poll.question}` : (m.content || '(attachment)')}</p>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -383,6 +538,8 @@ export default function DiscussPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const [showPinned, setShowPinned] = useState(false);
+  const [showPoll, setShowPoll] = useState(false);
+  const [showSaved, setShowSaved] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -422,6 +579,8 @@ export default function DiscussPage() {
     try { await api.notifications.muteChannel(activeChannel.id, !muted); qc.invalidateQueries({ queryKey: ['notif-prefs'] }); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not update mute'); }
   }
+  const { data: savedList = [] } = useQuery<SavedMessage[]>({ queryKey: ['saved-messages'], queryFn: () => api.channels.saved(), enabled: !!currentUser?.id, staleTime: 30_000 });
+  const savedIds = useMemo(() => new Set(savedList.map(m => m.id)), [savedList]);
 
   // Mention rendering data (highlight any "@Full Name" of an org member, longest first).
   const usersById = useMemo(() => new Map(users.map(u => [u.id, u])), [users]);
@@ -480,6 +639,23 @@ export default function DiscussPage() {
       const url = `${window.location.origin}/discuss?channel=${activeChannel.id}&message=${messageId}`;
       navigator.clipboard?.writeText(url).then(() => toast('Link copied'), () => toast('Could not copy link', 'error'));
     },
+    onVote: async (pollId, optionIds) => {
+      if (!activeChannel) return;
+      try { await api.channels.votePoll(activeChannel.id, pollId, optionIds); invalidateMessages(); }
+      catch (e) { alert(e instanceof Error ? e.message : 'Could not vote'); }
+    },
+    onClosePoll: async (pollId) => {
+      if (!activeChannel) return;
+      try { await api.channels.closePoll(activeChannel.id, pollId); invalidateMessages(); }
+      catch (e) { alert(e instanceof Error ? e.message : 'Could not update the poll'); }
+    },
+    onSave: async (messageId, save) => {
+      if (!activeChannel) return;
+      try {
+        await (save ? api.channels.saveMessage(activeChannel.id, messageId) : api.channels.unsaveMessage(activeChannel.id, messageId));
+        qc.invalidateQueries({ queryKey: ['saved-messages'] });
+      } catch (e) { alert(e instanceof Error ? e.message : 'Could not update saved'); }
+    },
   };
 
   async function deleteChannel(id: string) {
@@ -516,7 +692,10 @@ export default function DiscussPage() {
             </button>
           ))}
         </div>
-        <div className="px-4 py-3 border-t border-gray-200">
+        <div className="px-4 py-3 border-t border-gray-200 space-y-2">
+          <button onClick={() => setShowSaved(true)} className="flex items-center gap-2 text-sm text-gray-500 hover:text-brand-600 w-full transition-colors">
+            <Bookmark size={14} /> Saved {savedList.length > 0 && <span className="text-xs text-gray-400">({savedList.length})</span>}
+          </button>
           <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 text-sm text-gray-500 hover:text-brand-600 w-full transition-colors">
             <Plus size={14} /> New Discussion
           </button>
@@ -598,7 +777,7 @@ export default function DiscussPage() {
                 return (
                   <MessageItem key={msg.id} msg={msg} sameAuthor={sameAuthor} currentUserId={currentUser?.id}
                     canModerate={isOwner} mentionRe={mentionRe} mentionSet={mentionSet} usersById={usersById}
-                    highlight={highlightId === msg.id} authorStatus={presenceOf(msg.userId)?.status} h={handlers} />
+                    highlight={highlightId === msg.id} authorStatus={presenceOf(msg.userId)?.status} saved={savedIds.has(msg.id)} h={handlers} />
                 );
               })}
               <div ref={messagesEndRef} />
@@ -609,6 +788,8 @@ export default function DiscussPage() {
               <PendingAttachmentChips items={attachments.pending} onRemove={attachments.remove} />
               <div className="flex items-center gap-2 bg-gray-50 rounded-xl border border-gray-200 px-3 py-2.5 focus-within:border-brand-400 transition-colors">
                 <AttachButton onPick={attachments.add} disabled={sending} />
+                <button type="button" onClick={() => setShowPoll(true)} disabled={sending} title="Create a poll"
+                  className="p-1 text-gray-400 hover:text-brand-600 disabled:opacity-50 shrink-0"><BarChart3 size={18} /></button>
                 <MentionInput value={draft} onChange={setDraft} onEnter={sendMessage} members={channelMembers} placeholder={`Message ${activeChannel.name}  ·  @ to mention`} disabled={sending} />
                 <button type="submit" disabled={(!draft.trim() && attachments.documentIds.length === 0) || attachments.uploading || sending}
                   className="p-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 shrink-0">
@@ -628,6 +809,14 @@ export default function DiscussPage() {
 
       {showCreate && <CreateDiscussionModal onClose={() => setShowCreate(false)} onSuccess={(id) => { invalidateChannels(); setActiveChannelId(id); }} />}
       {showMembers && activeChannel && <MembersModal channelId={activeChannel.id} isOwner={isOwner} onClose={() => { setShowMembers(false); invalidateChannels(); }} />}
+      {showPoll && activeChannel && (
+        <CreatePollModal onClose={() => setShowPoll(false)}
+          onSubmit={async (question, options, multiple) => { await api.channels.createPoll(activeChannel.id, { question, options, multiple }); invalidateMessages(); invalidateChannels(); }} />
+      )}
+      {showSaved && (
+        <SavedModal saved={savedList} onClose={() => setShowSaved(false)}
+          onJump={(cid, mid) => { setShowSaved(false); setActiveChannelId(cid); setHighlightId(mid); }} />
+      )}
     </div>
   );
 }

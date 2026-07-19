@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Patch, Put, Query } from '@nestjs/common';
 import { ChannelsService } from './channels.service';
-import { CreateChannelDto, UpdateChannelDto, CreateMessageDto, SetChannelMembersDto, EditMessageDto, ReactionDto } from './dto';
+import { CreateChannelDto, UpdateChannelDto, CreateMessageDto, SetChannelMembersDto, EditMessageDto, ReactionDto, CreatePollDto, VoteDto } from './dto';
 
 // Discussions are PRIVATE + member-gated. Authorization is enforced in the service by
 // CHANNEL MEMBERSHIP / OWNERSHIP — not by RBAC permissions — so a Super Admin who was
@@ -44,6 +44,22 @@ export class ChannelsController {
     return this.channels.listPinned(id);
   }
 
+  // ── saved messages ─────────────────────────────────────────────────────────
+  @Get('me/saved')
+  listSaved() {
+    return this.channels.listSaved();
+  }
+
+  @Post(':channelId/messages/:messageId/save')
+  save(@Param('channelId') channelId: string, @Param('messageId') messageId: string) {
+    return this.channels.saveMessage(channelId, messageId);
+  }
+
+  @Post(':channelId/messages/:messageId/unsave')
+  unsave(@Param('messageId') messageId: string) {
+    return this.channels.unsaveMessage(messageId);
+  }
+
   @Post(':id/messages')
   createMessage(@Param('id') channelId: string, @Body() dto: CreateMessageDto) {
     return this.channels.createMessage(channelId, dto);
@@ -72,6 +88,22 @@ export class ChannelsController {
   @Post(':channelId/messages/:messageId/unpin')
   unpin(@Param('channelId') channelId: string, @Param('messageId') messageId: string) {
     return this.channels.setPinned(channelId, messageId, false);
+  }
+
+  // ── polls ──────────────────────────────────────────────────────────────────
+  @Post(':id/polls')
+  createPoll(@Param('id') channelId: string, @Body() dto: CreatePollDto) {
+    return this.channels.createPoll(channelId, dto);
+  }
+
+  @Post(':channelId/polls/:pollId/vote')
+  votePoll(@Param('channelId') channelId: string, @Param('pollId') pollId: string, @Body() dto: VoteDto) {
+    return this.channels.votePoll(channelId, pollId, dto.optionIds);
+  }
+
+  @Post(':channelId/polls/:pollId/close')
+  closePoll(@Param('channelId') channelId: string, @Param('pollId') pollId: string) {
+    return this.channels.closePoll(channelId, pollId);
   }
 
   // ── Member management (owner-only, enforced in the service) ──────────────────

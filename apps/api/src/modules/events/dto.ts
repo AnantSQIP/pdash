@@ -70,6 +70,19 @@ export class CreateEventDto {
   reminderMinutes?: number;
 
   @IsOptional()
+  @IsIn(['NONE', 'DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY'])
+  recurrence?: string;
+
+  @IsOptional()
+  @IsDateString()
+  recurrenceUntil?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(8000)
+  notes?: string;
+
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   attendeeIds?: string[];
@@ -78,6 +91,12 @@ export class CreateEventDto {
 export class RespondDto {
   @IsIn(['ACCEPTED', 'DECLINED', 'TENTATIVE', 'PENDING'])
   response!: string;
+}
+
+export class NotesDto {
+  @IsString()
+  @MaxLength(8000)
+  notes!: string;
 }
 
 export class UpdateEventDto {

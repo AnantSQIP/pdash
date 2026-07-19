@@ -11,12 +11,18 @@ const ATTACHMENTS_INCLUDE = {
   where: { document: { deletedAt: null } },
   select: { document: { select: DOC_SELECT } },
 } as const;
-// A message with its author, attachments, reactions and mentions.
+// A message with its author, attachments, reactions, mentions and (if it is one) poll.
 const MSG_INCLUDE = {
   user: { select: USER_SELECT },
   attachments: ATTACHMENTS_INCLUDE,
   reactions: { select: { emoji: true, userId: true } },
   mentions: { select: { userId: true } },
+  poll: {
+    include: {
+      options: { select: { id: true, text: true, sequence: true }, orderBy: { sequence: 'asc' } },
+      votes: { select: { optionId: true, userId: true } },
+    },
+  },
 } as const;
 
 // Reactions are limited to a small curated set — this both keeps the UI tidy and
@@ -258,6 +264,8 @@ export class ChannelsService {
       this.prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date(), content: '', pinnedAt: null, pinnedBy: null } }),
     ]);
     if (msg.attachments.length) await this.documents.softDeleteAttached(msg.attachments.map(a => a.documentId));
+    // If the message was a poll, remove the poll too (cascades options + votes).
+    if (msg.pollId) await this.prisma.poll.delete({ where: { id: msg.pollId } }).catch(() => { /* already gone */ });
     return { ok: true };
   }
 
@@ -275,6 +283,61 @@ export class ChannelsService {
     return this.prisma.messageReaction.findMany({ where: { messageId }, select: { emoji: true, userId: true } });
   }
 
+  // ── polls ───────────────────────────────────────────────────────────────────
+  private async fetchPollMessage(pollId: string) {
+    const m = await this.prisma.message.findFirst({ where: { pollId }, include: MSG_INCLUDE });
+    return m ? this.normalize(m) : null;
+  }
+
+  /** Post a poll into a channel — it becomes a message whose content is the question. */
+  async createPoll(channelId: string, dto: { question: string; options: string[]; multiple?: boolean }) {
+    const { actorId } = await this.assertMember(channelId);
+    const question = dto.question?.trim() ?? '';
+    const opts = (dto.options ?? []).map(o => (o ?? '').trim()).filter(Boolean);
+    if (!question) throw new BadRequestException('A poll needs a question.');
+    if (opts.length < 2) throw new BadRequestException('A poll needs at least 2 options.');
+    if (opts.length > 10) throw new BadRequestException('A poll can have at most 10 options.');
+    const message = await this.prisma.$transaction(async (tx) => {
+      const poll = await tx.poll.create({
+        data: {
+          channelId, createdBy: actorId, question, multiple: !!dto.multiple,
+          options: { create: opts.map((text, i) => ({ text, sequence: i })) },
+        },
+      });
+      return tx.message.create({ data: { channelId, userId: actorId, content: question, pollId: poll.id } });
+    });
+    return this.fetchMessage(message.id);
+  }
+
+  /** Cast (or change) the actor's vote. Single-choice replaces; multiple sets the given set. */
+  async votePoll(channelId: string, pollId: string, optionIds: string[]) {
+    const { actorId } = await this.assertMember(channelId);
+    const poll = await this.prisma.poll.findFirst({ where: { id: pollId, channelId }, include: { options: { select: { id: true } } } });
+    if (!poll) throw new NotFoundException('Poll not found');
+    if (poll.closedAt) throw new BadRequestException('This poll is closed.');
+    const valid = new Set(poll.options.map(o => o.id));
+    let chosen = [...new Set((optionIds ?? []).filter(id => valid.has(id)))];
+    if (!chosen.length) throw new BadRequestException('Pick at least one option.');
+    if (!poll.multiple) chosen = [chosen[0]];
+    await this.prisma.$transaction([
+      this.prisma.pollVote.deleteMany({ where: { pollId, userId: actorId } }),
+      this.prisma.pollVote.createMany({ data: chosen.map(optionId => ({ pollId, optionId, userId: actorId })) }),
+    ]);
+    return this.fetchPollMessage(pollId);
+  }
+
+  /** Close (or reopen) a poll — creator or channel owner only. */
+  async closePoll(channelId: string, pollId: string) {
+    const { channel, actorId } = await this.assertMember(channelId);
+    const poll = await this.prisma.poll.findFirst({ where: { id: pollId, channelId } });
+    if (!poll) throw new NotFoundException('Poll not found');
+    if (poll.createdBy !== actorId && channel.createdBy !== actorId) {
+      throw new ForbiddenException('Only the poll creator or the discussion owner can close it.');
+    }
+    await this.prisma.poll.update({ where: { id: pollId }, data: { closedAt: poll.closedAt ? null : new Date() } });
+    return this.fetchPollMessage(pollId);
+  }
+
   async setPinned(channelId: string, messageId: string, pinned: boolean) {
     const { actorId } = await this.assertMember(channelId);
     const msg = await this.prisma.message.findFirst({ where: { id: messageId, channelId, deletedAt: null }, select: { id: true } });
@@ -284,6 +347,36 @@ export class ChannelsService {
       data: pinned ? { pinnedAt: new Date(), pinnedBy: actorId } : { pinnedAt: null, pinnedBy: null },
     });
     return this.fetchMessage(messageId);
+  }
+
+  // ── saved messages (personal bookmarks) ────────────────────────────────────
+  async saveMessage(channelId: string, messageId: string) {
+    const { actorId } = await this.assertMember(channelId);
+    const msg = await this.prisma.message.findFirst({ where: { id: messageId, channelId, deletedAt: null }, select: { id: true } });
+    if (!msg) throw new NotFoundException('Message not found');
+    await this.prisma.savedMessage.upsert({
+      where: { userId_messageId: { userId: actorId, messageId } },
+      create: { userId: actorId, messageId }, update: {},
+    });
+    return { saved: true };
+  }
+
+  async unsaveMessage(messageId: string) {
+    const actorId = this.actor();
+    await this.prisma.savedMessage.deleteMany({ where: { userId: actorId, messageId } });
+    return { saved: false };
+  }
+
+  /** Messages the actor bookmarked, still visible (channel not deleted, still a member). */
+  async listSaved() {
+    const actorId = this.actor();
+    const rows = await this.prisma.savedMessage.findMany({
+      where: { userId: actorId, message: { deletedAt: null, channel: { deletedAt: null, members: { some: { userId: actorId } } } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { message: { include: { ...MSG_INCLUDE, channel: { select: { id: true, name: true } } } } },
+    });
+    return rows.map(r => ({ ...this.normalize(r.message), channel: (r.message as { channel: unknown }).channel, savedAt: r.createdAt }));
   }
 
   // ── Member management (owner-only) ──────────────────────────────────────────

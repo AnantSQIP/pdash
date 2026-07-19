@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { EventsService } from './events.service';
-import { CreateEventDto, UpdateEventDto, RespondDto } from './dto';
+import { CreateEventDto, UpdateEventDto, RespondDto, NotesDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -30,6 +30,14 @@ export class EventsController {
     return this.events.freeBusy(await this.actor.requireOrgId(), (userIds ?? '').split(',').filter(Boolean), from, to);
   }
 
+  // iCalendar download of the org's events (session-scoped org).
+  @Get('export.ics') @RequirePermission('calendar.view')
+  @Header('Content-Type', 'text/calendar; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="squark-calendar.ics"')
+  async exportIcs() {
+    return this.events.exportIcs(await this.actor.requireOrgId());
+  }
+
   @Get(':id') @RequirePermission('calendar.view')
   get(@Param('id') id: string) {
     return this.events.get(id);
@@ -53,8 +61,14 @@ export class EventsController {
     return this.events.update(id, dto);
   }
 
+  // Notes are collaborative — any attendee (or the organizer) may edit; enforced in the service.
+  @Put(':id/notes') @RequirePermission('calendar.view')
+  updateNotes(@Param('id') id: string, @Body() dto: NotesDto) {
+    return this.events.updateNotes(id, dto.notes);
+  }
+
   @Delete(':id') @RequirePermission('calendar.update')
-  remove(@Param('id') id: string) {
-    return this.events.softDelete(id);
+  remove(@Param('id') id: string, @Query('series') series?: string) {
+    return this.events.softDelete(id, series === 'true');
   }
 }

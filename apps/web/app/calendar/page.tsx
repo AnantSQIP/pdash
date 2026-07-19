@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, ChevronLeft, ChevronRight, Loader, X, Trash2, Calendar, Check, Video, MapPin } from 'lucide-react';
+import { Plus, ChevronLeft, ChevronRight, Loader, X, Trash2, Calendar, Check, Video, MapPin, Send, Repeat, Download } from 'lucide-react';
 import {
   RiCalendarEventLine,
   RiTeamLine,
@@ -23,7 +23,7 @@ import {
   type RemixiconComponentType,
 } from '@remixicon/react';
 import clsx from 'clsx';
-import { api, type CalendarEvent, type FreeBusy } from '@/lib/api';
+import { api, type CalendarEvent, type FreeBusy, type ApiComment, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
@@ -122,6 +122,8 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
   const [location, setLocation] = useState('');
   const [joinUrl, setJoinUrl] = useState('');
   const [reminder, setReminder] = useState(0);
+  const [recurrence, setRecurrence] = useState('NONE');
+  const [recurUntil, setRecurUntil] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const isMeeting = type === 'MEETING';
@@ -156,6 +158,8 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
         location: location.trim() || undefined,
         joinUrl: joinUrl.trim() || undefined,
         reminderMinutes: reminder || undefined,
+        recurrence: recurrence !== 'NONE' ? recurrence : undefined,
+        recurrenceUntil: recurrence !== 'NONE' && recurUntil ? recurUntil : undefined,
       });
       onSuccess();
       onClose();
@@ -293,6 +297,27 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Repeat</label>
+              <select value={recurrence} onChange={e => setRecurrence(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white">
+                <option value="NONE">Does not repeat</option>
+                <option value="DAILY">Daily</option>
+                <option value="WEEKLY">Weekly</option>
+                <option value="BIWEEKLY">Every 2 weeks</option>
+                <option value="MONTHLY">Monthly</option>
+              </select>
+            </div>
+            {recurrence !== 'NONE' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Until <span className="text-gray-400 font-normal">(optional)</span></label>
+                <DateField type="date" value={recurUntil} min={startDate} onChange={e => setRecurUntil(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+              </div>
+            )}
+          </div>
+
           {error && <p className="text-xs text-red-600">{error}</p>}
 
           <div className="flex items-center justify-end gap-3 pt-2">
@@ -322,6 +347,81 @@ function EventChip({ ev, onSelect }: { ev: CalendarEvent; onSelect: (ev: Calenda
       {!ev.allDay && <span className="opacity-90 tabular-nums text-[10px] shrink-0">{fmtTime(ev.startDate)}</span>}
       <span className="truncate">{ev.title}</span>
     </button>
+  );
+}
+
+const RECUR_LABEL: Record<string, string> = {
+  DAILY: 'Repeats daily', WEEKLY: 'Repeats weekly', BIWEEKLY: 'Repeats every 2 weeks', MONTHLY: 'Repeats monthly',
+};
+
+// Shared, collaboratively-editable meeting notes.
+function NotesEditor({ event, onSaved }: { event: CalendarEvent; onSaved: (e: CalendarEvent) => void }) {
+  const [notes, setNotes] = useState(event.notes ?? '');
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setNotes(event.notes ?? ''); setEditing(false); }, [event.id]);
+  async function save() {
+    setBusy(true);
+    try { const updated = await api.events.updateNotes(event.id, notes); onSaved(updated); setEditing(false); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not save notes'); } finally { setBusy(false); }
+  }
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Notes</span>
+        {!editing && <button onClick={() => setEditing(true)} className="text-[11px] text-brand-600 hover:underline">Edit</button>}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} placeholder="Agenda, minutes, action items…"
+            className="w-full text-sm border border-gray-300 rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 resize-none" />
+          <div className="flex gap-2">
+            <button onClick={save} disabled={busy} className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+            <button onClick={() => { setEditing(false); setNotes(event.notes ?? ''); }} className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-600 whitespace-pre-wrap">{event.notes ? event.notes : <span className="text-gray-300 italic">No notes yet.</span>}</p>
+      )}
+    </div>
+  );
+}
+
+// A lightweight comment thread on a meeting (reuses the polymorphic comments API).
+function MeetingChat({ eventId, currentUser }: { eventId: string; currentUser: UserSummary | null }) {
+  const qc = useQueryClient();
+  const { data: comments = [] } = useQuery<ApiComment[]>({
+    queryKey: ['meeting-chat', eventId], queryFn: () => api.comments.list('MEETING', eventId), staleTime: 8_000, refetchInterval: 12_000,
+  });
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function send() {
+    if (!draft.trim() || !currentUser || busy) return;
+    setBusy(true);
+    try { await api.comments.create({ entityType: 'MEETING', entityId: eventId, userId: currentUser.id, content: draft.trim() }); setDraft(''); qc.invalidateQueries({ queryKey: ['meeting-chat', eventId] }); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not post'); } finally { setBusy(false); }
+  }
+  return (
+    <div className="mb-4">
+      <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Discussion</span>
+      <div className="space-y-2 mt-1.5 max-h-40 overflow-y-auto">
+        {comments.length === 0 && <p className="text-xs text-gray-300">No messages yet.</p>}
+        {comments.map(c => (
+          <div key={c.id} className="flex items-start gap-2">
+            <Avatar user={c.user} size={22} className="shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-[11px] text-gray-400">{c.user?.firstName} {c.user?.lastName}</p>
+              <p className="text-sm text-gray-700 break-words">{c.content}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-2">
+        <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }}
+          placeholder="Message the attendees…" className="flex-1 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-brand-400" />
+        <button onClick={send} disabled={busy || !draft.trim()} className="p-1.5 rounded-lg bg-brand-600 text-white disabled:opacity-40 shrink-0"><Send size={14} /></button>
+      </div>
+    </div>
   );
 }
 
@@ -402,11 +502,11 @@ export default function CalendarPage() {
 
   function invalidate() { qc.invalidateQueries({ queryKey: ['events', org?.id] }); }
 
-  async function deleteEvent(id: string) {
-    if (!confirm('Delete this event?')) return;
+  async function deleteEvent(id: string, series = false) {
+    if (!confirm(series ? 'Delete the whole recurring series?' : 'Delete this event?')) return;
     setDeletingId(id);
     try {
-      await api.events.delete(id);
+      await api.events.delete(id, series);
       invalidate();
       setSelectedEvent(null);
     } catch (err) {
@@ -574,6 +674,10 @@ export default function CalendarPage() {
           </div>
 
           {isLoading && <Loader size={16} className="animate-spin text-gray-400" />}
+          <a href={api.events.icsHref()} title="Export upcoming events (.ics)"
+            className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+            <Download size={14} /> <span className="hidden sm:inline">Export</span>
+          </a>
           <button
             onClick={() => openAdd(undefined)}
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors"
@@ -866,6 +970,9 @@ export default function CalendarPage() {
               {selectedEvent.reminderMinutes ? (
                 <div className="flex items-center gap-2 text-xs text-gray-400"><RiAlarmLine size={14} /> Reminder {selectedEvent.reminderMinutes} min before</div>
               ) : null}
+              {(selectedEvent.recurrence || selectedEvent.recurrenceParentId) && (
+                <div className="flex items-center gap-2 text-xs text-gray-500"><Repeat size={14} className="text-gray-400" /> {selectedEvent.recurrence ? RECUR_LABEL[selectedEvent.recurrence] : 'Part of a recurring series'}</div>
+              )}
             </div>
 
             {/* Attendees + RSVP */}
@@ -913,14 +1020,28 @@ export default function CalendarPage() {
             {isReadOnlyEvent(selectedEvent.id) ? (
               <p className="text-xs text-gray-400 px-1">Company holiday — managed under Attendance &rsaquo; Holidays.</p>
             ) : (
-              <button
-                onClick={() => deleteEvent(selectedEvent.id)}
-                disabled={deletingId === selectedEvent.id}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full transition-colors disabled:opacity-50"
-              >
-                {deletingId === selectedEvent.id ? <Loader size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                Delete event
-              </button>
+              <>
+                <NotesEditor event={selectedEvent} onSaved={(e) => { setSelectedEvent(e); invalidate(); }} />
+                <MeetingChat eventId={selectedEvent.id} currentUser={currentUser} />
+                {(selectedEvent.recurrence || selectedEvent.recurrenceParentId) ? (
+                  <div className="space-y-1">
+                    <button onClick={() => deleteEvent(selectedEvent.id, false)} disabled={deletingId === selectedEvent.id}
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full transition-colors disabled:opacity-50">
+                      <Trash2 size={14} /> Delete this event
+                    </button>
+                    <button onClick={() => deleteEvent(selectedEvent.id, true)} disabled={deletingId === selectedEvent.id}
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full transition-colors disabled:opacity-50">
+                      <Trash2 size={14} /> Delete entire series
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => deleteEvent(selectedEvent.id, false)} disabled={deletingId === selectedEvent.id}
+                    className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg w-full transition-colors disabled:opacity-50">
+                    {deletingId === selectedEvent.id ? <Loader size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    Delete event
+                  </button>
+                )}
+              </>
             )}
           </div>
         ) : (

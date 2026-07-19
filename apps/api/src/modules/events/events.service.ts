@@ -54,7 +54,7 @@ export class EventsService {
 
   async create(dto: CreateEventDto) {
     // Organizer = verified actor (never the client-supplied createdBy).
-    const { attendeeIds = [], createdBy: _ignored, ...rest } = dto;
+    const { attendeeIds = [], createdBy: _ignored, recurrence, recurrenceUntil, ...rest } = dto;
     const actorId = getActorId();
     if (!actorId) throw new ForbiddenException('Not authenticated.');
     const event = await this.prisma.calendarEvent.create({
@@ -63,6 +63,9 @@ export class EventsService {
         createdBy: actorId,
         startDate: new Date(dto.startDate),
         endDate: dto.endDate ? new Date(dto.endDate) : undefined,
+        // Mark the master with its recurrence rule; occurrences are generated below.
+        recurrence: recurrence && recurrence !== 'NONE' ? recurrence : undefined,
+        recurrenceUntil: recurrenceUntil ? new Date(recurrenceUntil) : undefined,
         attendees: attendeeIds.length
           ? { create: attendeeIds.map(userId => ({ userId })) }
           : undefined,
@@ -79,7 +82,46 @@ export class EventsService {
         message: `${who} added you to "${event.title}" on ${this.formatWhen(event.startDate, event.allDay)}.`,
       });
     }
+    if (recurrence && recurrence !== 'NONE') await this.generateOccurrences(event, recurrence, recurrenceUntil, attendeeIds);
     return event;
+  }
+
+  private nextDate(d: Date, rule: string): Date {
+    const r = new Date(d);
+    if (rule === 'DAILY') r.setUTCDate(r.getUTCDate() + 1);
+    else if (rule === 'WEEKLY') r.setUTCDate(r.getUTCDate() + 7);
+    else if (rule === 'BIWEEKLY') r.setUTCDate(r.getUTCDate() + 14);
+    else if (rule === 'MONTHLY') r.setUTCMonth(r.getUTCMonth() + 1);
+    return r;
+  }
+
+  /** Materialize repeat occurrences after the master (capped), each linked to the series. */
+  private async generateOccurrences(master: { id: string; organizationId: string; title: string; description: string | null; type: string; allDay: boolean; color: string; location: string | null; joinUrl: string | null; reminderMinutes: number | null; notes: string | null; projectId: string | null; createdBy: string; startDate: Date; endDate: Date | null }, rule: string, untilStr: string | undefined, attendeeIds: string[]) {
+    const start = new Date(master.startDate);
+    const durationMs = master.endDate ? new Date(master.endDate).getTime() - start.getTime() : 0;
+    const until = untilStr ? new Date(untilStr) : this.nextDate(new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 3, start.getUTCDate())), 'DAILY');
+    const MAX = 60;
+    const creates = [];
+    let cur = this.nextDate(start, rule);
+    let count = 0;
+    while (cur <= until && count < MAX) {
+      const occStart = new Date(cur);
+      creates.push(this.prisma.calendarEvent.create({
+        data: {
+          organizationId: master.organizationId, title: master.title, description: master.description ?? undefined,
+          type: master.type, allDay: master.allDay, color: master.color,
+          location: master.location ?? undefined, joinUrl: master.joinUrl ?? undefined,
+          reminderMinutes: master.reminderMinutes ?? undefined, notes: master.notes ?? undefined,
+          projectId: master.projectId ?? undefined, createdBy: master.createdBy,
+          startDate: occStart, endDate: durationMs ? new Date(occStart.getTime() + durationMs) : undefined,
+          recurrenceParentId: master.id,
+          attendees: attendeeIds.length ? { create: attendeeIds.map(userId => ({ userId })) } : undefined,
+        },
+      }));
+      cur = this.nextDate(cur, rule);
+      count++;
+    }
+    if (creates.length) await this.prisma.$transaction(creates);
   }
 
   async update(id: string, dto: UpdateEventDto) {
@@ -106,13 +148,68 @@ export class EventsService {
     return event;
   }
 
-  async softDelete(id: string) {
+  async softDelete(id: string, series = false) {
     const existing = await this.get(id);
     await this.assertOrganizerOrPrivileged(existing.createdBy);
+    if (series) {
+      // Delete the whole series: the master + every occurrence linked to it.
+      const rootId = existing.recurrenceParentId ?? id;
+      await this.prisma.calendarEvent.updateMany({
+        where: { OR: [{ id: rootId }, { recurrenceParentId: rootId }] },
+        data: { deletedAt: new Date() },
+      });
+      return { ok: true };
+    }
     return this.prisma.calendarEvent.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
+  }
+
+  /** Shared meeting notes — editable by the organizer or any attendee (or a Super Admin). */
+  async updateNotes(id: string, notes: string) {
+    const event = await this.get(id);
+    const actorId = getActorId();
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    const isAttendee = event.attendees.some(a => a.userId === actorId);
+    if (actorId !== event.createdBy && !isAttendee) {
+      const perms = await this.permissions.getEffectivePermissions(actorId);
+      if (!perms.isSuperAdmin) throw new ForbiddenException('Only the organizer or an attendee can edit the notes.');
+    }
+    return this.prisma.calendarEvent.update({
+      where: { id },
+      data: { notes: (notes ?? '').slice(0, 8000) },
+      include: { attendees: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } } },
+    });
+  }
+
+  /** iCalendar export of the org's events in a ±window (download / subscribe). */
+  async exportIcs(organizationId: string): Promise<string> {
+    const now = Date.now();
+    const from = new Date(now - 30 * 86_400_000);
+    const to = new Date(now + 120 * 86_400_000);
+    const events = await this.prisma.calendarEvent.findMany({
+      where: { organizationId, deletedAt: null, startDate: { gte: from, lte: to } },
+      orderBy: { startDate: 'asc' },
+    });
+    const fmt = (d: Date) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    const esc = (s: string | null) => (s ?? '').replace(/([,;\\])/g, '\\$1').replace(/\r?\n/g, '\\n');
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Squark Dashboard//Calendar//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+    for (const e of events) {
+      lines.push('BEGIN:VEVENT', `UID:${e.id}@squark-dashboard`, `DTSTAMP:${fmt(e.createdAt)}`);
+      if (e.allDay) lines.push(`DTSTART;VALUE=DATE:${fmt(e.startDate).slice(0, 8)}`);
+      else {
+        lines.push(`DTSTART:${fmt(e.startDate)}`);
+        if (e.endDate) lines.push(`DTEND:${fmt(e.endDate)}`);
+      }
+      lines.push(`SUMMARY:${esc(e.title)}`);
+      if (e.description) lines.push(`DESCRIPTION:${esc(e.description)}`);
+      if (e.location) lines.push(`LOCATION:${esc(e.location)}`);
+      if (e.joinUrl) lines.push(`URL:${esc(e.joinUrl)}`);
+      lines.push('END:VEVENT');
+    }
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n');
   }
 
   /** An attendee RSVPs to a meeting; the organizer is notified. */

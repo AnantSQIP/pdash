@@ -119,6 +119,9 @@ model User {
   messages               Message[]
   messageReactions       MessageReaction[]
   messageMentions        MessageMention[]
+  pollsCreated           Poll[]                  @relation("PollCreator")
+  pollVotes              PollVote[]
+  savedMessages          SavedMessage[]
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
   metricsDaily           UserMetricDaily[]
@@ -1488,6 +1491,14 @@ model CalendarEvent {
   // stops the reminder sweep from firing twice for the same meeting.
   reminderMinutes Int?
   reminderSentAt  DateTime?
+  // Recurrence: NONE | DAILY | WEEKLY | BIWEEKLY | MONTHLY. Occurrences are materialized as
+  // separate events up to recurrenceUntil, each linked back to the series master via
+  // recurrenceParentId (null on the master itself).
+  recurrence         String?
+  recurrenceUntil    DateTime?
+  recurrenceParentId String?
+  // Shared, collaboratively-editable meeting notes (agenda / minutes).
+  notes          String?
   createdBy      String
   projectId      String?
   createdAt      DateTime  @default(now())
@@ -1498,6 +1509,7 @@ model CalendarEvent {
   attendees    CalendarEventAttendee[]
 
   @@index([organizationId])
+  @@index([recurrenceParentId])
   @@map("calendar_event")
 }
 
@@ -1534,6 +1546,7 @@ model Channel {
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   messages     Message[]
   members      ChannelMember[]
+  polls        Poll[]
 
   @@index([organizationId])
   @@map("channel")
@@ -1565,17 +1578,85 @@ model Message {
   // Pinning: any member may pin a message to the channel's pinned pane.
   pinnedAt  DateTime?
   pinnedBy  String?
+  // When set, this message IS a poll (content = the question). 1:1 with Poll.
+  pollId    String?   @unique
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
   channel     Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
   user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  poll        Poll?               @relation(fields: [pollId], references: [id], onDelete: SetNull)
   attachments MessageAttachment[]
   reactions   MessageReaction[]
   mentions    MessageMention[]
+  savedBy     SavedMessage[]
 
   @@index([channelId])
   @@map("message")
+}
+
+// A personal bookmark of a discussion message, retrievable from the "Saved" view.
+model SavedMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  messageId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, messageId])
+  @@index([userId])
+  @@map("saved_message")
+}
+
+// A poll posted in a discussion. The poll's own message carries the question; this row
+// holds the options and the (single- or multiple-choice) votes.
+model Poll {
+  id        String    @id @default(cuid())
+  channelId String
+  createdBy String
+  question  String
+  multiple  Boolean   @default(false)
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  channel Channel      @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  creator User         @relation("PollCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  message Message?
+  options PollOption[]
+  votes   PollVote[]
+
+  @@index([channelId])
+  @@map("poll")
+}
+
+model PollOption {
+  id       String @id @default(cuid())
+  pollId   String
+  text     String
+  sequence Int    @default(0)
+
+  poll  Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes PollVote[]
+
+  @@index([pollId])
+  @@map("poll_option")
+}
+
+model PollVote {
+  id       String @id @default(cuid())
+  pollId   String
+  optionId String
+  userId   String
+
+  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId, optionId])
+  @@index([pollId])
+  @@map("poll_vote")
 }
 
 // One emoji reaction by one person on one message. The (message,user,emoji) unique

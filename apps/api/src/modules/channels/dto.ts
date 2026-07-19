@@ -1,4 +1,4 @@
-import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CreateChannelDto {
   @IsString()
@@ -80,4 +80,27 @@ export class ReactionDto {
   @IsString()
   @MaxLength(16)
   emoji!: string;
+}
+
+export class CreatePollDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  question!: string;
+
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  options!: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  multiple?: boolean;
+}
+
+export class VoteDto {
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  optionIds!: string[];
 }

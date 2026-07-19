@@ -220,9 +220,12 @@ export type CalendarEvent = {
   type: string; startDate: string; endDate?: string; allDay: boolean;
   color: string; createdBy: string; projectId?: string; createdAt: string;
   location?: string | null; joinUrl?: string | null; reminderMinutes?: number | null;
+  recurrence?: string | null; recurrenceUntil?: string | null; recurrenceParentId?: string | null; notes?: string | null;
   attendees?: { userId: string; response?: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> }[];
 };
 export type FreeBusy = { userId: string; busy: { start: string; end: string; title: string; allDay: boolean }[] };
+// A bookmarked message, carrying its channel and when it was saved.
+export type SavedMessage = Message & { channel: { id: string; name: string }; savedAt: string };
 
 export type Channel = {
   id: string; organizationId: string; name: string; description?: string;
@@ -257,6 +260,12 @@ export type PresenceEntry = { userId: string; status: string; workMode: string; 
 // The signed-in user's own presence (manual choice + resolved effective).
 export type MyPresence = { status: string | null; statusMessage: string | null; statusExpiresAt: string | null; effective: string; workMode: string };
 export type MessageReaction = { emoji: string; userId: string };
+// A poll carried on its own message (message.content is the question).
+export type MessagePoll = {
+  id: string; question: string; multiple: boolean; closedAt?: string | null; createdBy: string;
+  options: { id: string; text: string; sequence: number }[];
+  votes: { optionId: string; userId: string }[];
+};
 export type Message = {
   id: string; channelId: string; userId: string; content: string; createdAt: string;
   editedAt?: string | null; deletedAt?: string | null;
@@ -267,6 +276,8 @@ export type Message = {
   reactions?: MessageReaction[];
   // User ids this message @mentioned (resolved server-side from channel members).
   mentions?: string[];
+  // Present when this message IS a poll.
+  poll?: MessagePoll | null;
 };
 
 export type Issue = {
@@ -744,14 +755,18 @@ export const api = {
       startDate: string; endDate?: string; allDay?: boolean; color?: string;
       createdBy: string; projectId?: string; attendeeIds?: string[];
       location?: string; joinUrl?: string; reminderMinutes?: number;
+      recurrence?: string; recurrenceUntil?: string; notes?: string;
     }) => req<CalendarEvent>('/calendar-events', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<CalendarEvent, 'title' | 'description' | 'type' | 'startDate' | 'endDate' | 'allDay' | 'color' | 'location' | 'joinUrl' | 'reminderMinutes'>>) =>
       req<CalendarEvent>(`/calendar-events/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    delete: (id: string) => req<void>(`/calendar-events/${id}`, { method: 'DELETE' }),
+    delete: (id: string, series?: boolean) => req<void>(`/calendar-events/${id}${series ? '?series=true' : ''}`, { method: 'DELETE' }),
     respond: (id: string, response: string) =>
       req<CalendarEvent>(`/calendar-events/${id}/respond`, { method: 'POST', body: JSON.stringify({ response }) }),
+    updateNotes: (id: string, notes: string) =>
+      req<CalendarEvent>(`/calendar-events/${id}/notes`, { method: 'PUT', body: JSON.stringify({ notes }) }),
     freeBusy: (userIds: string[], from: string, to: string) =>
       req<FreeBusy[]>(`/calendar-events/free-busy?userIds=${userIds.join(',')}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    icsHref: () => `${BASE}/calendar-events/export.ics`,
   },
 
   channels: {
@@ -778,6 +793,17 @@ export const api = {
     unpinMessage: (channelId: string, messageId: string) =>
       req<Message>(`/channels/${channelId}/messages/${messageId}/unpin`, { method: 'POST' }),
     pinned: (channelId: string) => req<Message[]>(`/channels/${channelId}/pinned`),
+    createPoll: (channelId: string, data: { question: string; options: string[]; multiple?: boolean }) =>
+      req<Message>(`/channels/${channelId}/polls`, { method: 'POST', body: JSON.stringify(data) }),
+    votePoll: (channelId: string, pollId: string, optionIds: string[]) =>
+      req<Message>(`/channels/${channelId}/polls/${pollId}/vote`, { method: 'POST', body: JSON.stringify({ optionIds }) }),
+    closePoll: (channelId: string, pollId: string) =>
+      req<Message>(`/channels/${channelId}/polls/${pollId}/close`, { method: 'POST' }),
+    saveMessage: (channelId: string, messageId: string) =>
+      req<{ saved: boolean }>(`/channels/${channelId}/messages/${messageId}/save`, { method: 'POST' }),
+    unsaveMessage: (channelId: string, messageId: string) =>
+      req<{ saved: boolean }>(`/channels/${channelId}/messages/${messageId}/unsave`, { method: 'POST' }),
+    saved: () => req<SavedMessage[]>('/channels/me/saved'),
     members: (channelId: string) => req<ChannelMembers>(`/channels/${channelId}/members`),
     addMembers: (channelId: string, userIds: string[]) =>
       req<{ ok: boolean }>(`/channels/${channelId}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
