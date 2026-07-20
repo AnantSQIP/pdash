@@ -8,8 +8,8 @@ export class IssuesController {
   constructor(private readonly issues: IssuesService) {}
 
   @Get()
-  list(@Query('projectId') projectId: string, @Query('status') status?: string) {
-    return this.issues.list(projectId, status);
+  list(@Query('projectId') projectId: string) {
+    return this.issues.list(projectId);
   }
 
   @Get(':id')

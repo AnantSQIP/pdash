@@ -203,10 +203,11 @@ export type ApiComment = {
 };
 
 export type Timesheet = {
-  id: string; userId: string; taskId: string; date: string;
+  id: string; userId: string; taskId?: string | null; issueId?: string | null; date: string;
   hoursLogged: number; billable: boolean; notes?: string;
   user: { id: string; firstName: string; lastName: string };
-  task: { id: string; title: string };
+  task?: { id: string; title: string } | null;
+  issue?: { id: string; title: string } | null;
 };
 
 export type CalendarEvent = {
@@ -316,12 +317,11 @@ export type Message = {
   poll?: MessagePoll | null;
 };
 
+// A technical issue / glitch — raising it logs the time it cost as non-billable.
 export type Issue = {
   id: string; projectId: string; title: string; description?: string;
-  severity: string; status: string; reportedBy: string; assigneeId?: string;
-  dueDate?: string; createdAt: string; updatedAt: string;
-  reporter?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
-  assignee?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> | null;
+  reportedBy: string; hours: number; createdAt: string; updatedAt: string;
+  reporter?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
 };
 
 export type ActivityItem = {
@@ -901,17 +901,13 @@ export const api = {
   },
 
   issues: {
-    list: (projectId: string, status?: string) => {
-      const params = new URLSearchParams({ projectId });
-      if (status) params.set('status', status);
-      return req<Issue[]>(`/issues?${params}`);
-    },
+    list: (projectId: string) => req<Issue[]>(`/issues?projectId=${encodeURIComponent(projectId)}`),
     get: (id: string) => req<Issue>(`/issues/${id}`),
-    create: (data: { projectId: string; title: string; description?: string; severity?: string; reportedBy: string; assigneeId?: string; dueDate?: string }) =>
+    create: (data: { projectId: string; title: string; description?: string; hours?: number; date?: string }) =>
       req<Issue>('/issues', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<Issue, 'title' | 'description' | 'severity' | 'status' | 'assigneeId' | 'dueDate'>>) =>
+    update: (id: string, data: Partial<Pick<Issue, 'title' | 'description'>>) =>
       req<Issue>(`/issues/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    delete: (id: string) => req<void>(`/issues/${id}`, { method: 'DELETE' }),
+    delete: (id: string) => req<{ ok: boolean }>(`/issues/${id}`, { method: 'DELETE' }),
   },
 
   analytics: {

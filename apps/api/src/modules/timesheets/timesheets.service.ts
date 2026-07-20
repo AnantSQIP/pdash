@@ -8,9 +8,14 @@ import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true };
 const TASK_SELECT = { id: true, title: true };
+const ISSUE_SELECT = { id: true, title: true };
 const PAGE_CAP = 500;
 
-const INCLUDE = { user: { select: USER_SELECT }, task: { select: TASK_SELECT } } as const;
+const INCLUDE = {
+  user: { select: USER_SELECT },
+  task: { select: TASK_SELECT },
+  issue: { select: ISSUE_SELECT },
+} as const;
 
 @Injectable()
 export class TimesheetsService {
@@ -44,15 +49,23 @@ export class TimesheetsService {
   }
 
   async listForProject(projectId: string) {
-    const projectTasks = await this.prisma.projectTask.findMany({
-      where: { projectId },
-      select: { taskId: true },
-    });
+    const [projectTasks, issues] = await Promise.all([
+      this.prisma.projectTask.findMany({ where: { projectId }, select: { taskId: true } }),
+      this.prisma.issue.findMany({ where: { projectId, deletedAt: null }, select: { id: true } }),
+    ]);
     const taskIds = projectTasks.map((pt) => pt.taskId);
-    if (!taskIds.length) return [];
+    const issueIds = issues.map((i) => i.id);
+    if (!taskIds.length && !issueIds.length) return [];
 
+    // A project's time = task entries + technical-issue (non-billable) entries.
     return this.prisma.timesheet.findMany({
-      where: { taskId: { in: taskIds }, deletedAt: null },
+      where: {
+        deletedAt: null,
+        OR: [
+          ...(taskIds.length ? [{ taskId: { in: taskIds } }] : []),
+          ...(issueIds.length ? [{ issueId: { in: issueIds } }] : []),
+        ],
+      },
       include: INCLUDE,
       orderBy: { date: 'desc' },
       take: PAGE_CAP,
@@ -119,7 +132,7 @@ export class TimesheetsService {
       },
       include: INCLUDE,
     });
-    if (dto.hoursLogged !== undefined) await this.recomputeTaskActualHours(entry.taskId);
+    if (dto.hoursLogged !== undefined && entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
     return updated;
   }
 
@@ -128,7 +141,7 @@ export class TimesheetsService {
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
     const deleted = await this.prisma.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
-    await this.recomputeTaskActualHours(entry.taskId);
+    if (entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
     return deleted;
   }
 }

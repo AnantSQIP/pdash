@@ -1,5 +1,7 @@
-import { IsDateString, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsDateString, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
+// A technical issue / glitch someone hit while working. Raising it logs the time it
+// cost as a non-billable timesheet entry (see IssuesService).
 export class CreateIssueDto {
   @IsString()
   projectId!: string;
@@ -11,25 +13,19 @@ export class CreateIssueDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(1000)
+  @MaxLength(2000)
   description?: string;
 
+  // Time the issue cost (hours) — logged as non-billable.
   @IsOptional()
-  @IsIn(['CRITICAL', 'MAJOR', 'MINOR', 'TRIVIAL'])
-  severity?: string;
-
-  // Deprecated/ignored — the reporter is taken from the verified cookie actor.
-  @IsOptional()
-  @IsString()
-  reportedBy?: string;
-
-  @IsOptional()
-  @IsString()
-  assigneeId?: string;
+  @IsNumber()
+  @Min(0)
+  @Max(24)
+  hours?: number;
 
   @IsOptional()
   @IsDateString()
-  dueDate?: string;
+  date?: string;
 }
 
 export class UpdateIssueDto {
@@ -40,22 +36,6 @@ export class UpdateIssueDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(1000)
+  @MaxLength(2000)
   description?: string;
-
-  @IsOptional()
-  @IsIn(['CRITICAL', 'MAJOR', 'MINOR', 'TRIVIAL'])
-  severity?: string;
-
-  @IsOptional()
-  @IsIn(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'])
-  status?: string;
-
-  @IsOptional()
-  @IsString()
-  assigneeId?: string;
-
-  @IsOptional()
-  @IsDateString()
-  dueDate?: string;
 }

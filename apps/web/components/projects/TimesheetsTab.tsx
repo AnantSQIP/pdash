@@ -163,7 +163,8 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
                 return (
                   <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3">
-                      <span className="text-sm font-medium text-gray-900">{entry.task.title}</span>
+                      <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? '—'}</span>
+                      {entry.issue && <span className="ml-2 text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
