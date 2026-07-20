@@ -47,13 +47,19 @@ export class AttendanceService {
     return u?.organizationId ?? null;
   }
 
-  /** Everyone who can approve regularisations (holds attendance.regularize) — HR/Admins. */
-  private async approverIds(organizationId: string | null): Promise<string[]> {
+  // Attendance regularisations are routed to HR (people-ops) + Yash (escalation owner)
+  // ONLY — deliberately NOT to managers or other admins. Yash is matched by his login
+  // account; HR by role, so a change of who holds HR is picked up automatically.
+  private static readonly REG_ESCALATION_EMAIL = 'yash@squarkip.com';
+  private async regularizationApproverIds(organizationId: string | null): Promise<string[]> {
     if (!organizationId) return [];
     const rows = await this.prisma.user.findMany({
       where: {
         organizationId, deletedAt: null, status: 'ACTIVE',
-        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'attendance.regularize' } } } } } },
+        OR: [
+          { userRoles: { some: { role: { name: 'HR' } } } },
+          { email: AttendanceService.REG_ESCALATION_EMAIL },
+        ],
       },
       select: { id: true },
     });
@@ -182,10 +188,11 @@ export class AttendanceService {
 
     const u = (req as any).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
-    await this.notifications.notify(await this.approverIds(organizationId), {
+    await this.notifications.notify(await this.regularizationApproverIds(organizationId), {
       type: 'attendance.regularization_requested',
       title: 'Attendance regularisation to review',
       message: `${name} asked to regularise ${dayKey(date)}: ${req.reason}`,
+      link: '/attendance',
     });
     return req;
   }

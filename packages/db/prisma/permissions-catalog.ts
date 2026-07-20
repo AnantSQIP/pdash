@@ -125,7 +125,9 @@ const MANAGER_CODES = [
   code('performance', 'view.own'), code('performance', 'view.organization'),
   // Delivery oversight: see who is free/overloaded, and the client-facing dates.
   code('capacity', 'view'), code('deadline', 'view.client'),
-  code('attendance', 'view.organization'), code('attendance', 'regularize'),
+  // Managers see team attendance but do NOT review regularisations — those route to
+  // HR + Yash only (see AttendanceService.regularizationApproverIds).
+  code('attendance', 'view.organization'),
   code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
   code('expense', 'view.organization'), code('expense', 'approve'),
   code('holiday', 'manage'),

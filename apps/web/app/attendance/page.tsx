@@ -33,6 +33,14 @@ const LEAVE_STATUS: Record<string, string> = {
 };
 
 function timeOf(s?: string | null) { return s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'; }
+// Average time-of-day across the given timestamps (local tz, matches how punches are shown).
+function avgTime(stamps: (string | null | undefined)[]): string | null {
+  const mins = stamps.filter(Boolean).map(s => { const d = new Date(s!); return d.getHours() * 60 + d.getMinutes(); });
+  if (!mins.length) return null;
+  const avg = Math.round(mins.reduce((a, b) => a + b, 0) / mins.length);
+  const d = new Date(); d.setHours(Math.floor(avg / 60), avg % 60, 0, 0);
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+}
 function fmtElapsed(ms: number) {
   const t = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
@@ -147,9 +155,13 @@ export default function AttendancePage() {
                   )}
                 </div>
               </div>
-              {/* Month summary */}
-              <SummaryTile label="Present" value={month?.summary.present ?? 0} tint="bg-green-100 text-green-600" sub="this month" />
-              <SummaryTile label="Attendance" value={`${month?.summary.attendanceRate ?? 0}%`} tint="bg-brand-50 text-brand-600" sub={`${month?.summary.onLeave ?? 0} on leave · ${month?.summary.absent ?? 0} absent`} />
+              {/* Month summary — Present / Attendance / Avg in / Avg out */}
+              <div className="sm:col-span-2 lg:col-span-2 grid grid-cols-2 gap-4">
+                <SummaryTile label="Present" value={month?.summary.present ?? 0} tint="bg-green-100 text-green-600" sub="this month" />
+                <SummaryTile label="Attendance" value={`${month?.summary.attendanceRate ?? 0}%`} tint="bg-brand-50 text-brand-600" sub={`${month?.summary.onLeave ?? 0} on leave · ${month?.summary.absent ?? 0} absent`} />
+                <SummaryTile label="Avg punch-in" value={avgTime((month?.days ?? []).map(d => d.checkIn)) ?? '—'} tint="bg-amber-50 text-amber-600" sub="this month" />
+                <SummaryTile label="Avg punch-out" value={avgTime((month?.days ?? []).map(d => d.checkOut)) ?? '—'} tint="bg-indigo-50 text-indigo-600" sub="this month" />
+              </div>
             </div>
 
             {/* Monthly grid */}
@@ -184,7 +196,14 @@ export default function AttendancePage() {
                   {myReg.map(r => (
                     <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-gray-800">{format(new Date(r.date), 'EEE, MMM d')} · <span className="text-gray-500 font-normal">{REG_TYPES.find(t => t.value === r.requestType)?.label ?? r.requestType}</span></p>
+                        <p className="text-sm font-medium text-gray-800">{format(new Date(r.date), 'EEE, MMM d')} · <span className="text-gray-500 font-normal">{REG_TYPES.find(t => t.value === r.requestType)?.label ?? r.requestType}</span>
+                          {(r.requestedCheckIn || r.requestedCheckOut) && (
+                            <span className="text-gray-400 font-normal">
+                              {r.requestedCheckIn ? ` · in ${format(new Date(r.requestedCheckIn), 'HH:mm')}` : ''}
+                              {r.requestedCheckOut ? ` · out ${format(new Date(r.requestedCheckOut), 'HH:mm')}` : ''}
+                            </span>
+                          )}
+                        </p>
                         <p className="text-xs text-gray-400 truncate">{r.reason}{r.reviewNote ? ` · Note: ${r.reviewNote}` : ''}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
