@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plus, Check } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
-import { api, type WorkflowStatus, type Milestone } from '@/lib/api';
+import { api, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
@@ -15,7 +15,6 @@ interface AddTaskModalProps {
   taskListId: string;
   initialStatusId?: string;
   workflowId?: string;
-  milestones?: Milestone[];
   onClose: () => void;
   onSuccess?: () => void;
   /** Prefills — used by the Capacity board to assign into someone's free window. */
@@ -25,10 +24,9 @@ interface AddTaskModalProps {
 }
 
 export function AddTaskModal({
-  projectId, taskListId, initialStatusId, workflowId, milestones, onClose, onSuccess,
+  projectId, taskListId, initialStatusId, workflowId, onClose, onSuccess,
   initialAssigneeIds, initialStartDate, initialDueDate,
 }: AddTaskModalProps) {
-  const [milestoneId, setMilestoneId] = useState('');
   const { currentUser, users } = useOrg();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -87,7 +85,6 @@ export function AddTaskModal({
         estimatedHours: estimatedHours ? parseFloat(estimatedHours) : undefined,
         projectId,
         taskListId,
-        milestoneId: milestoneId || undefined,
         createdBy: currentUser?.id ?? 'system', // server derives the real creator from the cookie actor
         currentWorkflowStatusId,
         assigneeIds: assigneeIds.length ? assigneeIds : undefined,
@@ -195,16 +192,6 @@ export function AddTaskModal({
             />
           </div>
 
-          {milestones && milestones.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Milestone</label>
-              <select value={milestoneId} onChange={e => setMilestoneId(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition">
-                <option value="">No milestone</option>
-                {milestones.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            </div>
-          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">

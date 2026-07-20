@@ -546,7 +546,6 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
         projectId={project.id}
         taskListId={taskList.id}
         workflowId={project.workflowId}
-        milestones={project.milestones}
         initialAssigneeIds={[row.userId]}
         initialStartDate={startDate}
         initialDueDate={dueDate}

@@ -10,9 +10,6 @@ class CreateTaskListDto {
   @MaxLength(100)
   name!: string;
 
-  @IsOptional()
-  @IsString()
-  milestoneId?: string;
 }
 
 class UpdateTaskListDto {
@@ -21,9 +18,6 @@ class UpdateTaskListDto {
   @MaxLength(100)
   name?: string;
 
-  @IsOptional()
-  @IsString()
-  milestoneId?: string;
 
   @IsOptional()
   @IsInt()
@@ -44,15 +38,14 @@ export class TaskListsService {
       data: {
         projectId,
         name: dto.name,
-        milestoneId: dto.milestoneId,
         sequence: count,
       },
     });
   }
 
-  list(projectId: string, milestoneId?: string) {
+  list(projectId: string) {
     return this.prisma.taskList.findMany({
-      where: { projectId, milestoneId, deletedAt: null },
+      where: { projectId, deletedAt: null },
       orderBy: { sequence: 'asc' },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
@@ -74,7 +67,7 @@ export class TaskListsService {
     }
     return this.prisma.taskList.update({
       where: { id },
-      data: { name: dto.name, milestoneId: dto.milestoneId, sequence: dto.sequence },
+      data: { name: dto.name, sequence: dto.sequence },
     });
   }
 
@@ -104,8 +97,8 @@ class TaskListsController {
   }
 
   @Get()
-  list(@Param('projectId') projectId: string, @Query('milestoneId') milestoneId?: string) {
-    return this.service.list(projectId, milestoneId);
+  list(@Param('projectId') projectId: string) {
+    return this.service.list(projectId);
   }
 
   @Get(':id')

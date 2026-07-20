@@ -1,6 +1,5 @@
 // One-time backfill so all derived aggregates match reality after the sync fixes:
 //   • Project.completionPercentage   (avg of task effective %, CLOSED=100)
-//   • Milestone.completionPercentage (same rule, over tasks linked by milestoneId)
 //   • Task.actualHours               (SUM of non-deleted timesheet hours)
 // Run: npx ts-node packages/db/prisma/backfill-all.ts
 import { PrismaClient } from '@prisma/client';
@@ -20,19 +19,13 @@ async function main() {
     await prisma.project.update({ where: { id: p.id }, data: { completionPercentage: pct } });
   }
 
-  const milestones = await prisma.milestone.findMany({ where: { deletedAt: null }, select: { id: true } });
-  for (const m of milestones) {
-    const { pct } = await effPct({ deletedAt: null, projectTasks: { some: { milestoneId: m.id } } });
-    await prisma.milestone.update({ where: { id: m.id }, data: { completionPercentage: pct } });
-  }
-
   const tasks = await prisma.task.findMany({ where: { deletedAt: null }, select: { id: true } });
   for (const t of tasks) {
     const agg = await prisma.timesheet.aggregate({ where: { taskId: t.id, deletedAt: null }, _sum: { hoursLogged: true } });
     await prisma.task.update({ where: { id: t.id }, data: { actualHours: agg._sum.hoursLogged ?? 0 } });
   }
 
-  console.log(`Backfilled ${projects.length} projects, ${milestones.length} milestones, ${tasks.length} tasks (actualHours).`);
+  console.log(`Backfilled ${projects.length} projects, ${tasks.length} tasks (actualHours).`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());

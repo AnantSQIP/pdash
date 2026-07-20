@@ -247,7 +247,6 @@ export class ProjectsService {
           },
         },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
-        milestones: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
         _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: true } },
       },
     });

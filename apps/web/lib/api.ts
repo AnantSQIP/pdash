@@ -156,13 +156,8 @@ export type ApiTask = {
   assignedBy?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
   assignees?: AssigneeRef[];
   subtasks?: Subtask[];
-  projectTasks?: { projectId: string; taskListId?: string; milestoneId?: string; sequence: number; project?: { id: string; title: string } }[];
+  projectTasks?: { projectId: string; taskListId?: string; sequence: number; project?: { id: string; title: string } }[];
   _count?: { subtasks: number; checklists?: number };
-};
-
-export type Milestone = {
-  id: string; name: string; description?: string; ownerId?: string;
-  completionPercentage: number; startDate?: string; endDate?: string; sequence: number;
 };
 
 export type ApiProject = {
@@ -183,7 +178,6 @@ export type ApiProject = {
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
   taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
-  milestones?: Milestone[];
   _count?: { members: number; projectTasks: number };
 };
 
@@ -701,21 +695,11 @@ export const api = {
       req<void>(`/projects/${projectId}/tasklists/${id}`, { method: 'DELETE' }),
   },
 
-  milestones: {
-    list: (projectId: string) => req<Milestone[]>(`/projects/${projectId}/milestones`),
-    create: (projectId: string, data: { name: string; description?: string; startDate?: string; endDate?: string }) =>
-      req<Milestone>(`/projects/${projectId}/milestones`, { method: 'POST', body: JSON.stringify(data) }),
-    update: (projectId: string, id: string, data: Partial<Pick<Milestone, 'name' | 'description' | 'startDate' | 'endDate'>>) =>
-      req<Milestone>(`/projects/${projectId}/milestones/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    remove: (projectId: string, id: string) =>
-      req<void>(`/projects/${projectId}/milestones/${id}`, { method: 'DELETE' }),
-  },
 
   tasks: {
-    list: (projectId: string, opts?: { taskListId?: string; milestoneId?: string }) => {
+    list: (projectId: string, opts?: { taskListId?: string }) => {
       const params = new URLSearchParams({ projectId });
       if (opts?.taskListId) params.set('taskListId', opts.taskListId);
-      if (opts?.milestoneId) params.set('milestoneId', opts.milestoneId);
       return req<ApiTask[]>(`/tasks?${params}`);
     },
     listForUser: (userId: string) => req<ApiTask[]>(`/tasks?userId=${encodeURIComponent(userId)}`),
@@ -724,7 +708,7 @@ export const api = {
       title: string; projectId: string; taskListId: string; createdBy: string;
       description?: string; priority?: string; startDate?: string; dueDate?: string;
       estimatedHours?: number; assigneeIds?: string[];
-      milestoneId?: string; currentWorkflowStatusId?: string;
+      currentWorkflowStatusId?: string;
     }) => req<ApiTask>('/tasks', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<ApiTask, 'title' | 'description' | 'priority' | 'completionPercentage' | 'startDate' | 'dueDate' | 'estimatedHours'>>) =>
       req<ApiTask>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

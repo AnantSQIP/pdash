@@ -34,10 +34,6 @@ export class CreateTaskDto {
 
   @IsOptional()
   @IsString()
-  milestoneId?: string;
-
-  @IsOptional()
-  @IsString()
   priority?: string;
 
   @IsOptional()

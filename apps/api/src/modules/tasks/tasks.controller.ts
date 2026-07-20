@@ -17,10 +17,9 @@ export class TasksController {
     @Query('projectId') projectId?: string,
     @Query('userId') userId?: string,
     @Query('taskListId') taskListId?: string,
-    @Query('milestoneId') milestoneId?: string,
   ) {
     if (userId) return this.tasks.listForUser(userId);
-    if (projectId) return this.tasks.list(projectId, { taskListId, milestoneId });
+    if (projectId) return this.tasks.list(projectId, { taskListId });
     return [];
   }
 

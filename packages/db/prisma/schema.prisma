@@ -118,7 +118,6 @@ model User {
   compOffRequests        CompOffRequest[]
   wfhRequests            WfhRequest[]
   expenses               Expense[]
-  ownedMilestones        Milestone[]             @relation("MilestoneOwner")
   calendarEventAttendees CalendarEventAttendee[]
   channelMemberships     ChannelMember[]
   messages               Message[]
@@ -404,7 +403,6 @@ model Workflow {
   transitions WorkflowTransition[]
   projects    Project[]
   tasks       Task[]
-  milestones  Milestone[]
 
   @@map("workflow")
 }
@@ -422,7 +420,6 @@ model WorkflowStatus {
   transitionsTo          WorkflowTransition[] @relation("TransitionTo")
   projectsAtStatus       Project[]            @relation("ProjectCurrentStatus")
   tasksAtStatus          Task[]               @relation("TaskCurrentStatus")
-  milestonesAtStatus     Milestone[]          @relation("MilestoneCurrentStatus")
 
   @@index([workflowId])
   @@map("workflow_status")
@@ -486,7 +483,6 @@ model Project {
   projectDepartments ProjectDepartment[]
   projectTeams       ProjectTeam[]
   projectTasks       ProjectTask[]
-  milestones         Milestone[]
   taskLists          TaskList[]
   projectDocuments   ProjectDocument[]
   issues             Issue[]
@@ -596,17 +592,14 @@ model ProjectTask {
   projectId   String
   taskId      String
   taskListId  String?
-  milestoneId String?
   sequence    Int    @default(0)
 
   project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task      Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
   taskList  TaskList?  @relation(fields: [taskListId], references: [id], onDelete: SetNull)
-  milestone Milestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, taskId])
   @@index([projectId])
-  @@index([milestoneId])
   @@map("project_task")
 }
 
@@ -681,39 +674,6 @@ model Checklist {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Milestone — prompt.md requirement (Project→Milestones→TaskLists→Tasks hierarchy)
-// Not in frozen ERD v2.0 but required by UI spec.
-// D1: auto-complete is an AutomationRule, not a hardcoded service.
-// ─────────────────────────────────────────────────────────────
-
-model Milestone {
-  id                      String    @id @default(cuid())
-  projectId               String
-  name                    String
-  description             String?
-  ownerId                 String?
-  startDate               DateTime?
-  endDate                 DateTime?
-  workflowId              String?
-  currentWorkflowStatusId String?
-  completionPercentage    Int       @default(0)
-  sequence                Int       @default(0)
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
-  deletedAt               DateTime?
-
-  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  owner         User?           @relation("MilestoneOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  workflow      Workflow?       @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  currentStatus WorkflowStatus? @relation("MilestoneCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
-  taskLists     TaskList[]
-  projectTasks  ProjectTask[]
-
-  @@index([projectId])
-  @@map("milestone")
-}
-
-// ─────────────────────────────────────────────────────────────
 // TaskList — prompt.md requirement.
 // "General" list (isDefault=true) is created automatically on project creation
 // and cannot be deleted (enforced in TaskListsService).
@@ -722,7 +682,6 @@ model Milestone {
 model TaskList {
   id          String    @id @default(cuid())
   projectId   String
-  milestoneId String?
   name        String
   isDefault   Boolean   @default(false)
   sequence    Int       @default(0)
@@ -731,7 +690,6 @@ model TaskList {
   deletedAt   DateTime?
 
   project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  milestone    Milestone?    @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
   projectTasks ProjectTask[]
 
   @@index([projectId])

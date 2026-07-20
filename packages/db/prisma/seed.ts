@@ -38,7 +38,6 @@ async function main() {
   await prisma.projectTask.deleteMany();
   await prisma.task.deleteMany();
   await prisma.taskList.deleteMany();
-  await prisma.milestone.deleteMany();
   await prisma.projectMember.deleteMany();
   await prisma.project.deleteMany();
   await prisma.automationRule.deleteMany();
@@ -226,7 +225,7 @@ async function main() {
   async function makeTask(opts: {
     title: string; priority: string; pct: number; statusId: string;
     createdBy: string; dueDate: string; assignee: string;
-    projectId: string; taskListId: string; milestoneId?: string; seq: number;
+    projectId: string; taskListId: string; seq: number;
   }) {
     const task = await prisma.task.create({
       data: {
@@ -237,7 +236,7 @@ async function main() {
       },
     });
     await prisma.projectTask.create({
-      data: { projectId: opts.projectId, taskId: task.id, taskListId: opts.taskListId, milestoneId: opts.milestoneId, sequence: opts.seq },
+      data: { projectId: opts.projectId, taskId: task.id, taskListId: opts.taskListId, sequence: opts.seq },
     });
     return task;
   }
@@ -261,23 +260,21 @@ async function main() {
     },
   });
   const gl1 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'General', isDefault: true, sequence: 0 } });
-  const m1  = await prisma.milestone.create({ data: { projectId: p1.id, name: 'Phase 1 — Search & Mapping',  ownerId: alice.id, startDate: new Date('2026-05-01'), endDate: new Date('2026-06-30'), sequence: 0 } });
-  const m2  = await prisma.milestone.create({ data: { projectId: p1.id, name: 'Phase 2 — Claim Charts',      ownerId: bob.id,   startDate: new Date('2026-07-01'), endDate: new Date('2026-08-01'), sequence: 1 } });
-  const sl1 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'Sprint 1 — Search', milestoneId: m1.id, sequence: 1 } });
-  const sl2 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'Sprint 2 — Charting', milestoneId: m2.id, sequence: 2 } });
+  const sl1 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'Sprint 1 — Search', sequence: 1 } });
+  const sl2 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'Sprint 2 — Charting', sequence: 2 } });
 
   await makeTask({ title: 'Define claim construction for target patents', priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-05-15', assignee: alice.id, projectId: p1.id, taskListId: gl1.id,            seq: 0 });
-  await makeTask({ title: 'Keyword & classification search strategy',     priority: 'MEDIUM', pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-05-20', assignee: bob.id,   projectId: p1.id, taskListId: sl1.id, milestoneId: m1.id, seq: 1 });
-  await makeTask({ title: 'Prior-art search — patent databases',          priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-06-10', assignee: bob.id,   projectId: p1.id, taskListId: sl1.id, milestoneId: m1.id, seq: 2 });
-  await makeTask({ title: 'Non-patent literature (NPL) search',           priority: 'HIGH',   pct: 70,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-06-30', assignee: carol.id, projectId: p1.id, taskListId: sl1.id, milestoneId: m1.id, seq: 3 });
-  await makeTask({ title: 'Build claim chart — Reference A',              priority: 'MEDIUM', pct: 50,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-20', assignee: bob.id,   projectId: p1.id, taskListId: sl2.id, milestoneId: m2.id, seq: 4 });
-  await makeTask({ title: 'Build claim chart — Reference B',              priority: 'HIGH',   pct: 40,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-25', assignee: vijay.id, projectId: p1.id, taskListId: sl2.id, milestoneId: m2.id, seq: 5 });
+  await makeTask({ title: 'Keyword & classification search strategy',     priority: 'MEDIUM', pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-05-20', assignee: bob.id,   projectId: p1.id, taskListId: sl1.id, seq: 1 });
+  await makeTask({ title: 'Prior-art search — patent databases',          priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-06-10', assignee: bob.id,   projectId: p1.id, taskListId: sl1.id, seq: 2 });
+  await makeTask({ title: 'Non-patent literature (NPL) search',           priority: 'HIGH',   pct: 70,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-06-30', assignee: carol.id, projectId: p1.id, taskListId: sl1.id, seq: 3 });
+  await makeTask({ title: 'Build claim chart — Reference A',              priority: 'MEDIUM', pct: 50,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-20', assignee: bob.id,   projectId: p1.id, taskListId: sl2.id, seq: 4 });
+  await makeTask({ title: 'Build claim chart — Reference B',              priority: 'HIGH',   pct: 40,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-25', assignee: vijay.id, projectId: p1.id, taskListId: sl2.id, seq: 5 });
   await makeTask({ title: 'Foreign patent family check (INPADOC)',        priority: 'LOW',    pct: 0,   statusId: sOpen.id,     createdBy: alice.id, dueDate: '2026-08-01', assignee: ketan.id, projectId: p1.id, taskListId: gl1.id,            seq: 6 });
-  await makeTask({ title: 'Senior review of invalidity position',         priority: 'HIGH',   pct: 75,  statusId: sReview.id,   createdBy: alice.id, dueDate: '2026-07-30', assignee: mohit.id, projectId: p1.id, taskListId: sl2.id, milestoneId: m2.id, seq: 7 });
+  await makeTask({ title: 'Senior review of invalidity position',         priority: 'HIGH',   pct: 75,  statusId: sReview.id,   createdBy: alice.id, dueDate: '2026-07-30', assignee: mohit.id, projectId: p1.id, taskListId: sl2.id, seq: 7 });
   await makeTask({ title: 'QA pass on claim mapping accuracy',            priority: 'MEDIUM', pct: 0,   statusId: sOpen.id,     createdBy: alice.id, dueDate: '2026-08-10', assignee: dave.id,  projectId: p1.id, taskListId: gl1.id,            seq: 8 });
   await makeTask({ title: 'Draft invalidity search report',              priority: 'MEDIUM', pct: 0,   statusId: sOpen.id,     createdBy: alice.id, dueDate: '2026-08-12', assignee: meetu.id, projectId: p1.id, taskListId: gl1.id,            seq: 9 });
   await makeTask({ title: 'Compile reference bibliography',               priority: 'LOW',    pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-06-01', assignee: carol.id, projectId: p1.id, taskListId: gl1.id,            seq: 10 });
-  await makeTask({ title: 'Client interim findings call',                 priority: 'MEDIUM', pct: 30,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-28', assignee: alice.id, projectId: p1.id, taskListId: sl2.id, milestoneId: m2.id, seq: 11 });
+  await makeTask({ title: 'Client interim findings call',                 priority: 'MEDIUM', pct: 30,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-28', assignee: alice.id, projectId: p1.id, taskListId: sl2.id, seq: 11 });
   await makeTask({ title: 'Docket IPR statutory deadline',                priority: 'HIGH',   pct: 20,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-06-15', assignee: nitin.id, projectId: p1.id, taskListId: gl1.id,            seq: 12 }); // overdue
 
   await prisma.issue.createMany({ data: [
@@ -307,15 +304,13 @@ async function main() {
     },
   });
   const gl2 = await prisma.taskList.create({ data: { projectId: p2.id, name: 'General', isDefault: true, sequence: 0 } });
-  const m3  = await prisma.milestone.create({ data: { projectId: p2.id, name: 'M1 — Feature Mapping', ownerId: bob.id,   startDate: new Date('2026-06-01'), endDate: new Date('2026-07-15'), sequence: 0 } });
-  const m4  = await prisma.milestone.create({ data: { projectId: p2.id, name: 'M2 — Opinion',         ownerId: alice.id, startDate: new Date('2026-07-15'), endDate: new Date('2026-09-01'), sequence: 1 } });
-  const sl3 = await prisma.taskList.create({ data: { projectId: p2.id, name: 'Scoping Sprint', milestoneId: m3.id, sequence: 1 } });
+  const sl3 = await prisma.taskList.create({ data: { projectId: p2.id, name: 'Scoping Sprint', sequence: 1 } });
 
-  await makeTask({ title: 'Map product features to search facets', priority: 'CRITICAL', pct: 100, statusId: sClosed.id,   createdBy: bob.id, dueDate: '2026-06-15', assignee: bob.id,   projectId: p2.id, taskListId: sl3.id, milestoneId: m3.id, seq: 0 });
-  await makeTask({ title: 'Identify active US patents by assignee',  priority: 'HIGH',     pct: 60,  statusId: sProgress.id, createdBy: bob.id, dueDate: '2026-06-28', assignee: vijay.id, projectId: p2.id, taskListId: sl3.id, milestoneId: m3.id, seq: 1 });
+  await makeTask({ title: 'Map product features to search facets', priority: 'CRITICAL', pct: 100, statusId: sClosed.id,   createdBy: bob.id, dueDate: '2026-06-15', assignee: bob.id,   projectId: p2.id, taskListId: sl3.id, seq: 0 });
+  await makeTask({ title: 'Identify active US patents by assignee',  priority: 'HIGH',     pct: 60,  statusId: sProgress.id, createdBy: bob.id, dueDate: '2026-06-28', assignee: vijay.id, projectId: p2.id, taskListId: sl3.id, seq: 1 });
   await makeTask({ title: 'Sensor electrode subsystem search',       priority: 'HIGH',     pct: 40,  statusId: sProgress.id, createdBy: bob.id, dueDate: '2026-07-05', assignee: basant.id,projectId: p2.id, taskListId: gl2.id,            seq: 2 });
   await makeTask({ title: 'BLE data-sync method search',             priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-10', assignee: arjun.id, projectId: p2.id, taskListId: gl2.id,            seq: 3 });
-  await makeTask({ title: 'Screen for expired / lapsed patents',     priority: 'HIGH',     pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-12', assignee: ketan.id, projectId: p2.id, taskListId: sl3.id, milestoneId: m3.id, seq: 4 });
+  await makeTask({ title: 'Screen for expired / lapsed patents',     priority: 'HIGH',     pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-12', assignee: ketan.id, projectId: p2.id, taskListId: sl3.id, seq: 4 });
   await makeTask({ title: 'EP designation & validation check',       priority: 'MEDIUM',   pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-20', assignee: khushi.id,projectId: p2.id, taskListId: gl2.id,            seq: 5 });
   await makeTask({ title: 'Risk ranking of blocking patents',        priority: 'LOW',      pct: 80,  statusId: sReview.id,   createdBy: bob.id, dueDate: '2026-07-01', assignee: meetu.id, projectId: p2.id, taskListId: gl2.id,            seq: 6 });
   await makeTask({ title: 'QA — search-string coverage audit',       priority: 'MEDIUM',   pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-15', assignee: dave.id,  projectId: p2.id, taskListId: gl2.id,            seq: 7 });
@@ -348,15 +343,13 @@ async function main() {
     },
   });
   const gl3 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Backlog', isDefault: true, sequence: 0 } });
-  const m5  = await prisma.milestone.create({ data: { projectId: p3.id, name: 'Disclosure & Claims', ownerId: admin.id, startDate: new Date('2026-04-01'), endDate: new Date('2026-05-31'), sequence: 0 } });
-  const m6  = await prisma.milestone.create({ data: { projectId: p3.id, name: 'Filing & Prosecution', ownerId: bob.id,  startDate: new Date('2026-06-01'), endDate: new Date('2026-08-15'), sequence: 1 } });
-  const sl4 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Sprint A — Drafting', milestoneId: m5.id, sequence: 1 } });
-  const sl5 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Sprint B — Filing',   milestoneId: m6.id, sequence: 2 } });
+  const sl4 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Sprint A — Drafting', sequence: 1 } });
+  const sl5 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Sprint B — Filing', sequence: 2 } });
 
-  await makeTask({ title: 'Invention disclosure intake & interview', priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: admin.id, dueDate: '2026-04-20', assignee: meetu.id, projectId: p3.id, taskListId: sl4.id, milestoneId: m5.id, seq: 0 });
-  await makeTask({ title: 'Draft independent claims set',            priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: admin.id, dueDate: '2026-05-15', assignee: nehu.id,  projectId: p3.id, taskListId: sl4.id, milestoneId: m5.id, seq: 1 });
-  await makeTask({ title: 'Draft specification & figures',           priority: 'HIGH',   pct: 65,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-06-30', assignee: nehu.id,  projectId: p3.id, taskListId: sl5.id, milestoneId: m6.id, seq: 2 });
-  await makeTask({ title: 'Prepare IDS & cite references',           priority: 'MEDIUM', pct: 30,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-07-15', assignee: amrit.id, projectId: p3.id, taskListId: sl5.id, milestoneId: m6.id, seq: 3 });
+  await makeTask({ title: 'Invention disclosure intake & interview', priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: admin.id, dueDate: '2026-04-20', assignee: meetu.id, projectId: p3.id, taskListId: sl4.id, seq: 0 });
+  await makeTask({ title: 'Draft independent claims set',            priority: 'HIGH',   pct: 100, statusId: sClosed.id,   createdBy: admin.id, dueDate: '2026-05-15', assignee: nehu.id,  projectId: p3.id, taskListId: sl4.id, seq: 1 });
+  await makeTask({ title: 'Draft specification & figures',           priority: 'HIGH',   pct: 65,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-06-30', assignee: nehu.id,  projectId: p3.id, taskListId: sl5.id, seq: 2 });
+  await makeTask({ title: 'Prepare IDS & cite references',           priority: 'MEDIUM', pct: 30,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-07-15', assignee: amrit.id, projectId: p3.id, taskListId: sl5.id, seq: 3 });
   await makeTask({ title: 'Patentability search for novelty check',  priority: 'MEDIUM', pct: 50,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-07-20', assignee: basant.id,projectId: p3.id, taskListId: gl3.id,            seq: 4 });
   await makeTask({ title: 'Prepare PCT filing package',              priority: 'LOW',    pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-01', assignee: nitin.id, projectId: p3.id, taskListId: gl3.id,            seq: 5 });
   await makeTask({ title: 'Respond to restriction requirement',      priority: 'HIGH',   pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-10', assignee: nehu.id,  projectId: p3.id, taskListId: gl3.id,            seq: 6 });

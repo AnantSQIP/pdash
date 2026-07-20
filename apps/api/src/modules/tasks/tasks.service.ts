@@ -21,7 +21,7 @@ export class TasksService {
   /**
    * Create a task and link it to a project via ProjectTask.
    * Task has no projectId — ProjectTask is the join record that also
-   * stores the task's position (taskList + milestone) within that project.
+   * stores the task's position (taskList) within that project.
    */
   async create(dto: CreateTaskDto) {
     const taskList = await this.prisma.taskList.findFirst({
@@ -29,16 +29,6 @@ export class TasksService {
     });
     if (!taskList) {
       throw new BadRequestException(`TaskList ${dto.taskListId} not found in project ${dto.projectId}`);
-    }
-
-    // A supplied milestone must belong to the same project (the FK only enforces existence).
-    if (dto.milestoneId) {
-      const milestone = await this.prisma.milestone.findFirst({
-        where: { id: dto.milestoneId, projectId: dto.projectId, deletedAt: null },
-      });
-      if (!milestone) {
-        throw new BadRequestException(`Milestone ${dto.milestoneId} not found in project ${dto.projectId}`);
-      }
     }
 
     // Resolve the task's home workflow up front. Previously left null, which made the
@@ -95,7 +85,6 @@ export class TasksService {
           projectId: dto.projectId,
           taskId: created.id,
           taskListId: dto.taskListId,
-          milestoneId: dto.milestoneId,
           sequence,
         },
       });
@@ -115,11 +104,10 @@ export class TasksService {
       message: `You were assigned to "${task.title}".`,
     });
     await this.recomputeProjectProgress(dto.projectId); // new task dilutes/updates progress
-    if (dto.milestoneId) await this.recomputeMilestoneProgress(dto.milestoneId);
     return task;
   }
 
-  async list(projectId: string, opts: { taskListId?: string; milestoneId?: string } = {}) {
+  async list(projectId: string, opts: { taskListId?: string } = {}) {
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
@@ -127,7 +115,6 @@ export class TasksService {
           some: {
             projectId,
             taskListId: opts.taskListId,
-            milestoneId: opts.milestoneId,
           },
         },
       },
@@ -151,7 +138,6 @@ export class TasksService {
           select: {
             projectId: true,
             taskListId: true,
-            milestoneId: true,
             sequence: true,
             project: { select: { id: true, title: true } },
           },
@@ -330,30 +316,14 @@ export class TasksService {
     await this.prisma.project.update({ where: { id: projectId }, data: { completionPercentage: pct } });
   }
 
-  /** Recompute a milestone's completionPercentage from its tasks (same rule as projects). */
-  private async recomputeMilestoneProgress(milestoneId: string): Promise<void> {
-    const tasks = await this.prisma.task.findMany({
-      where: { deletedAt: null, projectTasks: { some: { milestoneId } } },
-      select: { completionPercentage: true, currentStatus: { select: { type: true } } },
-    });
-    const effective = tasks.map(t => (t.currentStatus?.type === 'CLOSED' ? 100 : (t.completionPercentage ?? 0)));
-    const pct = effective.length ? Math.round(effective.reduce((s, v) => s + v, 0) / effective.length) : 0;
-    await this.prisma.milestone.update({ where: { id: milestoneId }, data: { completionPercentage: pct } });
-  }
-
   /**
-   * Recompute every PARENT a task rolls up into — its project(s) AND its milestone(s).
-   * Tasks are M2M with both via ProjectTask (projectId + optional milestoneId), so a
-   * single status change/edit/delete can move several progress bars.
+   * Recompute every PARENT project a task rolls up into. A task is M2M with projects via
+   * ProjectTask, so a single status change/edit/delete can move several progress bars.
    */
   private async recomputeForTask(taskId: string): Promise<void> {
-    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true, milestoneId: true } });
+    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
     const projectIds = [...new Set(links.map(l => l.projectId))];
-    const milestoneIds = [...new Set(links.map(l => l.milestoneId).filter((m): m is string => !!m))];
-    await Promise.all([
-      ...projectIds.map(id => this.recomputeProjectProgress(id)),
-      ...milestoneIds.map(id => this.recomputeMilestoneProgress(id)),
-    ]);
+    await Promise.all(projectIds.map(id => this.recomputeProjectProgress(id)));
   }
 
   // ── Subtask methods (flat, one level only) ──────────────────
@@ -422,7 +392,7 @@ export class TasksService {
         select: { id: true, title: true, status: true, priority: true, dueDate: true },
       },
       projectTasks: {
-        select: { projectId: true, taskListId: true, milestoneId: true, sequence: true },
+        select: { projectId: true, taskListId: true, sequence: true },
       },
       _count: { select: { subtasks: true, checklists: true } },
     };
@@ -444,7 +414,7 @@ export class TasksService {
         },
       },
       projectTasks: {
-        select: { projectId: true, taskListId: true, milestoneId: true, sequence: true },
+        select: { projectId: true, taskListId: true, sequence: true },
       },
       _count: { select: { subtasks: true, checklists: true } },
     };

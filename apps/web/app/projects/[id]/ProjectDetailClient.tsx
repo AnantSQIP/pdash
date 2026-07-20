@@ -30,9 +30,9 @@ import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
 
-type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Milestones' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
+type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 // Timesheets is a core, frequently-used tab, so it sits up front (3rd) rather than buried.
-const BASE_TABS: Tab[] = ['Overview', 'Task List', 'Timesheets', 'Board', 'Gantt', 'Milestones', 'Files', 'Issues', 'Activity', 'Discussions'];
+const BASE_TABS: Tab[] = ['Overview', 'Task List', 'Timesheets', 'Board', 'Gantt', 'Files', 'Issues', 'Activity', 'Discussions'];
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -373,7 +373,6 @@ export function ProjectDetailClient({ projectId }: Props) {
           />
         )}
         {activeTab === 'Overview' && <OverviewView project={project} tasks={tasks} />}
-        {activeTab === 'Milestones' && <MilestonesView project={project} />}
         {activeTab === 'Capacity' && <ProjectCapacityTab projectId={projectId} />}
         {activeTab === 'Files' && <FilesTab projectId={projectId} />}
         {activeTab === 'Gantt' && <GanttView tasks={tasks} project={project} />}
@@ -389,7 +388,6 @@ export function ProjectDetailClient({ projectId }: Props) {
           taskListId={defaultTaskList.id}
           initialStatusId={addTaskStatusId}
           workflowId={project.workflowId}
-          milestones={project.milestones}
           onClose={() => setShowAddTask(false)}
           onSuccess={invalidateTasks}
         />
@@ -424,88 +422,6 @@ export function ProjectDetailClient({ projectId }: Props) {
   );
 }
 
-// ── Milestones View (U4) ────────────────────────────────────────────────────────
-
-function MilestonesView({ project }: { project: ApiProject }) {
-  const { can } = usePermissions();
-  const qc = useQueryClient();
-  const milestones = [...(project.milestones ?? [])].sort((a, b) => a.sequence - b.sequence);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState('');
-  const [start, setStart] = useState('');
-  const [end, setEnd] = useState('');
-  const [busy, setBusy] = useState(false);
-  const refresh = () => qc.invalidateQueries({ queryKey: ['project', project.id] });
-
-  async function create() {
-    if (!name.trim() || busy) return;
-    setBusy(true);
-    try {
-      await api.milestones.create(project.id, { name: name.trim(), startDate: start || undefined, endDate: end || undefined });
-      setName(''); setStart(''); setEnd(''); setAdding(false); refresh();
-    } catch (e) { alert(e instanceof Error ? e.message : 'Could not create milestone.'); }
-    finally { setBusy(false); }
-  }
-  async function remove(id: string) {
-    if (!window.confirm('Delete this milestone? Its tasks stay but are detached from it.')) return;
-    try { await api.milestones.remove(project.id, id); refresh(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not delete milestone.'); }
-  }
-
-  return (
-    <div className="max-w-3xl space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-700">Milestones</h3>
-        {can('milestone.create') && !adding && (
-          <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
-            <Plus size={13} /> New milestone
-          </button>
-        )}
-      </div>
-
-      {adding && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-          <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Milestone name" className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2" />
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-500">Start <input type="date" value={start} onChange={e => setStart(e.target.value)} className="ml-1 text-sm border border-gray-300 rounded-lg px-2 py-1" /></label>
-            <label className="text-xs text-gray-500">End <input type="date" value={end} onChange={e => setEnd(e.target.value)} className="ml-1 text-sm border border-gray-300 rounded-lg px-2 py-1" /></label>
-          </div>
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setAdding(false)} className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
-            <button onClick={create} disabled={busy || !name.trim()} className="px-3 py-1.5 text-sm bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">{busy ? 'Adding…' : 'Add milestone'}</button>
-          </div>
-        </div>
-      )}
-
-      {milestones.length === 0 && !adding ? (
-        <p className="text-sm text-gray-400">No milestones yet.</p>
-      ) : (
-        <div className="space-y-3">
-          {milestones.map(m => (
-            <div key={m.id} className="bg-white rounded-xl border border-gray-200 p-4 group">
-              <div className="flex items-center gap-2 mb-2">
-                <Flag size={14} className="text-brand-500 shrink-0" />
-                <span className="text-sm font-medium text-gray-800 flex-1">{m.name}</span>
-                <span className="text-xs text-gray-400">{formatDate(m.startDate)} – {formatDate(m.endDate)}</span>
-                {can('milestone.delete') && (
-                  <button onClick={() => remove(m.id)} title="Delete milestone" className="p-1 rounded text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><XIcon size={14} /></button>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-brand-500 rounded-full" style={{ width: `${m.completionPercentage}%` }} />
-                </div>
-                <span className="text-xs font-medium text-gray-500 w-9 text-right">{m.completionPercentage}%</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Task List View ─────────────────────────────────────────────────────────────
 
 function TaskListView({
   tasks, loading, statuses, canAddTask, listName, onTaskClick, onAddTask, onStatusChange,
