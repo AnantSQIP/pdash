@@ -22,7 +22,7 @@ import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { api, type ApiProject, type ApiTask, type WorkflowStatus } from '@/lib/api';
-import { useOrg } from '@/lib/org-context';
+import { useOrg, byName } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
@@ -582,7 +582,7 @@ function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[
     statusCounts[name].count++;
   }
   const statuses = Object.entries(statusCounts).map(([label, { count, color }]) => ({ label, count, color }));
-  const members = project.members ?? [];
+  const members = [...(project.members ?? [])].sort((a, b) => byName(a.user, b.user));
 
   // #11: add / remove project members.
   const { users } = useOrg();

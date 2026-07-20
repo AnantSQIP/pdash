@@ -123,7 +123,8 @@ export class UsersService {
     // (default stays ACTIVE-only for the rest of the app).
     return this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, ...(opts?.includeInactive ? {} : { status: 'ACTIVE' }) },
-      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      // Alphabetical by the displayed name (First Last) — the visible order everywhere.
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
       select: {
         id: true, organizationId: true, employeeCode: true, firstName: true, lastName: true,
         email: true, phone: true, designation: true, profilePhoto: true, joiningDate: true,

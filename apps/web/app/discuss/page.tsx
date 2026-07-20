@@ -9,7 +9,7 @@ import {
 import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Channel, type Message, type ChannelMembers, type UserSummary, type MessagePoll, type SavedMessage, type Tag, type ChannelRead } from '@/lib/api';
-import { useOrg } from '@/lib/org-context';
+import { useOrg, byName } from '@/lib/org-context';
 import { usePresence } from '@/lib/presence-context';
 import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
@@ -659,7 +659,7 @@ export default function DiscussPage() {
   const { data: memberData } = useQuery<ChannelMembers>({
     queryKey: ['channel-members', activeChannel?.id], queryFn: () => api.channels.members(activeChannel!.id), enabled: !!activeChannel?.id,
   });
-  const channelMembers = (memberData?.members ?? []).map(m => m.user);
+  const channelMembers = (memberData?.members ?? []).map(m => m.user).sort(byName);
   const { data: notifPrefs } = useQuery({ queryKey: ['notif-prefs'], queryFn: () => api.notifications.preferences(), staleTime: 30_000 });
   const muted = !!activeChannel && (notifPrefs?.mutedChannels ?? []).includes(activeChannel.id);
   async function toggleMute() {

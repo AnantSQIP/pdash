@@ -4,6 +4,11 @@ import { createContext, useContext, useMemo, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, OrgSummary, UserSummary } from './api';
 import { useAuth } from './auth-context';
+import { fullName } from './avatar';
+
+// Shared comparator so every people list is alphabetical by the displayed name.
+export const byName = (a: { firstName?: string | null; lastName?: string | null }, b: { firstName?: string | null; lastName?: string | null }) =>
+  fullName(a).toLowerCase().localeCompare(fullName(b).toLowerCase());
 
 type OrgContextValue = {
   org: OrgSummary | null;
@@ -39,15 +44,16 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   // Memoize the whole context value so consumers don't re-render on every parent render.
   // currentUser is derived here (was recomputed via users.find on each render).
   const value = useMemo<OrgContextValue>(() => {
+    const sortedUsers = [...users].sort(byName);
     const currentUser: UserSummary | null = user
-      ? (users.find(u => u.id === user.id) ?? {
+      ? (sortedUsers.find(u => u.id === user.id) ?? {
           id: user.id, firstName: user.firstName, lastName: user.lastName,
           email: user.email, designation: user.designation ?? undefined, status: user.status,
         })
       : null;
     return {
       org,
-      users,
+      users: sortedUsers,
       currentUser,
       loading: isAuthed && (orgsLoading || (!!org && usersLoading)),
       isError: orgsError || usersError,
