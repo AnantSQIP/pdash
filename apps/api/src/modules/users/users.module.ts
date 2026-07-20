@@ -2,7 +2,7 @@ import {
   BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, Injectable, Module, NotFoundException,
   Param, Patch, Post, Put, Query,
 } from '@nestjs/common';
-import { IsArray, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsEmail, IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Prisma } from '@pdash/db';
 import { hash as argonHash } from '@node-rs/argon2';
@@ -29,7 +29,10 @@ class CreateUserDto {
   @IsString() organizationId!: string;
   @IsString() @MinLength(1) @MaxLength(60) firstName!: string;
   @IsOptional() @IsString() @MaxLength(60) lastName?: string;
-  @IsEmail() @MaxLength(160) email!: string;
+  // Only company addresses may be added — no personal gmail/yahoo/etc.
+  @IsEmail() @MaxLength(160)
+  @Matches(/@squarkip\.com$/i, { message: 'Only @squarkip.com email addresses can be added.' })
+  email!: string;
   @IsOptional() @IsString() designation?: string;
   @IsOptional() @IsString() phone?: string;
   // Optional admin-set initial password; if omitted a temp one is generated.

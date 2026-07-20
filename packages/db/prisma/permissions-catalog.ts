@@ -61,10 +61,6 @@ export const MODULES: ModuleDef[] = [
   //   profile.view.personal → home addresses, DOB, emergency contact (Admin/Super Admin/HR)
   // Everyone can always see and edit their OWN profile — that needs no permission.
   { key: 'profile',     label: 'User Profiles', actions: ['view', 'view.personal', 'update.any'] },
-  // Employee lifecycle: onboarding + offboarding processes, checklists, and HR letters.
-  // `manage` = HR/Admin run the processes and issue letters; `view` sees the boards.
-  // (A person always sees their OWN onboarding tasks + letters without any permission.)
-  { key: 'lifecycle',   label: 'Employee Lifecycle', actions: ['view', 'manage'] },
   // Company feed + HR policy library. Reading is open to everyone (no permission);
   // `manage` = HR/Admin post announcements / publish policies.
   { key: 'announcement', label: 'Announcements', actions: ['manage'] },
@@ -136,8 +132,6 @@ const MANAGER_CODES = [
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
   code('profile', 'view'),
-  // See onboarding/offboarding status of the team (HR still owns running them).
-  code('lifecycle', 'view'),
 ];
 
 // Employee: see work, manage own contributions.
@@ -229,8 +223,6 @@ const HR_CODES = [
   code('user', 'view'), code('user', 'create'), code('user', 'update'), code('user', 'manage_access'),
   // People-ops: HR is one of the three roles trusted with personal details.
   code('profile', 'view'), code('profile', 'view.personal'), code('profile', 'update.any'),
-  // People-ops owns onboarding/offboarding and issues HR letters.
-  code('lifecycle', 'view'), code('lifecycle', 'manage'),
   // People-ops posts company announcements and publishes HR policies.
   code('announcement', 'manage'), code('policy', 'manage'),
   // People-ops runs the appraisal review cycles.

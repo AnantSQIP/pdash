@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { User, CheckSquare, Settings, LogOut, Home, Plane, FileBadge } from 'lucide-react';
+import { User, CheckSquare, Settings, LogOut, Home, Plane } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useOrg } from '@/lib/org-context';
 import { usePresence, presenceMeta } from '@/lib/presence-context';
@@ -97,7 +97,6 @@ export function UserMenu({ onClose, collapsed = false }: { onClose: () => void; 
   const menuItems: MenuItem[] = [
     { icon: User,        label: 'My Profile', href: '/settings' },
     { icon: CheckSquare, label: 'My Tasks',   href: '/tasks' },
-    { icon: FileBadge,   label: 'My HR',      href: '/my-hr' },
     { icon: Settings,    label: 'Account Settings', href: '/settings' },
     { icon: LogOut,      label: 'Sign Out', danger: true, separator: true, action: () => { logout(); router.replace('/login'); } },
   ];

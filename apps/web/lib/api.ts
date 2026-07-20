@@ -241,26 +241,6 @@ export type ChannelRead = { userId: string; lastReadAt: string };
 // A named, @mentionable group of people.
 export type Tag = { id: string; name: string; memberIds: string[]; memberCount: number };
 
-// ── Employee lifecycle (onboarding / offboarding + HR letters) ────────────────
-export type LifecycleTask = {
-  id: string; processId: string; title: string; description?: string | null;
-  dueDate?: string | null; done: boolean; doneAt?: string | null; doneBy?: string | null; sequence: number;
-};
-export type LifecycleProcess = {
-  id: string; organizationId: string; userId: string; type: string; status: string;
-  notes?: string | null; reason?: string | null; lastWorkingDay?: string | null;
-  startedBy: string; startedAt: string; completedAt?: string | null;
-  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto' | 'designation'>;
-  tasks?: LifecycleTask[]; progress?: { done: number; total: number };
-};
-export type ChecklistTemplateItem = { id: string; title: string; description?: string | null; dueDays?: number | null; sequence: number };
-export type ChecklistTemplate = { id: string; type: string; name: string; items: ChecklistTemplateItem[] };
-export type HrLetter = {
-  id: string; userId: string; type: string; title: string; body: string;
-  issuedBy: string; issuedAt: string; acknowledgedAt?: string | null;
-  user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
-};
-
 // ── Company comms & knowledge (announcements / policies / celebrations / org chart) ──
 type PersonLite = Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto' | 'designation'>;
 export type Announcement = {
@@ -884,36 +864,6 @@ export const api = {
     remove: (id: string) => req<void>(`/tags/${id}`, { method: 'DELETE' }),
     setMembers: (id: string, userIds: string[]) =>
       req<{ ok: boolean; count: number }>(`/tags/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
-  },
-  lifecycle: {
-    list: (type?: string) => req<LifecycleProcess[]>(`/lifecycle${type ? `?type=${type}` : ''}`),
-    get: (id: string) => req<LifecycleProcess>(`/lifecycle/${id}`),
-    start: (data: { userId: string; type: string; templateId?: string; notes?: string; reason?: string; lastWorkingDay?: string }) =>
-      req<LifecycleProcess>('/lifecycle', { method: 'POST', body: JSON.stringify(data) }),
-    addTask: (id: string, data: { title: string; description?: string; dueDate?: string }) =>
-      req<LifecycleProcess>(`/lifecycle/${id}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
-    updateTask: (id: string, taskId: string, data: { title?: string; description?: string; dueDate?: string; done?: boolean }) =>
-      req<LifecycleProcess>(`/lifecycle/${id}/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    deleteTask: (id: string, taskId: string) => req<LifecycleProcess>(`/lifecycle/${id}/tasks/${taskId}`, { method: 'DELETE' }),
-    complete: (id: string) => req<LifecycleProcess>(`/lifecycle/${id}/complete`, { method: 'POST' }),
-    cancel: (id: string) => req<LifecycleProcess>(`/lifecycle/${id}/cancel`, { method: 'POST' }),
-    // own surfaces
-    mine: () => req<LifecycleProcess[]>('/lifecycle/me'),
-    toggleMyTask: (taskId: string, done: boolean) => req<{ ok: boolean; done: boolean }>(`/lifecycle/me/tasks/${taskId}/toggle`, { method: 'POST', body: JSON.stringify({ done }) }),
-    myLetters: () => req<HrLetter[]>('/lifecycle/me/letters'),
-    acknowledgeLetter: (id: string) => req<HrLetter>(`/lifecycle/letters/${id}/acknowledge`, { method: 'POST' }),
-    // templates (HR)
-    templates: (type?: string) => req<ChecklistTemplate[]>(`/lifecycle/templates${type ? `?type=${type}` : ''}`),
-    createTemplate: (data: { type: string; name: string }) => req<ChecklistTemplate>('/lifecycle/templates', { method: 'POST', body: JSON.stringify(data) }),
-    renameTemplate: (id: string, name: string) => req<ChecklistTemplate>(`/lifecycle/templates/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
-    deleteTemplate: (id: string) => req<void>(`/lifecycle/templates/${id}`, { method: 'DELETE' }),
-    setTemplateItems: (id: string, items: { title: string; description?: string; dueDays?: number }[]) =>
-      req<ChecklistTemplate>(`/lifecycle/templates/${id}/items`, { method: 'PUT', body: JSON.stringify({ items }) }),
-    // letters (HR)
-    letters: (userId?: string) => req<HrLetter[]>(`/lifecycle/letters${userId ? `?userId=${userId}` : ''}`),
-    issueLetter: (data: { userId: string; type: string; title: string; body: string }) =>
-      req<HrLetter>('/lifecycle/letters', { method: 'POST', body: JSON.stringify(data) }),
-    deleteLetter: (id: string) => req<void>(`/lifecycle/letters/${id}`, { method: 'DELETE' }),
   },
   company: {
     announcements: () => req<Announcement[]>('/company/announcements'),

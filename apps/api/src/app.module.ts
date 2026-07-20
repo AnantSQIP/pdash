@@ -42,7 +42,6 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { PresenceModule } from './modules/presence/presence.module';
 import { SearchModule } from './modules/search/search.module';
 import { TagsModule } from './modules/tags/tags.module';
-import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
 import { CompanyModule } from './modules/company/company.module';
 import { AppraisalsModule } from './modules/appraisals/appraisals.module';
 
@@ -94,7 +93,6 @@ import { AppraisalsModule } from './modules/appraisals/appraisals.module';
     PresenceModule,
     SearchModule,
     TagsModule,
-    LifecycleModule,
     CompanyModule,
     AppraisalsModule,
   ],
