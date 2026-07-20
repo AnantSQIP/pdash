@@ -244,7 +244,7 @@ export type Announcement = {
 };
 export type Celebration = { user: PersonLite; inDays: number; month: number; day: number; years?: number };
 export type Celebrations = { anniversaries: (Celebration & { years: number })[]; birthdays: Celebration[] };
-export type OrgChartNode = PersonLite & { managerIds: string[] };
+export type DirectoryEntry = PersonLite & { phone?: string | null };
 export type PolicyDoc = { id: string; name: string; fileUrl: string; mimeType?: string | null; fileSize?: number | null };
 export type Policy = {
   id: string; organizationId: string; title: string; description?: string | null; category?: string | null;
@@ -855,7 +855,7 @@ export const api = {
     pinAnnouncement: (id: string) => req<Announcement>(`/company/announcements/${id}/pin`, { method: 'POST' }),
     deleteAnnouncement: (id: string) => req<void>(`/company/announcements/${id}`, { method: 'DELETE' }),
     celebrations: () => req<Celebrations>('/company/celebrations'),
-    orgChart: () => req<OrgChartNode[]>('/company/org-chart'),
+    directory: () => req<DirectoryEntry[]>('/company/directory'),
     policies: () => req<Policy[]>('/company/policies'),
     createPolicy: (data: { title: string; description?: string; category?: string; body?: string; documentId?: string; requiresAck?: boolean }) =>
       req<Policy>('/company/policies', { method: 'POST', body: JSON.stringify(data) }),

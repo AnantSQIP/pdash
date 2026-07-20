@@ -137,20 +137,15 @@ export class CompanyService {
     return { id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, profilePhoto: u.profilePhoto, designation: u.designation };
   }
 
-  // ── org chart (derived from UserManager) ───────────────────────────────────────
-  async orgChart() {
+  // ── company directory (everyone: name, designation, email, contact number) ──────
+  async directory() {
     const organizationId = await this.actor.requireOrgId();
     const users = await this.prisma.user.findMany({
       where: { organizationId, status: 'ACTIVE', deletedAt: null },
-      select: { ...USER_SELECT, managedBy: { select: { managerId: true } } },
-      orderBy: { firstName: 'asc' },
+      select: { ...USER_SELECT, phone: true },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
     });
-    const ids = new Set(users.map(u => u.id));
-    return users.map(u => ({
-      ...this.pick(u),
-      // keep only managers that are themselves active users of this org
-      managerIds: u.managedBy.map(m => m.managerId).filter(id => ids.has(id)),
-    }));
+    return users.map(u => ({ ...this.pick(u), phone: u.phone }));
   }
 
   // ── HR policy library ──────────────────────────────────────────────────────────
@@ -242,7 +237,7 @@ export class CompanyController {
   // ── reads: open to any authenticated user ──────────────────────────────────────
   @Get('announcements') listAnnouncements() { return this.svc.listAnnouncements(); }
   @Get('celebrations') celebrations() { return this.svc.celebrations(); }
-  @Get('org-chart') orgChart() { return this.svc.orgChart(); }
+  @Get('directory') directory() { return this.svc.directory(); }
   @Get('policies') listPolicies() { return this.svc.listPolicies(); }
   @Post('policies/:id/acknowledge') acknowledge(@Param('id') id: string) { return this.svc.acknowledgePolicy(id); }
 

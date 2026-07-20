@@ -3,12 +3,12 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Megaphone, FileText, Network, Plus, X, Loader, Pin, PinOff, Pencil, Trash2, Check,
-  Cake, PartyPopper, Download, CheckCircle2, ChevronRight, Users as UsersIcon,
+  Megaphone, FileText, Contact, Search, Plus, X, Loader, Pin, PinOff, Pencil, Trash2, Check,
+  Cake, PartyPopper, Download, CheckCircle2, Users as UsersIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
-  api, type Announcement, type Celebrations, type OrgChartNode, type Policy, type PolicyAckStatus,
+  api, type Announcement, type Celebrations, type DirectoryEntry, type Policy, type PolicyAckStatus,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -339,45 +339,54 @@ function PoliciesTab({ canManage }: { canManage: boolean }) {
   );
 }
 
-// ── Org chart tab ──────────────────────────────────────────────────────────────
-function OrgChartTab() {
-  const { data: nodes = [], isLoading } = useQuery<OrgChartNode[]>({ queryKey: ['org-chart'], queryFn: () => api.company.orgChart() });
-
-  const { roots, childrenOf } = useMemo(() => {
-    const byId = new Map(nodes.map(n => [n.id, n]));
-    const childrenOf = new Map<string, OrgChartNode[]>();
-    const roots: OrgChartNode[] = [];
-    for (const n of nodes) {
-      const parent = n.managerIds.find(id => byId.has(id));
-      if (parent && parent !== n.id) { (childrenOf.get(parent) ?? childrenOf.set(parent, []).get(parent)!).push(n); }
-      else roots.push(n);
-    }
-    return { roots, childrenOf };
-  }, [nodes]);
-
-  function Node({ node, depth }: { node: OrgChartNode; depth: number }) {
-    const kids = childrenOf.get(node.id) ?? [];
-    return (
-      <div>
-        <div className="flex items-center gap-2.5 py-1.5" style={{ paddingLeft: depth * 22 }}>
-          {depth > 0 && <ChevronRight size={13} className="text-gray-300 shrink-0" />}
-          <Avatar user={node} size={30} className="shrink-0" />
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-gray-800 truncate">{fullName(node)}</p>
-            {node.designation && <p className="text-[11px] text-gray-400 truncate">{node.designation}</p>}
-          </div>
-          {kids.length > 0 && <span className="text-[10px] text-gray-400 ml-1">{kids.length} report{kids.length === 1 ? '' : 's'}</span>}
-        </div>
-        {kids.map(k => <Node key={k.id} node={k} depth={depth + 1} />)}
-      </div>
-    );
-  }
+// ── Directory tab (everyone: name, designation, email, contact number) ───────────
+function DirectoryTab() {
+  const [q, setQ] = useState('');
+  const { data: people = [], isLoading } = useQuery<DirectoryEntry[]>({ queryKey: ['directory'], queryFn: () => api.company.directory() });
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return people;
+    return people.filter(p => `${fullName(p)} ${p.designation ?? ''} ${p.email} ${p.phone ?? ''}`.toLowerCase().includes(s));
+  }, [people, q]);
 
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader size={18} className="animate-spin text-gray-400" /></div>;
-  if (nodes.length === 0) return <p className="text-sm text-gray-400 py-10 text-center">No people to chart.</p>;
   return (
-    <div className="max-w-2xl border border-gray-200 rounded-xl p-4 overflow-x-auto">
-      {roots.map(r => <Node key={r.id} node={r} depth={0} />)}
+    <div className="max-w-4xl">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="flex items-center gap-1.5 flex-1 max-w-sm border border-gray-200 rounded-lg px-3 py-2 focus-within:border-brand-400">
+          <Search size={15} className="text-gray-400 shrink-0" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, designation, email or number…" className="flex-1 text-sm focus:outline-none bg-transparent" />
+        </div>
+        <span className="text-xs text-gray-400">{filtered.length} {filtered.length === 1 ? 'person' : 'people'}</span>
+      </div>
+      <div className="border border-gray-200 rounded-xl overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[560px]">
+          <thead>
+            <tr className="border-b border-gray-200 bg-gray-50 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+              <th className="px-4 py-2.5">Name</th>
+              <th className="px-4 py-2.5">Designation</th>
+              <th className="px-4 py-2.5">Email</th>
+              <th className="px-4 py-2.5">Contact</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {filtered.length === 0 && <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-gray-400">No one matches “{q}”.</td></tr>}
+            {filtered.map(p => (
+              <tr key={p.id} className="hover:bg-gray-50">
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2.5">
+                    <Avatar user={p} size={30} className="shrink-0" />
+                    <span className="text-sm font-medium text-gray-900">{fullName(p)}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-600">{p.designation ?? '—'}</td>
+                <td className="px-4 py-3 text-sm"><a href={`mailto:${p.email}`} className="text-brand-600 hover:underline">{p.email}</a></td>
+                <td className="px-4 py-3 text-sm">{p.phone ? <a href={`tel:${p.phone}`} className="text-gray-700 hover:text-brand-600">{p.phone}</a> : <span className="text-gray-400">—</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -386,7 +395,7 @@ function OrgChartTab() {
 const TABS = [
   { id: 'feed', label: 'Feed', icon: Megaphone },
   { id: 'policies', label: 'Policies', icon: FileText },
-  { id: 'orgchart', label: 'Org chart', icon: Network },
+  { id: 'directory', label: 'Directory', icon: Contact },
 ];
 
 export default function CompanyPage() {
@@ -418,7 +427,7 @@ export default function CompanyPage() {
       <div className="p-4 sm:p-6">
         {tab === 'feed' && <FeedTab canManage={canAnnounce} />}
         {tab === 'policies' && <PoliciesTab canManage={canPolicy} />}
-        {tab === 'orgchart' && <OrgChartTab />}
+        {tab === 'directory' && <DirectoryTab />}
       </div>
     </div>
   );
