@@ -6,7 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw, Receipt,
+  CheckCircle2, Archive, RotateCcw,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -77,23 +77,6 @@ export function ProjectDetailClient({ projectId }: Props) {
     }
   }
 
-  // Only admins/super-admins set whether a project is billable (mirrors the server gate).
-  const isAdmin = can('project.approve') && can('user.manage_access');
-  async function runBillable(billable: boolean) {
-    if (lifecycleBusy) return;
-    setLifecycleBusy(true);
-    try {
-      await api.projects.setBillable(projectId, billable);
-      qc.invalidateQueries({ queryKey: ['project', projectId] });
-      qc.invalidateQueries({ queryKey: ['notifications'] });
-      qc.invalidateQueries({ queryKey: ['notifications-unread'] });
-      toast(billable ? 'Marked billable' : 'Marked non-billable', 'success');
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not set billable status', 'error');
-    } finally {
-      setLifecycleBusy(false);
-    }
-  }
 
   const { data: project, isLoading: projLoading, isError: projError } = useQuery({
     queryKey: ['project', projectId],
@@ -333,31 +316,6 @@ export function ProjectDetailClient({ projectId }: Props) {
                 <LockIcon size={12} />
                 <span>Client <span className="font-semibold">{formatDate(project.clientDueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
               </div>
-            )}
-            {/* Billable status — admin/super-admin only. Undecided = a prompt to set it. */}
-            {isAdmin && (
-              project.billable == null ? (
-                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg pl-2.5 pr-1.5 py-1" title="Only an admin sets whether this project's work is billable">
-                  <Receipt size={13} className="text-amber-600" />
-                  <span className="text-xs text-amber-700 font-medium">Billable?</span>
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => runBillable(true)} disabled={lifecycleBusy} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">Yes</button>
-                    <button onClick={() => runBillable(false)} disabled={lifecycleBusy} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-white text-gray-600 border border-gray-200 hover:bg-gray-50 disabled:opacity-50">No</button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  onClick={() => runBillable(!project.billable)}
-                  disabled={lifecycleBusy}
-                  title="Billable status — click to switch"
-                  className={clsx('group inline-flex items-center gap-1.5 border px-2.5 py-1 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors',
-                    project.billable ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100' : 'text-gray-600 bg-gray-50 border-gray-200 hover:bg-gray-100')}
-                >
-                  <Receipt size={13} />
-                  {project.billable ? 'Billable' : 'Non-billable'}
-                  <Pencil size={11} className="opacity-0 group-hover:opacity-60 transition-opacity" />
-                </button>
-              )
             )}
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-xs text-gray-500">{project.completionPercentage}% complete</span>

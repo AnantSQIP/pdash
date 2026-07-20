@@ -211,7 +211,6 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
         <LogTimeModal
           projectId={projectId}
           tasks={tasks}
-          projectBillable={project?.billable ?? null}
           onClose={() => setShowLogModal(false)}
           onSuccess={invalidate}
         />

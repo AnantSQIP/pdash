@@ -175,7 +175,7 @@ export type ApiProject = {
   /** CLIENT deadline — only present when the actor may see it (redacted server-side). */
   clientDueDate?: string | null;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
-  /** Whether the work is billable. null = an admin hasn't decided yet. */
+  /** Projects are billable by default; per-time-entry billability is chosen by each logger. */
   billable?: boolean | null;
   /** Set when the project reaches its lifecycle end-states (COMPLETED / CLOSED). */
   completedAt?: string | null; closedAt?: string | null;
@@ -687,9 +687,6 @@ export const api = {
     complete: (id: string) => req<ApiProject>(`/projects/${id}/complete`, { method: 'POST' }),
     close: (id: string) => req<ApiProject>(`/projects/${id}/close`, { method: 'POST' }),
     reopen: (id: string) => req<ApiProject>(`/projects/${id}/reopen`, { method: 'POST' }),
-    // Admin/super-admin only — set whether the project's work is billable.
-    setBillable: (id: string, billable: boolean) =>
-      req<ApiProject>(`/projects/${id}/billable`, { method: 'POST', body: JSON.stringify({ billable }) }),
     addMember: (id: string, userId: string, projectRole?: string) =>
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>

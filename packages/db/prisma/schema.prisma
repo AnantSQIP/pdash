@@ -464,9 +464,9 @@ model Project {
   // server-side, never merely hidden in the UI.
   clientDueDate           DateTime?
   completionPercentage    Int       @default(0)
-  // Whether the project's work is billable to the client. null = an admin has not decided
-  // yet (they are notified to set it on creation); true/false once decided.
-  billable                Boolean?
+  // Projects are billable by default. Billability is no longer an admin decision — each
+  // person chooses whether their OWN logged time is billable, on the time entry itself.
+  billable                Boolean   @default(true)
   // Lifecycle end-states (distinct from deletedAt, which is a real delete):
   //   projectPhase COMPLETED → work finished, still listed, locked. completedAt set.
   //   projectPhase CLOSED    → archived to the Closed section, reopenable. closedAt set.

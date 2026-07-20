@@ -120,38 +120,9 @@ export class ProjectsService {
       metadata: { projectId: project.id, title: project.title, managerId },
     });
 
-    const admins = await this.orgAdmins(organizationId);
-
-    // Billable review — ONLY org admins/super-admins decide whether the new project's
-    // work is billable. They can click through to the project (link) and set it there.
-    await this.notifications.notify(admins, {
-      type: 'project.billable_review',
-      title: 'Set billable status',
-      message: `New project "${project.title}" — mark whether its work is billable to the client.`,
-      link: `/projects/${project.id}`,
-    });
+    // Projects are billable by default; billability is decided per time entry by each
+    // logger, so there is no admin billable-review step on creation any more.
     return this.deadlines.redactProject(project as any, scope);
-  }
-
-  /**
-   * Set a project's billable flag. Admin/super-admin only (mirrors orgAdmins): this is a
-   * commercial decision, not something a project manager or HR sets.
-   */
-  async setBillable(id: string, billable: boolean) {
-    const project = await this.getRaw(id);
-    const actorId = getActorId();
-    if (!actorId) throw new ForbiddenException('Not authenticated.');
-    const organizationId = await this.orgOfProject(id);
-    const admins = organizationId ? await this.orgAdmins(organizationId) : [];
-    if (!admins.includes(actorId)) {
-      throw new ForbiddenException('Only an admin can set whether a project is billable.');
-    }
-    const updated = await this.prisma.project.update({ where: { id }, data: { billable } });
-    await this.events.emit({
-      action: EVENTS.PROJECT_UPDATED, entityType: 'PROJECT', entityId: id, actorId,
-      metadata: { projectId: id, title: project.title, billable },
-    });
-    return this.deadlines.redactProject(updated as any, await this.deadlines.scope());
   }
 
   /** The org that owns a project (reached through its members, like list()). */

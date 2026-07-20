@@ -61,11 +61,6 @@ export class ProjectsController {
     return this.projects.complete(id);
   }
 
-  // Admin/super-admin only (enforced in the service) — a commercial billable decision.
-  @Post(':id/billable') @RequirePermission('project.update')
-  setBillable(@Param('id') id: string, @Body() body: { billable: boolean }) {
-    return this.projects.setBillable(id, !!body?.billable);
-  }
 
   @Post(':id/close') @RequirePermission('project.update')
   close(@Param('id') id: string) {

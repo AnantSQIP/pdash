@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { Lock } from 'lucide-react';
 import { api, type ApiTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
@@ -10,20 +9,16 @@ import { Modal } from '@/components/ui/Modal';
 interface LogTimeModalProps {
   projectId: string;
   tasks: ApiTask[];
-  /** The project's admin billable decision. When set (true/false), timesheets inherit it
-   *  and the per-entry toggle is hidden; null = undecided, so the logger chooses. */
-  projectBillable?: boolean | null;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-export function LogTimeModal({ projectId: _projectId, tasks, projectBillable = null, onClose, onSuccess }: LogTimeModalProps) {
+export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess }: LogTimeModalProps) {
   const { currentUser } = useOrg();
-  const billableLocked = projectBillable != null;
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? '');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [hours, setHours] = useState('');
-  const [billable, setBillable] = useState(billableLocked ? projectBillable! : true);
+  const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -127,29 +122,20 @@ export function LogTimeModal({ projectId: _projectId, tasks, projectBillable = n
           <div className="flex items-center justify-between">
             <div>
               <span className="text-sm font-medium text-gray-700">Billable</span>
-              <p className="text-xs text-gray-400">
-                {billableLocked ? 'Set by an admin for this project' : 'Counts toward client-billable hours'}
-              </p>
+              <p className="text-xs text-gray-400">You decide whether this time is billable</p>
             </div>
-            {billableLocked ? (
-              // Admin decided billability for this project → inherited, read-only.
-              <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${projectBillable ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                <Lock size={11} /> {projectBillable ? 'Billable' : 'Non-billable'}
-              </span>
-            ) : (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={billable}
-                aria-label="Billable"
-                onClick={() => setBillable(prev => !prev)}
-                className={`relative h-5 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 ${billable ? 'bg-brand-600' : 'bg-gray-300'}`}
-              >
-                <span
-                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${billable ? 'left-[22px]' : 'left-0.5'}`}
-                />
-              </button>
-            )}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={billable}
+              aria-label="Billable"
+              onClick={() => setBillable(prev => !prev)}
+              className={`relative h-5 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 ${billable ? 'bg-brand-600' : 'bg-gray-300'}`}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${billable ? 'left-[22px]' : 'left-0.5'}`}
+              />
+            </button>
           </div>
 
         </form>

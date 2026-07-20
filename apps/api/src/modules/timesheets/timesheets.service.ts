@@ -77,14 +77,12 @@ export class TimesheetsService {
     const actorId = await this.actor();
     const task = await this.prisma.task.findFirst({
       where: { id: dto.taskId, deletedAt: null },
-      select: { id: true, projectTasks: { select: { project: { select: { billable: true } } }, take: 1 } },
+      select: { id: true },
     });
     if (!task) throw new NotFoundException(`Task ${dto.taskId} not found`);
-    // If an admin has decided billability at the PROJECT level, every timesheet on it
-    // inherits that decision — the logger's own choice is ignored. Only when the project
-    // is undecided (null) does the logged value (default billable) apply.
-    const projectBillable = task.projectTasks[0]?.project?.billable;
-    const billable = projectBillable != null ? projectBillable : (dto.billable ?? true);
+    // Each person decides whether their own logged time is billable — there is no
+    // project-level override or admin authority. Defaults to billable when not specified.
+    const billable = dto.billable ?? true;
     const entry = await this.prisma.timesheet.create({
       data: {
         userId: actorId,
