@@ -11,7 +11,30 @@ import { NotificationsService } from '../notifications/notifications.module';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true, designation: true };
 
+// Recognition categories (card-like). Labels are mirrored on the frontend.
+const REWARD_CATEGORIES = ['STAR_PERFORMER', 'TEAM_PLAYER', 'ABOVE_AND_BEYOND', 'INNOVATION', 'LEADERSHIP', 'APPRECIATION'];
+const REWARD_LABELS: Record<string, string> = {
+  STAR_PERFORMER: 'Star Performer', TEAM_PLAYER: 'Team Player', ABOVE_AND_BEYOND: 'Above & Beyond',
+  INNOVATION: 'Innovation', LEADERSHIP: 'Leadership', APPRECIATION: 'Appreciation',
+};
+
+// The Indian financial year runs Apr 1 → Mar 31. offset 0 = current FY, -1 = last FY.
+function financialYearWindow(offset = 0) {
+  const now = new Date();
+  const startYear = (now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1) + offset;
+  return {
+    start: new Date(startYear, 3, 1),        // Apr 1
+    end: new Date(startYear + 1, 3, 1),      // next Apr 1 (exclusive)
+    label: `FY ${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`,
+  };
+}
+
 // ── DTOs ─────────────────────────────────────────────────────────────────────
+class RewardDto {
+  @IsString() recipientId!: string;
+  @IsIn(REWARD_CATEGORIES) category!: string;
+  @IsOptional() @IsString() @MaxLength(500) message?: string;
+}
 class AnnouncementDto {
   @IsString() @MinLength(1) @MaxLength(200) title!: string;
   @IsString() @MinLength(1) @MaxLength(10000) body!: string;
@@ -148,6 +171,52 @@ export class CompanyService {
     return users.map(u => ({ ...this.pick(u), phone: u.phone }));
   }
 
+  // ── recognition / rewards (everyone views; admins/HR/managers give) ──────────────
+  async listRewards(period?: string) {
+    const organizationId = await this.actor.requireOrgId();
+    const { start, end, label } = financialYearWindow(period === 'last' ? -1 : 0);
+    const rewards = await this.prisma.reward.findMany({
+      where: { organizationId, awardedAt: { gte: start, lt: end } },
+      include: { recipient: { select: USER_SELECT }, giver: { select: USER_SELECT } },
+      orderBy: { awardedAt: 'desc' },
+      take: 500,
+    });
+    // Leaderboard = recognition count per recipient, most-awarded first.
+    const counts = new Map<string, { user: (typeof rewards)[number]['recipient']; count: number }>();
+    for (const r of rewards) {
+      const e = counts.get(r.recipientId) ?? { user: r.recipient, count: 0 };
+      e.count++; counts.set(r.recipientId, e);
+    }
+    const leaderboard = [...counts.values()].sort((a, b) => b.count - a.count);
+    return { financialYear: label, period: period === 'last' ? 'last' : 'current', total: rewards.length, leaderboard, rewards };
+  }
+
+  async giveReward(dto: RewardDto) {
+    const organizationId = await this.actor.requireOrgId();
+    const givenById = this.actorId();
+    if (dto.recipientId === givenById) throw new BadRequestException('You cannot give recognition to yourself.');
+    const recipient = await this.prisma.user.findFirst({ where: { id: dto.recipientId, organizationId, status: 'ACTIVE', deletedAt: null }, select: { id: true } });
+    if (!recipient) throw new NotFoundException('Employee not found');
+    const reward = await this.prisma.reward.create({
+      data: { organizationId, recipientId: dto.recipientId, givenById, category: dto.category, message: dto.message?.trim() || null },
+      include: { recipient: { select: USER_SELECT }, giver: { select: USER_SELECT } },
+    });
+    await this.notifications.notify([dto.recipientId], {
+      type: 'reward.received', title: 'You received recognition 🎉',
+      message: `You were recognised — ${REWARD_LABELS[dto.category] ?? 'Appreciation'}${reward.message ? `: ${reward.message}` : ''}.`,
+      link: '/company',
+    });
+    return reward;
+  }
+
+  async deleteReward(id: string) {
+    const organizationId = await this.actor.requireOrgId();
+    const r = await this.prisma.reward.findFirst({ where: { id, organizationId } });
+    if (!r) throw new NotFoundException('Reward not found');
+    await this.prisma.reward.delete({ where: { id } });
+    return { ok: true };
+  }
+
   // ── HR policy library ──────────────────────────────────────────────────────────
   async listPolicies() {
     const organizationId = await this.actor.requireOrgId();
@@ -238,8 +307,15 @@ export class CompanyController {
   @Get('announcements') listAnnouncements() { return this.svc.listAnnouncements(); }
   @Get('celebrations') celebrations() { return this.svc.celebrations(); }
   @Get('directory') directory() { return this.svc.directory(); }
+  @Get('rewards') listRewards(@Query('period') period?: string) { return this.svc.listRewards(period); }
   @Get('policies') listPolicies() { return this.svc.listPolicies(); }
   @Post('policies/:id/acknowledge') acknowledge(@Param('id') id: string) { return this.svc.acknowledgePolicy(id); }
+
+  // ── recognition (give/delete gated by reward.give) ──────────────────────────────
+  @Post('rewards') @RequirePermission('reward.give')
+  giveReward(@Body() dto: RewardDto) { return this.svc.giveReward(dto); }
+  @Delete('rewards/:id') @RequirePermission('reward.give')
+  deleteReward(@Param('id') id: string) { return this.svc.deleteReward(id); }
 
   // ── announcements (HR) ──────────────────────────────────────────────────────────
   @Post('announcements') @RequirePermission('announcement.manage')

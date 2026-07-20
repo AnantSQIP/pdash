@@ -52,6 +52,7 @@ model Organization {
   policies           Policy[]
   appraisalCycles    AppraisalCycle[]
   appraisals         Appraisal[]
+  rewards            Reward[]
 
   @@map("organization")
 }
@@ -130,6 +131,8 @@ model User {
   channelReads           ChannelRead[]
   appraisalsAsEmployee   Appraisal[]             @relation("AppraisalEmployee")
   appraisalsAsReviewer   Appraisal[]             @relation("AppraisalReviewer")
+  rewardsReceived        Reward[]                @relation("RewardRecipient")
+  rewardsGiven           Reward[]                @relation("RewardGiver")
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
   metricsDaily           UserMetricDaily[]
@@ -1905,4 +1908,29 @@ model AppraisalGoal {
 
   @@index([appraisalId])
   @@map("appraisal_goal")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 20. RECOGNITION DOMAIN (rewards / appreciation given to employees)
+// ═══════════════════════════════════════════════════════════════
+
+// A recognition/appreciation given to an employee by an admin/HR/manager. Visible to
+// everyone; tallied per person per financial year (India FY = Apr 1 – Mar 31).
+model Reward {
+  id             String   @id @default(cuid())
+  organizationId String
+  recipientId    String
+  givenById      String
+  category       String   // STAR_PERFORMER | TEAM_PLAYER | ABOVE_AND_BEYOND | INNOVATION | LEADERSHIP | APPRECIATION
+  message        String?
+  awardedAt      DateTime @default(now()) // drives the financial-year bucket
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipient    User         @relation("RewardRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  giver        User         @relation("RewardGiver", fields: [givenById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, awardedAt])
+  @@index([recipientId])
+  @@map("reward")
 }

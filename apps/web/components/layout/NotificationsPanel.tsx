@@ -61,6 +61,7 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'appraisal.assigned':     { Icon: RiStarLine,        color: 'text-brand-600',  bg: 'bg-brand-50' },
   'appraisal.self_submitted': { Icon: RiStarLine,      color: 'text-amber-600',  bg: 'bg-amber-50' },
   'appraisal.completed':    { Icon: RiStarLine,        color: 'text-green-600',  bg: 'bg-green-50' },
+  'reward.received':        { Icon: RiStarLine,        color: 'text-amber-600',  bg: 'bg-amber-50' },
 };
 function typeMeta(t: string) { return TYPE_META[t] ?? { Icon: RiNotification3Line, color: 'text-gray-600', bg: 'bg-gray-100' }; }
 

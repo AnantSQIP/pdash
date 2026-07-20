@@ -67,6 +67,8 @@ export const MODULES: ModuleDef[] = [
   // Appraisal review cycles. `manage` = HR/Admin run cycles + see all appraisals;
   // employees fill their own and managers review their reports (ownership-based, no perm).
   { key: 'appraisal',    label: 'Appraisals',    actions: ['manage'] },
+  // Recognition / rewards. `give` = admins/HR/managers award recognition; everyone views.
+  { key: 'reward',       label: 'Recognition',   actions: ['give'] },
   { key: 'role',        label: 'Roles',        actions: ['view', 'create', 'update', 'delete'] },
   { key: 'group',       label: 'Permission Groups', actions: ['view', 'create', 'update', 'delete', 'manage_members'] },
   { key: 'permission',  label: 'Permissions',  actions: ['view'] },
@@ -129,6 +131,7 @@ const MANAGER_CODES = [
   code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
   code('expense', 'view.organization'), code('expense', 'approve'),
   code('holiday', 'manage'),
+  code('reward', 'give'),
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
   code('profile', 'view'),
@@ -173,6 +176,7 @@ const SENIOR_CONSULTANT_CODES = [
   // Delivery oversight: see who is free/overloaded, and the client-facing dates.
   code('capacity', 'view'), code('deadline', 'view.client'),
   code('leave', 'request'),
+  code('reward', 'give'),
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
   code('profile', 'view'),
@@ -217,6 +221,7 @@ const HR_CODES = [
   code('expense', 'view.own'), code('expense', 'submit'),
   code('expense', 'view.organization'), code('expense', 'approve'),
   code('holiday', 'view'), code('holiday', 'manage'),
+  code('reward', 'give'),
   code('department', 'view'), code('department', 'create'), code('department', 'update'),
   code('user', 'view'), code('user', 'create'), code('user', 'update'), code('user', 'manage_access'),
   // People-ops: HR is one of the three roles trusted with personal details.

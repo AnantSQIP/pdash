@@ -245,6 +245,16 @@ export type Announcement = {
 export type Celebration = { user: PersonLite; inDays: number; month: number; day: number; years?: number };
 export type Celebrations = { anniversaries: (Celebration & { years: number })[]; birthdays: Celebration[] };
 export type DirectoryEntry = PersonLite & { phone?: string | null };
+// Recognition / rewards given to employees.
+export type Reward = {
+  id: string; recipientId: string; givenById: string; category: string;
+  message?: string | null; awardedAt: string; recipient?: PersonLite; giver?: PersonLite;
+};
+export type RewardsView = {
+  financialYear: string; period: string; total: number;
+  leaderboard: { user: PersonLite; count: number }[];
+  rewards: Reward[];
+};
 export type PolicyDoc = { id: string; name: string; fileUrl: string; mimeType?: string | null; fileSize?: number | null };
 export type Policy = {
   id: string; organizationId: string; title: string; description?: string | null; category?: string | null;
@@ -856,6 +866,10 @@ export const api = {
     deleteAnnouncement: (id: string) => req<void>(`/company/announcements/${id}`, { method: 'DELETE' }),
     celebrations: () => req<Celebrations>('/company/celebrations'),
     directory: () => req<DirectoryEntry[]>('/company/directory'),
+    rewards: (period?: 'current' | 'last') => req<RewardsView>(`/company/rewards${period === 'last' ? '?period=last' : ''}`),
+    giveReward: (data: { recipientId: string; category: string; message?: string }) =>
+      req<Reward>('/company/rewards', { method: 'POST', body: JSON.stringify(data) }),
+    deleteReward: (id: string) => req<{ ok: boolean }>(`/company/rewards/${id}`, { method: 'DELETE' }),
     policies: () => req<Policy[]>('/company/policies'),
     createPolicy: (data: { title: string; description?: string; category?: string; body?: string; documentId?: string; requiresAck?: boolean }) =>
       req<Policy>('/company/policies', { method: 'POST', body: JSON.stringify(data) }),

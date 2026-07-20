@@ -5,10 +5,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Megaphone, FileText, Contact, Search, Plus, X, Loader, Pin, PinOff, Pencil, Trash2, Check,
   Cake, PartyPopper, Download, CheckCircle2, Users as UsersIcon,
+  Award, Star, Rocket, Lightbulb, Crown, Heart, Medal, type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
-  api, type Announcement, type Celebrations, type DirectoryEntry, type Policy, type PolicyAckStatus,
+  api, type Announcement, type Celebrations, type DirectoryEntry, type Policy, type PolicyAckStatus, type RewardsView,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -391,9 +392,175 @@ function DirectoryTab() {
   );
 }
 
+// ── Rewards / recognition tab ────────────────────────────────────────────────────
+const REWARD_META: Record<string, { label: string; Icon: LucideIcon; color: string; ring: string; chip: string }> = {
+  STAR_PERFORMER:   { label: 'Star Performer',  Icon: Star,      color: 'text-amber-600',  ring: 'border-amber-200 bg-amber-50',   chip: 'bg-amber-100 text-amber-700' },
+  TEAM_PLAYER:      { label: 'Team Player',     Icon: UsersIcon, color: 'text-blue-600',   ring: 'border-blue-200 bg-blue-50',     chip: 'bg-blue-100 text-blue-700' },
+  ABOVE_AND_BEYOND: { label: 'Above & Beyond',  Icon: Rocket,    color: 'text-purple-600', ring: 'border-purple-200 bg-purple-50', chip: 'bg-purple-100 text-purple-700' },
+  INNOVATION:       { label: 'Innovation',      Icon: Lightbulb, color: 'text-teal-600',   ring: 'border-teal-200 bg-teal-50',     chip: 'bg-teal-100 text-teal-700' },
+  LEADERSHIP:       { label: 'Leadership',      Icon: Crown,     color: 'text-indigo-600', ring: 'border-indigo-200 bg-indigo-50', chip: 'bg-indigo-100 text-indigo-700' },
+  APPRECIATION:     { label: 'Appreciation',    Icon: Heart,     color: 'text-pink-600',   ring: 'border-pink-200 bg-pink-50',     chip: 'bg-pink-100 text-pink-700' },
+};
+const rewardMeta = (c: string) => REWARD_META[c] ?? REWARD_META.APPRECIATION;
+
+function GiveRewardModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { users, currentUser } = useOrg();
+  const { toast } = useToast();
+  const [recipientId, setRecipientId] = useState('');
+  const [category, setCategory] = useState('STAR_PERFORMER');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const people = users.filter(u => u.id !== currentUser?.id && u.status !== 'INACTIVE');
+
+  async function submit() {
+    if (!recipientId) return;
+    setBusy(true);
+    try { await api.company.giveReward({ recipientId, category, message: message.trim() || undefined }); toast('Recognition given 🎉'); onDone(); onClose(); }
+    catch (e) { toast(e instanceof Error ? e.message : 'Could not give recognition', 'error'); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 max-h-[calc(100dvh-4rem)] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2"><Award size={17} className="text-brand-600" /> Give recognition</h2>
+          <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          <label className="block">
+            <span className="text-xs font-medium text-gray-600">Recognise *</span>
+            <select value={recipientId} onChange={e => setRecipientId(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500">
+              <option value="">Select a person…</option>
+              {people.map(u => <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` · ${u.designation}` : ''}</option>)}
+            </select>
+          </label>
+          <div>
+            <span className="text-xs font-medium text-gray-600">Recognition</span>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              {Object.entries(REWARD_META).map(([key, m]) => {
+                const Icon = m.Icon; const on = category === key;
+                return (
+                  <button key={key} type="button" onClick={() => setCategory(key)}
+                    className={clsx('flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors', on ? m.ring : 'border-gray-200 hover:bg-gray-50')}>
+                    <Icon size={15} className={m.color} /> <span className="text-gray-700">{m.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <label className="block">
+            <span className="text-xs font-medium text-gray-600">Message</span>
+            <textarea value={message} onChange={e => setMessage(e.target.value)} rows={3} maxLength={500} placeholder="What did they do great?"
+              className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 resize-none" />
+          </label>
+        </div>
+        <div className="flex items-center justify-end gap-3 px-6 py-3 border-t border-gray-100">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+          <button onClick={submit} disabled={!recipientId || busy} className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+            {busy ? <Loader size={14} className="animate-spin" /> : <Award size={14} />} Give
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RewardsTab({ canGive }: { canGive: boolean }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [period, setPeriod] = useState<'current' | 'last'>('current');
+  const [showGive, setShowGive] = useState(false);
+  const { data, isLoading } = useQuery<RewardsView>({ queryKey: ['rewards', period], queryFn: () => api.company.rewards(period) });
+  const refresh = () => qc.invalidateQueries({ queryKey: ['rewards'] });
+
+  async function del(id: string) {
+    if (!confirm('Remove this recognition?')) return;
+    try { await api.company.deleteReward(id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
+  }
+
+  const leaderboard = data?.leaderboard ?? [];
+  const rewards = data?.rewards ?? [];
+  const MEDAL = ['text-amber-500', 'text-gray-400', 'text-orange-400'];
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-3">
+      <div className="lg:col-span-2 space-y-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          {canGive && (
+            <button onClick={() => setShowGive(true)} className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700">
+              <Award size={14} /> Give recognition
+            </button>
+          )}
+          <div className="flex items-center gap-1 ml-auto bg-gray-100 rounded-lg p-0.5">
+            {(['current', 'last'] as const).map(p => (
+              <button key={p} onClick={() => setPeriod(p)} className={clsx('px-3 py-1 text-xs font-medium rounded-md', period === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500')}>
+                {p === 'current' ? 'This FY' : 'Last FY'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-gray-400">{data?.financialYear} · {data?.total ?? 0} recognition{(data?.total ?? 0) === 1 ? '' : 's'}</p>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12"><Loader size={18} className="animate-spin text-gray-400" /></div>
+        ) : rewards.length === 0 ? (
+          <p className="text-sm text-gray-400 py-10 text-center border border-dashed border-gray-200 rounded-xl">No recognition given {period === 'last' ? 'last' : 'this'} financial year yet.</p>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {rewards.map(r => {
+              const m = rewardMeta(r.category); const Icon = m.Icon;
+              return (
+                <div key={r.id} className={clsx('relative border rounded-xl p-4', m.ring)}>
+                  {canGive && <button onClick={() => del(r.id)} className="absolute top-2 right-2 p-1 text-gray-300 hover:text-red-500"><Trash2 size={13} /></button>}
+                  <div className="flex items-center gap-2">
+                    <span className={clsx('w-9 h-9 rounded-xl bg-white flex items-center justify-center border', m.ring)}><Icon size={17} className={m.color} /></span>
+                    <span className={clsx('text-[11px] font-semibold px-2 py-0.5 rounded-full', m.chip)}>{m.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-3">
+                    {r.recipient && <Avatar user={r.recipient} size={28} />}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{r.recipient ? fullName(r.recipient) : ''}</p>
+                      {r.recipient?.designation && <p className="text-[11px] text-gray-400 truncate">{r.recipient.designation}</p>}
+                    </div>
+                  </div>
+                  {r.message && <p className="text-sm text-gray-600 mt-2">“{r.message}”</p>}
+                  <p className="text-[11px] text-gray-400 mt-2">by {r.giver ? fullName(r.giver) : 'HR'} · {fmtDate(r.awardedAt)}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Leaderboard */}
+      <aside>
+        <div className="border border-gray-200 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3"><Medal size={16} className="text-amber-500" /> Most recognised · {data?.financialYear}</h3>
+          {leaderboard.length === 0 ? <p className="text-xs text-gray-400">No one recognised yet.</p> : (
+            <ul className="space-y-2.5">
+              {leaderboard.map((row, i) => (
+                <li key={row.user.id} className="flex items-center gap-2.5">
+                  <span className={clsx('w-5 text-center text-xs font-bold', i < 3 ? MEDAL[i] : 'text-gray-300')}>{i + 1}</span>
+                  <Avatar user={row.user} size={28} className="shrink-0" />
+                  <span className="text-sm text-gray-800 truncate flex-1">{fullName(row.user)}</span>
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 bg-brand-50 px-2 py-0.5 rounded-full"><Award size={11} /> {row.count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </aside>
+
+      {showGive && <GiveRewardModal onClose={() => setShowGive(false)} onDone={refresh} />}
+    </div>
+  );
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────────
 const TABS = [
   { id: 'feed', label: 'Feed', icon: Megaphone },
+  { id: 'rewards', label: 'Recognition', icon: Award },
   { id: 'policies', label: 'Policies', icon: FileText },
   { id: 'directory', label: 'Directory', icon: Contact },
 ];
@@ -426,6 +593,7 @@ export default function CompanyPage() {
       </div>
       <div className="p-4 sm:p-6">
         {tab === 'feed' && <FeedTab canManage={canAnnounce} />}
+        {tab === 'rewards' && <RewardsTab canGive={can('reward.give')} />}
         {tab === 'policies' && <PoliciesTab canManage={canPolicy} />}
         {tab === 'directory' && <DirectoryTab />}
       </div>
