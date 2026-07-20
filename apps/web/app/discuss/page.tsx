@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import {
-  Send, Hash, Plus, Lock, X, Loader, Trash2, Users, UserPlus, Crown, Check,
+  Send, Hash, Plus, MessagesSquare, X, Loader, Trash2, Users, UserPlus, Crown, Check,
   Smile, Pin, PinOff, Pencil, Link2, Bell, BellOff, BarChart3, Bookmark, BookmarkCheck,
   AtSign, Archive, ArchiveRestore, Settings2, Clock,
 } from 'lucide-react';
@@ -203,7 +203,7 @@ function CreateDiscussionModal({ onClose, onSuccess }: { onClose: () => void; on
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center"><Lock size={17} className="text-brand-600" /></div>
+            <div className="w-9 h-9 rounded-xl bg-brand-50 flex items-center justify-center"><MessagesSquare size={17} className="text-brand-600" /></div>
             <h2 className="text-lg font-semibold text-gray-900">New Discussion</h2>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
@@ -222,7 +222,7 @@ function CreateDiscussionModal({ onClose, onSuccess }: { onClose: () => void; on
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Add people {memberIds.size > 0 && <span className="text-gray-400 font-normal">({memberIds.size})</span>}</label>
             <MemberPicker users={users} selected={memberIds} exclude={exclude} onToggle={id => setMemberIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; })} />
-            <p className="text-[11px] text-gray-400 mt-1.5 flex items-center gap-1"><Lock size={11} /> Private — only you and the people you add can see this. You are the owner.</p>
+            <p className="text-[11px] text-gray-400 mt-1.5">Private — only you and the people you add can see this. You are the owner.</p>
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}
           <div className="flex items-center justify-end gap-3 pt-1">
@@ -557,7 +557,7 @@ function SavedModal({ saved, onClose, onJump }: { saved: SavedMessage[]; onClose
           {saved.length === 0 && <p className="px-6 py-10 text-center text-sm text-gray-400">No saved messages yet. Hover a message and tap the bookmark to save it.</p>}
           {saved.map(m => (
             <button key={m.id} onClick={() => onJump(m.channelId, m.id)} className="w-full text-left px-6 py-3 hover:bg-gray-50">
-              <p className="text-[11px] text-gray-400 mb-0.5"><Lock size={9} className="inline mr-1" />{m.channel.name} · {fullName(m.user)} · {fmtTime(m.createdAt)}</p>
+              <p className="text-[11px] text-gray-400 mb-0.5"><Hash size={9} className="inline mr-0.5" />{m.channel.name} · {fullName(m.user)} · {fmtTime(m.createdAt)}</p>
               <p className="text-sm text-gray-700 line-clamp-2">{m.poll ? `📊 ${m.poll.question}` : (m.content || '(attachment)')}</p>
             </button>
           ))}
@@ -740,6 +740,25 @@ export default function DiscussPage() {
     catch (err) { alert(err instanceof Error ? err.message : 'Failed to send'); } finally { setSending(false); }
   }
 
+  // Paste a screenshot / image straight from the clipboard into the composer (Ctrl/⌘+V) →
+  // upload it as an attachment, like a snippet.
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const it of items) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const blob = it.getAsFile();
+        if (blob) {
+          const ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+          const named = blob.name && !/^image\.\w+$/i.test(blob.name) ? blob.name : `screenshot-${Date.now()}.${ext}`;
+          files.push(new File([blob], named, { type: blob.type }));
+        }
+      }
+    }
+    if (files.length) { e.preventDefault(); attachments.add(files); }
+  }
+
   const handlers: MsgHandlers = {
     onReact: async (messageId, emoji) => {
       if (!activeChannel) return;
@@ -831,7 +850,7 @@ export default function DiscussPage() {
               <button key={ch.id} onClick={() => setActiveChannelId(ch.id)}
                 className={clsx('w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors',
                   active ? 'bg-brand-50 text-brand-700 font-medium' : clsx('hover:bg-gray-100', unread > 0 ? 'text-gray-900 font-semibold' : 'text-gray-600'))}>
-                {isArchived ? <Archive size={12} className="shrink-0 text-gray-400" /> : <Lock size={12} className="shrink-0 text-gray-400" />}
+                {isArchived ? <Archive size={12} className="shrink-0 text-gray-400" /> : <Hash size={13} className="shrink-0 text-gray-400" />}
                 <span className="flex-1 truncate">{ch.name}</span>
                 {unread > 0 && !active
                   ? <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-brand-600 text-white text-[10px] font-semibold flex items-center justify-center tabular-nums">{unread > 99 ? '99+' : unread}</span>
@@ -856,7 +875,7 @@ export default function DiscussPage() {
           <>
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200 bg-white">
               <div className="flex items-center gap-2 min-w-0">
-                <Lock size={15} className="text-gray-400 shrink-0" />
+                <Hash size={16} className="text-gray-400 shrink-0" />
                 {editingName ? (
                   <input autoFocus defaultValue={activeChannel.name}
                     onChange={e => setNameDraft(e.target.value)}
@@ -868,9 +887,10 @@ export default function DiscussPage() {
                     className="font-semibold text-gray-900 border border-brand-300 rounded-md px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-brand-200 min-w-0" />
                 ) : (
                   <button onClick={() => { if (isOwner) { setNameDraft(activeChannel.name); setEditingName(true); } }}
-                    title={isOwner ? 'Click to rename' : undefined}
-                    className={clsx('font-semibold text-gray-900 truncate rounded-md px-1 -mx-1', isOwner && 'hover:bg-gray-100 cursor-pointer')}>
+                    title={isOwner ? 'Rename discussion' : undefined}
+                    className={clsx('font-semibold text-gray-900 truncate rounded-md px-1 -mx-1 inline-flex items-center gap-1.5', isOwner && 'hover:bg-gray-100 cursor-pointer')}>
                     {activeChannel.name}
+                    {isOwner && <Pencil size={12} className="text-gray-300 shrink-0" />}
                   </button>
                 )}
                 <span className="text-xs text-gray-400 ml-1 shrink-0">· {activeChannel._count?.members ?? 0} members</span>
@@ -950,7 +970,7 @@ export default function DiscussPage() {
                 {isOwner && <button onClick={() => unarchiveChannel(activeChannel.id)} className="text-brand-600 hover:underline font-medium">Reopen</button>}
               </div>
             ) : (
-              <form onSubmit={sendMessage} className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-white space-y-2">
+              <form onSubmit={sendMessage} onPaste={handlePaste} className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-white space-y-2">
                 {attachments.error && <p className="text-xs text-red-600">{attachments.error}</p>}
                 <PendingAttachmentChips items={attachments.pending} onRemove={attachments.remove} />
                 <div className="flex items-center gap-2 bg-gray-50 rounded-xl border border-gray-200 px-3 py-2.5 focus-within:border-brand-400 transition-colors">
@@ -969,7 +989,7 @@ export default function DiscussPage() {
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
-            <Lock size={40} className="mb-3 opacity-20" />
+            <MessagesSquare size={40} className="mb-3 opacity-20" />
             <p className="text-base font-medium">Your private discussions appear here</p>
             <button onClick={() => setShowCreate(true)} className="mt-4 text-sm text-brand-600 hover:underline flex items-center gap-1"><Plus size={14} /> Start a discussion</button>
           </div>
