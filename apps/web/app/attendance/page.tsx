@@ -394,16 +394,17 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
   const [status, setStatus] = useState('PRESENT');
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');
+  const [pid, setPid] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const compOff = !!nonWorking; // a weekend/holiday → claim comp-off, not a normal regularisation
 
   async function submit() {
-    if (saving || !reason.trim()) return;
+    if (saving || !reason.trim() || (compOff && !pid.trim())) return;
     setSaving(true); setError('');
     try {
       if (compOff) {
-        await api.leave.requestCompOff({ workDate: date, reason: reason.trim() });
+        await api.leave.requestCompOff({ workDate: date, reason: reason.trim(), projectRef: pid.trim() });
       } else {
         await api.attendance.requestRegularization({
           date,
@@ -438,9 +439,15 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
         </div>
         <div className="px-6 py-5 space-y-4">
           {compOff ? (
-            <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
-              This is {nonWorking} — a non-working day. Worked anyway? Claim <b>comp-off</b> and HR will review it. On approval you get a compensatory day off to use later.
-            </p>
+            <>
+              <p className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+                This is {nonWorking} — a non-working day. Worked anyway? Claim <b>comp-off</b> — HR, your manager and Yash will review it. On approval you get a compensatory day off to use later.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Project ID (PID) <span className="text-red-500">*</span></label>
+                <input value={pid} onChange={e => setPid(e.target.value)} placeholder="e.g. PID-1042" className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500" />
+              </div>
+            </>
           ) : (
             <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
               This is sent to HR for approval. Your attendance changes only once they approve it.
@@ -482,7 +489,7 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
           {error && <p className="text-xs text-red-600">{error}</p>}
           <div className="flex items-center justify-end gap-3 pt-1">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
-            <button onClick={submit} disabled={saving || !reason.trim()} className={clsx('flex items-center gap-2 px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50', compOff ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-brand-600 hover:bg-brand-700')}>
+            <button onClick={submit} disabled={saving || !reason.trim() || (compOff && !pid.trim())} className={clsx('flex items-center gap-2 px-5 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50', compOff ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-brand-600 hover:bg-brand-700')}>
               {saving ? <><Loader size={14} className="animate-spin" /> Sending…</> : (compOff ? 'Claim comp-off' : 'Send to HR')}
             </button>
           </div>
@@ -521,7 +528,7 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
       {/* Balances */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-gray-700">Leave balance · {new Date().getUTCFullYear()}</h3>
+          <h3 className="text-sm font-semibold text-gray-700">Leaves Request Status for Jan–Dec {new Date().getUTCFullYear()}</h3>
           <button onClick={() => setShowForm(s => !s)} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700"><Plus size={13} /> Request</button>
         </div>
         <div className="space-y-3">
@@ -683,16 +690,16 @@ function CompOffCard() {
   const qc = useQueryClient();
   const { data: claims = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-mine'], queryFn: () => api.leave.myCompOffs(), staleTime: 30_000 });
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ workDate: '', reason: '' });
+  const [form, setForm] = useState({ workDate: '', reason: '', projectRef: '' });
   const [busy, setBusy] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
   async function submit() {
-    if (busy || !form.workDate || !form.reason.trim()) return;
+    if (busy || !form.workDate || !form.reason.trim() || !form.projectRef.trim()) return;
     setBusy(true);
     try {
       await api.leave.requestCompOff(form);
-      setShowForm(false); setForm({ workDate: '', reason: '' });
+      setShowForm(false); setForm({ workDate: '', reason: '', projectRef: '' });
       qc.invalidateQueries({ queryKey: ['compoff-mine'] });
     } catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the comp-off claim.'); }
     finally { setBusy(false); }
@@ -720,14 +727,18 @@ function CompOffCard() {
               <label className="block text-[11px] font-medium text-gray-500 mb-1">Day you worked (weekend/holiday)</label>
               <DateField type="date" value={form.workDate} max={today} onChange={e => setForm(f => ({ ...f, workDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
-            <div className="sm:col-span-2">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Project ID (PID) <span className="text-red-500">*</span></label>
+              <input value={form.projectRef} onChange={e => setForm(f => ({ ...f, projectRef: e.target.value }))} placeholder="e.g. PID-1042" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+            </div>
+            <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">What did you work on?</label>
-              <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Production hotfix for Patent X filing" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+              <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Production hotfix" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
           </div>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowForm(false)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
-            <button onClick={submit} disabled={busy || !form.workDate || !form.reason.trim()} className="text-sm font-medium px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">Submit claim</button>
+            <button onClick={submit} disabled={busy || !form.workDate || !form.reason.trim() || !form.projectRef.trim()} className="text-sm font-medium px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">Submit claim</button>
           </div>
         </div>
       )}
@@ -736,7 +747,7 @@ function CompOffCard() {
         {claims.map(c => (
           <li key={c.id} className="px-5 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-800">Worked {format(new Date(c.workDate), 'EEE, MMM d')}</p>
+              <p className="text-sm font-medium text-gray-800">Worked {format(new Date(c.workDate), 'EEE, MMM d')}{c.projectRef ? <span className="text-gray-400 font-normal"> · PID {c.projectRef}</span> : null}</p>
               <p className="text-xs text-gray-400 truncate">{c.reason}{c.reviewNote ? ` · Note: ${c.reviewNote}` : ''}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -921,7 +932,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
                   <Avatar user={c.user} size={32} />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">
-                      {c.user?.firstName} {c.user?.lastName} · worked {format(new Date(c.workDate), 'EEE, MMM d')}
+                      {c.user?.firstName} {c.user?.lastName} · worked {format(new Date(c.workDate), 'EEE, MMM d')}{c.projectRef ? ` · PID ${c.projectRef}` : ''}
                     </p>
                     <p className="text-xs text-gray-400 truncate">{c.reason}</p>
                   </div>

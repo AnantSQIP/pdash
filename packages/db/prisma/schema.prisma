@@ -954,6 +954,9 @@ model CompOffRequest {
   organizationId String?
   workDate       DateTime // the non-working day they worked
   reason         String   // what they worked on
+  // Free-text Project ID / PID the comp-off was worked against (mandatory on new claims;
+  // nullable so any pre-existing rows stay valid).
+  projectRef     String?
   hoursWorked    Float?
   // PENDING | APPROVED | REJECTED | CANCELLED
   status         String   @default("PENDING")

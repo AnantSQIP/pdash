@@ -26,6 +26,9 @@ function parseInstant(s?: string | null): Date | null {
 }
 
 const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
+// Escalation owner who is copied on attendance regularisations and comp-off claims
+// (in addition to HR / managers). Matched by login account.
+const ESCALATION_EMAIL = 'yash@squarkip.com';
 
 // A day is a full "present" only if at least this many hours were worked; below it,
 // the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
@@ -50,7 +53,6 @@ export class AttendanceService {
   // Attendance regularisations are routed to HR (people-ops) + Yash (escalation owner)
   // ONLY — deliberately NOT to managers or other admins. Yash is matched by his login
   // account; HR by role, so a change of who holds HR is picked up automatically.
-  private static readonly REG_ESCALATION_EMAIL = 'yash@squarkip.com';
   private async regularizationApproverIds(organizationId: string | null): Promise<string[]> {
     if (!organizationId) return [];
     const rows = await this.prisma.user.findMany({
@@ -58,7 +60,7 @@ export class AttendanceService {
         organizationId, deletedAt: null, status: 'ACTIVE',
         OR: [
           { userRoles: { some: { role: { name: 'HR' } } } },
-          { email: AttendanceService.REG_ESCALATION_EMAIL },
+          { email: ESCALATION_EMAIL },
         ],
       },
       select: { id: true },
@@ -588,11 +590,13 @@ export class LeaveService {
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
     // M4: reject leave that is entirely in the past (approval would retroactively debit balance).
     if (end < utcDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
-    // M3: reject a request overlapping an existing pending/approved one (double-debits balance).
+    // M3: only ONE leave can apply to a given day — reject a request that overlaps any
+    // existing pending/approved leave (also prevents double-debiting the balance, and
+    // stops applying two leave types on the same day).
     const clash = await this.prisma.leaveRequest.findFirst({
       where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
     });
-    if (clash) throw new BadRequestException('You already have a leave request overlapping these dates.');
+    if (clash) throw new BadRequestException('You already have a leave (pending or approved) on one or more of these days — only one leave can apply to a day.');
     const organizationId = await this.orgOf(userId);
     // Count business days only — weekends and holidays do not consume leave balance.
     const numDays = (await this.businessDays(organizationId, start, end)).length;
@@ -738,6 +742,22 @@ export class LeaveService {
     return users.map(u => u.id);
   }
 
+  // Comp-off claims route to HR + Managers + Yash (escalation owner) specifically.
+  private async compOffApproverIds(organizationId: string | null): Promise<string[]> {
+    if (!organizationId) return [];
+    const users = await this.prisma.user.findMany({
+      where: {
+        organizationId, deletedAt: null, status: 'ACTIVE',
+        OR: [
+          { userRoles: { some: { role: { name: { in: ['HR', 'Manager'] } } } } },
+          { email: ESCALATION_EMAIL },
+        ],
+      },
+      select: { id: true },
+    });
+    return users.map(u => u.id);
+  }
+
   /** A day is claimable for comp-off only if it was a weekend or an org holiday. */
   private async isNonWorkingDay(organizationId: string | null, date: Date): Promise<boolean> {
     const wd = date.getUTCDay();
@@ -767,8 +787,9 @@ export class LeaveService {
     return { earned, used: usedDays, available: Math.max(0, earned - usedDays) };
   }
 
-  async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number }) {
+  async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) {
     if (!data?.reason?.trim()) throw new BadRequestException('Tell us what you worked on.');
+    if (!data?.projectRef?.trim()) throw new BadRequestException('A Project ID (PID) is required.');
     const workDate = parseDay(data.workDate.slice(0, 10));
     if (workDate > utcDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
     const organizationId = await this.orgOf(userId);
@@ -778,14 +799,16 @@ export class LeaveService {
     const existing = await this.prisma.compOffRequest.findFirst({ where: { userId, workDate, status: { in: ['PENDING', 'APPROVED'] } } });
     if (existing) throw new BadRequestException('You already have a comp-off claim for this day.');
     const req = await this.prisma.compOffRequest.create({
-      data: { userId, organizationId, workDate, reason: data.reason.trim(), hoursWorked: data.hoursWorked ?? null, status: 'PENDING' },
+      data: { userId, organizationId, workDate, reason: data.reason.trim(), projectRef: data.projectRef.trim(), hoursWorked: data.hoursWorked ?? null, status: 'PENDING' },
       include: { user: this.userSelect },
     });
     const u = (req as { user?: { firstName?: string; lastName?: string } }).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
-    await this.notifications.notify(await this.leaveApprovers(organizationId), {
+    // Comp-off routes to HR + Managers + Yash.
+    await this.notifications.notify(await this.compOffApproverIds(organizationId), {
       type: 'compoff.requested', title: 'Comp-off to review',
-      message: `${name} claims comp-off for working ${dayKey(workDate)}: ${req.reason}`,
+      message: `${name} claims comp-off for working ${dayKey(workDate)} (PID ${req.projectRef}): ${req.reason}`,
+      link: '/attendance',
     });
     return req;
   }
@@ -1085,7 +1108,7 @@ class LeaveController {
 
   // ── comp-off ──────────────────────────────────────────────────────────────────
   @Post('compoff')
-  requestCompOff(@Actor() actorId: string | null, @Body() body: { workDate: string; reason: string; hoursWorked?: number }) {
+  requestCompOff(@Actor() actorId: string | null, @Body() body: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.requestCompOff(actorId, body);
   }

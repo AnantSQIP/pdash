@@ -585,7 +585,7 @@ export type WfhRequestItem = {
 };
 export type CompOffRequest = {
   id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
-  hoursWorked?: number | null; status: string;
+  projectRef?: string | null; hoursWorked?: number | null; status: string;
   reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null; createdAt: string;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
   evidence?: CompOffEvidence | null;
@@ -1111,7 +1111,7 @@ export const api = {
     cancel: (id: string) => req<LeaveRequestItem>(`/leave/requests/${id}/cancel`, { method: 'POST' }),
     balances: () => req<LeaveBalance[]>('/leave/balance/me'),
     // Comp-off: worked a non-working day → claim → HR approves → CO leave credit.
-    requestCompOff: (data: { workDate: string; reason: string; hoursWorked?: number }) =>
+    requestCompOff: (data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) =>
       req<CompOffRequest>('/leave/compoff', { method: 'POST', body: JSON.stringify(data) }),
     myCompOffs: () => req<CompOffRequest[]>('/leave/compoff/me'),
     pendingCompOffs: () => req<CompOffRequest[]>('/leave/compoff/pending'),
