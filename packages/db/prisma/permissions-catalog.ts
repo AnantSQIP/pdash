@@ -69,6 +69,9 @@ export const MODULES: ModuleDef[] = [
   // `manage` = HR/Admin post announcements / publish policies.
   { key: 'announcement', label: 'Announcements', actions: ['manage'] },
   { key: 'policy',       label: 'HR Policies',   actions: ['manage'] },
+  // Appraisal review cycles. `manage` = HR/Admin run cycles + see all appraisals;
+  // employees fill their own and managers review their reports (ownership-based, no perm).
+  { key: 'appraisal',    label: 'Appraisals',    actions: ['manage'] },
   { key: 'role',        label: 'Roles',        actions: ['view', 'create', 'update', 'delete'] },
   { key: 'group',       label: 'Permission Groups', actions: ['view', 'create', 'update', 'delete', 'manage_members'] },
   { key: 'permission',  label: 'Permissions',  actions: ['view'] },
@@ -230,6 +233,8 @@ const HR_CODES = [
   code('lifecycle', 'view'), code('lifecycle', 'manage'),
   // People-ops posts company announcements and publishes HR policies.
   code('announcement', 'manage'), code('policy', 'manage'),
+  // People-ops runs the appraisal review cycles.
+  code('appraisal', 'manage'),
 ];
 
 // Admin: everything except the most destructive RBAC delete (kept for Super Admin).

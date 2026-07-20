@@ -277,6 +277,25 @@ export type Policy = {
   createdAt: string; updatedAt: string; document?: PolicyDoc | null; ackCount: number; acknowledgedByMe: boolean;
 };
 export type PolicyAckStatus = { user: PersonLite; acknowledgedAt: string | null };
+
+// ── Appraisal review cycles ────────────────────────────────────────────────────
+export type AppraisalGoal = {
+  id: string; appraisalId: string; title: string; description?: string | null; weight?: number | null;
+  selfRating?: number | null; selfComment?: string | null; managerRating?: number | null; managerComment?: string | null; sequence: number;
+};
+export type AppraisalCycleRef = { id: string; name: string; status: string; dueDate?: string | null; periodStart?: string | null; periodEnd?: string | null };
+export type Appraisal = {
+  id: string; cycleId: string; organizationId: string; employeeId: string; reviewerId?: string | null; status: string;
+  selfRating?: number | null; selfComments?: string | null; managerRating?: number | null; managerComments?: string | null; overallRating?: number | null;
+  submittedSelfAt?: string | null; submittedManagerAt?: string | null; acknowledgedAt?: string | null; createdAt: string; updatedAt: string;
+  cycle?: AppraisalCycleRef; employee?: PersonLite; reviewer?: PersonLite | null; goals?: AppraisalGoal[];
+};
+export type AppraisalCycle = {
+  id: string; organizationId: string; name: string; periodStart?: string | null; periodEnd?: string | null; dueDate?: string | null;
+  status: string; createdBy: string; createdAt: string; updatedAt: string;
+  progress?: { total: number; completed: number; pendingSelf: number; pendingManager: number };
+  appraisals?: Appraisal[];
+};
 export type ChannelMembers = {
   ownerId: string;
   members: { userId: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'> }[];
@@ -914,6 +933,32 @@ export const api = {
     deletePolicy: (id: string) => req<void>(`/company/policies/${id}`, { method: 'DELETE' }),
     acknowledgePolicy: (id: string) => req<{ ok: boolean }>(`/company/policies/${id}/acknowledge`, { method: 'POST' }),
     policyAckStatus: (id: string) => req<PolicyAckStatus[]>(`/company/policies/${id}/acknowledgements`),
+  },
+  appraisals: {
+    mine: () => req<Appraisal[]>('/appraisals/me'),
+    toReview: () => req<Appraisal[]>('/appraisals/review'),
+    get: (id: string) => req<Appraisal>(`/appraisals/${id}`),
+    addGoal: (id: string, data: { title: string; description?: string; weight?: number }) =>
+      req<Appraisal>(`/appraisals/${id}/goals`, { method: 'POST', body: JSON.stringify(data) }),
+    updateGoal: (id: string, goalId: string, data: Partial<Pick<AppraisalGoal, 'title' | 'description' | 'selfRating' | 'selfComment' | 'managerRating' | 'managerComment'>>) =>
+      req<Appraisal>(`/appraisals/${id}/goals/${goalId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    deleteGoal: (id: string, goalId: string) => req<Appraisal>(`/appraisals/${id}/goals/${goalId}`, { method: 'DELETE' }),
+    submitSelf: (id: string, data: { selfRating?: number; selfComments?: string }) =>
+      req<Appraisal>(`/appraisals/${id}/submit-self`, { method: 'POST', body: JSON.stringify(data) }),
+    submitManager: (id: string, data: { managerRating?: number; overallRating?: number; managerComments?: string }) =>
+      req<Appraisal>(`/appraisals/${id}/submit-manager`, { method: 'POST', body: JSON.stringify(data) }),
+    acknowledge: (id: string) => req<Appraisal>(`/appraisals/${id}/acknowledge`, { method: 'POST' }),
+    // cycles (HR)
+    cycles: () => req<AppraisalCycle[]>('/appraisals/cycles'),
+    getCycle: (id: string) => req<AppraisalCycle>(`/appraisals/cycles/${id}`),
+    createCycle: (data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string }) =>
+      req<AppraisalCycle>('/appraisals/cycles', { method: 'POST', body: JSON.stringify(data) }),
+    updateCycle: (id: string, data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string }) =>
+      req<AppraisalCycle>(`/appraisals/cycles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    launch: (id: string, employeeIds?: string[]) =>
+      req<{ ok: boolean; created: number }>(`/appraisals/cycles/${id}/launch`, { method: 'POST', body: JSON.stringify({ employeeIds }) }),
+    closeCycle: (id: string) => req<AppraisalCycle>(`/appraisals/cycles/${id}/close`, { method: 'POST' }),
+    deleteCycle: (id: string) => req<void>(`/appraisals/cycles/${id}`, { method: 'DELETE' }),
   },
   presence: {
     org: () => req<PresenceEntry[]>('/presence/org'),

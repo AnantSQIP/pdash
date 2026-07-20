@@ -53,6 +53,8 @@ model Organization {
   hrLetters          HrLetter[]
   announcements      Announcement[]
   policies           Policy[]
+  appraisalCycles    AppraisalCycle[]
+  appraisals         Appraisal[]
 
   @@map("organization")
 }
@@ -132,6 +134,8 @@ model User {
   channelReads           ChannelRead[]
   lifecycleProcesses     LifecycleProcess[]      @relation("LifecycleSubject")
   hrLetters              HrLetter[]              @relation("LetterRecipient")
+  appraisalsAsEmployee   Appraisal[]             @relation("AppraisalEmployee")
+  appraisalsAsReviewer   Appraisal[]             @relation("AppraisalReviewer")
   reportedIssues         Issue[]                 @relation("IssueReporter")
   assignedIssues         Issue[]                 @relation("IssueAssignee")
   metricsDaily           UserMetricDaily[]
@@ -1962,4 +1966,79 @@ model PolicyAcknowledgement {
   @@unique([policyId, userId])
   @@index([policyId])
   @@map("policy_acknowledgement")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 19. PERFORMANCE APPRAISALS DOMAIN (TeamNest port — structured review cycles)
+// This is appraisal-based review (self → manager → acknowledge), distinct from the
+// metrics-derived Performance module (which scores from task/attendance data).
+// ═══════════════════════════════════════════════════════════════
+
+model AppraisalCycle {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  dueDate        DateTime?
+  status         String    @default("DRAFT") // DRAFT | ACTIVE | CLOSED
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appraisals   Appraisal[]
+
+  @@index([organizationId])
+  @@map("appraisal_cycle")
+}
+
+model Appraisal {
+  id             String    @id @default(cuid())
+  cycleId        String
+  organizationId String
+  employeeId     String
+  reviewerId     String?
+  // PENDING_SELF → PENDING_MANAGER → COMPLETED → ACKNOWLEDGED
+  status         String    @default("PENDING_SELF")
+  selfRating     Int?
+  selfComments   String?
+  managerRating  Int?
+  managerComments String?
+  overallRating  Int?
+  submittedSelfAt    DateTime?
+  submittedManagerAt DateTime?
+  acknowledgedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  cycle        AppraisalCycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     User            @relation("AppraisalEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewer     User?           @relation("AppraisalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  goals        AppraisalGoal[]
+
+  @@unique([cycleId, employeeId])
+  @@index([organizationId])
+  @@index([employeeId])
+  @@index([reviewerId])
+  @@map("appraisal")
+}
+
+model AppraisalGoal {
+  id             String  @id @default(cuid())
+  appraisalId    String
+  title          String
+  description    String?
+  weight         Int?
+  selfRating     Int?
+  selfComment    String?
+  managerRating  Int?
+  managerComment String?
+  sequence       Int     @default(0)
+
+  appraisal Appraisal @relation(fields: [appraisalId], references: [id], onDelete: Cascade)
+
+  @@index([appraisalId])
+  @@map("appraisal_goal")
 }
