@@ -71,6 +71,8 @@ export interface CapacityRow {
   freeHours: number;
   /** Committed hours across the window. */
   committedHours: number;
+  /** Committed hours BEYOND capacity on overloaded days (0 when never overloaded). */
+  overCommittedHours: number;
   /** Total working capacity across the window (excludes weekends/holidays/leave). */
   capacityHours: number;
   utilization: number;
@@ -288,6 +290,11 @@ export class CapacityService {
       const capacityHours = workDays.length * DAILY_CAPACITY_HOURS;
       const committedHours = workDays.reduce((s, d) => s + d.load, 0);
       const freeHours = workDays.reduce((s, d) => s + d.free, 0);
+      // Hours committed BEYOND capacity on overloaded days. freeHours floors per-day free at
+      // 0, so committed+free stops reconciling with capacity exactly when someone is
+      // overloaded — this surfaces that overload instead of letting the window-average
+      // utilization dilute (and hide) it.
+      const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - DAILY_CAPACITY_HOURS), 0);
 
       // "When is this person free?" — the first workable day with real room, and how
       // many consecutive free days follow (a 2-day gap is a genuine assignment window).
@@ -317,6 +324,7 @@ export class CapacityService {
         openTasks,
         freeHours: r1(freeHours),
         committedHours: r1(committedHours),
+        overCommittedHours: r1(overCommittedHours),
         capacityHours: r1(capacityHours),
         utilization: capacityHours > 0 ? Math.round((committedHours / capacityHours) * 100) : 0,
         nextFreeDate: firstFreeIdx >= 0 ? days[firstFreeIdx].date : null,
@@ -432,11 +440,13 @@ export class CapacityService {
   private static readonly RISK_PRIORITIES = ['HIGH', 'CRITICAL'];
   private static readonly EMERGENCY_NOTICE_DAYS = 3;
 
-  /** Short notice = booked ≤ N days before it starts, or already in progress. */
-  private isShortNotice(createdAt: Date, startDate: Date, today: Date): boolean {
-    const start = startOfUtcDay(startDate);
-    if (start <= today) return true; // already started — the ultimate short notice
-    const noticeDays = Math.floor((start.getTime() - startOfUtcDay(createdAt).getTime()) / 86_400_000);
+  /**
+   * Short notice = booked ≤ N days before it starts. Whether the leave has already begun
+   * is irrelevant: a leave booked three weeks in advance is not an "emergency" just because
+   * today falls inside it — that previously flagged every in-progress leave as short-notice.
+   */
+  private isShortNotice(createdAt: Date, startDate: Date): boolean {
+    const noticeDays = Math.floor((startOfUtcDay(startDate).getTime() - startOfUtcDay(createdAt).getTime()) / 86_400_000);
     return noticeDays <= CapacityService.EMERGENCY_NOTICE_DAYS;
   }
 
@@ -519,16 +529,19 @@ export class CapacityService {
         user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       },
     });
-    const emergency = leaves.filter(lv => this.isShortNotice(lv.createdAt, lv.startDate, today));
+    const emergency = leaves.filter(lv => this.isShortNotice(lv.createdAt, lv.startDate));
     if (!emergency.length) return this.emptyCoverage(today, to);
 
     const tasks = await this.atRiskTasks([...new Set(emergency.map(l => l.userId))], to);
     if (!tasks.length) return this.emptyCoverage(today, to);
 
     const risks = emergency.map(lv => {
+      const start = startOfUtcDay(lv.startDate);
       const end = startOfUtcDay(lv.endDate);
       const mine = tasks
-        .filter(t => t.userIds.includes(lv.userId) && startOfUtcDay(t.dueDate) <= end)
+        // Only work that comes due DURING the leave is a risk caused by it. A task already
+        // overdue before the leave began was late independently — don't blame the leave.
+        .filter(t => t.userIds.includes(lv.userId) && startOfUtcDay(t.dueDate) >= start && startOfUtcDay(t.dueDate) <= end)
         .map(({ userIds: _uids, ...rest }) => ({ ...rest, dueDate: dayKey(rest.dueDate) }))
         .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
       const u = lv.user;
@@ -570,11 +583,12 @@ export class CapacityService {
    */
   async notifyIfCoverageAtRisk(organizationId: string | null, userId: string, leave: { startDate: Date; endDate: Date; createdAt: Date; leaveType: string }, name: string) {
     if (!organizationId) return;
-    const today = startOfUtcDay(new Date());
-    if (!this.isShortNotice(leave.createdAt, leave.startDate, today)) return;
+    if (!this.isShortNotice(leave.createdAt, leave.startDate)) return;
+    const start = startOfUtcDay(leave.startDate);
     const end = startOfUtcDay(leave.endDate);
     const tasks = (await this.atRiskTasks([userId], addDays(end, 1)))
-      .filter(t => t.userIds.includes(userId) && startOfUtcDay(t.dueDate) <= end);
+      // Only tasks falling due DURING the leave — not ones already overdue before it began.
+      .filter(t => t.userIds.includes(userId) && startOfUtcDay(t.dueDate) >= start && startOfUtcDay(t.dueDate) <= end);
     if (!tasks.length) return;
     const projectIds = [...new Set(tasks.map(t => t.projectId).filter((x): x is string => !!x))];
     const reviewers = (await this.coverageReviewers(organizationId, projectIds)).filter(id => id !== userId);

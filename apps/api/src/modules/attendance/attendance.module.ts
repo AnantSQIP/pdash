@@ -5,6 +5,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 
@@ -74,6 +75,12 @@ export class AttendanceService {
   private async orgOf(userId: string): Promise<string | null> {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     return u?.organizationId ?? null;
+  }
+
+  /** 404 unless the target user belongs to the given (caller's) organization. */
+  async assertUserInOrg(userId: string, organizationId: string): Promise<void> {
+    const u = await this.prisma.user.findFirst({ where: { id: userId, organizationId, deletedAt: null }, select: { id: true } });
+    if (!u) throw new NotFoundException(`User ${userId} not found`);
   }
 
   // Attendance regularisations are routed to HR (people-ops) + Yash (escalation owner)
@@ -396,6 +403,7 @@ export class AttendanceService {
   async approveWfh(id: string, actorId: string, note?: string) {
     const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('WFH request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('WFH request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be approved.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own WFH request.');
 
@@ -437,6 +445,7 @@ export class AttendanceService {
   async rejectWfh(id: string, actorId: string, note?: string) {
     const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('WFH request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('WFH request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be rejected.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own WFH request.');
     const updated = await this.prisma.wfhRequest.update({
@@ -716,6 +725,7 @@ export class LeaveService {
   async approve(id: string, actorId: string, note?: string) {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.status !== 'PENDING') throw new BadRequestException('Only PENDING requests can be approved');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own leave request');
 
@@ -771,6 +781,7 @@ export class LeaveService {
   async reject(id: string, actorId: string, note?: string) {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.status !== 'PENDING') throw new BadRequestException('Only PENDING requests can be rejected');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own leave request');
     const updated = await this.prisma.leaveRequest.update({
@@ -961,6 +972,7 @@ export class LeaveService {
   async approveCompOff(id: string, actorId: string, note?: string) {
     const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('Comp-off request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be approved.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own comp-off claim.');
     await this.ensureCompOffType(req.organizationId); // so the earned credit is availeable as CO leave
@@ -990,6 +1002,7 @@ export class LeaveService {
   async rejectCompOff(id: string, actorId: string, note?: string) {
     const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('Comp-off request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be rejected.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own comp-off claim.');
     const updated = await this.prisma.compOffRequest.update({
@@ -1033,7 +1046,10 @@ export class LeaveService {
 // ════════════════════════════════════════════════════════════════════════════════
 @Controller('attendance')
 class AttendanceController {
-  constructor(private readonly svc: AttendanceService) {}
+  constructor(
+    private readonly svc: AttendanceService,
+    private readonly actor: ActorContextService,
+  ) {}
 
   @Get('me/today')
   today(@Actor() actorId: string | null) {
@@ -1155,17 +1171,20 @@ class AttendanceController {
 
   @Get('users/:userId/month')
   @RequirePermission('attendance.view.organization')
-  userMonth(@Param('userId') userId: string, @Query('year') year: string, @Query('month') month: string) {
+  async userMonth(@Param('userId') userId: string, @Query('year') year: string, @Query('month') month: string) {
     const y = parseInt(year, 10), m = parseInt(month, 10);
     if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) throw new BadRequestException('year and month are required');
+    // The target must be in the caller's own org (no cross-tenant read by path userId).
+    await this.svc.assertUserInOrg(userId, await this.actor.requireOrgId());
     return this.svc.getMonth(userId, y, m);
   }
 
   @Get('org/summary')
   @RequirePermission('attendance.view.organization')
-  orgSummary(@Query('organizationId') organizationId: string, @Query('from') from: string, @Query('to') to: string) {
-    if (!organizationId || !from || !to) throw new BadRequestException('organizationId, from, to are required');
-    return this.svc.orgSummary(organizationId, from, to);
+  async orgSummary(@Query('from') from: string, @Query('to') to: string) {
+    if (!from || !to) throw new BadRequestException('from and to are required');
+    // Org from the session actor — never a client-supplied query param.
+    return this.svc.orgSummary(await this.actor.requireOrgId(), from, to);
   }
 
   @Post('mark')
@@ -1177,7 +1196,10 @@ class AttendanceController {
 
 @Controller('leave')
 class LeaveController {
-  constructor(private readonly svc: LeaveService) {}
+  constructor(
+    private readonly svc: LeaveService,
+    private readonly actor: ActorContextService,
+  ) {}
 
   @Get('requests/me')
   myRequests(@Actor() actorId: string | null, @Query('status') status?: string) {
@@ -1187,12 +1209,13 @@ class LeaveController {
 
   @Get('requests/org')
   @RequirePermission('leave.view.organization')
-  orgRequests(@Query('organizationId') organizationId: string, @Query('status') status?: string) {
-    if (!organizationId) throw new BadRequestException('organizationId required');
-    return this.svc.listForOrg(organizationId, status);
+  async orgRequests(@Query('status') status?: string) {
+    // Org from the session actor — never a client-supplied query param.
+    return this.svc.listForOrg(await this.actor.requireOrgId(), status);
   }
 
   @Post('requests')
+  @RequirePermission('leave.request')
   create(@Actor() actorId: string | null, @Body() body: { leaveType: string; startDate: string; endDate: string; reason?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.create(actorId, body);
@@ -1260,22 +1283,24 @@ class LeaveController {
     return this.svc.cancelCompOff(id, actorId);
   }
 
+  // Leave types & holidays are org-public reads (everyone files leave / sees holidays), so
+  // they stay open to any authenticated user — but scoped to the caller's OWN org, resolved
+  // from the session rather than a client-supplied (and previously unchecked) query param.
   @Get('types')
-  types(@Query('organizationId') organizationId: string) {
-    if (!organizationId) throw new BadRequestException('organizationId required');
-    return this.svc.listTypes(organizationId);
+  async types() {
+    return this.svc.listTypes(await this.actor.requireOrgId());
   }
 
   @Get('holidays')
-  holidays(@Query('organizationId') organizationId: string, @Query('year') year?: string) {
-    if (!organizationId) throw new BadRequestException('organizationId required');
-    return this.svc.listHolidays(organizationId, year ? parseInt(year, 10) : undefined);
+  async holidays(@Query('year') year?: string) {
+    return this.svc.listHolidays(await this.actor.requireOrgId(), year ? parseInt(year, 10) : undefined);
   }
 
   @Post('holidays')
   @RequirePermission('holiday.manage')
-  createHoliday(@Body() body: { organizationId: string; name: string; date: string; type?: string; recurring?: boolean }) {
-    return this.svc.createHoliday(body);
+  async createHoliday(@Body() body: { name: string; date: string; type?: string; recurring?: boolean }) {
+    // The holiday belongs to the creator's org, taken from the session (not the body).
+    return this.svc.createHoliday({ ...body, organizationId: await this.actor.requireOrgId() });
   }
 
   @Delete('holidays/:id')
