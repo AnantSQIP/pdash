@@ -85,8 +85,13 @@ export class ProjectsService {
     // ── Deadlines: internal is open; the client date is restricted (new project → the
     //    global permission is the only qualifier, there is no manager relationship yet).
     const scope = await this.deadlines.scope(creator.id);
+    const startD = dto.startDate ? new Date(dto.startDate) : undefined;
     const internalDue = dto.dueDate ? new Date(dto.dueDate) : undefined;
     const clientDue = dto.clientDueDate ? new Date(dto.clientDueDate) : undefined;
+    // Reject an inverted range at CREATE too — update() already does (was an A/B gap).
+    if (startD && internalDue && internalDue < startD) {
+      throw new BadRequestException('Due date cannot be before the start date.');
+    }
     if (clientDue) await this.deadlines.assertMaySetClientDue([], scope);
     this.deadlines.assertOrdered(internalDue, clientDue);
 

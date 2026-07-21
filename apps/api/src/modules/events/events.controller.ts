@@ -12,12 +12,12 @@ export class EventsController {
   ) {}
 
   @Get() @RequirePermission('calendar.view')
-  list(
-    @Query('organizationId') organizationId: string,
+  async list(
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.events.list(organizationId, from, to);
+    // Org from the session actor — never a client-supplied query param.
+    return this.events.list(await this.actor.requireOrgId(), from, to);
   }
 
   // Scheduling assistant: free/busy for the given people over a window. Org from session.

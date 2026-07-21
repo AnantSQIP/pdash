@@ -29,9 +29,9 @@ const DEFAULT_DAYS = 14;
  * un-guarded NaN flows into addDays() → an Invalid Date → the whole board silently breaks;
  * a caller could also ask for 100000 days and force a huge computation. Clamp to a range.
  */
-export function parseHorizon(raw: string | undefined): number {
+export function parseHorizon(raw: string | undefined, fallback = DEFAULT_DAYS): number {
   const n = Number.parseInt(raw ?? '', 10);
-  if (!Number.isFinite(n)) return DEFAULT_DAYS;
+  if (!Number.isFinite(n)) return fallback;
   return Math.max(MIN_DAYS, Math.min(MAX_DAYS, n));
 }
 
@@ -610,7 +610,9 @@ class CapacityController {
   @RequirePermission('capacity.view')
   async history(@Query('days') days?: string) {
     const organizationId = await this.actor.requireOrgId();
-    return this.capacity.teamHistory(organizationId, parseHorizon(days));
+    // The history view's intent is "Past 30 days" — default to 30 when unspecified, not the
+    // 14-day forward-board default (which silently contradicted the range label).
+    return this.capacity.teamHistory(organizationId, parseHorizon(days, 30));
   }
 
   /**
