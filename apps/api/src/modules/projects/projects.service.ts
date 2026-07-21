@@ -291,6 +291,17 @@ export class ProjectsService {
     const clientDue = resolveDate(dto.clientDueDate, existing.clientDueDate);
     this.deadlines.assertOrdered(due, clientDue);
 
+    // Keep the lifecycle timestamps consistent with the phase however it is set. Setting
+    // projectPhase via this generic edit used to skip completedAt/closedAt entirely (they
+    // are set only by complete()/close()), so a project edited straight to COMPLETED/CLOSED
+    // had no end-date and a "reopened"-via-edit project kept a stale one.
+    let lifecycleStamps: { completedAt?: Date | null; closedAt?: Date | null } = {};
+    if (dto.projectPhase !== undefined && dto.projectPhase !== existing.projectPhase) {
+      if (dto.projectPhase === 'COMPLETED') lifecycleStamps = { completedAt: existing.completedAt ?? new Date(), closedAt: null };
+      else if (dto.projectPhase === 'CLOSED') lifecycleStamps = { closedAt: new Date(), completedAt: existing.completedAt ?? new Date() };
+      else lifecycleStamps = { completedAt: null, closedAt: null }; // any non-end-state clears the stamps
+    }
+
     const project = await this.prisma.project.update({
       where: { id },
       data: {
@@ -298,6 +309,7 @@ export class ProjectsService {
         description: dto.description,
         priority: dto.priority,
         projectPhase: dto.projectPhase,
+        ...lifecycleStamps,
         // `undefined` leaves the column alone; `null` CLEARS it. Collapsing the two would
         // make a date impossible to remove once set (the update silently no-ops).
         ...(dto.startDate === undefined ? {} : { startDate: start }),
