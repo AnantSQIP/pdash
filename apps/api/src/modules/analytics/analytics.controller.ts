@@ -6,27 +6,28 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 export class AnalyticsController {
   constructor(private readonly analytics: AnalyticsService) {}
 
-  // NOTE: dashboard/projects feed the Home dashboard for ALL users and are intentionally
-  // left open for now. Gating org-wide stats behind a permission is a product decision
-  // tracked under workstream B4 (and depends on real auth). The per-user billable rollup
-  // below IS sensitive, so it is locked to org-analytics viewers.
+  // Home + Reports feed. The organization is derived from the session actor (never a query
+  // param), and the payload is object-scoped to the projects the actor may see, so a junior
+  // never pulls firm-wide client-matter titles/descriptions or aggregate totals for matters
+  // they are not staffed on. dashboard.view / report.view are held by every seeded role.
   @Get('dashboard')
-  dashboard(@Query('organizationId') organizationId: string) {
-    return this.analytics.getDashboard(organizationId);
+  @RequirePermission('dashboard.view')
+  dashboard() {
+    return this.analytics.getDashboard();
   }
 
   @Get('projects')
-  projects(@Query('organizationId') organizationId: string) {
-    return this.analytics.getProjectStats(organizationId);
+  @RequirePermission('report.view')
+  projects() {
+    return this.analytics.getProjectStats();
   }
 
   @Get('timesheets')
   @RequirePermission('analytics.view.organization')
   timesheets(
-    @Query('organizationId') organizationId: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.analytics.getTimesheetSummary(organizationId, from, to);
+    return this.analytics.getTimesheetSummary(from, to);
   }
 }

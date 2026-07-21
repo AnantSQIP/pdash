@@ -65,6 +65,16 @@ export class PerformanceService {
     if (!ok) throw new ForbiddenException('Not allowed to view this user\'s performance.');
   }
 
+  /**
+   * 404 when the id does not resolve to a real user. Without this, heatmap/breakdowns
+   * echo the attacker-supplied id back inside a synthesized empty payload (a 200), which
+   * is inconsistent with getUserPerformance() and lets callers probe id existence.
+   */
+  private async assertUserExists(userId: string): Promise<void> {
+    const u = await this.prisma.user.findFirst({ where: { id: userId, deletedAt: null }, select: { id: true } });
+    if (!u) throw new NotFoundException(`User ${userId} not found`);
+  }
+
   async getUserPerformance(userId: string, days = 30) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -215,6 +225,7 @@ export class PerformanceService {
   }
 
   async getHeatmap(userId: string, days: number) {
+    await this.assertUserExists(userId);
     const since = utcDay(new Date());
     since.setUTCDate(since.getUTCDate() - (days - 1));
     const snaps = await this.prisma.userMetricDaily.findMany({
@@ -427,6 +438,7 @@ export class PerformanceService {
 
   /** Distribution + comparison breakdowns for one user: status/priority/severity mix, hours-by-project, est-vs-actual. */
   async getUserBreakdowns(userId: string, days = 30) {
+    await this.assertUserExists(userId);
     const { from, to } = windowRange(days);
     const [tasks, issues, sheets, openTasks] = await Promise.all([
       this.prisma.task.findMany({

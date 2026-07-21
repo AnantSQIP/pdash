@@ -13,6 +13,7 @@ import { EVENTS } from '../../common/events/canonical-events';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
 import { getActorId } from '../../common/context/request-context';
+import { ActorContextService } from '../../common/context/actor-context.service';
 import { PermissionService } from '../permissions/permission.service';
 import { NotificationsService } from '../notifications/notifications.module';
 
@@ -322,11 +323,18 @@ export class UsersService {
 
 @Controller('users')
 class UsersController {
-  constructor(private readonly service: UsersService) {}
+  constructor(
+    private readonly service: UsersService,
+    private readonly actor: ActorContextService,
+  ) {}
 
-  // Read endpoints stay open — the app resolves the current user from the user list.
+  // The company directory (name/designation/email/phone) is intentionally visible to every
+  // authenticated user, but the org is the ACTOR's own — resolved from the session, never a
+  // query param. Trusting the param let a caller omit it (Prisma drops the filter → all
+  // orgs) or name a foreign org; the roster must stay scoped to the caller's organization.
   @Get()
-  list(@Query('organizationId') organizationId: string, @Query('includeInactive') includeInactive?: string) {
+  async list(@Query('includeInactive') includeInactive?: string) {
+    const organizationId = await this.actor.requireOrgId();
     return this.service.list(organizationId, { includeInactive: includeInactive === 'true' });
   }
 
