@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { CreateProjectDto, UpdateProjectDto, ApprovalDto } from './dto';
@@ -22,6 +23,7 @@ export class ProjectsService {
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
+    private readonly access: ProjectAccessService,
   ) {}
 
   /**
@@ -154,10 +156,16 @@ export class ProjectsService {
   }
 
   async list(organizationId: string, opts: { phase?: string } = {}) {
+    // Scope to the projects the actor may see: a delivery lead sees every org project,
+    // everyone else sees only the matters they are staffed on (conflict wall).
+    const actorId = getActorId();
+    const scope = actorId
+      ? await this.access.projectScopeWhere(actorId, organizationId)
+      : { members: { some: { user: { organizationId } } } };
     const projects = await this.prisma.project.findMany({
       where: {
         deletedAt: null,
-        members: { some: { user: { organizationId } } },
+        ...scope,
         projectPhase: opts.phase,
       },
       orderBy: { createdAt: 'desc' },
@@ -255,11 +263,15 @@ export class ProjectsService {
   }
 
   async get(id: string) {
+    // Membership/oversight gate: a non-member (even a Super Admin who was never staffed)
+    // cannot read a matter they are not on.
+    await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     return this.deadlines.redactProject(project, await this.deadlines.scope());
   }
 
   async update(id: string, dto: UpdateProjectDto) {
+    await this.access.assertProjectAccess(getActorId(), id);
     const existing = await this.getRaw(id);
     // #14: reject an inverted date range (dueDate before startDate). Compare against
     // the incoming value or the current one so a partial edit is still validated.
@@ -383,6 +395,7 @@ export class ProjectsService {
 
   /** ACTIVE/ON_HOLD → COMPLETED. Work is done; the project stays listed but locked. */
   async complete(id: string) {
+    await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase === 'COMPLETED') return this.get(id);
@@ -406,6 +419,7 @@ export class ProjectsService {
 
   /** COMPLETED (or active) → CLOSED. Archived to the Closed section; still reopenable. */
   async close(id: string) {
+    await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase === 'CLOSED') return this.get(id);
@@ -430,6 +444,7 @@ export class ProjectsService {
 
   /** COMPLETED/CLOSED → ACTIVE. Clears the end-state timestamps. */
   async reopen(id: string) {
+    await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase !== 'COMPLETED' && phase !== 'CLOSED') {
@@ -453,10 +468,14 @@ export class ProjectsService {
 
   // ── Members (#11: staffing a project — add / remove teammates) ────────────────
   async addMember(projectId: string, userId: string, projectRole?: string) {
-    const project = await this.getRaw(projectId);
+    await this.getRaw(projectId);
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const user = await this.prisma.user.findFirst({ where: { id: userId, deletedAt: null }, select: { organizationId: true } });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
-    if (user.organizationId !== (project as any).organizationId) {
+    // The Project row has no organizationId column (org is reached through members), so
+    // compare the invitee's org against the project's org resolved via its members.
+    const projectOrg = await this.orgOfProject(projectId);
+    if (projectOrg && user.organizationId !== projectOrg) {
       throw new BadRequestException('User is not in this project\'s organization.');
     }
     // Re-activate if they were previously removed; the global filter maps the unique
@@ -471,6 +490,7 @@ export class ProjectsService {
   }
 
   async removeMember(projectId: string, userId: string) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const project = await this.getRaw(projectId);
     // The MANAGER owns and approves this project — removing them would strand it with
     // no owner (and, while PENDING, no approver). Reassign the manager instead.

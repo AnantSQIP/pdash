@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
@@ -6,6 +6,7 @@ import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateT
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { startOfUtcDay, resolveDate } from '../../common/dates';
 
 
@@ -16,6 +17,7 @@ export class TasksService {
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
+    private readonly access: ProjectAccessService,
   ) {}
 
   /**
@@ -24,6 +26,7 @@ export class TasksService {
    * stores the task's position (taskList) within that project.
    */
   async create(dto: CreateTaskDto) {
+    await this.access.assertProjectAccess(getActorId(), dto.projectId);
     const taskList = await this.prisma.taskList.findFirst({
       where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null },
     });
@@ -108,6 +111,7 @@ export class TasksService {
   }
 
   async list(projectId: string, opts: { taskListId?: string } = {}) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
@@ -125,6 +129,12 @@ export class TasksService {
   }
 
   async listForUser(userId: string) {
+    // A person may list their OWN assigned tasks; only a delivery lead may view someone
+    // else's workload (prevents enumerating any colleague's tasks by passing their id).
+    const actorId = getActorId();
+    if (actorId && userId !== actorId && !(await this.access.hasOversight(actorId))) {
+      throw new ForbiddenException('You can only view your own tasks.');
+    }
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
@@ -158,10 +168,12 @@ export class TasksService {
   }
 
   async get(id: string) {
+    await this.access.assertTaskAccess(getActorId(), id);
     return this.getRaw(id);
   }
 
   async update(id: string, dto: UpdateTaskDto) {
+    await this.access.assertTaskAccess(getActorId(), id);
     const before = await this.getRaw(id);
 
     const internalDue = resolveDate(dto.dueDate, before.dueDate);
@@ -203,6 +215,7 @@ export class TasksService {
    * If the target status has type CLOSED, all subtasks are also closed.
    */
   async setStatus(id: string, dto: SetStatusDto) {
+    await this.access.assertTaskAccess(getActorId(), id);
     const task = await this.getRaw(id);
 
     const status = await this.prisma.workflowStatus.findUnique({
@@ -254,6 +267,7 @@ export class TasksService {
   }
 
   async setAssignees(id: string, dto: SetAssigneesDto) {
+    await this.access.assertTaskAccess(getActorId(), id);
     const before = await this.getRaw(id);
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     // Whoever changes the assignees is the "assigned by" — the person delegating the work.
@@ -284,6 +298,7 @@ export class TasksService {
   }
 
   async softDelete(id: string) {
+    await this.access.assertTaskAccess(getActorId(), id);
     const task = await this.getRaw(id);
     const result = await this.prisma.task.update({
       where: { id },
@@ -329,6 +344,7 @@ export class TasksService {
   // ── Subtask methods (flat, one level only) ──────────────────
 
   async createSubtask(taskId: string, dto: CreateSubtaskDto) {
+    await this.access.assertTaskAccess(getActorId(), taskId);
     await this.getRaw(taskId);
     const subtask = await this.prisma.subtask.create({
       data: {
@@ -363,6 +379,7 @@ export class TasksService {
   async closeSubtask(subtaskId: string) {
     const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
     if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
+    await this.access.assertTaskAccess(getActorId(), subtask.taskId);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'CLOSED' } });
   }
 
@@ -370,12 +387,14 @@ export class TasksService {
   async reopenSubtask(subtaskId: string) {
     const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
     if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
+    await this.access.assertTaskAccess(getActorId(), subtask.taskId);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'OPEN' } });
   }
 
   async softDeleteSubtask(subtaskId: string) {
     const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
     if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
+    await this.access.assertTaskAccess(getActorId(), subtask.taskId);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { deletedAt: new Date() } });
   }
 
