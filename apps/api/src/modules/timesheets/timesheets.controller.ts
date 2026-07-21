@@ -28,7 +28,10 @@ export class TimesheetsController {
     return this.timesheets.update(id, dto);
   }
 
-  @Delete(':id') @RequirePermission('timesheet.delete')
+  // No @RequirePermission: deleting a timesheet is self-scoped — the service enforces
+  // owner-or-Super-Admin. The catalog's timesheet.delete was granted to no role, so gating
+  // on it blocked people from removing even their OWN entry.
+  @Delete(':id')
   remove(@Param('id') id: string) {
     return this.timesheets.softDelete(id);
   }

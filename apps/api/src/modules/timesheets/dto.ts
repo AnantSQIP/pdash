@@ -1,4 +1,4 @@
-import { IsBoolean, IsDateString, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class CreateTimesheetDto {
   // IGNORED by the server — the owner is derived from the authenticated actor.
@@ -25,6 +25,7 @@ export class CreateTimesheetDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(2000)
   notes?: string;
 }
 
@@ -41,5 +42,6 @@ export class UpdateTimesheetDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(2000)
   notes?: string;
 }

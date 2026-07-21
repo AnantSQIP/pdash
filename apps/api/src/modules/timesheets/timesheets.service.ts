@@ -2,9 +2,13 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
+
+// A person cannot log more than a full day against any single calendar day.
+const MAX_HOURS_PER_DAY = 24;
 
 const USER_SELECT = { id: true, firstName: true, lastName: true };
 const TASK_SELECT = { id: true, title: true };
@@ -23,6 +27,7 @@ export class TimesheetsService {
     private readonly prisma: PrismaService,
     private readonly events: EventService,
     private readonly permissions: PermissionService,
+    private readonly access: ProjectAccessService,
   ) {}
 
   private async actor() {
@@ -49,6 +54,9 @@ export class TimesheetsService {
   }
 
   async listForProject(projectId: string) {
+    // A project's full time ledger (every member's hours/billable/notes) is only for
+    // people ON the project (or a delivery lead) — not any timesheet.view holder.
+    await this.access.assertProjectAccess(await this.actor(), projectId);
     const [projectTasks, issues] = await Promise.all([
       this.prisma.projectTask.findMany({ where: { projectId }, select: { taskId: true } }),
       this.prisma.issue.findMany({ where: { projectId, deletedAt: null }, select: { id: true } }),
@@ -100,6 +108,26 @@ export class TimesheetsService {
       select: { id: true },
     });
     if (!task) throw new NotFoundException(`Task ${dto.taskId} not found`);
+    // You can only log time on a task in a project you are staffed on (or as a lead).
+    await this.access.assertTaskAccess(actorId, dto.taskId);
+
+    // Reject an identical re-submission (same task, day and hours) — a double-billing vector.
+    const dupe = await this.prisma.timesheet.findFirst({
+      where: { userId: actorId, taskId: dto.taskId, date: new Date(dto.date), hoursLogged: dto.hoursLogged, deletedAt: null },
+      select: { id: true },
+    });
+    if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
+
+    // No one can log more than a full day against a single calendar day (across all tasks).
+    const dayAgg = await this.prisma.timesheet.aggregate({
+      where: { userId: actorId, date: new Date(dto.date), deletedAt: null },
+      _sum: { hoursLogged: true },
+    });
+    if ((dayAgg._sum.hoursLogged ?? 0) + dto.hoursLogged > MAX_HOURS_PER_DAY) {
+      const left = Math.max(0, MAX_HOURS_PER_DAY - (dayAgg._sum.hoursLogged ?? 0));
+      throw new BadRequestException(`That would exceed ${MAX_HOURS_PER_DAY}h logged for the day — ${left}h remaining.`);
+    }
+
     // Each person decides whether their own logged time is billable — there is no
     // project-level override or admin authority. Defaults to billable when not specified.
     const billable = dto.billable ?? true;
@@ -130,11 +158,26 @@ export class TimesheetsService {
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
 
+    // An issue-raised entry is non-billable by rule — it can never be flipped to billable.
+    const billable = entry.issueId ? false : dto.billable;
+
+    // Re-enforce the 24h/day cap if the hours are being raised.
+    if (dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged) {
+      const dayAgg = await this.prisma.timesheet.aggregate({
+        where: { userId: entry.userId, date: entry.date, deletedAt: null, id: { not: id } },
+        _sum: { hoursLogged: true },
+      });
+      if ((dayAgg._sum.hoursLogged ?? 0) + dto.hoursLogged > MAX_HOURS_PER_DAY) {
+        const left = Math.max(0, MAX_HOURS_PER_DAY - (dayAgg._sum.hoursLogged ?? 0));
+        throw new BadRequestException(`That would exceed ${MAX_HOURS_PER_DAY}h logged for the day — ${left}h remaining.`);
+      }
+    }
+
     const updated = await this.prisma.timesheet.update({
       where: { id },
       data: {
         hoursLogged: dto.hoursLogged,
-        billable: dto.billable,
+        billable,
         notes: dto.notes,
       },
       include: INCLUDE,
