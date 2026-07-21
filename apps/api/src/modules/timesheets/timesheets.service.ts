@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
@@ -88,6 +88,13 @@ export class TimesheetsService {
     // SECURITY: the owner is the authenticated actor — never the client-supplied
     // dto.userId (which is ignored). Prevents logging/inflating others' hours.
     const actorId = await this.actor();
+    // Time is logged for work already done — a future date is never valid (it also feeds
+    // capacity/performance, which a future entry would distort). Compare on the calendar
+    // day so an entry dated "today" is always allowed regardless of the time of day.
+    const entryDay = new Date(String(dto.date).slice(0, 10));
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    if (isNaN(entryDay.getTime())) throw new BadRequestException('A valid date is required.');
+    if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
     const task = await this.prisma.task.findFirst({
       where: { id: dto.taskId, deletedAt: null },
       select: { id: true },
