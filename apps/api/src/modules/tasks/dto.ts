@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsDateString,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -10,6 +11,9 @@ import {
   MinLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+
+// Task priority is a fixed set — free-text used to be stored verbatim (incl. markup).
+export const TASK_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 export class CreateTaskDto {
   @IsString()
@@ -33,7 +37,7 @@ export class CreateTaskDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(TASK_PRIORITIES)
   priority?: string;
 
   @IsOptional()
@@ -76,7 +80,7 @@ export class UpdateTaskDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(TASK_PRIORITIES)
   priority?: string;
 
   @IsOptional()
@@ -127,7 +131,7 @@ export class CreateSubtaskDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(TASK_PRIORITIES)
   priority?: string;
 
   @IsOptional()

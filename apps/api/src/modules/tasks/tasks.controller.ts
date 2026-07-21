@@ -61,17 +61,17 @@ export class TasksController {
   }
 
   @Post(':id/subtasks/:subtaskId/close') @RequirePermission('task.update')
-  closeSubtask(@Param('subtaskId') subtaskId: string) {
-    return this.tasks.closeSubtask(subtaskId);
+  closeSubtask(@Param('id') taskId: string, @Param('subtaskId') subtaskId: string) {
+    return this.tasks.closeSubtask(taskId, subtaskId);
   }
 
   @Post(':id/subtasks/:subtaskId/reopen') @RequirePermission('task.update')
-  reopenSubtask(@Param('subtaskId') subtaskId: string) {
-    return this.tasks.reopenSubtask(subtaskId);
+  reopenSubtask(@Param('id') taskId: string, @Param('subtaskId') subtaskId: string) {
+    return this.tasks.reopenSubtask(taskId, subtaskId);
   }
 
   @Delete(':id/subtasks/:subtaskId') @RequirePermission('task.update')
-  deleteSubtask(@Param('subtaskId') subtaskId: string) {
-    return this.tasks.softDeleteSubtask(subtaskId);
+  deleteSubtask(@Param('id') taskId: string, @Param('subtaskId') subtaskId: string) {
+    return this.tasks.softDeleteSubtask(taskId, subtaskId);
   }
 }

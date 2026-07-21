@@ -20,6 +20,29 @@ export class TasksService {
     private readonly access: ProjectAccessService,
   ) {}
 
+  /** A task's deadline can't fall before its start. */
+  private assertTaskDateOrder(start?: Date | null, due?: Date | null) {
+    if (start && due && due < start) throw new BadRequestException('The due date cannot be before the start date.');
+  }
+
+  /** Everyone assigned must be an ACTIVE member of one of the given project(s). */
+  private async assertAssigneesAreMembers(projectIds: string[], assigneeIds: string[]) {
+    if (!assigneeIds.length || !projectIds.length) return;
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId: { in: projectIds }, userId: { in: assigneeIds }, isActive: true },
+      select: { userId: true },
+    });
+    const memberSet = new Set(members.map(m => m.userId));
+    const outsiders = [...new Set(assigneeIds.filter(id => !memberSet.has(id)))];
+    if (outsiders.length) throw new BadRequestException('You can only assign people who are members of the project.');
+  }
+
+  /** Resolve the project(s) a task belongs to (for assignee-membership checks). */
+  private async projectIdsForTask(taskId: string): Promise<string[]> {
+    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
+    return links.map(l => l.projectId);
+  }
+
   /**
    * Create a task and link it to a project via ProjectTask.
    * Task has no projectId — ProjectTask is the join record that also
@@ -57,6 +80,9 @@ export class TasksService {
     // A task has a single deadline (dueDate). Client-facing deadlines live only on the
     // project now — tasks no longer carry one.
     const internalDue = dto.dueDate ? new Date(dto.dueDate) : undefined;
+    this.assertTaskDateOrder(dto.startDate ? new Date(dto.startDate) : undefined, internalDue);
+    // You can only assign people who are on the project.
+    await this.assertAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
 
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
@@ -177,6 +203,9 @@ export class TasksService {
     const before = await this.getRaw(id);
 
     const internalDue = resolveDate(dto.dueDate, before.dueDate);
+    // Validate the effective (post-update) order — a partial edit can't leave due < start.
+    const effectiveStart = dto.startDate === undefined ? before.startDate : resolveDate(dto.startDate, null);
+    this.assertTaskDateOrder(effectiveStart, internalDue);
 
     // Re-arm the overdue alert when the task can no longer be late for the reason it was
     // flagged — the internal deadline moved into the future, or was removed altogether — so
@@ -269,6 +298,8 @@ export class TasksService {
   async setAssignees(id: string, dto: SetAssigneesDto) {
     await this.access.assertTaskAccess(getActorId(), id);
     const before = await this.getRaw(id);
+    // Only project members can be assigned this task.
+    await this.assertAssigneesAreMembers(await this.projectIdsForTask(id), dto.assigneeIds);
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     // Whoever changes the assignees is the "assigned by" — the person delegating the work.
     // Clear it when the task is left unassigned.
@@ -346,6 +377,7 @@ export class TasksService {
   async createSubtask(taskId: string, dto: CreateSubtaskDto) {
     await this.access.assertTaskAccess(getActorId(), taskId);
     await this.getRaw(taskId);
+    await this.assertAssigneesAreMembers(await this.projectIdsForTask(taskId), dto.assigneeIds ?? []);
     const subtask = await this.prisma.subtask.create({
       data: {
         taskId,
@@ -376,25 +408,27 @@ export class TasksService {
     });
   }
 
-  async closeSubtask(subtaskId: string) {
+  /** Fetch a subtask, asserting it really belongs to the parent task named in the URL. */
+  private async getSubtaskOfParent(parentTaskId: string, subtaskId: string) {
     const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
-    if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
+    if (!subtask || subtask.taskId !== parentTaskId) throw new NotFoundException(`Subtask ${subtaskId} not found`);
     await this.access.assertTaskAccess(getActorId(), subtask.taskId);
+    return subtask;
+  }
+
+  async closeSubtask(parentTaskId: string, subtaskId: string) {
+    await this.getSubtaskOfParent(parentTaskId, subtaskId);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'CLOSED' } });
   }
 
   /** Reopen a closed subtask (there was previously no way back once closed / after a parent-close cascade). */
-  async reopenSubtask(subtaskId: string) {
-    const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
-    if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
-    await this.access.assertTaskAccess(getActorId(), subtask.taskId);
+  async reopenSubtask(parentTaskId: string, subtaskId: string) {
+    await this.getSubtaskOfParent(parentTaskId, subtaskId);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'OPEN' } });
   }
 
-  async softDeleteSubtask(subtaskId: string) {
-    const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
-    if (!subtask) throw new NotFoundException(`Subtask ${subtaskId} not found`);
-    await this.access.assertTaskAccess(getActorId(), subtask.taskId);
+  async softDeleteSubtask(parentTaskId: string, subtaskId: string) {
+    await this.getSubtaskOfParent(parentTaskId, subtaskId);
     return this.prisma.subtask.update({ where: { id: subtaskId }, data: { deletedAt: new Date() } });
   }
 
