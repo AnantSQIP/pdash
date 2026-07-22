@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -27,6 +27,7 @@ type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | 
 const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
   { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view' },
+  { href: '/patents',     icon: FileLock2,       label: 'Patents',     perm: 'patent.manage' },
   { href: '/tasks',       icon: ListTodo,        label: 'My Tasks',    perm: 'task.view' },
   // My time across every project — logging + reviewing hours is now a first-class
   // destination, not buried in a per-project tab. timesheet.view is held by everyone.

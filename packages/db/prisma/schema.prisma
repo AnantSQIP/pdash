@@ -451,13 +451,18 @@ model WorkflowTransition {
 
 model Project {
   id                      String    @id @default(cuid())
-  code                    String?
+  // Human project code = the PID "SQ_<FY>_<serial>" (e.g. SQ_26_27_001). Unique; also
+  // matched by global search. Backfilled for legacy rows, then always set on new projects.
+  code                    String?   @unique
   title                   String
   description             String?
   // The kind of patent-analysis matter this project is (HML, Claim Chart, FTO, Novelty,
   // Invalidity, Reverse Engineering, Risk & Strategy, …). Drives the workflow task template
   // auto-created on project creation. Null = a general project with no preset workflow.
   projectType             String?
+  // The client/matter this project is for (drives the "{Type} - {Client}" title and the
+  // confidential patent picker). Null for internal/General projects.
+  clientId                String?
   projectPhase            String    @default("PLANNING")
   priority                String    @default("MEDIUM")
   startDate               DateTime?
@@ -493,9 +498,75 @@ model Project {
   taskLists          TaskList[]
   projectDocuments   ProjectDocument[]
   issues             Issue[]
+  client             Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  patents            ProjectPatent[]
 
   @@index([deletedAt])
+  @@index([clientId])
   @@map("project")
+}
+
+// ── Patent-analysis clients + their confidential coded patents (Phase 2 + Phase 1) ──
+// A Client is the "Malikie / MLK" grouping. Its patents get a public HANDLE (Pat_MLK_1, …)
+// shown in the project picker, while the real patent number stays Admin/Super-Admin only.
+model Client {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String?   // OPTIONAL — the portal shows the code alone when there's no name
+  code           String    // "MLK" — used in patent handles Pat_<code>_<serial>
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  patents        Patent[]
+  projects       Project[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, deletedAt])
+  @@map("client")
+}
+
+model Patent {
+  id             String    @id @default(cuid())
+  organizationId String
+  clientId       String
+  serial         Int       // 1..N within the client
+  handle         String    // "Pat_MLK_1" — the non-secret, shareable identifier
+  // CONFIDENTIAL real patent number — never selected for a non-`patent.manage` actor.
+  realNumber     String
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  projectLinks   ProjectPatent[]
+
+  @@unique([organizationId, handle])
+  @@unique([clientId, serial])
+  @@index([organizationId, clientId, deletedAt])
+  @@map("patent")
+}
+
+model ProjectPatent {
+  projectId String
+  patentId  String
+  addedBy   String
+  addedAt   DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  patent    Patent   @relation(fields: [patentId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, patentId])
+  @@index([patentId])
+  @@map("project_patent")
+}
+
+// Atomic, gap-tolerant serial allocator (PIDs + patent handles). One row per scope,
+// incremented via INSERT … ON CONFLICT … RETURNING so concurrent creates never collide.
+model SequenceCounter {
+  scope String @id
+  value Int    @default(0)
+
+  @@map("sequence_counter")
 }
 
 model ProjectMember {

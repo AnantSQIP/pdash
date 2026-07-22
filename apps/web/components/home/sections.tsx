@@ -34,6 +34,38 @@ const ROLE_PERSONA: Record<string, { label: string; sub: string }> = {
   Employee:            { label: 'Team Member',        sub: 'Your tasks & performance' },
 };
 
+// Compact Punch In / Out — the quick daily action, shown in the home banner's top-right.
+// Shares the Attendance page's cache keys so a punch here updates it (and vice-versa).
+function PunchButton() {
+  const { can } = usePermissions();
+  const { currentUser } = useOrg();
+  const qc = useQueryClient();
+  const allowed = can('attendance.view.own');
+  const { data: att } = useQuery<Attendance | null>({
+    queryKey: ['attn-today', currentUser?.id], queryFn: () => api.attendance.today(), enabled: allowed, staleTime: 30_000,
+  });
+  const punch = useMutation({
+    mutationFn: () => api.attendance.punch(),
+    onSuccess: () => ['attn-today', 'attn-month', 'attn-org', 'leave-balances'].forEach(k => qc.invalidateQueries({ queryKey: [k] })),
+  });
+  if (!allowed) return null;
+  const clockedIn = !!att?.checkIn && !att?.checkOut;
+  const dayComplete = !!att?.checkIn && !!att?.checkOut;
+  const busy = punch.isPending;
+  return (
+    <button
+      onClick={() => { if (!busy && !dayComplete) punch.mutate(); }}
+      disabled={busy || dayComplete}
+      title={dayComplete ? 'You have clocked in and out — the day is complete.' : clockedIn ? 'Clock out for the day' : 'Clock in for the day'}
+      className={clsx('inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
+        dayComplete ? 'bg-gray-300' : clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}
+    >
+      {busy ? <Loader size={15} className="animate-spin" /> : dayComplete ? <Check size={15} /> : clockedIn ? <LogOut size={15} /> : <LogIn size={15} />}
+      {dayComplete ? 'Completed for today' : clockedIn ? 'Punch Out' : 'Punch In'}
+    </button>
+  );
+}
+
 export function PersonaBanner() {
   const { currentUser } = useOrg();
   const { primaryRole } = usePermissions();
@@ -42,14 +74,19 @@ export function PersonaBanner() {
   const todayStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const greeting = now.getHours() < 12 ? 'Good morning' : now.getHours() < 18 ? 'Good afternoon' : 'Good evening';
   return (
-    <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+    <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between gap-4">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">{greeting}, {currentUser?.firstName ?? 'there'}</h1>
         <p className="text-sm text-gray-500 mt-1">{todayStr}</p>
+        {/* Role + designation — moved here, under the name (was in the top-right corner). */}
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <span className="inline-block text-xs font-semibold text-brand-700 bg-brand-50 px-3 py-1 rounded-full">{persona.label}</span>
+          {currentUser?.designation && <span className="text-xs text-gray-500">{currentUser.designation}</span>}
+        </div>
       </div>
-      <div className="text-right">
-        <span className="inline-block text-xs font-semibold text-brand-700 bg-brand-50 px-3 py-1 rounded-full">{persona.label}</span>
-        <p className="text-xs text-gray-400 mt-1.5">{persona.sub}</p>
+      {/* Punch In / Out — the quick daily action, top-right. */}
+      <div className="shrink-0">
+        <PunchButton />
       </div>
     </div>
   );

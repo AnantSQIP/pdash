@@ -48,6 +48,7 @@ function toDisplay(p: ApiProject): MockProject {
   }));
   return {
     id: p.id,
+    code: p.code,
     title: p.title,
     description: p.description ?? '',
     projectPhase: p.projectPhase as Phase,
@@ -101,7 +102,7 @@ export function ProjectsClient() {
     // (including "All Projects"); they only appear under the Closed filter.
     if (phase === 'ALL') { if (p.projectPhase === 'CLOSED') return false; }
     else if (p.projectPhase !== phase) return false;
-    if (search && !p.title.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search && !`${p.title} ${p.code ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
@@ -237,7 +238,7 @@ function ProjectSearch({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const matches = value.trim()
-    ? suggestions.filter(p => p.title.toLowerCase().includes(value.toLowerCase())).slice(0, 6)
+    ? suggestions.filter(p => `${p.title} ${p.code ?? ''}`.toLowerCase().includes(value.toLowerCase())).slice(0, 6)
     : [];
 
   useEffect(() => {

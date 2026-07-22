@@ -40,6 +40,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
                 {priority.label}
               </span>
             </div>
+            {project.code && <span className="block text-[11px] font-mono text-gray-400 mb-0.5">{project.code}</span>}
             <h3 className="font-semibold text-gray-900 text-base leading-tight group-hover:text-brand-600 transition-colors line-clamp-1">
               {project.title}
             </h3>

@@ -5,6 +5,7 @@ export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface MockProject {
   id: string;
+  code?: string | null; // the PID, e.g. SQ_26_27_001
   title: string;
   description: string;
   projectPhase: Phase;

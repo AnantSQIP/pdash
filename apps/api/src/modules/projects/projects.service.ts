@@ -15,6 +15,8 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { resolveDate } from '../../common/dates';
 import { PROJECT_TYPES, templateFor } from './project-templates';
+import { SequenceService } from '../../common/sequence/sequence.service';
+import { financialYear, formatPid, pidScope } from '../../common/financial-year';
 
 @Injectable()
 export class ProjectsService {
@@ -25,6 +27,7 @@ export class ProjectsService {
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
     private readonly access: ProjectAccessService,
+    private readonly sequence: SequenceService,
   ) {}
 
   /**
@@ -104,15 +107,52 @@ export class ProjectsService {
     // standard workflow as a task list of ready-made tasks. Resolved before the write.
     const template = templateFor(dto.projectType);
 
+    // ── Patent linkage (Phase 1) — the client is DERIVED from the patents, never picked.
+    // Only patent.view holders (Super Admin by default, or anyone granted it) may attach
+    // patents; the field is hidden for everyone else and the API re-checks so it can't be forced.
+    let patentIds: string[] = [];
+    let derivedClientId: string | null = null;
+    if (dto.patentIds?.length) {
+      if (!(await this.permissions.check(creator.id, 'patent.view'))) {
+        throw new ForbiddenException('You are not permitted to attach patents.');
+      }
+      const wanted = [...new Set(dto.patentIds)];
+      const found = await this.prisma.patent.findMany({
+        where: { id: { in: wanted }, organizationId, deletedAt: null },
+        select: { id: true, clientId: true },
+      });
+      if (found.length !== wanted.length) {
+        throw new BadRequestException('One or more selected patents are invalid.');
+      }
+      patentIds = found.map(p => p.id);
+      const clientIds = [...new Set(found.map(p => p.clientId))];
+      if (clientIds.length > 1) {
+        throw new BadRequestException('Selected patents belong to different clients — a project maps to one client.');
+      }
+      derivedClientId = clientIds[0] ?? null;
+    }
+
+    // Allocate the PID atomically (a separate committed statement — the counter lock is
+    // never held across the heavy create tx). FY is computed in IST, so a create just after
+    // midnight on Apr 1 is never mis-bucketed into the previous financial year.
+    const orgRec = await this.prisma.organization.findUnique({
+      where: { id: organizationId }, select: { code: true },
+    });
+    const fy = financialYear(new Date());
+    const pidSerial = await this.sequence.allocate(pidScope(organizationId, fy.label));
+    const pid = formatPid(orgRec?.code ?? 'SQ', fy.label, pidSerial);
+
     // Projects are usable immediately — they are created ACTIVE, with no approval gate.
     // Project + members + task lists + any template tasks are one transaction so a partial
     // failure never leaves a project with a half-built workflow.
     const project = await this.prisma.$transaction(async (tx) => {
       const created = await tx.project.create({
         data: {
+          code: pid,
           title: dto.title,
           description: dto.description,
           projectType: dto.projectType ?? null,
+          clientId: derivedClientId,
           projectPhase: 'ACTIVE',
           priority: dto.priority ?? 'MEDIUM',
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
@@ -126,6 +166,13 @@ export class ProjectsService {
         },
         include: { taskLists: true },
       });
+
+      if (patentIds.length) {
+        await tx.projectPatent.createMany({
+          data: patentIds.map(pId => ({ projectId: created.id, patentId: pId, addedBy: creator.id })),
+          skipDuplicates: true,
+        });
+      }
 
       if (template) {
         // Resolve the org's GLOBAL workflow and its first OPEN status so the generated
@@ -179,6 +226,24 @@ export class ProjectsService {
     return PROJECT_TYPES;
   }
 
+  /**
+   * Non-binding preview of the PID the next created project would get. Labelled non-binding
+   * because a concurrent create consumes the serial first — only create()'s result is authoritative.
+   */
+  async nextPid() {
+    const actorId = getActorId();
+    const creator = actorId
+      ? await this.prisma.user.findFirst({ where: { id: actorId, deletedAt: null }, select: { organizationId: true } })
+      : null;
+    if (!creator) return { pid: null as string | null };
+    const orgRec = await this.prisma.organization.findUnique({
+      where: { id: creator.organizationId }, select: { code: true },
+    });
+    const fy = financialYear(new Date());
+    const serial = await this.sequence.peek(pidScope(creator.organizationId, fy.label));
+    return { pid: formatPid(orgRec?.code ?? 'SQ', fy.label, serial) };
+  }
+
   /** The org that owns a project (reached through its members, like list()). */
   private async orgOfProject(id: string): Promise<string | null> {
     const m = await this.prisma.projectMember.findFirst({
@@ -223,6 +288,7 @@ export class ProjectsService {
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
+        code: true, // P1: the PID (SQ_26_27_nnn) — so cards/rows/search can show & match it
         title: true,
         projectPhase: true,
         priority: true,
@@ -307,6 +373,12 @@ export class ProjectsService {
           },
         },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
+        client: { select: { id: true, name: true, code: true } },
+        // Linked patents — HANDLES ONLY. clientId is omitted too, so a member without
+        // patent.manage can't correlate the hidden client from the network payload (S2).
+        patents: {
+          select: { patent: { select: { id: true, handle: true, serial: true } } },
+        },
         _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: true } },
       },
     });
@@ -317,9 +389,17 @@ export class ProjectsService {
   async get(id: string) {
     // Membership/oversight gate: a non-member (even a Super Admin who was never staffed)
     // cannot read a matter they are not on.
-    await this.access.assertProjectAccess(getActorId(), id);
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, id);
     const project = await this.getRaw(id);
-    return this.deadlines.redactProject(project, await this.deadlines.scope());
+    const redacted: any = this.deadlines.redactProject(project, await this.deadlines.scope());
+    // Patent HANDLES are visible to patent.view holders (any project creator); CLIENT details
+    // are stricter — patent.manage (Super Admin) only. The PID stays visible to everyone.
+    const canViewPatents = actorId ? await this.permissions.check(actorId, 'patent.view') : false;
+    const canViewClient = actorId ? await this.permissions.check(actorId, 'patent.manage') : false;
+    if (!canViewPatents) delete redacted.patents;
+    if (!canViewClient) { delete redacted.client; delete redacted.clientId; }
+    return redacted;
   }
 
   async update(id: string, dto: UpdateProjectDto) {
@@ -562,11 +642,19 @@ export class ProjectsService {
     if (isManager) {
       throw new BadRequestException('The project manager cannot be removed. Assign a different manager first.');
     }
-    await this.prisma.projectMember.deleteMany({ where: { projectId, userId } });
+    // Unassign the removed member from this project's tasks — otherwise a stale non-member
+    // stays selected and 400s every future assignee edit on those tasks (D1).
+    const links = await this.prisma.projectTask.findMany({ where: { projectId }, select: { taskId: true } });
+    const taskIds = links.map(l => l.taskId);
+    await this.prisma.$transaction([
+      this.prisma.projectMember.deleteMany({ where: { projectId, userId } }),
+      ...(taskIds.length ? [this.prisma.taskAssignee.deleteMany({ where: { userId, taskId: { in: taskIds } } })] : []),
+    ]);
     return this.get(projectId);
   }
 
   async softDelete(id: string) {
+    await this.access.assertProjectAccess(getActorId(), id); // S4: match the other project mutations
     await this.getRaw(id);
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {

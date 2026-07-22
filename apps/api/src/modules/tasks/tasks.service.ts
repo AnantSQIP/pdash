@@ -25,16 +25,46 @@ export class TasksService {
     if (start && due && due < start) throw new BadRequestException('The due date cannot be before the start date.');
   }
 
-  /** Everyone assigned must be an ACTIVE member of one of the given project(s). */
-  private async assertAssigneesAreMembers(projectIds: string[], assigneeIds: string[]) {
+  /**
+   * Everyone assigned must be a member of one of the task's project(s). "Assign = staff":
+   * if the actor may staff the project (a delivery lead / oversight), a not-yet-member
+   * assignee is AUTO-ADDED as a MEMBER (reactivated if previously removed), so assigning
+   * work just works. Anyone else gets a clear message to have a manager add the person.
+   * Only real, ACTIVE, same-org users are added (also fixes assigning a deactivated user).
+   */
+  private async ensureAssigneesAreMembers(projectIds: string[], assigneeIds: string[]) {
     if (!assigneeIds.length || !projectIds.length) return;
-    const members = await this.prisma.projectMember.findMany({
-      where: { projectId: { in: projectIds }, userId: { in: assigneeIds }, isActive: true },
-      select: { userId: true },
+    const rows = await this.prisma.projectMember.findMany({
+      where: { projectId: { in: projectIds }, userId: { in: assigneeIds } },
+      select: { id: true, userId: true, isActive: true },
     });
-    const memberSet = new Set(members.map(m => m.userId));
-    const outsiders = [...new Set(assigneeIds.filter(id => !memberSet.has(id)))];
-    if (outsiders.length) throw new BadRequestException('You can only assign people who are members of the project.');
+    const active = new Set(rows.filter(r => r.isActive).map(r => r.userId));
+    const outsiders = [...new Set(assigneeIds.filter(id => !active.has(id)))];
+    if (!outsiders.length) return;
+
+    const actorId = getActorId();
+    if (!actorId || !(await this.access.hasOversight(actorId))) {
+      throw new BadRequestException('You can only assign people who are members of the project. Ask a manager to add them first.');
+    }
+
+    // Add the outsiders to the primary project — validate they are active, same-org users.
+    const primary = projectIds[0];
+    const anchor = await this.prisma.projectMember.findFirst({
+      where: { projectId: primary }, select: { user: { select: { organizationId: true } } },
+    });
+    const orgId = anchor?.user?.organizationId;
+    const valid = new Set((await this.prisma.user.findMany({
+      where: { id: { in: outsiders }, deletedAt: null, status: 'ACTIVE', ...(orgId ? { organizationId: orgId } : {}) },
+      select: { id: true },
+    })).map(u => u.id));
+    if (outsiders.some(id => !valid.has(id))) {
+      throw new BadRequestException('One or more selected people are not active members of this organization.');
+    }
+    for (const uid of outsiders) {
+      const existing = rows.find(r => r.userId === uid);
+      if (existing) await this.prisma.projectMember.update({ where: { id: existing.id }, data: { isActive: true } });
+      else await this.prisma.projectMember.create({ data: { projectId: primary, userId: uid, projectRole: 'MEMBER' } });
+    }
   }
 
   /** Resolve the project(s) a task belongs to (for assignee-membership checks). */
@@ -81,8 +111,8 @@ export class TasksService {
     // project now — tasks no longer carry one.
     const internalDue = dto.dueDate ? new Date(dto.dueDate) : undefined;
     this.assertTaskDateOrder(dto.startDate ? new Date(dto.startDate) : undefined, internalDue);
-    // You can only assign people who are on the project.
-    await this.assertAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
+    // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
+    await this.ensureAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
 
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
@@ -277,6 +307,13 @@ export class TasksService {
           where: { taskId: id, deletedAt: null },
           data: { status: 'CLOSED' },
         });
+      } else if (wasClosed) {
+        // D2: reopening a completed task must reopen its subtasks too — otherwise the
+        // subtask bar stays 100% while the task reads 0%/Open.
+        await tx.subtask.updateMany({
+          where: { taskId: id, deletedAt: null },
+          data: { status: 'OPEN' },
+        });
       }
 
       return u;
@@ -298,8 +335,8 @@ export class TasksService {
   async setAssignees(id: string, dto: SetAssigneesDto) {
     await this.access.assertTaskAccess(getActorId(), id);
     const before = await this.getRaw(id);
-    // Only project members can be assigned this task.
-    await this.assertAssigneesAreMembers(await this.projectIdsForTask(id), dto.assigneeIds);
+    // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
+    await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), dto.assigneeIds);
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     // Whoever changes the assignees is the "assigned by" — the person delegating the work.
     // Clear it when the task is left unassigned.
@@ -377,7 +414,7 @@ export class TasksService {
   async createSubtask(taskId: string, dto: CreateSubtaskDto) {
     await this.access.assertTaskAccess(getActorId(), taskId);
     await this.getRaw(taskId);
-    await this.assertAssigneesAreMembers(await this.projectIdsForTask(taskId), dto.assigneeIds ?? []);
+    await this.ensureAssigneesAreMembers(await this.projectIdsForTask(taskId), dto.assigneeIds ?? []);
     const subtask = await this.prisma.subtask.create({
       data: {
         taskId,
@@ -400,7 +437,8 @@ export class TasksService {
     return subtask;
   }
 
-  listSubtasks(taskId: string) {
+  async listSubtasks(taskId: string) {
+    await this.access.assertTaskAccess(getActorId(), taskId); // S1: was an unguarded IDOR
     return this.prisma.subtask.findMany({
       where: { taskId, deletedAt: null },
       include: { assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } } },

@@ -2,10 +2,10 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Plus, Lock, Info } from 'lucide-react';
+import { X, Plus, Lock, Info, Search } from 'lucide-react';
 import clsx from 'clsx';
 
-import { api, type UserSummary, type ProjectTypeDef } from '@/lib/api';
+import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { DateField } from '@/components/ui/DateField';
@@ -24,9 +24,13 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   // manager who will own and approve it. Approvers manage their own by default.
   const canApprove = can('project.approve');
   const canSetClientDue = can('deadline.view.client');
+  // Clients/patents are confidential — only patent.view holders (Super Admin by default) see them.
+  const canSeePatents = can('patent.view');
 
   const [title, setTitle] = useState('');
   const [projectType, setProjectType] = useState('');
+  const [patentIds, setPatentIds] = useState<string[]>([]);
+  const [patentSearch, setPatentSearch] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
   const [startDate, setStartDate] = useState('');
@@ -57,6 +61,26 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   });
   const selectedType = projectTypes.find(t => t.value === projectType);
 
+  // Patent HANDLES (the pickable "Patent ID"). No client details are shown here — just the
+  // handles. The project's client is derived from the selected patents server-side.
+  const { data: patentOptions = [] } = useQuery<PatentOption[]>({
+    queryKey: ['patent-options-all'], queryFn: () => api.patents.options(),
+    enabled: canSeePatents, staleTime: 30_000,
+  });
+  const { data: pidPreview } = useQuery({
+    queryKey: ['next-pid'], queryFn: () => api.projects.nextPid(), staleTime: 10_000,
+  });
+
+  // Filter handles by the search box — needed when there are many patents.
+  const filteredPatents = useMemo(() => {
+    const q = patentSearch.trim().toLowerCase();
+    return q ? patentOptions.filter(p => p.handle.toLowerCase().includes(q)) : patentOptions;
+  }, [patentOptions, patentSearch]);
+
+  function togglePatent(id: string) {
+    setPatentIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canApprove && !managerId) {
@@ -69,6 +93,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
       await api.projects.create({
         title,
         projectType: projectType || undefined,
+        patentIds: patentIds.length ? patentIds : undefined,
         description: description || undefined,
         priority,
         startDate: startDate || undefined,
@@ -118,6 +143,14 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </div>
           )}
 
+          {/* Auto-assigned Project ID (PID) — read-only preview; the final ID is set on save. */}
+          {pidPreview?.pid && (
+            <div className="flex items-center justify-between rounded-lg border border-brand-100 bg-brand-50/60 px-3.5 py-2.5">
+              <p className="text-sm font-medium text-brand-800">Project ID (PID)</p>
+              <span className="text-sm font-semibold text-brand-700 font-mono">{pidPreview.pid}</span>
+            </div>
+          )}
+
           {/* Project TYPE — selecting a patent-analysis type auto-creates its standard tasks. */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -152,6 +185,46 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               </div>
             )}
           </div>
+
+          {/* Patent IDs — pick the handles to link. A search box helps when there are many. */}
+          {canSeePatents && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Patent IDs
+                {patentIds.length > 0 && <span className="ml-1 text-xs font-normal text-brand-600">· {patentIds.length} selected</span>}
+              </label>
+              {patentOptions.length === 0 ? (
+                <p className="text-xs text-gray-400 border border-gray-200 rounded-lg px-3 py-2.5">No patents registered yet.</p>
+              ) : (
+                <div className="rounded-lg border border-gray-300 overflow-hidden">
+                  <div className="relative border-b border-gray-100">
+                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      value={patentSearch}
+                      onChange={e => setPatentSearch(e.target.value)}
+                      placeholder="Search patent ID…"
+                      className="w-full pl-8 pr-3 py-2 text-sm focus:outline-none"
+                    />
+                  </div>
+                  <div className="max-h-44 overflow-y-auto divide-y divide-gray-50">
+                    {filteredPatents.length === 0 ? (
+                      <p className="px-3 py-3 text-xs text-gray-400">No patents match “{patentSearch}”.</p>
+                    ) : filteredPatents.map(p => (
+                      <label key={p.id} className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={patentIds.includes(p.id)}
+                          onChange={() => togglePatent(p.id)}
+                          className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                        />
+                        <span className="text-sm font-mono text-gray-700">{p.handle}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">

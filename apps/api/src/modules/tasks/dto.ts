@@ -17,6 +17,7 @@ export const TASK_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 export class CreateTaskDto {
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
   @MaxLength(200)
   title!: string;
@@ -34,6 +35,7 @@ export class CreateTaskDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   description?: string;
 
   @IsOptional()
@@ -77,6 +79,7 @@ export class UpdateTaskDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   description?: string;
 
   @IsOptional()
@@ -128,6 +131,7 @@ export class CreateSubtaskDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   description?: string;
 
   @IsOptional()

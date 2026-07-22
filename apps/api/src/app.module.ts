@@ -44,6 +44,8 @@ import { SearchModule } from './modules/search/search.module';
 import { TagsModule } from './modules/tags/tags.module';
 import { CompanyModule } from './modules/company/company.module';
 import { AppraisalsModule } from './modules/appraisals/appraisals.module';
+import { SequenceModule } from './common/sequence/sequence.module';
+import { PatentsModule } from './modules/patents/patents.module';
 
 @Module({
   imports: [
@@ -95,6 +97,9 @@ import { AppraisalsModule } from './modules/appraisals/appraisals.module';
     TagsModule,
     CompanyModule,
     AppraisalsModule,
+    // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
+    SequenceModule,
+    PatentsModule,
   ],
   providers: [
     // 0) Global error mapping: Prisma/unknown errors → correct HTTP status (not 500).
