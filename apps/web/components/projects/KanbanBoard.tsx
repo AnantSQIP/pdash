@@ -35,6 +35,9 @@ const PRIORITY_COLOR: Record<string, string> = {
 export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }: KanbanBoardProps) {
   const ready = !!(statuses && statuses.length); // real, movable statuses loaded?
   const columns = ready ? [...statuses].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)) : FALLBACK;
+  // The column a task belongs to (matched by status id or name), or undefined if it has no
+  // status or its status matches no loaded column.
+  const colOf = (t: ApiTask) => columns.find(c => (t.currentStatus?.id ?? '') === c.id || t.currentStatus?.name === c.name);
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
 
@@ -51,13 +54,14 @@ export function KanbanBoard({ tasks, statuses, onTaskClick, onAddTask, onMove }:
   return (
     <div className="flex gap-3 lg:gap-4 h-full overflow-x-auto py-1 px-0.5 lg:px-1">
       {columns.map((col, idx) => {
-        // L4: a task with no workflow status was invisible (matched no column). Surface
-        // such "unstarted" tasks in the first column instead of dropping them.
-        const colTasks = tasks.filter(t =>
-          t.currentStatus
-            ? ((t.currentStatus.id ?? '') === col.id || t.currentStatus.name === col.name)
-            : idx === 0,
-        );
+        // Every task must land in exactly one column. A task whose status matches a loaded
+        // column goes there; a task with NO status, or a status that matches no column
+        // (statuses still loading, or a renamed/foreign workflow) falls to the first column
+        // instead of silently disappearing.
+        const colTasks = tasks.filter(t => {
+          const home = t.currentStatus ? colOf(t) : undefined;
+          return home ? home.id === col.id : idx === 0;
+        });
         const isClosedCol = col.type === 'CLOSED';
 
         return (

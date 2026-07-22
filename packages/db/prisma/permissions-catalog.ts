@@ -74,6 +74,11 @@ export const MODULES: ModuleDef[] = [
   { key: 'permission',  label: 'Permissions',  actions: ['view'] },
   { key: 'audit',       label: 'Audit Log',    actions: ['view', 'export'] },
   { key: 'settings',    label: 'Settings',     actions: ['view', 'update'] },
+  // Confidential clients + their coded patents. SUPER-ADMIN-ONLY by default; a Super Admin
+  // may grant these to anyone via the matrix (a passcode-gated RBAC change).
+  //   patent.view   → see clients, patent handles (Pat_MLK_1) and the project patent-picker.
+  //   patent.manage → the confidential portal: register clients/patents + see REAL numbers.
+  { key: 'patent',      label: 'Clients & Patents', actions: ['view', 'manage'] },
 ];
 
 export interface PermissionDef {
@@ -99,6 +104,9 @@ const code = (k: string, a: string) => `${k}.${a}`;
 // Read-only "view" of the operational modules a normal user touches.
 const VIEW_BASICS = [
   code('dashboard', 'view'), code('project', 'view'), code('task', 'view'),
+  // See/select patent HANDLES (Pat_MLK_1) — the pickable "Patent ID" in project creation.
+  // CLIENT details (names), the portal, and real numbers stay behind patent.manage (Super Admin).
+  code('patent', 'view'),
   code('tasklist', 'view'), code('timesheet', 'view'),
   code('issue', 'view'), code('comment', 'view'), code('document', 'view'),
   code('calendar', 'view'),
@@ -245,8 +253,17 @@ const HR_CODES = [
   code('appraisal', 'manage'),
 ];
 
-// Admin: everything except the most destructive RBAC delete (kept for Super Admin).
-const ADMIN_CODES = ALL_PERMISSION_CODES.filter(c => c !== code('role', 'delete'));
+// CLIENT details (client names, the portal, real patent numbers) are SUPER-ADMIN-ONLY —
+// gated by patent.manage, which a Super Admin may grant to anyone via the matrix (a
+// passcode-gated RBAC change). Patent HANDLES (the pickable "Patent ID") are broader —
+// patent.view sits in the basics so any project creator can select them.
+const SUPER_ADMIN_ONLY_CODES = [code('patent', 'manage')];
+
+// Admin: everything except the most destructive RBAC delete (kept for Super Admin) and the
+// confidential CLIENT surface (patent.manage — Super Admin only).
+const ADMIN_CODES = ALL_PERMISSION_CODES.filter(
+  c => c !== code('role', 'delete') && !SUPER_ADMIN_ONLY_CODES.includes(c),
+);
 
 /**
  * Role → permission-code presets. The '*' sentinel means "all permissions"

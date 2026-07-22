@@ -16,9 +16,12 @@ export class ProjectsController {
     return this.projects.create(dto);
   }
 
+  // Org comes from the SESSION, never the client query — otherwise an oversight actor could
+  // pass another org's id and enumerate its projects (S3). The ?organizationId= param the web
+  // still sends is ignored.
   @Get()
-  list(@Query('organizationId') organizationId: string, @Query('phase') phase?: string) {
-    return this.projects.list(organizationId, { phase });
+  async list(@Query('phase') phase?: string) {
+    return this.projects.list(await this.actor.requireOrgId(), { phase });
   }
 
   /**
@@ -40,6 +43,12 @@ export class ProjectsController {
   @Get('types')
   projectTypes() {
     return this.projects.projectTypes();
+  }
+
+  /** Non-binding preview of the PID the next created project would receive. */
+  @Get('next-pid')
+  nextPid() {
+    return this.projects.nextPid();
   }
 
   @Get(':id')

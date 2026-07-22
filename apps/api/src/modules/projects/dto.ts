@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsDateString,
   IsIn,
   IsInt,
@@ -28,6 +29,17 @@ export class CreateProjectDto {
   @IsOptional()
   @IsIn(PROJECT_TYPE_VALUES)
   projectType?: string;
+
+  /** The client/matter (drives the "{Type} - {Client}" title + the confidential patent picker). */
+  @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  /** Patent handles (Pat_MLK_*) to link — chosen from the selected client's confidential set. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  patentIds?: string[];
 
   // Deprecated/ignored — the creator is taken from the verified cookie actor.
   // Kept optional so legacy clients that still send it are not rejected.

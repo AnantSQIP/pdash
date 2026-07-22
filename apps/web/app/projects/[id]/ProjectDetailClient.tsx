@@ -98,6 +98,9 @@ export function ProjectDetailClient({ projectId }: Props) {
     queryFn: () => api.tasks.list(projectId),
     enabled: !!project && needsTasks,
     staleTime: 60_000,
+    // Keep the current tasks visible while a new project's tasks load (or a background
+    // refetch runs), so switching projects never flashes an empty board/list.
+    placeholderData: keepPreviousData,
   });
 
   // Workflow statuses power the Kanban columns
@@ -230,9 +233,19 @@ export function ProjectDetailClient({ projectId }: Props) {
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
+                {project.code && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
+                    {project.code}
+                  </span>
+                )}
                 {typeLabel && (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-brand-50 text-brand-700 ring-1 ring-brand-100">
                     {typeLabel}
+                  </span>
+                )}
+                {project.client && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 ring-1 ring-purple-100">
+                    {project.client.name}
                   </span>
                 )}
                 <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium', phase.bg, phase.text)}>
@@ -243,6 +256,19 @@ export function ProjectDetailClient({ projectId }: Props) {
               <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{project.title}</h1>
               {project.description && (
                 <p className="text-sm text-gray-500 mt-1 max-w-xl">{project.description}</p>
+              )}
+              {project.patents && project.patents.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                  <span className="text-[11px] text-gray-400">Patents:</span>
+                  {project.patents
+                    .slice()
+                    .sort((a, b) => a.patent.serial - b.patent.serial)
+                    .map(({ patent }) => (
+                      <span key={patent.id} className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-100">
+                        {patent.handle}
+                      </span>
+                    ))}
+                </div>
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">

@@ -18,7 +18,7 @@ import {
 export default function HomeDashboardPage() {
   return (
     <div className="min-h-full">
-      {/* Full-width top zone */}
+      {/* Full-width top zone — the banner now carries the Punch In/Out button, top-right. */}
       <PersonaBanner />
       <OrgStatsRow />
       <MyPerformanceCard />
@@ -26,7 +26,6 @@ export default function HomeDashboardPage() {
       {/* Balanced masonry — cards flow to keep columns even regardless of which render. */}
       <div className="px-4 py-4 sm:px-6 sm:py-6">
         <div className="columns-1 lg:columns-2 2xl:columns-3 gap-4 sm:gap-6 [&>*]:mb-4 sm:[&>*]:mb-6 [&>*]:break-inside-avoid">
-          {/* Punch-in card first — it's the most-used daily action, so keep it at the top. */}
           <MyAttendanceCard />
           <ProjectApprovalsCard />
           <TeamAvailabilityCard />

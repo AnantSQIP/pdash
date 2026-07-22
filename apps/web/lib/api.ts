@@ -170,6 +170,12 @@ export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
   /** The kind of patent-analysis matter (HML, CC_NEW, FTO, …); null for a general project. */
   projectType?: string | null;
+  /** The PID, e.g. SQ_26_27_001 (globally unique; also searchable). */
+  code?: string | null;
+  /** The client/matter this project is for. */
+  client?: { id: string; name: string; code: string } | null;
+  /** Linked patent handles — confidential real numbers are never included here. */
+  patents?: { patent: PatentOption }[];
   // See ApiTask: `null` = unset (and clears on update); an ABSENT clientDueDate means the
   // server redacted it from this actor.
   priority: string; startDate?: string | null;
@@ -188,6 +194,15 @@ export type ApiProject = {
   taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
   _count?: { members: number; projectTasks: number };
 };
+
+// ─── Patent-analysis client codes + confidential coded patents ────────────────
+export type ClientSummary = { id: string; name?: string | null; code: string; _count?: { patents: number } };
+/** Non-secret patent handle (for the project picker + project detail). */
+export type PatentOption = { id: string; handle: string; serial: number; clientId?: string };
+/** Portal OVERVIEW — patent IDs + serials, NO real number. */
+export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; client?: { id: string; name?: string | null; code: string } };
+/** Portal REVEAL — includes the confidential real number (passcode-gated). */
+export type PatentFull = PatentOverview & { realNumber: string; createdAt?: string };
 
 // ─── Files & attachments ─────────────────────────────────────────────────────
 export type DocumentRef = {
@@ -677,8 +692,11 @@ export const api = {
     get: (id: string) => req<ApiProject>(`/projects/${id}`),
     /** The catalog of project types + their auto-created task templates (for the create form). */
     types: () => req<ProjectTypeDef[]>('/projects/types'),
+    /** Non-binding preview of the PID the next created project would get. */
+    nextPid: () => req<{ pid: string | null }>('/projects/next-pid'),
     create: (data: {
-      title: string; projectType?: string; description?: string; priority?: string; startDate?: string;
+      title: string; projectType?: string; clientId?: string; patentIds?: string[];
+      description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>
@@ -705,6 +723,31 @@ export const api = {
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
       req<ApiProject>(`/projects/${id}/members/${userId}`, { method: 'DELETE' }),
+  },
+
+  // Client codes (the "MLK" grouping). Create/remove need patent.manage + the org passcode.
+  clients: {
+    list: () => req<ClientSummary[]>('/clients'),
+    create: (data: { code: string; name?: string }) =>
+      req<ClientSummary>('/clients', { method: 'POST', body: JSON.stringify(data) }),
+    remove: (id: string) => req<{ ok: boolean }>(`/clients/${id}`, { method: 'DELETE' }),
+  },
+
+  // Confidential coded patents. `list` is the passcode-free OVERVIEW (patent IDs, no real
+  // numbers); `reveal` returns the real numbers and triggers the org passcode; every mutation
+  // needs patent.manage + the passcode. `options` returns handles only (patent.view).
+  patents: {
+    list: (clientId?: string) =>
+      req<PatentOverview[]>(`/patents${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
+    reveal: (clientId?: string) =>
+      req<PatentFull[]>(`/patents/reveal${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
+    options: (clientId?: string) =>
+      req<PatentOption[]>(`/patents/options${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
+    register: (data: { clientId: string; realNumbers: string[] }) =>
+      req<PatentOverview[]>('/patents', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, realNumber: string) =>
+      req<PatentOverview>(`/patents/${id}`, { method: 'PATCH', body: JSON.stringify({ realNumber }) }),
+    remove: (id: string) => req<{ ok: boolean }>(`/patents/${id}`, { method: 'DELETE' }),
   },
 
   taskLists: {
