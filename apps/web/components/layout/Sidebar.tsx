@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -28,6 +28,9 @@ const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
   { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view' },
   { href: '/tasks',       icon: ListTodo,        label: 'My Tasks',    perm: 'task.view' },
+  // My time across every project — logging + reviewing hours is now a first-class
+  // destination, not buried in a per-project tab. timesheet.view is held by everyone.
+  { href: '/timesheets',  icon: Timer,           label: 'Timesheets',  perm: 'timesheet.view' },
   // Delivery-lead view: who is free, who is overloaded, who can take more work — a load gauge.
   { href: '/capacity',    icon: Gauge,           label: 'Team Capacity', perm: 'capacity.view' },
   { href: '/performance', icon: LineChart,       label: 'Performance', perm: 'performance.view.own' },
