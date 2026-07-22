@@ -14,6 +14,7 @@ import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { resolveDate } from '../../common/dates';
+import { PROJECT_TYPES, templateFor } from './project-templates';
 
 @Injectable()
 export class ProjectsService {
@@ -99,23 +100,64 @@ export class ProjectsService {
       ? [{ userId: creator.id, projectRole: 'MANAGER' }]
       : [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }];
 
+    // A patent-analysis project TYPE (HML, Claim Chart, FTO, …) auto-creates that type's
+    // standard workflow as a task list of ready-made tasks. Resolved before the write.
+    const template = templateFor(dto.projectType);
+
     // Projects are usable immediately — they are created ACTIVE, with no approval gate.
-    const project = await this.prisma.project.create({
-      data: {
-        title: dto.title,
-        description: dto.description,
-        projectPhase: 'ACTIVE',
-        priority: dto.priority ?? 'MEDIUM',
-        startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-        dueDate: internalDue,
-        clientDueDate: clientDue,
-        createdBy: creator.id,
-        members: { create: members },
-        taskLists: {
-          create: { name: 'General', isDefault: true, sequence: 0 },
+    // Project + members + task lists + any template tasks are one transaction so a partial
+    // failure never leaves a project with a half-built workflow.
+    const project = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.project.create({
+        data: {
+          title: dto.title,
+          description: dto.description,
+          projectType: dto.projectType ?? null,
+          projectPhase: 'ACTIVE',
+          priority: dto.priority ?? 'MEDIUM',
+          startDate: dto.startDate ? new Date(dto.startDate) : undefined,
+          dueDate: internalDue,
+          clientDueDate: clientDue,
+          createdBy: creator.id,
+          members: { create: members },
+          taskLists: {
+            create: { name: 'General', isDefault: true, sequence: 0 },
+          },
         },
-      },
-      include: { taskLists: true },
+        include: { taskLists: true },
+      });
+
+      if (template) {
+        // Resolve the org's GLOBAL workflow and its first OPEN status so the generated
+        // tasks open in the correct board column (mirrors TasksService.create).
+        const wf = await tx.workflow.findFirst({
+          where: { type: 'GLOBAL' },
+          orderBy: { name: 'asc' },
+          select: { id: true, statuses: { orderBy: { sequence: 'asc' }, select: { id: true, type: true } } },
+        });
+        const initialStatusId = wf ? (wf.statuses.find(s => s.type === 'OPEN') ?? wf.statuses[0])?.id : undefined;
+
+        const list = await tx.taskList.create({
+          data: { projectId: created.id, name: template.taskListName!, sequence: 1 },
+        });
+        // Sequentially, so ProjectTask.sequence reflects the workflow order.
+        for (let i = 0; i < template.tasks!.length; i++) {
+          const task = await tx.task.create({
+            data: {
+              title: template.tasks![i],
+              priority: 'MEDIUM',
+              createdBy: creator.id,
+              ...(wf ? { workflowId: wf.id } : {}),
+              ...(initialStatusId ? { currentWorkflowStatusId: initialStatusId } : {}),
+            },
+          });
+          await tx.projectTask.create({
+            data: { projectId: created.id, taskId: task.id, taskListId: list.id, sequence: i },
+          });
+        }
+      }
+
+      return created;
     });
 
     await this.events.emit({
@@ -130,6 +172,11 @@ export class ProjectsService {
     // Projects are billable by default; billability is decided per time entry by each
     // logger, so there is no admin billable-review step on creation any more.
     return this.deadlines.redactProject(project as any, scope);
+  }
+
+  /** The catalog of project types (drives the create-form dropdown + task preview). */
+  projectTypes() {
+    return PROJECT_TYPES;
   }
 
   /** The org that owns a project (reached through its members, like list()). */

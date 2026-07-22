@@ -454,6 +454,10 @@ model Project {
   code                    String?
   title                   String
   description             String?
+  // The kind of patent-analysis matter this project is (HML, Claim Chart, FTO, Novelty,
+  // Invalidity, Reverse Engineering, Risk & Strategy, …). Drives the workflow task template
+  // auto-created on project creation. Null = a general project with no preset workflow.
+  projectType             String?
   projectPhase            String    @default("PLANNING")
   priority                String    @default("MEDIUM")
   startDate               DateTime?

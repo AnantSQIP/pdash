@@ -36,6 +36,12 @@ export class ProjectsController {
     return this.projects.eligibleManagers(await this.actor.requireOrgId());
   }
 
+  /** The catalog of project types + their auto-created task templates (for the create form). */
+  @Get('types')
+  projectTypes() {
+    return this.projects.projectTypes();
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     return this.projects.get(id);

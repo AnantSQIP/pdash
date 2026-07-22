@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X, Plus, Lock, Info } from 'lucide-react';
 import clsx from 'clsx';
 
-import { api, type UserSummary } from '@/lib/api';
+import { api, type UserSummary, type ProjectTypeDef } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { DateField } from '@/components/ui/DateField';
@@ -26,6 +26,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const canSetClientDue = can('deadline.view.client');
 
   const [title, setTitle] = useState('');
+  const [projectType, setProjectType] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
   const [startDate, setStartDate] = useState('');
@@ -48,6 +49,14 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     [eligible, currentUser],
   );
 
+  // Project types + their auto-created task templates (static catalog from the API).
+  const { data: projectTypes = [] } = useQuery<ProjectTypeDef[]>({
+    queryKey: ['project-types'],
+    queryFn: () => api.projects.types(),
+    staleTime: Infinity,
+  });
+  const selectedType = projectTypes.find(t => t.value === projectType);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canApprove && !managerId) {
@@ -59,6 +68,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     try {
       await api.projects.create({
         title,
+        projectType: projectType || undefined,
         description: description || undefined,
         priority,
         startDate: startDate || undefined,
@@ -108,6 +118,41 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </div>
           )}
 
+          {/* Project TYPE — selecting a patent-analysis type auto-creates its standard tasks. */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Project Type <span className="text-red-500">*</span>
+            </label>
+            <select
+              required
+              value={projectType}
+              onChange={e => setProjectType(e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+            >
+              <option value="">Select a type…</option>
+              {projectTypes.map(t => (
+                <option key={t.value} value={t.value} disabled={t.comingSoon}>
+                  {t.label}{t.comingSoon ? ' — coming soon' : ''}
+                </option>
+              ))}
+            </select>
+            {selectedType && (
+              <div className="mt-2">
+                <p className="text-[11px] text-gray-400">{selectedType.description}</p>
+                {selectedType.tasks && selectedType.tasks.length > 0 && (
+                  <div className="mt-2 rounded-lg border border-brand-100 bg-brand-50/60 px-3 py-2">
+                    <p className="text-xs font-medium text-brand-800 mb-1">
+                      Creates {selectedType.tasks.length} tasks in “{selectedType.taskListName}”:
+                    </p>
+                    <ol className="list-decimal list-inside space-y-0.5 text-xs text-brand-700">
+                      {selectedType.tasks.map((t, i) => <li key={i}>{t}</li>)}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Project Title <span className="text-red-500">*</span>
@@ -117,7 +162,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               required
               value={title}
               onChange={e => setTitle(e.target.value)}
-              placeholder="e.g. Website Redesign Q3"
+              placeholder="e.g. Invalidity — Acme Patent US1234567"
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
             />
           </div>
@@ -223,7 +268,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </button>
             <button
               type="submit"
-              disabled={loading || !title.trim() || (!canApprove && !managerId)}
+              disabled={loading || !title.trim() || !projectType || (!canApprove && !managerId)}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (

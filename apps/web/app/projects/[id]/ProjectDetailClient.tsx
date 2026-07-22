@@ -85,6 +85,12 @@ export function ProjectDetailClient({ projectId }: Props) {
     placeholderData: keepPreviousData,
   });
 
+  // Project-type catalog (cached) → the readable label for this project's type badge.
+  const { data: projectTypes = [] } = useQuery({
+    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: Infinity,
+  });
+  const typeLabel = projectTypes.find(t => t.value === project?.projectType)?.label;
+
   // Load tasks for any tab that renders them
   const needsTasks = activeTab === 'Task List' || activeTab === 'Overview' || activeTab === 'Board' || activeTab === 'Gantt';
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({
@@ -223,7 +229,12 @@ export function ProjectDetailClient({ projectId }: Props) {
 
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                {typeLabel && (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-brand-50 text-brand-700 ring-1 ring-brand-100">
+                    {typeLabel}
+                  </span>
+                )}
                 <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium', phase.bg, phase.text)}>
                   {phase.label}
                 </span>
