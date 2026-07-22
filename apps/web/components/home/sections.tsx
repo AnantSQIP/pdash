@@ -7,7 +7,7 @@ import clsx from 'clsx';
 import {
   FolderKanban, Activity, TrendingUp, CheckSquare, CheckCircle, Clock, AlertTriangle,
   Flag, MessageCircle, FileText, UserCheck, Users, Shield, ScrollText,
-  Check, X, CalendarDays, UserPlus, Award,
+  Check, X, CalendarDays, UserPlus, Award, LogIn, LogOut, Loader,
 } from 'lucide-react';
 import {
   api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance,
@@ -303,6 +303,7 @@ export function QuickStatsCard() {
 export function MyAttendanceCard() {
   const { can } = usePermissions();
   const { currentUser } = useOrg();
+  const qc = useQueryClient();
   const allowed = can('attendance.view.own');
   // M33: share the Attendance page's query keys so a punch/regularize there also
   // refreshes this card (previously 'att-today' ≠ the page's 'attn-today').
@@ -312,19 +313,42 @@ export function MyAttendanceCard() {
   const { data: balances = [] } = useQuery<LeaveBalance[]>({
     queryKey: ['leave-balances', currentUser?.id], queryFn: () => api.leave.balances(), enabled: allowed, staleTime: 60_000,
   });
+  // Punch in/out straight from Home. Same endpoint AND cache keys as the Attendance page,
+  // so a punch here updates the Attendance page (and vice-versa) without a reload.
+  const punch = useMutation({
+    mutationFn: () => api.attendance.punch(),
+    onSuccess: () => ['attn-today', 'attn-month', 'attn-org', 'leave-balances'].forEach(k => qc.invalidateQueries({ queryKey: [k] })),
+  });
   if (!allowed) return null;
+  const timeOf = (s?: string | null) => (s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—');
   const clockedIn = !!att?.checkIn && !att?.checkOut;
-  const statusLabel = !att ? 'Not clocked in' : att.checkOut ? 'Clocked out' : att.checkIn ? 'Clocked in' : (att.status ?? '—');
+  const dayComplete = !!att?.checkIn && !!att?.checkOut; // clocked in AND out — locked for the day
+  const statusLabel = dayComplete ? 'Day complete' : !att?.checkIn ? 'Not clocked in' : 'Clocked in';
   const totalRemaining = balances.reduce((s, b) => s + (b.remaining ?? 0), 0);
+  const busy = punch.isPending;
   return (
     <Card>
       <CardHeader title="My Attendance" icon={Clock} href="/attendance" linkLabel="Open" />
-      <div className="px-5 py-4 flex items-center gap-3 border-b border-gray-100">
-        <span className={clsx('w-2.5 h-2.5 rounded-full', clockedIn ? 'bg-green-500' : 'bg-gray-300')} />
-        <div className="flex-1">
-          <p className="text-sm font-medium text-gray-800">{statusLabel}</p>
-          {att?.checkIn && <p className="text-xs text-gray-400">In {new Date(att.checkIn).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}{att.checkOut ? ` · Out ${new Date(att.checkOut).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}` : ''}</p>}
+      <div className="px-5 py-4 border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <span className={clsx('w-2.5 h-2.5 rounded-full shrink-0', clockedIn ? 'bg-green-500 animate-pulse' : dayComplete ? 'bg-gray-400' : 'bg-gray-300')} />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-800">{statusLabel}</p>
+            {att?.checkIn && <p className="text-xs text-gray-400">In {timeOf(att.checkIn)}{att.checkOut ? ` · Out ${timeOf(att.checkOut)}` : ''}{att.totalHours != null ? ` · ${att.totalHours}h` : ''}</p>}
+          </div>
         </div>
+        {/* Punch In → Punch Out → locked once the day is complete (clocked in AND out). */}
+        <button
+          onClick={() => { if (!busy && !dayComplete) punch.mutate(); }}
+          disabled={busy || dayComplete}
+          title={dayComplete ? 'You have clocked in and out — the day is complete.' : clockedIn ? 'Clock out for the day' : 'Clock in for the day'}
+          className={clsx('mt-3 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
+            dayComplete ? 'bg-gray-300' : clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}
+        >
+          {busy ? <Loader size={15} className="animate-spin" /> : dayComplete ? <Check size={15} /> : clockedIn ? <LogOut size={15} /> : <LogIn size={15} />}
+          {dayComplete ? 'Completed for today' : clockedIn ? 'Punch Out' : 'Punch In'}
+        </button>
+        {punch.isError && <p className="text-xs text-red-600 mt-2">{punch.error instanceof Error ? punch.error.message : 'Could not record your punch.'}</p>}
       </div>
       <div className="px-5 py-3 flex items-center justify-between">
         <span className="text-xs text-gray-500">Leave remaining</span>
