@@ -74,4 +74,37 @@ UPDATE task SET "actualHours" = COALESCE(
     (SELECT SUM("hoursLogged") FROM timesheet ts WHERE ts."taskId"=task.id AND ts."deletedAt" IS NULL), 0)
 WHERE id IN (SELECT id FROM _affected_tasks);
 
+-- 6) Clear each member's PERSONAL seed activity/content so they start clean for real-data
+--    testing: performance feed + daily metrics, notifications, discuss messages, comments,
+--    calendar events (incl. stale LEAVE/WFH events), raised issues, presence, votes,
+--    recognitions. SHARED entities (projects/tasks/channels others also use) are left
+--    intact; account, login, profile, role and project memberships are kept.
+CREATE TEMP TABLE _msgs ON COMMIT DROP AS SELECT id FROM message WHERE "userId" IN (SELECT id FROM _clear_users);
+DELETE FROM message_reaction   WHERE "messageId" IN (SELECT id FROM _msgs) OR "userId" IN (SELECT id FROM _clear_users);
+DELETE FROM message_mention    WHERE "messageId" IN (SELECT id FROM _msgs) OR "userId" IN (SELECT id FROM _clear_users);
+DELETE FROM saved_message      WHERE "messageId" IN (SELECT id FROM _msgs) OR "userId" IN (SELECT id FROM _clear_users);
+DELETE FROM message_attachment WHERE "messageId" IN (SELECT id FROM _msgs);
+DELETE FROM message            WHERE id IN (SELECT id FROM _msgs);
+
+CREATE TEMP TABLE _events ON COMMIT DROP AS SELECT id FROM calendar_event WHERE "createdBy" IN (SELECT id FROM _clear_users);
+DELETE FROM calendar_event_attendee WHERE "eventId" IN (SELECT id FROM _events) OR "userId" IN (SELECT id FROM _clear_users);
+DELETE FROM calendar_event           WHERE id IN (SELECT id FROM _events);
+
+CREATE TEMP TABLE _cmts ON COMMIT DROP AS SELECT id FROM comment WHERE "userId" IN (SELECT id FROM _clear_users);
+DELETE FROM comment_attachment WHERE "commentId" IN (SELECT id FROM _cmts);
+DELETE FROM comment            WHERE id IN (SELECT id FROM _cmts);
+
+CREATE TEMP TABLE _issues ON COMMIT DROP AS SELECT id FROM issue WHERE "reportedBy" IN (SELECT id FROM _clear_users);
+DELETE FROM comment WHERE "entityType"='ISSUE' AND "entityId" IN (SELECT id FROM _issues);
+DELETE FROM issue   WHERE id IN (SELECT id FROM _issues);
+UPDATE issue SET "assigneeId"=NULL WHERE "assigneeId" IN (SELECT id FROM _clear_users);
+
+DELETE FROM analytics_event   WHERE "userId"  IN (SELECT id FROM _clear_users);
+DELETE FROM user_metric_daily WHERE "userId"  IN (SELECT id FROM _clear_users);
+DELETE FROM activity          WHERE "actorId" IN (SELECT id FROM _clear_users);
+DELETE FROM notification      WHERE "userId"  IN (SELECT id FROM _clear_users);
+DELETE FROM presence          WHERE "userId"  IN (SELECT id FROM _clear_users);
+DELETE FROM poll_vote         WHERE "userId"  IN (SELECT id FROM _clear_users);
+DELETE FROM reward            WHERE "recipientId" IN (SELECT id FROM _clear_users) OR "givenById" IN (SELECT id FROM _clear_users);
+
 COMMIT;

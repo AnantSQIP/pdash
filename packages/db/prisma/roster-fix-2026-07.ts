@@ -72,6 +72,45 @@ async function main() {
     await prisma.task.update({ where: { id: taskId }, data: { actualHours: agg._sum.hoursLogged ?? 0 } });
   }
   console.log(`  recomputed actualHours for ${affectedTaskIds.length} task(s)`);
+
+  // ── 4) Clear each member's PERSONAL activity/content (performance feed, notifications,
+  //       discuss messages, comments, calendar events, raised issues, presence, votes,
+  //       recognitions) so they start clean for real-data testing. SHARED entities
+  //       (projects/tasks/channels others use) are left intact. ────────────────────────
+  const msgs = await prisma.message.findMany({ where: { userId: { in: userIds } }, select: { id: true } });
+  const msgIds = msgs.map(m => m.id);
+  await prisma.messageReaction.deleteMany({ where: { OR: [{ messageId: { in: msgIds } }, { userId: { in: userIds } }] } });
+  await prisma.messageMention.deleteMany({ where: { OR: [{ messageId: { in: msgIds } }, { userId: { in: userIds } }] } });
+  await prisma.savedMessage.deleteMany({ where: { OR: [{ messageId: { in: msgIds } }, { userId: { in: userIds } }] } });
+  await prisma.messageAttachment.deleteMany({ where: { messageId: { in: msgIds } } });
+  await prisma.message.deleteMany({ where: { id: { in: msgIds } } });
+
+  const events = await prisma.calendarEvent.findMany({ where: { createdBy: { in: userIds } }, select: { id: true } });
+  const eventIds = events.map(e => e.id);
+  await prisma.calendarEventAttendee.deleteMany({ where: { OR: [{ eventId: { in: eventIds } }, { userId: { in: userIds } }] } });
+  await prisma.calendarEvent.deleteMany({ where: { id: { in: eventIds } } });
+
+  const cmts = await prisma.comment.findMany({ where: { userId: { in: userIds } }, select: { id: true } });
+  const cmtIds = cmts.map(c => c.id);
+  await prisma.commentAttachment.deleteMany({ where: { commentId: { in: cmtIds } } });
+  await prisma.comment.deleteMany({ where: { id: { in: cmtIds } } });
+
+  const raised = await prisma.issue.findMany({ where: { reportedBy: { in: userIds } }, select: { id: true } });
+  const raisedIds = raised.map(i => i.id);
+  await prisma.comment.deleteMany({ where: { entityType: 'ISSUE', entityId: { in: raisedIds } } });
+  await prisma.issue.deleteMany({ where: { id: { in: raisedIds } } });
+  await prisma.issue.updateMany({ where: { assigneeId: { in: userIds } }, data: { assigneeId: null } });
+
+  const cleared = {
+    analytics: (await prisma.analyticsEvent.deleteMany({ where: { userId: { in: userIds } } })).count,
+    metrics: (await prisma.userMetricDaily.deleteMany({ where: { userId: { in: userIds } } })).count,
+    activity: (await prisma.activity.deleteMany({ where: { actorId: { in: userIds } } })).count,
+    notifications: (await prisma.notification.deleteMany({ where: { userId: { in: userIds } } })).count,
+    presence: (await prisma.presence.deleteMany({ where: { userId: { in: userIds } } })).count,
+    pollVotes: (await prisma.pollVote.deleteMany({ where: { userId: { in: userIds } } })).count,
+    rewards: (await prisma.reward.deleteMany({ where: { OR: [{ recipientId: { in: userIds } }, { givenById: { in: userIds } }] } })).count,
+  };
+  console.log(`  cleared activity: messages=${msgIds.length} events=${eventIds.length} comments=${cmtIds.length} issues=${raisedIds.length} analytics=${cleared.analytics} metrics=${cleared.metrics} activity=${cleared.activity} notifications=${cleared.notifications}`);
 }
 
 main()
