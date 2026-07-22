@@ -2,6 +2,7 @@ import { Controller, Get, Module, Param, Post, Query } from '@nestjs/common';
 import { PerformanceService } from './performance.service';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
 
 /** Clamp the period window to a sensible range (default 30 days). */
 function periodDays(raw?: string): number {
@@ -12,7 +13,10 @@ function periodDays(raw?: string): number {
 
 @Controller('performance')
 class PerformanceController {
-  constructor(private readonly perf: PerformanceService) {}
+  constructor(
+    private readonly perf: PerformanceService,
+    private readonly actor: ActorContextService,
+  ) {}
 
   @Get('me')
   async me(@Actor() actorId: string | null, @Query('days') days?: string) {
@@ -38,34 +42,37 @@ class PerformanceController {
     return this.perf.getHeatmap(userId, days ? Math.min(parseInt(days, 10), 366) : 365);
   }
 
+  // The organization for every org-wide report is the ACTOR's own org, resolved from the
+  // session — never a query param. Trusting the param let a holder of the permission scope
+  // the query to any org id (and omitting it dropped the filter, aggregating ALL orgs).
   @Get('org')
   @RequirePermission('analytics.view.organization')
-  org(@Query('organizationId') organizationId: string, @Query('days') days?: string) {
-    return this.perf.getOrgPerformance(organizationId, periodDays(days));
+  async org(@Query('days') days?: string) {
+    return this.perf.getOrgPerformance(await this.actor.requireOrgId(), periodDays(days));
   }
 
   @Get('org-heatmap')
   @RequirePermission('analytics.view.organization')
-  orgHeatmap(@Query('organizationId') organizationId: string, @Query('days') days?: string) {
-    return this.perf.getOrgHeatmap(organizationId, days ? Math.min(parseInt(days, 10), 366) : 365);
+  async orgHeatmap(@Query('days') days?: string) {
+    return this.perf.getOrgHeatmap(await this.actor.requireOrgId(), days ? Math.min(parseInt(days, 10), 366) : 365);
   }
 
   @Get('org/breakdowns')
   @RequirePermission('analytics.view.organization')
-  orgBreakdowns(@Query('organizationId') organizationId: string, @Query('days') days?: string) {
-    return this.perf.getOrgBreakdowns(organizationId, periodDays(days));
+  async orgBreakdowns(@Query('days') days?: string) {
+    return this.perf.getOrgBreakdowns(await this.actor.requireOrgId(), periodDays(days));
   }
 
   @Get('org/trend')
   @RequirePermission('analytics.view.organization')
-  orgTrend(@Query('organizationId') organizationId: string, @Query('days') days?: string) {
-    return this.perf.getOrgTrend(organizationId, periodDays(days));
+  async orgTrend(@Query('days') days?: string) {
+    return this.perf.getOrgTrend(await this.actor.requireOrgId(), periodDays(days));
   }
 
   @Post('snapshots/rebuild')
   @RequirePermission('analytics.view.organization')
-  rebuild(@Query('organizationId') organizationId: string) {
-    return this.perf.rebuildSnapshots(organizationId);
+  async rebuild() {
+    return this.perf.rebuildSnapshots(await this.actor.requireOrgId());
   }
 }
 

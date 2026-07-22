@@ -1,77 +1,78 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ActorContextService } from '../../common/context/actor-context.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
+import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 
 @Injectable()
 export class AnalyticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly actor: ActorContextService,
+    private readonly access: ProjectAccessService,
+    private readonly deadlines: DeadlineVisibilityService,
+  ) {}
 
-  async getDashboard(organizationId: string) {
+  /**
+   * The set of projects the current actor may see, as a Prisma Project where-fragment.
+   * A delivery lead (oversight) sees every project in their org; everyone else sees only
+   * the matters they are actively staffed on. This is the SAME conflict-wall rule the
+   * Projects list enforces, so an employee's Home never reflects firm-wide totals for
+   * matters they are not on. Org identity comes from the session, never a query param.
+   */
+  private async actorProjectWhere() {
+    const actorId = this.actor.requireActorId();
+    const organizationId = await this.actor.requireOrgId();
+    const oversight = await this.access.hasOversight(actorId);
+    const memberScope = oversight
+      ? { members: { some: { user: { organizationId } } } }
+      : { members: { some: { userId: actorId, isActive: true } } };
+    return { actorId, organizationId, oversight, projectWhere: { deletedAt: null, ...memberScope } };
+  }
+
+  async getDashboard() {
+    const { actorId, organizationId, oversight, projectWhere } = await this.actorProjectWhere();
+
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
 
+    // Tasks and time are scoped the same way: a lead sees the org's, a member sees their
+    // own. Time-logged reflects the actor's own hours for a member (their week), the whole
+    // org for a lead (the team's week) — never another employee's hours to a member.
+    const taskProjectWhere = { project: projectWhere, task: { deletedAt: null } };
+
     const [projects, taskCounts, timesheetHours, overdueCount, dueTodayCount] = await Promise.all([
       this.prisma.project.findMany({
-        where: {
-          deletedAt: null,
-          members: { some: { user: { organizationId } } },
-        },
-        select: {
-          id: true,
-          projectPhase: true,
-          completionPercentage: true,
-          dueDate: true,
-        },
+        where: projectWhere,
+        select: { id: true, projectPhase: true, completionPercentage: true, dueDate: true },
       }),
 
-      this.prisma.projectTask.count({
-        where: {
-          project: {
-            deletedAt: null,
-            members: { some: { user: { organizationId } } },
-          },
-          task: { deletedAt: null },
-        },
-      }),
+      this.prisma.projectTask.count({ where: taskProjectWhere }),
 
       this.prisma.timesheet.aggregate({
         where: {
           deletedAt: null,
-          date: {
-            gte: new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() - 6),
-          },
-          user: { organizationId },
+          date: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate() - 6) },
+          ...(oversight ? { user: { organizationId } } : { userId: actorId }),
         },
         _sum: { hoursLogged: true },
       }),
 
       this.prisma.projectTask.count({
         where: {
-          project: {
-            deletedAt: null,
-            members: { some: { user: { organizationId } } },
-          },
-          task: {
-            deletedAt: null,
-            dueDate: { lt: startOfToday },
-            currentStatus: { type: { not: 'CLOSED' } },
-          },
+          project: projectWhere,
+          task: { deletedAt: null, dueDate: { lt: startOfToday }, currentStatus: { type: { not: 'CLOSED' } } },
         },
       }),
 
       this.prisma.projectTask.count({
         where: {
-          project: {
-            deletedAt: null,
-            members: { some: { user: { organizationId } } },
-          },
+          project: projectWhere,
           task: {
             deletedAt: null,
-            dueDate: {
-              gte: startOfToday,
-              lt: endOfToday,
-            },
+            dueDate: { gte: startOfToday, lt: endOfToday },
             currentStatus: { type: { not: 'CLOSED' } },
             completionPercentage: { not: 100 },
           },
@@ -96,12 +97,10 @@ export class AnalyticsService {
     };
   }
 
-  async getProjectStats(organizationId: string) {
+  async getProjectStats() {
+    const { actorId, projectWhere } = await this.actorProjectWhere();
     const projects = await this.prisma.project.findMany({
-      where: {
-        deletedAt: null,
-        members: { some: { user: { organizationId } } },
-      },
+      where: projectWhere,
       include: {
         // L8: count only join rows whose task is not soft-deleted, so the reports
         // "Tasks" column / CSV / PDF don't overcount archived tasks.
@@ -110,10 +109,17 @@ export class AnalyticsService {
       },
       orderBy: { updatedAt: 'desc' },
     });
-    return projects;
+    // The client-facing deadline is restricted the same way the /projects module strips
+    // it — analytics must not become a redaction bypass.
+    const scope = await this.deadlines.scope(actorId);
+    return this.deadlines.redactProjects(projects, scope);
   }
 
-  async getTimesheetSummary(organizationId: string, from?: string, to?: string) {
+  async getTimesheetSummary(from?: string, to?: string) {
+    const organizationId = await this.actor.requireOrgId();
+    if (from && to && new Date(from) > new Date(to)) {
+      throw new BadRequestException('The "from" date must be on or before the "to" date.');
+    }
     const where = {
       deletedAt: null,
       user: { organizationId },

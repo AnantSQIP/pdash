@@ -1,9 +1,14 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { PermissionService } from '../permissions/permission.service';
+import { ActorContextService } from '../../common/context/actor-context.service';
 import { getActorId } from '../../common/context/request-context';
 import { CreateEventDto, UpdateEventDto } from './dto';
+
+// A recurring series is materialised up front; this caps how many occurrences one request
+// can create. Exceeding it is rejected explicitly (it used to be silently truncated).
+const MAX_OCCURRENCES = 365;
 
 @Injectable()
 export class EventsService {
@@ -11,7 +16,23 @@ export class EventsService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly permissions: PermissionService,
+    private readonly actor: ActorContextService,
   ) {}
+
+  /** Reject an event whose end precedes its start, or a recurrence that ends before it begins. */
+  private assertDateOrder(start?: Date | null, end?: Date | null, until?: Date | null) {
+    if (start && end && end < start) throw new BadRequestException('The event end cannot be before its start.');
+    if (start && until && until < start) throw new BadRequestException('The recurrence end date cannot be before the event start.');
+  }
+
+  /** A join link must be a real http(s) URL — never a javascript:/data: (XSS) or junk string. */
+  private cleanJoinUrl(v?: string): string | undefined {
+    if (v == null) return undefined;
+    const s = v.trim();
+    if (!s) return '';
+    if (!/^https?:\/\/\S+$/i.test(s)) throw new BadRequestException('The join link must be an http(s) URL.');
+    return s;
+  }
 
   /** Only the organizer (createdBy) or a Super Admin may modify/delete an event. */
   private async assertOrganizerOrPrivileged(createdBy: string) {
@@ -29,6 +50,9 @@ export class EventsService {
   }
 
   list(organizationId: string, from?: string, to?: string) {
+    if (from && to && new Date(from) > new Date(to)) {
+      throw new BadRequestException('The "from" date must be on or before the "to" date.');
+    }
     return this.prisma.calendarEvent.findMany({
       where: {
         organizationId,
@@ -44,8 +68,11 @@ export class EventsService {
   }
 
   async get(id: string) {
+    // Scope to the caller's org — an event id from another organization must 404, not leak
+    // its full detail (joinUrl/description/notes). All callers are single-org actors.
+    const organizationId = await this.actor.requireOrgId();
     const event = await this.prisma.calendarEvent.findFirst({
-      where: { id, deletedAt: null },
+      where: { id, organizationId, deletedAt: null },
       include: { attendees: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } } },
     });
     if (!event) throw new NotFoundException(`Event ${id} not found`);
@@ -54,15 +81,30 @@ export class EventsService {
 
   async create(dto: CreateEventDto) {
     // Organizer = verified actor (never the client-supplied createdBy).
-    const { attendeeIds = [], createdBy: _ignored, recurrence, recurrenceUntil, ...rest } = dto;
+    const { attendeeIds = [], createdBy: _ignored, organizationId: _clientOrg, joinUrl, recurrence, recurrenceUntil, ...rest } = dto;
     const actorId = getActorId();
     if (!actorId) throw new ForbiddenException('Not authenticated.');
+    // Org comes from the session, not the request body (no cross-tenant writes).
+    const organizationId = await this.actor.requireOrgId();
+    const start = new Date(dto.startDate);
+    const end = dto.endDate ? new Date(dto.endDate) : undefined;
+    const until = recurrenceUntil ? new Date(recurrenceUntil) : undefined;
+    this.assertDateOrder(start, end, until);
+    const cleanUrl = this.cleanJoinUrl(joinUrl);
+    if (recurrence && recurrence !== 'NONE') {
+      const n = this.countOccurrences(start, recurrence, until);
+      if (n > MAX_OCCURRENCES) {
+        throw new BadRequestException(`This recurring series is too long (max ${MAX_OCCURRENCES} occurrences) — shorten the end date or use a less frequent cadence.`);
+      }
+    }
     const event = await this.prisma.calendarEvent.create({
       data: {
         ...rest,
+        organizationId,
+        joinUrl: cleanUrl,
         createdBy: actorId,
-        startDate: new Date(dto.startDate),
-        endDate: dto.endDate ? new Date(dto.endDate) : undefined,
+        startDate: start,
+        endDate: end,
         // Mark the master with its recurrence rule; occurrences are generated below.
         recurrence: recurrence && recurrence !== 'NONE' ? recurrence : undefined,
         recurrenceUntil: recurrenceUntil ? new Date(recurrenceUntil) : undefined,
@@ -95,12 +137,21 @@ export class EventsService {
     return r;
   }
 
+  /** How many occurrences a series would produce up to `until` (bounded by the cap + 1). */
+  private countOccurrences(start: Date, rule: string, until?: Date): number {
+    const horizon = until ?? this.nextDate(new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 3, start.getUTCDate())), 'DAILY');
+    let cur = this.nextDate(start, rule);
+    let count = 0;
+    while (cur <= horizon && count <= MAX_OCCURRENCES) { cur = this.nextDate(cur, rule); count++; }
+    return count;
+  }
+
   /** Materialize repeat occurrences after the master (capped), each linked to the series. */
   private async generateOccurrences(master: { id: string; organizationId: string; title: string; description: string | null; type: string; allDay: boolean; color: string; location: string | null; joinUrl: string | null; reminderMinutes: number | null; notes: string | null; projectId: string | null; createdBy: string; startDate: Date; endDate: Date | null }, rule: string, untilStr: string | undefined, attendeeIds: string[]) {
     const start = new Date(master.startDate);
     const durationMs = master.endDate ? new Date(master.endDate).getTime() - start.getTime() : 0;
     const until = untilStr ? new Date(untilStr) : this.nextDate(new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 3, start.getUTCDate())), 'DAILY');
-    const MAX = 60;
+    const MAX = MAX_OCCURRENCES;
     const creates = [];
     let cur = this.nextDate(start, rule);
     let count = 0;
@@ -127,10 +178,18 @@ export class EventsService {
   async update(id: string, dto: UpdateEventDto) {
     const existing = await this.get(id);
     await this.assertOrganizerOrPrivileged(existing.createdBy);
+    // Validate the effective (post-update) date order, merging changed + unchanged fields,
+    // so a partial edit can't leave the event with its end before its start.
+    const start = dto.startDate ? new Date(dto.startDate) : existing.startDate;
+    const end = dto.endDate ? new Date(dto.endDate) : existing.endDate;
+    this.assertDateOrder(start, end);
+    const { joinUrl, ...restDto } = dto;
+    const cleanUrl = this.cleanJoinUrl(joinUrl);
     const event = await this.prisma.calendarEvent.update({
       where: { id },
       data: {
-        ...dto,
+        ...restDto,
+        ...(joinUrl !== undefined ? { joinUrl: cleanUrl } : {}),
         startDate: dto.startDate ? new Date(dto.startDate) : undefined,
         endDate: dto.endDate ? new Date(dto.endDate) : undefined,
       },
@@ -216,6 +275,8 @@ export class EventsService {
   async respond(id: string, response: string) {
     const actorId = getActorId();
     if (!actorId) throw new ForbiddenException('Not authenticated.');
+    // Distinguish "no such event" (404) from "event exists but you're not invited" (403).
+    await this.get(id);
     const att = await this.prisma.calendarEventAttendee.findUnique({ where: { eventId_userId: { eventId: id, userId: actorId } } });
     if (!att) throw new ForbiddenException('You are not invited to this meeting.');
     await this.prisma.calendarEventAttendee.update({ where: { id: att.id }, data: { response } });
@@ -263,7 +324,9 @@ export class EventsService {
       const on = new Set<string>();
       if (ids.includes(e.createdBy)) on.add(e.createdBy);
       e.attendees.forEach(a => { if (ids.includes(a.userId)) on.add(a.userId); });
-      on.forEach(uid => busy.get(uid)!.push({ start: e.startDate.toISOString(), end, title: e.title, allDay: e.allDay }));
+      // Free/busy exposes only the TIME blocks — never the meeting title, which can name a
+      // confidential client matter. The scheduling assistant just needs to see "busy".
+      on.forEach(uid => busy.get(uid)!.push({ start: e.startDate.toISOString(), end, title: 'Busy', allDay: e.allDay }));
     }
     for (const l of leaves) {
       busy.get(l.userId)?.push({ start: l.startDate.toISOString(), end: l.endDate.toISOString(), title: `${l.leaveType} leave`, allDay: true });

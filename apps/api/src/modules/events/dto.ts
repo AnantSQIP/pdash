@@ -11,6 +11,10 @@ import {
   MinLength,
 } from 'class-validator';
 
+// The kinds of calendar event the app understands (mirrors the web EventType union).
+// Free-text types used to be stored verbatim — including HTML/script strings.
+export const EVENT_TYPES = ['EVENT', 'MEETING', 'TASK_DUE', 'MILESTONE', 'REMINDER', 'HOLIDAY', 'LEAVE', 'COMPOFF', 'WFH'];
+
 export class CreateEventDto {
   @IsString()
   organizationId!: string;
@@ -26,7 +30,7 @@ export class CreateEventDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(EVENT_TYPES)
   type?: string;
 
   @IsDateString()
@@ -111,7 +115,7 @@ export class UpdateEventDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(EVENT_TYPES)
   type?: string;
 
   @IsOptional()

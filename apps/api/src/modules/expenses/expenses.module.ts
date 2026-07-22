@@ -10,6 +10,13 @@ import { NotificationsService } from '../notifications/notifications.module';
 // Expense management: an employee records a business expense and requests reimbursement.
 // Flow: submit → an approver (expense.approve) approves/rejects → mark reimbursed once paid.
 const CATEGORIES = ['TRAVEL', 'MEALS', 'SUPPLIES', 'SOFTWARE', 'ACCOMMODATION', 'CLIENT', 'OTHER'];
+const STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'REIMBURSED', 'CANCELLED'];
+// Currencies the app accepts (matches the web form + common billing currencies).
+const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AUD', 'CAD', 'SGD', 'JPY', 'CHF', 'AED'];
+const MAX_AMOUNT = 10_000_000; // ₹1 crore — a sane ceiling on a single claim
+const MAX_DESC = 2000;
+const MAX_NOTE = 2000;
+const MAX_AGE_YEARS = 5;
 const userSelect = { select: { id: true, firstName: true, lastName: true, email: true, profilePhoto: true } };
 
 @Injectable()
@@ -40,17 +47,47 @@ export class ExpensesService {
   async submit(userId: string, data: { category?: string; amount: number; currency?: string; spentOn: string; description: string; receiptDocumentId?: string }) {
     const amount = Number(data?.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Enter a valid expense amount.');
+    if (amount > MAX_AMOUNT) throw new BadRequestException('That amount is too large — please check the value.');
+    // Money has at most 2 decimal places — reject sub-paisa precision (0.001 etc.).
+    if (Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-6) {
+      throw new BadRequestException('Amount can have at most 2 decimal places.');
+    }
     if (!data?.description?.trim()) throw new BadRequestException('A description is required.');
+    if (data.description.length > MAX_DESC) throw new BadRequestException('Description is too long.');
     if (!data?.spentOn) throw new BadRequestException('Tell us when the expense was incurred.');
-    const category = data.category && CATEGORIES.includes(data.category) ? data.category : 'OTHER';
+    // Unknown category is rejected, not silently reclassified to OTHER (which corrupted reports).
+    const category = data.category ?? 'OTHER';
+    if (!CATEGORIES.includes(category)) throw new BadRequestException(`category must be one of: ${CATEGORIES.join(', ')}`);
+    const currency = (data.currency || 'INR').toUpperCase();
+    if (!CURRENCIES.includes(currency)) throw new BadRequestException(`currency must be one of: ${CURRENCIES.join(', ')}`);
     const spentOn = new Date(`${data.spentOn.slice(0, 10)}T00:00:00.000Z`);
     if (Number.isNaN(spentOn.getTime())) throw new BadRequestException('Invalid date.');
     if (spentOn > new Date()) throw new BadRequestException('The expense date cannot be in the future.');
+    const minDate = new Date();
+    minDate.setUTCFullYear(minDate.getUTCFullYear() - MAX_AGE_YEARS);
+    if (spentOn < minDate) throw new BadRequestException(`The expense date is too far in the past (older than ${MAX_AGE_YEARS} years).`);
 
     const organizationId = await this.orgOf(userId);
+    // A receipt, if attached, must be a real document the SUBMITTER uploaded — never a
+    // guessed id or another user's blob (that was an IDOR into document storage).
+    if (data.receiptDocumentId) {
+      const doc = await this.prisma.document.findFirst({
+        where: { id: data.receiptDocumentId, deletedAt: null }, select: { uploadedBy: true },
+      });
+      if (!doc) throw new BadRequestException('The attached receipt could not be found.');
+      if (doc.uploadedBy !== userId) throw new ForbiddenException('You can only attach a receipt you uploaded.');
+    }
+    // Duplicate guard: the same person, amount, day and description already on file (and not
+    // rejected/cancelled) is almost certainly a double-claim.
+    const dup = await this.prisma.expense.findFirst({
+      where: { userId, amount, spentOn, description: data.description.trim(), status: { notIn: ['REJECTED', 'CANCELLED'] } },
+      select: { id: true },
+    });
+    if (dup) throw new BadRequestException('You already submitted an identical expense — check your list before resubmitting.');
+
     const expense = await this.prisma.expense.create({
       data: {
-        userId, organizationId, category, amount, currency: data.currency || 'INR',
+        userId, organizationId, category, amount, currency,
         spentOn, description: data.description.trim(), receiptDocumentId: data.receiptDocumentId ?? null,
         status: 'PENDING',
       },
@@ -72,6 +109,7 @@ export class ExpensesService {
   }
 
   async forOrg(reviewerId: string, status?: string) {
+    if (status && !STATUSES.includes(status)) throw new BadRequestException(`status must be one of: ${STATUSES.join(', ')}`);
     const organizationId = await this.orgOf(reviewerId);
     if (!organizationId) return [];
     return this.prisma.expense.findMany({
@@ -81,7 +119,10 @@ export class ExpensesService {
   }
 
   async decide(id: string, actorId: string, approve: boolean, note?: string) {
-    const exp = await this.prisma.expense.findUnique({ where: { id } });
+    if (note && note.length > MAX_NOTE) throw new BadRequestException('Review note is too long.');
+    // Scope the lookup to the reviewer's own org (defence-in-depth for multi-tenant).
+    const organizationId = await this.orgOf(actorId);
+    const exp = await this.prisma.expense.findFirst({ where: { id, organizationId: organizationId ?? undefined } });
     if (!exp) throw new NotFoundException('Expense not found');
     if (exp.status !== 'PENDING') throw new BadRequestException('Only a pending expense can be reviewed.');
     if (exp.userId === actorId) throw new ForbiddenException('You cannot review your own expense.');
@@ -103,9 +144,14 @@ export class ExpensesService {
 
   /** Mark an APPROVED expense as paid out. */
   async markReimbursed(id: string, actorId: string) {
-    const exp = await this.prisma.expense.findUnique({ where: { id } });
+    const organizationId = await this.orgOf(actorId);
+    const exp = await this.prisma.expense.findFirst({ where: { id, organizationId: organizationId ?? undefined } });
     if (!exp) throw new NotFoundException('Expense not found');
     if (exp.status !== 'APPROVED') throw new BadRequestException('Only an approved expense can be marked reimbursed.');
+    // Segregation of duties: the payer can be neither the claimant nor the approver — no one
+    // person can push their own (or an expense they approved) all the way to "paid".
+    if (exp.userId === actorId) throw new ForbiddenException('You cannot reimburse your own expense.');
+    if (exp.reviewedBy === actorId) throw new ForbiddenException('The person who approved an expense cannot also mark it reimbursed.');
     const updated = await this.prisma.expense.update({
       where: { id }, data: { status: 'REIMBURSED', reimbursedAt: new Date() }, include: { user: userSelect },
     });

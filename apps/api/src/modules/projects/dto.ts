@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -10,8 +11,14 @@ import {
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
+// Task/project priority is a fixed set — free-text used to be stored verbatim.
+export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+// The project lifecycle phases (free-text before — any string was accepted).
+export const PROJECT_PHASES = ['IDEA', 'PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
+
 export class CreateProjectDto {
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
   @MaxLength(100)
   title!: string;
@@ -36,7 +43,7 @@ export class CreateProjectDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(PROJECT_PRIORITIES)
   priority?: string;
 
   // An emptied form field submits "", which @IsDateString would reject with a 400. Treat it
@@ -62,6 +69,8 @@ export class CreateProjectDto {
 export class UpdateProjectDto {
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
   @MaxLength(100)
   title?: string;
 
@@ -70,11 +79,11 @@ export class UpdateProjectDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(PROJECT_PRIORITIES)
   priority?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(PROJECT_PHASES)
   projectPhase?: string;
 
   // `null` is meaningful on these three: it CLEARS the date. @IsOptional() lets null through

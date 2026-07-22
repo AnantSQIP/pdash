@@ -5,6 +5,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 
@@ -24,6 +25,32 @@ function parseInstant(s?: string | null): Date | null {
   const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s.trim());
   return new Date(hasTz ? s : `${s}Z`);
 }
+
+/**
+ * Parse a required calendar-day field to a UTC midnight Date, throwing a clean 400 when
+ * it is missing, non-string, or not a real date. The handlers used to do
+ * `data.date.slice(0, 10)` directly, so an absent/mistyped field threw a TypeError that
+ * surfaced as an opaque HTTP 500 across every attendance/leave create endpoint.
+ */
+function parseDayStrict(s: unknown, field = 'date'): Date {
+  const raw = typeof s === 'string' ? s.slice(0, 10) : '';
+  const d = new Date(`${raw}T00:00:00.000Z`);
+  if (isNaN(d.getTime())) throw new BadRequestException(`A valid ${field} (YYYY-MM-DD) is required.`);
+  return d;
+}
+
+// Statuses an admin may set manually / a regularisation may resolve to. Free-text status
+// used to be written straight through, silently corrupting attendance reports.
+const MARK_STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE', 'HOLIDAY', 'LATE'];
+// What kind of day a regularisation is about (free-form before — a rogue "WFH" type even
+// re-routed around the dedicated WFH approval flow).
+const REG_TYPES = ['MISSED_PUNCH', 'LATE', 'ON_DUTY', 'WFH', 'OTHER'];
+// Upper bounds on free-text so a single request can't store/broadcast a novel-length blob.
+const MAX_REASON = 2000;
+const MAX_PID = 120;
+const MAX_NAME = 160;
+// A comp-off claim must be reasonably recent — no farming weekends from years ago.
+const COMPOFF_MAX_AGE_DAYS = 90;
 
 const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
 // Escalation owner who is copied on attendance regularisations and comp-off claims
@@ -48,6 +75,12 @@ export class AttendanceService {
   private async orgOf(userId: string): Promise<string | null> {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     return u?.organizationId ?? null;
+  }
+
+  /** 404 unless the target user belongs to the given (caller's) organization. */
+  async assertUserInOrg(userId: string, organizationId: string): Promise<void> {
+    const u = await this.prisma.user.findFirst({ where: { id: userId, organizationId, deletedAt: null }, select: { id: true } });
+    if (!u) throw new NotFoundException(`User ${userId} not found`);
   }
 
   // Attendance regularisations are routed to HR (people-ops) + Yash (escalation owner)
@@ -130,7 +163,12 @@ export class AttendanceService {
 
   /** Admin/manual mark for a specific user+date. */
   async mark(data: { userId: string; date: string; status: string; note?: string }) {
-    const date = parseDay(data.date.slice(0, 10));
+    const date = parseDayStrict(data.date, 'date');
+    if (date > utcDay(new Date())) throw new BadRequestException('Cannot mark attendance for a future date.');
+    if (!MARK_STATUSES.includes(data.status)) {
+      throw new BadRequestException(`status must be one of: ${MARK_STATUSES.join(', ')}`);
+    }
+    if (data.note && data.note.length > MAX_REASON) throw new BadRequestException('Note is too long.');
     const organizationId = await this.orgOf(data.userId);
     return this.prisma.attendance.upsert({
       where: { userId_date: { userId: data.userId, date } },
@@ -140,6 +178,11 @@ export class AttendanceService {
   }
 
   async regularize(id: string, actorId: string, reason: string, newStatus?: string) {
+    if (!reason?.trim()) throw new BadRequestException('A reason is required.');
+    if (reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
+    if (newStatus && !MARK_STATUSES.includes(newStatus)) {
+      throw new BadRequestException(`newStatus must be one of: ${MARK_STATUSES.join(', ')}`);
+    }
     const row = await this.prisma.attendance.findUnique({ where: { id } });
     if (!row) throw new NotFoundException(`Attendance ${id} not found`);
     return this.prisma.attendance.update({
@@ -160,13 +203,20 @@ export class AttendanceService {
     data: { date: string; reason: string; requestType?: string; status?: string; checkIn?: string; checkOut?: string },
   ) {
     if (!data?.reason?.trim()) throw new BadRequestException('A reason is required.');
+    if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
     const REG_ALLOWED = ['PRESENT', 'HALF_DAY'];
     const status = data.status ?? 'PRESENT';
     if (!REG_ALLOWED.includes(status)) throw new BadRequestException(`status must be one of: ${REG_ALLOWED.join(', ')}`);
-    const date = parseDay(data.date.slice(0, 10));
+    const requestType = data.requestType ?? 'OTHER';
+    if (!REG_TYPES.includes(requestType)) throw new BadRequestException(`requestType must be one of: ${REG_TYPES.join(', ')}`);
+    const date = parseDayStrict(data.date, 'date');
     if (date > utcDay(new Date())) throw new BadRequestException('Cannot regularise a future date.');
     const checkIn = parseInstant(data.checkIn);
     const checkOut = parseInstant(data.checkOut);
+    // Times MUST fall on the day being regularised. Otherwise an unrelated-date check-out
+    // produced a multi-day span that approval wrote as an absurd single-day total (441h).
+    if (checkIn && dayKey(utcDay(checkIn)) !== dayKey(date)) throw new BadRequestException('Check-in time must fall on the day being regularised.');
+    if (checkOut && dayKey(utcDay(checkOut)) !== dayKey(date)) throw new BadRequestException('Check-out time must fall on the day being regularised.');
     if (checkIn && checkOut && checkOut <= checkIn) throw new BadRequestException('Check-out must be after check-in.');
 
     // One open request per day — a second would let two approvals fight over the same row.
@@ -179,7 +229,7 @@ export class AttendanceService {
     const req = await this.prisma.regularizationRequest.create({
       data: {
         userId, organizationId, date, reason: data.reason.trim(),
-        requestType: data.requestType ?? 'OTHER',
+        requestType,
         requestedStatus: status,
         requestedCheckIn: checkIn ?? undefined,
         requestedCheckOut: checkOut ?? undefined,
@@ -297,8 +347,9 @@ export class AttendanceService {
 
   async requestWfh(userId: string, data: { startDate: string; endDate: string; reason: string }) {
     if (!data?.reason?.trim()) throw new BadRequestException('A reason is required.');
-    const start = parseDay(data.startDate.slice(0, 10));
-    const end = parseDay(data.endDate.slice(0, 10));
+    if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
+    const start = parseDayStrict(data.startDate, 'startDate');
+    const end = parseDayStrict(data.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
     if (end < utcDay(new Date())) throw new BadRequestException('Cannot request work-from-home for dates in the past.');
     // A runaway range would silently turn everything WFH — long arrangements go through HR.
@@ -352,6 +403,7 @@ export class AttendanceService {
   async approveWfh(id: string, actorId: string, note?: string) {
     const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('WFH request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('WFH request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be approved.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own WFH request.');
 
@@ -393,6 +445,7 @@ export class AttendanceService {
   async rejectWfh(id: string, actorId: string, note?: string) {
     const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('WFH request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('WFH request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be rejected.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own WFH request.');
     const updated = await this.prisma.wfhRequest.update({
@@ -416,7 +469,16 @@ export class AttendanceService {
     // An APPROVED future/ongoing WFH can be cancelled too (plans changed — coming to the
     // office). Days already punched keep their recorded mode; later punches derive OFFICE.
     if (!['PENDING', 'APPROVED'].includes(req.status)) throw new BadRequestException('Cannot cancel this request.');
-    return this.prisma.wfhRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
+    const wasApproved = req.status === 'APPROVED';
+    const updated = await this.prisma.wfhRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
+    // Approval published a "Working from home" event to the shared calendar — remove it,
+    // or the person keeps showing as WFH after cancelling.
+    if (wasApproved && req.organizationId) {
+      await this.prisma.calendarEvent.deleteMany({
+        where: { organizationId: req.organizationId, type: 'WFH', createdBy: req.userId, startDate: req.startDate, endDate: req.endDate },
+      });
+    }
+    return updated;
   }
 
   /**
@@ -425,6 +487,9 @@ export class AttendanceService {
    * This is what links attendance to the rest of the system.
    */
   async getMonth(userId: string, year: number, month: number) {
+    if (!Number.isInteger(year) || year < 1970 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12) {
+      throw new BadRequestException('A valid year (1970–9999) and month (1–12) are required.');
+    }
     const first = new Date(Date.UTC(year, month - 1, 1));
     const last = new Date(Date.UTC(year, month, 0));
     const daysInMonth = last.getUTCDate();
@@ -467,13 +532,15 @@ export class AttendanceService {
     }
     const count = (s: string) => days.filter(d => d.status === s).length;
     const present = count('PRESENT') + count('HALF_DAY');
+    // A HALF_DAY is half a day present — it must not score as a full day in the rate.
+    const presentCredit = count('PRESENT') + 0.5 * count('HALF_DAY');
     const workingDays = days.filter(d => WORKING.includes(d.status)).length;
     // Approved leave must NOT count against attendance rate (it isn't an expected
     // working day). Denominator = working days minus approved-leave days.
     const expectedDays = workingDays - count('ON_LEAVE');
     const summary = {
       present, absent: count('ABSENT'), onLeave: count('ON_LEAVE'), holiday: count('HOLIDAY'),
-      weekend: count('WEEKEND'), workingDays, attendanceRate: expectedDays > 0 ? Math.round((present / expectedDays) * 100) : 0,
+      weekend: count('WEEKEND'), workingDays, attendanceRate: expectedDays > 0 ? Math.round((presentCredit / expectedDays) * 100) : 0,
       hoursLogged: round(days.reduce((s, d) => s + (d.totalHours ?? 0), 0)),
     };
     return { userId, year, month, days, summary };
@@ -481,8 +548,9 @@ export class AttendanceService {
 
   /** Per-user attendance summary across a date range — admin all-users view. */
   async orgSummary(organizationId: string, from: string, to: string) {
-    const fromD = parseDay(from.slice(0, 10));
-    const toD = parseDay(to.slice(0, 10));
+    const fromD = parseDayStrict(from, 'from');
+    const toD = parseDayStrict(to, 'to');
+    if (fromD > toD) throw new BadRequestException('The "from" date must be on or before the "to" date.');
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true, designation: true },
@@ -508,12 +576,12 @@ export class AttendanceService {
     const todayKey = dayKey(utcDay(new Date()));
 
     const rows = users.map(u => {
-      let present = 0, absent = 0, onLeave = 0, holiday = 0, hours = 0;
+      let present = 0, absent = 0, onLeave = 0, holiday = 0, hours = 0, half = 0;
       for (const k of days) {
         const wd = parseDay(k).getUTCDay();
         const ex = attByUserDay.get(`${u.id}|${k}`);
         if (ex) {
-          if (ex.status === 'PRESENT' || ex.status === 'HALF_DAY') { present++; hours += ex.totalHours ?? 0; }
+          if (ex.status === 'PRESENT' || ex.status === 'HALF_DAY') { present++; if (ex.status === 'HALF_DAY') half++; hours += ex.totalHours ?? 0; }
           else if (ex.status === 'ABSENT') absent++;
           else if (ex.status === 'ON_LEAVE') onLeave++;
           else if (ex.status === 'HOLIDAY') holiday++;
@@ -526,12 +594,14 @@ export class AttendanceService {
         if (k < todayKey) absent++;
       }
       // Approved leave is not an expected working day, so it must not drag the rate
-      // down — mirror getMonth, where the denominator excludes leave days.
+      // down — mirror getMonth, where the denominator excludes leave days. A HALF_DAY
+      // scores half a present day in the rate (not a full one).
       const expectedDays = present + absent;
+      const presentCredit = present - 0.5 * half;
       return {
         userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
         present, absent, onLeave, holiday, hoursLogged: round(hours),
-        attendanceRate: expectedDays ? Math.round((present / expectedDays) * 100) : 0,
+        attendanceRate: expectedDays ? Math.round((presentCredit / expectedDays) * 100) : 0,
       };
     });
     return { from, to, rows };
@@ -585,11 +655,24 @@ export class LeaveService {
   }
 
   async create(userId: string, dto: { leaveType: string; startDate: string; endDate: string; reason?: string }) {
-    const start = parseDay(dto.startDate.slice(0, 10));
-    const end = parseDay(dto.endDate.slice(0, 10));
+    const start = parseDayStrict(dto.startDate, 'startDate');
+    const end = parseDayStrict(dto.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
     // M4: reject leave that is entirely in the past (approval would retroactively debit balance).
     if (end < utcDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
+    if (dto.reason && dto.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
+    // A runaway range would loop the business-day counter unbounded and debit an absurd
+    // balance — a single leave never spans more than a year.
+    if ((end.getTime() - start.getTime()) / 86_400_000 > 366) {
+      throw new BadRequestException('A single leave request cannot span more than a year.');
+    }
+    const organizationId = await this.orgOf(userId);
+    // The leave type must be one the org actually offers. Free-text types silently bypassed
+    // quota and never showed up in the balance view.
+    const type = await this.prisma.leaveType.findFirst({
+      where: { organizationId: organizationId ?? undefined, code: dto.leaveType },
+    });
+    if (!type) throw new BadRequestException(`"${dto.leaveType}" is not a valid leave type.`);
     // M3: only ONE leave can apply to a given day — reject a request that overlaps any
     // existing pending/approved leave (also prevents double-debiting the balance, and
     // stops applying two leave types on the same day).
@@ -597,7 +680,6 @@ export class LeaveService {
       where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
     });
     if (clash) throw new BadRequestException('You already have a leave (pending or approved) on one or more of these days — only one leave can apply to a day.');
-    const organizationId = await this.orgOf(userId);
     // Count business days only — weekends and holidays do not consume leave balance.
     const numDays = (await this.businessDays(organizationId, start, end)).length;
     if (numDays === 0) throw new BadRequestException('Selected dates contain no working days');
@@ -607,16 +689,43 @@ export class LeaveService {
       if (available < numDays) {
         throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
       }
+    } else if (type.annualQuota > 0) {
+      // Enforce the annual quota for regular leave types (CL/SL/EL …). Count both pending
+      // and approved days this year so stacked requests can't collectively exceed it.
+      const year = new Date().getUTCFullYear();
+      const yStart = new Date(Date.UTC(year, 0, 1));
+      const yEnd = new Date(Date.UTC(year + 1, 0, 1));
+      const usedAgg = await this.prisma.leaveRequest.aggregate({
+        where: { userId, leaveType: dto.leaveType, status: { in: ['PENDING', 'APPROVED'] }, startDate: { gte: yStart, lt: yEnd } },
+        _sum: { numDays: true },
+      });
+      const used = usedAgg._sum.numDays ?? 0;
+      if (used + numDays > type.annualQuota) {
+        const remaining = Math.max(0, type.annualQuota - used);
+        throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
+      }
     }
-    return this.prisma.leaveRequest.create({
+    const created = await this.prisma.leaveRequest.create({
       data: { userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end, numDays, reason: dto.reason ?? null, status: 'PENDING' },
       include: { user: this.userSelect },
     });
+    // Route the request to approvers — parity with WFH and comp-off, which both notify.
+    const u = (created as { user?: { firstName?: string; lastName?: string } }).user;
+    const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() || 'An employee' : 'An employee';
+    const range = dayKey(start) === dayKey(end) ? dayKey(start) : `${dayKey(start)} – ${dayKey(end)}`;
+    await this.notifications.notify(await this.leaveApprovers(organizationId), {
+      type: 'leave.requested',
+      title: 'Leave request to review',
+      message: `${name} requested ${dto.leaveType} leave (${numDays} day${numDays === 1 ? '' : 's'}) for ${range}.`,
+      link: '/attendance',
+    });
+    return created;
   }
 
   async approve(id: string, actorId: string, note?: string) {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.status !== 'PENDING') throw new BadRequestException('Only PENDING requests can be approved');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own leave request');
 
@@ -672,6 +781,7 @@ export class LeaveService {
   async reject(id: string, actorId: string, note?: string) {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.status !== 'PENDING') throw new BadRequestException('Only PENDING requests can be rejected');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own leave request');
     const updated = await this.prisma.leaveRequest.update({
@@ -691,9 +801,15 @@ export class LeaveService {
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.userId !== actorId) throw new ForbiddenException('You can only cancel your own leave requests');
     if (!['PENDING', 'APPROVED'].includes(req.status)) throw new BadRequestException('Cannot cancel this request');
-    // Remove generated ON_LEAVE attendance if it was approved.
+    // Remove generated ON_LEAVE attendance + the shared-calendar event if it was approved,
+    // so the person no longer shows as on-leave anywhere after cancelling.
     if (req.status === 'APPROVED') {
       await this.prisma.attendance.deleteMany({ where: { userId: req.userId, status: 'ON_LEAVE', date: { gte: utcDay(req.startDate), lte: utcDay(req.endDate) } } });
+      if (req.organizationId) {
+        await this.prisma.calendarEvent.deleteMany({
+          where: { organizationId: req.organizationId, type: 'LEAVE', createdBy: req.userId, startDate: req.startDate, endDate: req.endDate },
+        });
+      }
     }
     return this.prisma.leaveRequest.update({ where: { id }, data: { status: 'CANCELLED' }, include: { user: this.userSelect } });
   }
@@ -790,8 +906,16 @@ export class LeaveService {
   async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) {
     if (!data?.reason?.trim()) throw new BadRequestException('Tell us what you worked on.');
     if (!data?.projectRef?.trim()) throw new BadRequestException('A Project ID (PID) is required.');
-    const workDate = parseDay(data.workDate.slice(0, 10));
+    if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
+    if (data.projectRef.length > MAX_PID) throw new BadRequestException('Project ID is too long.');
+    if (data.hoursWorked != null && (!(data.hoursWorked > 0) || data.hoursWorked > 24)) {
+      throw new BadRequestException('Hours worked must be between 0 and 24.');
+    }
+    const workDate = parseDayStrict(data.workDate, 'workDate');
     if (workDate > utcDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
+    if ((utcDay(new Date()).getTime() - workDate.getTime()) / 86_400_000 > COMPOFF_MAX_AGE_DAYS) {
+      throw new BadRequestException(`Comp-off must be claimed within ${COMPOFF_MAX_AGE_DAYS} days of the day worked.`);
+    }
     const organizationId = await this.orgOf(userId);
     if (!(await this.isNonWorkingDay(organizationId, workDate))) {
       throw new BadRequestException('Comp-off is only for working on a weekend or a company holiday.');
@@ -848,6 +972,7 @@ export class LeaveService {
   async approveCompOff(id: string, actorId: string, note?: string) {
     const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('Comp-off request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be approved.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own comp-off claim.');
     await this.ensureCompOffType(req.organizationId); // so the earned credit is availeable as CO leave
@@ -877,6 +1002,7 @@ export class LeaveService {
   async rejectCompOff(id: string, actorId: string, note?: string) {
     const req = await this.prisma.compOffRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('Comp-off request not found');
+    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('Comp-off request not found');
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending claim can be rejected.');
     if (req.userId === actorId) throw new ForbiddenException('You cannot review your own comp-off claim.');
     const updated = await this.prisma.compOffRequest.update({
@@ -905,8 +1031,11 @@ export class LeaveService {
     return this.prisma.holiday.findMany({ where, orderBy: { date: 'asc' } });
   }
   createHoliday(dto: { organizationId: string; name: string; date: string; type?: string; recurring?: boolean }) {
+    if (!dto?.name?.trim()) throw new BadRequestException('A holiday name is required.');
+    if (dto.name.length > MAX_NAME) throw new BadRequestException('Holiday name is too long.');
+    const date = parseDayStrict(dto.date, 'date');
     return this.prisma.holiday.create({
-      data: { organizationId: dto.organizationId, name: dto.name, date: parseDay(dto.date.slice(0, 10)), type: dto.type ?? 'PUBLIC', recurring: dto.recurring ?? false },
+      data: { organizationId: dto.organizationId, name: dto.name.trim(), date, type: dto.type ?? 'PUBLIC', recurring: dto.recurring ?? false },
     });
   }
   removeHoliday(id: string) {
@@ -917,7 +1046,10 @@ export class LeaveService {
 // ════════════════════════════════════════════════════════════════════════════════
 @Controller('attendance')
 class AttendanceController {
-  constructor(private readonly svc: AttendanceService) {}
+  constructor(
+    private readonly svc: AttendanceService,
+    private readonly actor: ActorContextService,
+  ) {}
 
   @Get('me/today')
   today(@Actor() actorId: string | null) {
@@ -1039,17 +1171,20 @@ class AttendanceController {
 
   @Get('users/:userId/month')
   @RequirePermission('attendance.view.organization')
-  userMonth(@Param('userId') userId: string, @Query('year') year: string, @Query('month') month: string) {
+  async userMonth(@Param('userId') userId: string, @Query('year') year: string, @Query('month') month: string) {
     const y = parseInt(year, 10), m = parseInt(month, 10);
     if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) throw new BadRequestException('year and month are required');
+    // The target must be in the caller's own org (no cross-tenant read by path userId).
+    await this.svc.assertUserInOrg(userId, await this.actor.requireOrgId());
     return this.svc.getMonth(userId, y, m);
   }
 
   @Get('org/summary')
   @RequirePermission('attendance.view.organization')
-  orgSummary(@Query('organizationId') organizationId: string, @Query('from') from: string, @Query('to') to: string) {
-    if (!organizationId || !from || !to) throw new BadRequestException('organizationId, from, to are required');
-    return this.svc.orgSummary(organizationId, from, to);
+  async orgSummary(@Query('from') from: string, @Query('to') to: string) {
+    if (!from || !to) throw new BadRequestException('from and to are required');
+    // Org from the session actor — never a client-supplied query param.
+    return this.svc.orgSummary(await this.actor.requireOrgId(), from, to);
   }
 
   @Post('mark')
@@ -1061,7 +1196,10 @@ class AttendanceController {
 
 @Controller('leave')
 class LeaveController {
-  constructor(private readonly svc: LeaveService) {}
+  constructor(
+    private readonly svc: LeaveService,
+    private readonly actor: ActorContextService,
+  ) {}
 
   @Get('requests/me')
   myRequests(@Actor() actorId: string | null, @Query('status') status?: string) {
@@ -1071,12 +1209,13 @@ class LeaveController {
 
   @Get('requests/org')
   @RequirePermission('leave.view.organization')
-  orgRequests(@Query('organizationId') organizationId: string, @Query('status') status?: string) {
-    if (!organizationId) throw new BadRequestException('organizationId required');
-    return this.svc.listForOrg(organizationId, status);
+  async orgRequests(@Query('status') status?: string) {
+    // Org from the session actor — never a client-supplied query param.
+    return this.svc.listForOrg(await this.actor.requireOrgId(), status);
   }
 
   @Post('requests')
+  @RequirePermission('leave.request')
   create(@Actor() actorId: string | null, @Body() body: { leaveType: string; startDate: string; endDate: string; reason?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.create(actorId, body);
@@ -1144,22 +1283,24 @@ class LeaveController {
     return this.svc.cancelCompOff(id, actorId);
   }
 
+  // Leave types & holidays are org-public reads (everyone files leave / sees holidays), so
+  // they stay open to any authenticated user — but scoped to the caller's OWN org, resolved
+  // from the session rather than a client-supplied (and previously unchecked) query param.
   @Get('types')
-  types(@Query('organizationId') organizationId: string) {
-    if (!organizationId) throw new BadRequestException('organizationId required');
-    return this.svc.listTypes(organizationId);
+  async types() {
+    return this.svc.listTypes(await this.actor.requireOrgId());
   }
 
   @Get('holidays')
-  holidays(@Query('organizationId') organizationId: string, @Query('year') year?: string) {
-    if (!organizationId) throw new BadRequestException('organizationId required');
-    return this.svc.listHolidays(organizationId, year ? parseInt(year, 10) : undefined);
+  async holidays(@Query('year') year?: string) {
+    return this.svc.listHolidays(await this.actor.requireOrgId(), year ? parseInt(year, 10) : undefined);
   }
 
   @Post('holidays')
   @RequirePermission('holiday.manage')
-  createHoliday(@Body() body: { organizationId: string; name: string; date: string; type?: string; recurring?: boolean }) {
-    return this.svc.createHoliday(body);
+  async createHoliday(@Body() body: { name: string; date: string; type?: string; recurring?: boolean }) {
+    // The holiday belongs to the creator's org, taken from the session (not the body).
+    return this.svc.createHoliday({ ...body, organizationId: await this.actor.requireOrgId() });
   }
 
   @Delete('holidays/:id')

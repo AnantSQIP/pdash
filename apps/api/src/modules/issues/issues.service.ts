@@ -4,6 +4,7 @@ import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { CreateIssueDto, UpdateIssueDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true };
 const TS_SELECT = { id: true, hoursLogged: true, billable: true, date: true } as const;
@@ -18,7 +19,16 @@ export class IssuesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventService,
+    private readonly access: ProjectAccessService,
   ) {}
+
+  /** Resolve an issue's project, then assert the actor may access that project. */
+  private async assertIssueAccess(id: string): Promise<{ projectId: string }> {
+    const issue = await this.prisma.issue.findFirst({ where: { id, deletedAt: null }, select: { projectId: true } });
+    if (!issue) throw new NotFoundException(`Issue ${id} not found`);
+    await this.access.assertProjectAccess(getActorId(), issue.projectId);
+    return issue;
+  }
 
   private include = {
     reporter: { select: USER_SELECT },
@@ -33,6 +43,7 @@ export class IssuesService {
 
   async list(projectId: string) {
     if (!projectId) return [];
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const rows = await this.prisma.issue.findMany({
       where: { projectId, deletedAt: null },
       include: this.include,
@@ -42,6 +53,7 @@ export class IssuesService {
   }
 
   async get(id: string) {
+    await this.assertIssueAccess(id);
     const issue = await this.prisma.issue.findFirst({ where: { id, deletedAt: null }, include: this.include });
     if (!issue) throw new NotFoundException(`Issue ${id} not found`);
     return this.shape(issue);
@@ -49,6 +61,7 @@ export class IssuesService {
 
   /** Raise a technical issue → also logs the time it cost as a non-billable timesheet. */
   async create(dto: CreateIssueDto) {
+    await this.access.assertProjectAccess(getActorId(), dto.projectId);
     const reportedBy = getActorId() ?? 'system';
     const hours = dto.hours && dto.hours > 0 ? dto.hours : 0;
     const date = dto.date ? new Date(dto.date) : new Date();
