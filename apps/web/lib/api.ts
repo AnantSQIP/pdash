@@ -160,8 +160,16 @@ export type ApiTask = {
   _count?: { subtasks: number; checklists?: number };
 };
 
+/** A selectable project type + its auto-created task template (from GET /projects/types). */
+export type ProjectTypeDef = {
+  value: string; label: string; description: string;
+  comingSoon?: boolean; taskListName?: string; tasks?: string[];
+};
+
 export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
+  /** The kind of patent-analysis matter (HML, CC_NEW, FTO, …); null for a general project. */
+  projectType?: string | null;
   // See ApiTask: `null` = unset (and clears on update); an ABSENT clientDueDate means the
   // server redacted it from this actor.
   priority: string; startDate?: string | null;
@@ -667,8 +675,10 @@ export const api = {
       return req<ApiProject[]>(`/projects?${params}`);
     },
     get: (id: string) => req<ApiProject>(`/projects/${id}`),
+    /** The catalog of project types + their auto-created task templates (for the create form). */
+    types: () => req<ProjectTypeDef[]>('/projects/types'),
     create: (data: {
-      title: string; description?: string; priority?: string; startDate?: string;
+      title: string; projectType?: string; description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>

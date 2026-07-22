@@ -10,6 +10,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { PROJECT_TYPE_VALUES } from './project-templates';
 
 // Task/project priority is a fixed set — free-text used to be stored verbatim.
 export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
@@ -22,6 +23,11 @@ export class CreateProjectDto {
   @MinLength(1)
   @MaxLength(100)
   title!: string;
+
+  /** The kind of matter (HML, Claim Chart, FTO, …). Drives the auto-created task template. */
+  @IsOptional()
+  @IsIn(PROJECT_TYPE_VALUES)
+  projectType?: string;
 
   // Deprecated/ignored — the creator is taken from the verified cookie actor.
   // Kept optional so legacy clients that still send it are not rejected.
