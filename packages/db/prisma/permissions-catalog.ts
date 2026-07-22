@@ -155,6 +155,19 @@ const EMPLOYEE_CODES = [
   code('leave', 'request'),
 ];
 
+// Senior Research Associate: a SENIOR INDIVIDUAL CONTRIBUTOR in the research/analysis
+// track (patent search, FTO, invalidity). Above a Research Associate (Employee) — leads a
+// search/analysis workstream, so they may DELEGATE sub-tasks to juniors, TRIAGE the
+// technical issues raised on their matters, and EXPORT their research reports. But they are
+// NOT a delivery lead: no project approval, no org-wide analytics, no client-facing
+// deadlines, no capacity board, no people-ops. Sits between Employee and Consultant.
+const SENIOR_RESEARCH_ASSOCIATE_CODES = [
+  ...EMPLOYEE_CODES,
+  code('task', 'assign'),
+  code('issue', 'update'),
+  code('report', 'export'),
+];
+
 // Senior Consultant: strong delivery lead — full operational control over
 // projects/tasks (incl. approve + assign) and org-wide visibility, but no
 // people-ops admin (leave approval, holidays, user management stay with
@@ -246,6 +259,7 @@ export const ROLE_PRESETS: Record<string, string[] | '*'> = {
   Manager: MANAGER_CODES,
   'Senior Consultant': SENIOR_CONSULTANT_CODES,
   Consultant: CONSULTANT_CODES,
+  'Senior Research Associate': SENIOR_RESEARCH_ASSOCIATE_CODES,
   HR: HR_CODES,
   Employee: EMPLOYEE_CODES,
 };

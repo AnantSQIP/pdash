@@ -21,6 +21,20 @@ async function main() {
   }
   if (added) console.log(`  Added ${added} new permission code(s) from the catalog`);
 
+  // Ensure every role named in the presets EXISTS (additive). Lets a brand-new role
+  // (e.g. "Senior Research Associate") be introduced by editing the catalog + running this
+  // on any existing DB — its permissions are then applied by the sync below.
+  const org = await prisma.organization.findFirst({ select: { id: true } });
+  let rolesAdded = 0;
+  for (const name of Object.keys(ROLE_PRESETS)) {
+    const existing = await prisma.role.findFirst({ where: { name } });
+    if (!existing && org) {
+      await prisma.role.create({ data: { organizationId: org.id, name, description: `${name} role` } });
+      rolesAdded++;
+    }
+  }
+  if (rolesAdded) console.log(`  Created ${rolesAdded} missing role(s) from the presets`);
+
   // Resolve every role's target permission set BEFORE touching anything.
   const plan: { name: string; roleIds: string[]; permIds: string[] }[] = [];
   for (const [name, preset] of Object.entries(ROLE_PRESETS)) {

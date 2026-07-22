@@ -86,6 +86,7 @@ async function main() {
   const managerRole     = await prisma.role.create({ data: { id: 'role-manager',    organizationId: org.id, name: 'Manager',     description: 'Engagement manager' } });
   const seniorConsultantRole = await prisma.role.create({ data: { id: 'role-senior-consultant', organizationId: org.id, name: 'Senior Consultant', description: 'Senior delivery lead — full project & task control, org-wide visibility' } });
   const consultantRole  = await prisma.role.create({ data: { id: 'role-consultant', organizationId: org.id, name: 'Consultant',  description: 'Senior contributor — can assign tasks and shape milestones/issues' } });
+  const seniorResearchAssociateRole = await prisma.role.create({ data: { id: 'role-senior-research-associate', organizationId: org.id, name: 'Senior Research Associate', description: 'Senior individual contributor (research track) — delegate sub-tasks, triage issues, export reports' } });
   const hrRole          = await prisma.role.create({ data: { id: 'role-hr',         organizationId: org.id, name: 'HR',          description: 'People operations — attendance, leave, holidays, user & department management' } });
   const employeeRole    = await prisma.role.create({ data: { id: 'role-employee',   organizationId: org.id, name: 'Employee',    description: 'Team member' } });
 
@@ -102,6 +103,7 @@ async function main() {
     Manager: managerRole.id,
     'Senior Consultant': seniorConsultantRole.id,
     Consultant: consultantRole.id,
+    'Senior Research Associate': seniorResearchAssociateRole.id,
     HR: hrRole.id,
     Employee: employeeRole.id,
   };
@@ -145,17 +147,17 @@ async function main() {
   const yash      = await makeUser('Yash',      'Bhargava',  'yash@squarkip.com',             'VP',                        superAdminRole.id,       '9166876696');
   const arjun     = await makeUser('Arjun',     'Ghosh',     'arjun.ghosh@squarkip.com',      'Research Associate',        employeeRole.id,         '9002766291');
   const vijay     = await makeUser('Vijay',     'Mishra',    'vijay.mishra@squarkip.com',     'Consultant',                consultantRole.id,       '9654129571');
-  const basant    = await makeUser('Basant',    'Goyal',     'basant.goyal@squarkip.com',     'Senior Consultant',         seniorConsultantRole.id, '8946889936');
-  const khushi    = await makeUser('Khushi',    'Gupta',     'khushi.gupta@squarkip.com',     'Senior Research Associate', employeeRole.id,         '8875555997');
+  const basant    = await makeUser('Basant',    'Goyal',     'basant.goyal@squarkip.com',     'Senior Research Associate', seniorResearchAssociateRole.id, '8946889936');
+  const khushi    = await makeUser('Khushi',    'Gupta',     'khushi.gupta@squarkip.com',     'Senior Research Associate', seniorResearchAssociateRole.id, '8875555997');
   const meetu     = await makeUser('Meetu',     'Singh',     'meetu.singh@squarkip.com',      'Consultant',                consultantRole.id,       '6376595932');
   const nehu      = await makeUser('Neha',      'Shukla',    'neha.shukla@squarkip.com',      'Consultant',                consultantRole.id,       '9694815249');
-  const amrit     = await makeUser('Amritpal',  'Kaur',      'amritpal.kaur@squarkip.com',    'Senior Consultant',         seniorConsultantRole.id, '8699426272');
+  const amrit     = await makeUser('Amritpal',  'Kaur',      'amritpal.kaur@squarkip.com',    'Senior Research Associate', seniorResearchAssociateRole.id, '8699426272');
   const nitin     = await makeUser('Nitin',     'Goel',      'nitin.goel@squarkip.com',       'Manager',                   managerRole.id,          '8826599004');
   const divyanshu = await makeUser('Divyanshu', 'Saxena',    'divyanshu.saxena@squarkip.com', 'Testing and QA',            employeeRole.id,         '6376685331');
   const ankit     = await makeUser('Ankit',     'Verma',     'ankit.verma@squarkip.com',      'Product Development',       managerRole.id,          '7217827713');
-  const anant     = await makeUser('Anant',     'Gupta',     'anant.gupta@squarkip.com',      'Product Development and Research Intern',       managerRole.id,          '7206390512');
+  const anant     = await makeUser('Anant',     'Gupta',     'anant.gupta@squarkip.com',      'Intern- Product Development & Research',        employeeRole.id,         '7206390512');
   const shaveta   = await makeUser('Shaveta',   'Sharma',    'shavetasharma@squarkip.com',    'HR',                        hrRole.id,               '6280149294');
-  const ketan     = await makeUser('Ketan',     'Dagar',     'ketan.dagar@squarkip.com',      'Senior Research Associate', employeeRole.id,         '6284795508');
+  const ketan     = await makeUser('Ketan',     'Dagar',     'ketan.dagar@squarkip.com',      'Senior Research Associate', seniorResearchAssociateRole.id, '6284795508');
 
   // ── Wider roster — additional real team members ──
   await Promise.all([
