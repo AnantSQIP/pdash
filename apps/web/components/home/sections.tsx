@@ -44,25 +44,45 @@ function PunchButton() {
   const { data: att } = useQuery<Attendance | null>({
     queryKey: ['attn-today', currentUser?.id], queryFn: () => api.attendance.today(), enabled: allowed, staleTime: 30_000,
   });
+  const { data: balances = [] } = useQuery<LeaveBalance[]>({
+    queryKey: ['leave-balances', currentUser?.id], queryFn: () => api.leave.balances(), enabled: allowed, staleTime: 60_000,
+  });
   const punch = useMutation({
     mutationFn: () => api.attendance.punch(),
     onSuccess: () => ['attn-today', 'attn-month', 'attn-org', 'leave-balances'].forEach(k => qc.invalidateQueries({ queryKey: [k] })),
   });
   if (!allowed) return null;
+  const timeOf = (s?: string | null) => (s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—');
   const clockedIn = !!att?.checkIn && !att?.checkOut;
   const dayComplete = !!att?.checkIn && !!att?.checkOut;
   const busy = punch.isPending;
+  const statusLabel = dayComplete ? 'Day complete' : !att?.checkIn ? 'Not clocked in' : 'Clocked in';
+  const totalLeave = balances.reduce((s, b) => s + (b.remaining ?? 0), 0);
   return (
-    <button
-      onClick={() => { if (!busy && !dayComplete) punch.mutate(); }}
-      disabled={busy || dayComplete}
-      title={dayComplete ? 'You have clocked in and out — the day is complete.' : clockedIn ? 'Clock out for the day' : 'Clock in for the day'}
-      className={clsx('inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
-        dayComplete ? 'bg-gray-300' : clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}
-    >
-      {busy ? <Loader size={15} className="animate-spin" /> : dayComplete ? <Check size={15} /> : clockedIn ? <LogOut size={15} /> : <LogIn size={15} />}
-      {dayComplete ? 'Completed for today' : clockedIn ? 'Punch Out' : 'Punch In'}
-    </button>
+    <div className="flex items-center gap-3">
+      {/* Today's status + punch times/hours, with leave balance as the fallback line. */}
+      <div className="text-right hidden sm:block">
+        <div className="flex items-center justify-end gap-1.5">
+          <span className={clsx('w-2 h-2 rounded-full shrink-0', clockedIn ? 'bg-green-500 animate-pulse' : dayComplete ? 'bg-gray-400' : 'bg-gray-300')} />
+          <span className="text-xs font-semibold text-gray-700">{statusLabel}</span>
+        </div>
+        <p className="text-[11px] text-gray-400 mt-0.5">
+          {att?.checkIn
+            ? `In ${timeOf(att.checkIn)}${att.checkOut ? ` · Out ${timeOf(att.checkOut)}` : ''}${att.totalHours != null ? ` · ${att.totalHours}h` : ''}`
+            : `${totalLeave} leave day${totalLeave === 1 ? '' : 's'} left`}
+        </p>
+      </div>
+      <button
+        onClick={() => { if (!busy && !dayComplete) punch.mutate(); }}
+        disabled={busy || dayComplete}
+        title={dayComplete ? 'You have clocked in and out — the day is complete.' : clockedIn ? 'Clock out for the day' : 'Clock in for the day'}
+        className={clsx('inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed',
+          dayComplete ? 'bg-gray-300' : clockedIn ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700')}
+      >
+        {busy ? <Loader size={15} className="animate-spin" /> : dayComplete ? <Check size={15} /> : clockedIn ? <LogOut size={15} /> : <LogIn size={15} />}
+        {dayComplete ? 'Completed for today' : clockedIn ? 'Punch Out' : 'Punch In'}
+      </button>
+    </div>
   );
 }
 

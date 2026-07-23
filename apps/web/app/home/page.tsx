@@ -10,7 +10,7 @@
 // masonry auto-distributes whatever cards render so both/all columns stay balanced.
 import {
   PersonaBanner, OrgStatsRow, MyPerformanceCard,
-  MyTasksCard, MyProjectsCard, ProjectStatusCard, QuickStatsCard, MyAttendanceCard,
+  MyTasksCard, MyProjectsCard, ProjectStatusCard, QuickStatsCard,
   OrgPerformanceCard, TeamAttendanceCard, LeaveApprovalsCard, PeopleOpsCard,
   AdminShortcutsCard, QuickAccessCard, ProjectApprovalsCard, TeamAvailabilityCard,
 } from '@/components/home/sections';
@@ -26,7 +26,6 @@ export default function HomeDashboardPage() {
       {/* Balanced masonry — cards flow to keep columns even regardless of which render. */}
       <div className="px-4 py-4 sm:px-6 sm:py-6">
         <div className="columns-1 lg:columns-2 2xl:columns-3 gap-4 sm:gap-6 [&>*]:mb-4 sm:[&>*]:mb-6 [&>*]:break-inside-avoid">
-          <MyAttendanceCard />
           <ProjectApprovalsCard />
           <TeamAvailabilityCard />
           <LeaveApprovalsCard />

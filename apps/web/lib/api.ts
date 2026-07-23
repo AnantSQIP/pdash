@@ -37,6 +37,12 @@ export type PasscodeHandler = (info: PasscodePrompt) => Promise<string | null>;
 const PASSCODE_CODES = new Set(['PASSCODE_REQUIRED', 'PASSCODE_INVALID', 'PASSCODE_LOCKED']);
 let passcodeHandler: PasscodeHandler | null = null;
 export function setPasscodeHandler(fn: PasscodeHandler | null) { passcodeHandler = fn; }
+// Remember the passcode for the session (sliding TTL) so a burst of "big change" actions
+// doesn't prompt for every single one. Dropped when the server rejects it (changed/expired)
+// or on a full page reload. Held only in memory, never persisted.
+let cachedPasscode: { value: string; at: number } | null = null;
+const PASSCODE_TTL_MS = 15 * 60_000;
+export function clearPasscodeCache() { cachedPasscode = null; }
 
 async function req<T>(
   path: string,
@@ -60,13 +66,18 @@ async function req<T>(
     if (ok) return req<T>(path, init, { ...opts, retriedRefresh: true });
   }
 
-  // Step-up passcode required → prompt, then retry with the passcode header. Bounded
-  // attempts so an unbreakable wrong/locked passcode can't loop forever.
-  if (res.status === 403 && passcodeHandler && (opts.passcodeAttempt ?? 0) < 5) {
+  // Step-up passcode required → reuse the cached passcode silently, otherwise prompt, then
+  // retry with the x-org-passcode header. Bounded attempts so a wrong/locked passcode can't loop.
+  if (res.status === 403 && (opts.passcodeAttempt ?? 0) < 5) {
     const body = await res.clone().json().catch(() => null);
     if (body?.code && PASSCODE_CODES.has(body.code)) {
-      const passcode = await passcodeHandler({ code: body.code, message: body.message, remaining: body.remaining, lockedUntil: body.lockedUntil });
+      // A rejected/locked passcode means the cached one is stale — drop it and re-prompt.
+      if (body.code !== 'PASSCODE_REQUIRED') cachedPasscode = null;
+      const fresh = cachedPasscode && Date.now() - cachedPasscode.at < PASSCODE_TTL_MS ? cachedPasscode.value : null;
+      const passcode = fresh
+        ?? (passcodeHandler ? await passcodeHandler({ code: body.code, message: body.message, remaining: body.remaining, lockedUntil: body.lockedUntil }) : null);
       if (passcode) {
+        cachedPasscode = { value: passcode, at: Date.now() };
         const headers = { ...(init?.headers as Record<string, string> | undefined), 'x-org-passcode': passcode };
         return req<T>(path, { ...init, headers }, { ...opts, passcodeAttempt: (opts.passcodeAttempt ?? 0) + 1 });
       }
@@ -200,7 +211,7 @@ export type ClientSummary = { id: string; name?: string | null; code: string; _c
 /** Non-secret patent handle (for the project picker + project detail). */
 export type PatentOption = { id: string; handle: string; serial: number; clientId?: string };
 /** Portal OVERVIEW — patent IDs + serials, NO real number. */
-export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; client?: { id: string; name?: string | null; code: string } };
+export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; documentId?: string | null; documentName?: string | null; client?: { id: string; name?: string | null; code: string } };
 /** Portal REVEAL — includes the confidential real number (passcode-gated). */
 export type PatentFull = PatentOverview & { realNumber: string; createdAt?: string };
 
@@ -748,6 +759,17 @@ export const api = {
     update: (id: string, realNumber: string) =>
       req<PatentOverview>(`/patents/${id}`, { method: 'PATCH', body: JSON.stringify({ realNumber }) }),
     remove: (id: string) => req<{ ok: boolean }>(`/patents/${id}`, { method: 'DELETE' }),
+    // Attach a PDF/media document to a patent (stored in the DB); documentUrl opens it.
+    uploadDocument: (id: string, file: File) => {
+      const form = new FormData(); form.append('file', file);
+      return uploadReq<{ documentId: string; documentName: string }>(`/patents/${id}/document`, form);
+    },
+    // Upload a document → creates a patent (ID auto-generated, real number from the file name).
+    createFromDocument: (clientId: string, file: File) => {
+      const form = new FormData(); form.append('file', file); form.append('clientId', clientId);
+      return uploadReq<PatentOverview>('/patents/from-document', form);
+    },
+    documentUrl: (id: string) => `${BASE}/patents/${id}/document/content`,
   },
 
   taskLists: {

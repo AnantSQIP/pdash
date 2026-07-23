@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  FileLock2, Plus, Trash2, Loader, ShieldAlert, KeyRound, Eye, EyeOff, Pencil, Check, X, Hash,
+  FileLock2, Plus, Trash2, Loader, ShieldAlert, KeyRound, Eye, EyeOff, Pencil, Check, X, Hash, FileText, Paperclip, Upload,
 } from 'lucide-react';
 import { api, type ClientSummary, type PatentOverview } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
@@ -58,6 +58,16 @@ export default function PatentsPortalPage() {
   const reveal = useMutation({
     mutationFn: () => api.patents.reveal(selected!),
     onSuccess: (rows) => { setRevealed(Object.fromEntries(rows.map(r => [r.id, r.realNumber]))); setErr(''); },
+    onError: e => setErr(msg(e)),
+  });
+  const attachDoc = useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) => api.patents.uploadDocument(id, file),
+    onSuccess: () => { setErr(''); qc.invalidateQueries({ queryKey: ['patents', selected] }); },
+    onError: e => setErr(msg(e)),
+  });
+  const createFromDoc = useMutation({
+    mutationFn: async (files: File[]) => { for (const f of files) await api.patents.createFromDocument(selected!, f); },
+    onSuccess: () => { setErr(''); qc.invalidateQueries({ queryKey: ['patents', selected] }); qc.invalidateQueries({ queryKey: ['clients'] }); },
     onError: e => setErr(msg(e)),
   });
   const saveEdit = useMutation({
@@ -171,17 +181,28 @@ export default function PatentsPortalPage() {
                 </div>
               </div>
 
-              {/* Register / upload */}
-              <div className="p-4 border-b border-gray-100 bg-gray-50/40">
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Upload patents — one real number per line</label>
-                <textarea rows={3} value={numbersText} onChange={e => setNumbersText(e.target.value)} placeholder={'US1234567\nUS2345678'}
-                  className="w-full px-3 py-2 text-sm font-mono border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 resize-none" />
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-[11px] text-amber-600 flex items-center gap-1"><KeyRound size={11} /> Passcode required.</span>
-                  <button onClick={() => register.mutate()} disabled={register.isPending || !numbersText.trim()}
-                    className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-                    {register.isPending ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Add patents
-                  </button>
+              {/* Add patents — by number, or by uploading documents (one patent per file). */}
+              <div className="p-4 border-b border-gray-100 bg-gray-50/40 space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Add by number — one real number per line</label>
+                  <textarea rows={3} value={numbersText} onChange={e => setNumbersText(e.target.value)} placeholder={'US1234567\nUS2345678'}
+                    className="w-full px-3 py-2 text-sm font-mono border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 resize-none" />
+                  <div className="flex justify-end mt-2">
+                    <button onClick={() => register.mutate()} disabled={register.isPending || !numbersText.trim()}
+                      className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                      {register.isPending ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Add patents
+                    </button>
+                  </div>
+                </div>
+                <div className="border-t border-gray-100 pt-3">
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Or upload documents (PDF / Word / media) — one patent per file, ID auto-generated</label>
+                  <label className={clsx('inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-dashed rounded-lg cursor-pointer transition',
+                    createFromDoc.isPending ? 'border-brand-300 bg-brand-50/40 text-brand-600' : 'border-gray-300 text-gray-600 hover:border-brand-400 hover:bg-brand-50/40')}>
+                    {createFromDoc.isPending ? <Loader size={14} className="animate-spin" /> : <Upload size={14} />}
+                    {createFromDoc.isPending ? 'Uploading…' : 'Choose files'}
+                    <input type="file" multiple className="hidden" accept=".pdf,.doc,.docx,image/*,application/*"
+                      onChange={e => { const fs = Array.from(e.target.files ?? []); if (fs.length) createFromDoc.mutate(fs); (e.target as HTMLInputElement).value = ''; }} />
+                  </label>
                 </div>
               </div>
 
@@ -210,6 +231,21 @@ export default function PatentsPortalPage() {
                       ) : (
                         <span className="text-gray-300 tracking-widest">•••••••••</span>
                       )}
+                    </span>
+                    {/* Attached patent document (PDF/media) — view + attach/replace */}
+                    <span className="shrink-0 flex items-center gap-1">
+                      {p.documentName && (
+                        <a href={api.patents.documentUrl(p.id)} target="_blank" rel="noreferrer" title={p.documentName}
+                          className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline max-w-[130px]">
+                          <FileText size={13} className="shrink-0" /> <span className="truncate">{p.documentName}</span>
+                        </a>
+                      )}
+                      <label title={p.documentName ? 'Replace document' : 'Attach PDF/media'}
+                        className="inline-flex items-center p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-brand-600 cursor-pointer">
+                        {attachDoc.isPending && attachDoc.variables?.id === p.id ? <Loader size={14} className="animate-spin" /> : <Paperclip size={14} />}
+                        <input type="file" className="hidden" accept=".pdf,image/*,application/*"
+                          onChange={e => { const f = e.target.files?.[0]; if (f) attachDoc.mutate({ id: p.id, file: f }); (e.target as HTMLInputElement).value = ''; }} />
+                      </label>
                     </span>
                     <button onClick={() => { if (confirm(`Remove ${p.handle}?`)) removePatent.mutate(p.id); }} disabled={removePatent.isPending}
                       title="Remove patent" className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500 shrink-0">
