@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, Uploaded
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { PatentsService } from './patents.service';
-import { CreateClientDto, RegisterPatentsDto, UpdatePatentDto } from './dto';
+import { CreateClientDto, RegisterPatentsDto, UpdateClientDto, UpdatePatentDto } from './dto';
 import { MAX_FILE_BYTES, isInlineSafe, type UploadedFileLike } from '../documents/documents.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
@@ -34,6 +34,12 @@ export class PatentsController {
   @Post('clients') @RequirePermission('patent.manage') @RequirePasscode()
   async createClient(@Body() dto: CreateClientDto) {
     return this.patents.createClient(await this.actor.requireOrgId(), getActorId()!, dto);
+  }
+
+  // Editing a client code re-mints its patent handles → a "big change" → passcode.
+  @Patch('clients/:id') @RequirePermission('patent.manage') @RequirePasscode()
+  async updateClient(@Param('id') id: string, @Body() dto: UpdateClientDto) {
+    return this.patents.updateClient(await this.actor.requireOrgId(), id, dto);
   }
 
   // Removing a client code (and soft-deleting its patents) is a "big change" → passcode.

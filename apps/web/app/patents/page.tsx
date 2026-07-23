@@ -11,6 +11,13 @@ import { usePermissions } from '@/lib/permissions-context';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
+// Mirror of the server's patent-number check, so files that aren't named like a patent number
+// are skipped before uploading (and the rest still go through).
+function isPatentNumber(name: string): boolean {
+  const n = (name || '').replace(/\.[^.]+$/, '').replace(/[\s,._()\-\/]/g, '').toUpperCase();
+  return /^[A-Z]{0,2}\d{5,13}[A-Z]{0,2}\d?$/.test(n);
+}
+
 export default function PatentsPortalPage() {
   const { can } = usePermissions();
   const qc = useQueryClient();
@@ -20,6 +27,9 @@ export default function PatentsPortalPage() {
   const [newCode, setNewCode] = useState('');
   const [newName, setNewName] = useState('');
   const [numbersText, setNumbersText] = useState('');
+  const [editingClient, setEditingClient] = useState(false);
+  const [ecode, setEcode] = useState('');
+  const [ename, setEname] = useState('');
   const [revealed, setRevealed] = useState<Record<string, string>>({}); // patentId → real number
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -76,7 +86,13 @@ export default function PatentsPortalPage() {
   });
   const createFromDoc = useMutation({
     mutationFn: async (files: File[]) => { for (const f of files) await api.patents.createFromDocument(selected!, f); },
-    onSuccess: () => { setErr(''); qc.invalidateQueries({ queryKey: ['patents', selected] }); qc.invalidateQueries({ queryKey: ['clients'] }); },
+    // Don't clear err here — the "skipped bad-named files" notice is set on file-select.
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['patents', selected] }); qc.invalidateQueries({ queryKey: ['clients'] }); },
+    onError: e => setErr(msg(e)),
+  });
+  const editClient = useMutation({
+    mutationFn: () => api.clients.update(selected!, { code: ecode.trim() || undefined, name: ename.trim() || undefined }),
+    onSuccess: () => { setEditingClient(false); setErr(''); resetReveal(); qc.invalidateQueries({ queryKey: ['clients'] }); qc.invalidateQueries({ queryKey: ['patents', selected] }); },
     onError: e => setErr(msg(e)),
   });
   const saveEdit = useMutation({
@@ -167,9 +183,29 @@ export default function PatentsPortalPage() {
           ) : (
             <>
               <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-gray-800 font-mono">{active.code}{active.name ? <span className="ml-2 font-sans font-normal text-gray-400">{active.name}</span> : null}</h2>
-                  <p className="text-[11px] text-gray-400">IDs mint as <span className="font-mono">Pat_{active.code}_001</span>, in serial order</p>
+                <div className="min-w-0 flex-1">
+                  {editingClient ? (
+                    <div className="flex items-center gap-2">
+                      <input value={ecode} onChange={e => setEcode(e.target.value.toUpperCase())} placeholder="CODE" autoFocus
+                        className="w-24 px-2 py-1 text-sm font-mono border border-brand-300 rounded focus:outline-none focus:border-brand-500" />
+                      <input value={ename} onChange={e => setEname(e.target.value)} placeholder="Name (optional)"
+                        className="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:border-brand-500" />
+                      <button onClick={() => editClient.mutate()} disabled={editClient.isPending || !ecode.trim()} title="Save"
+                        className="p-1 text-green-600 hover:bg-green-50 rounded shrink-0 disabled:opacity-40">
+                        {editClient.isPending ? <Loader size={15} className="animate-spin" /> : <Check size={15} />}
+                      </button>
+                      <button onClick={() => setEditingClient(false)} title="Cancel" className="p-1 text-gray-400 hover:bg-gray-100 rounded shrink-0"><X size={15} /></button>
+                    </div>
+                  ) : (
+                    <>
+                      <h2 className="text-sm font-semibold text-gray-800 font-mono flex items-center gap-2">
+                        <span className="truncate">{active.code}{active.name ? <span className="ml-2 font-sans font-normal text-gray-400">{active.name}</span> : null}</span>
+                        <button onClick={() => { setEditingClient(true); setEcode(active.code); setEname(active.name ?? ''); setErr(''); }}
+                          title="Edit code / name" className="text-gray-300 hover:text-brand-600 shrink-0"><Pencil size={12} /></button>
+                      </h2>
+                      <p className="text-[11px] text-gray-400">IDs mint as <span className="font-mono">Pat_{active.code}_001</span>, in serial order · renaming the code re-mints the IDs</p>
+                    </>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {isRevealed ? (
@@ -204,13 +240,20 @@ export default function PatentsPortalPage() {
                   </div>
                 </div>
                 <div className="border-t border-gray-100 pt-3">
-                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Or upload documents (PDF / Word / media) — one patent per file, ID auto-generated</label>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Or upload documents — one patent per file. <b className="text-gray-700">Name each file as its patent number</b> (e.g. <span className="font-mono">US1234567.pdf</span>); others are skipped.</label>
                   <label className={clsx('inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-dashed rounded-lg cursor-pointer transition',
                     createFromDoc.isPending ? 'border-brand-300 bg-brand-50/40 text-brand-600' : 'border-gray-300 text-gray-600 hover:border-brand-400 hover:bg-brand-50/40')}>
                     {createFromDoc.isPending ? <Loader size={14} className="animate-spin" /> : <Upload size={14} />}
                     {createFromDoc.isPending ? 'Uploading…' : 'Choose files'}
                     <input type="file" multiple className="hidden" accept=".pdf,.doc,.docx,image/*,application/*"
-                      onChange={e => { const fs = Array.from(e.target.files ?? []); if (fs.length) createFromDoc.mutate(fs); (e.target as HTMLInputElement).value = ''; }} />
+                      onChange={e => {
+                        const fs = Array.from(e.target.files ?? []);
+                        const valid = fs.filter(f => isPatentNumber(f.name));
+                        const skipped = fs.filter(f => !isPatentNumber(f.name));
+                        setErr(skipped.length ? `Skipped ${skipped.length} file(s) not named like a patent number: ${skipped.map(f => f.name).join(', ')}` : '');
+                        if (valid.length) createFromDoc.mutate(valid);
+                        (e.target as HTMLInputElement).value = '';
+                      }} />
                   </label>
                 </div>
               </div>
