@@ -534,6 +534,9 @@ model Patent {
   handle         String    // "Pat_MLK_1" — the non-secret, shareable identifier
   // CONFIDENTIAL real patent number — never selected for a non-`patent.manage` actor.
   realNumber     String
+  // Optional attached patent document (PDF/media), stored via the shared Document + blob table.
+  documentId     String?
+  documentName   String?
   createdBy      String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
