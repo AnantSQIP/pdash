@@ -1143,6 +1143,9 @@ model Document {
   folderId             String?
   name                 String
   fileUrl              String
+  // Where the bytes live: a disk key (new uploads) so large files stay OUT of the database.
+  // The DocumentBlob row is written only as a fallback when disk storage is unavailable.
+  storagePath          String?
   fileSize             Int?
   mimeType             String?
   uploadedBy           String

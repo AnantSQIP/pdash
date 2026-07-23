@@ -94,8 +94,14 @@ export class PatentsService {
     });
     if (!client) throw new NotFoundException('Client not found.');
 
-    const numbers = dto.realNumbers.map(n => n.trim()).filter(Boolean);
-    if (!numbers.length) throw new BadRequestException('Provide at least one patent number.');
+    const wanted = [...new Set(dto.realNumbers.map(n => n.trim()).filter(Boolean))];
+    if (!wanted.length) throw new BadRequestException('Provide at least one patent number.');
+    // Skip numbers already registered for this client — no duplicate patents (#3).
+    const seen = new Set((await this.prisma.patent.findMany({
+      where: { clientId: client.id, deletedAt: null, realNumber: { in: wanted } },
+      select: { realNumber: true },
+    })).map(p => p.realNumber));
+    const numbers = wanted.filter(n => !seen.has(n));
 
     const created = [];
     for (const realNumber of numbers) {
@@ -122,9 +128,20 @@ export class PatentsService {
     if (!client) throw new NotFoundException('Client code not found.');
     const doc = await this.documents.upload(file);
     if (!doc) throw new BadRequestException('Upload failed.');
+    const realNumber = ((doc.name || '').replace(/\.[^.]+$/, '').trim() || doc.name || 'document').slice(0, 100);
+    // De-dup (#3): if this number already exists for the client, attach the new document to
+    // that patent instead of creating a duplicate.
+    const dup = await this.prisma.patent.findFirst({
+      where: { clientId: client.id, realNumber, deletedAt: null }, select: { id: true, documentId: true },
+    });
+    if (dup) {
+      if (dup.documentId) await this.prisma.document.update({ where: { id: dup.documentId }, data: { deletedAt: new Date() } }).catch(() => {});
+      return this.prisma.patent.update({
+        where: { id: dup.id }, data: { documentId: doc.id, documentName: doc.name }, select: PATENT_OVERVIEW_SELECT,
+      });
+    }
     const serial = await this.sequence.allocate(patentScope(client.id));
     const handle = formatPatentHandle(client.code, serial);
-    const realNumber = ((doc.name || '').replace(/\.[^.]+$/, '').trim() || doc.name || 'document').slice(0, 100);
     return this.prisma.patent.create({
       data: {
         organizationId, clientId: client.id, serial, handle, realNumber,

@@ -34,6 +34,15 @@ export default function PatentsPortalPage() {
 
   const resetReveal = () => { setRevealed({}); setEditingId(null); };
   const pick = (id: string) => { setSelected(id); resetReveal(); setErr(''); };
+  // Open a patent's document — fetched as a blob so the passcode header is sent, then opened.
+  async function openDoc(id: string) {
+    try {
+      const blob = await api.patents.downloadDocument(id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) { setErr(msg(e)); }
+  }
 
   const createClient = useMutation({
     mutationFn: () => api.clients.create({ code: newCode.trim(), name: newName.trim() || undefined }),
@@ -235,10 +244,10 @@ export default function PatentsPortalPage() {
                     {/* Attached patent document (PDF/media) — view + attach/replace */}
                     <span className="shrink-0 flex items-center gap-1">
                       {p.documentName && (
-                        <a href={api.patents.documentUrl(p.id)} target="_blank" rel="noreferrer" title={p.documentName}
+                        <button type="button" onClick={() => openDoc(p.id)} title={p.documentName}
                           className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline max-w-[130px]">
                           <FileText size={13} className="shrink-0" /> <span className="truncate">{p.documentName}</span>
-                        </a>
+                        </button>
                       )}
                       <label title={p.documentName ? 'Replace document' : 'Attach PDF/media'}
                         className="inline-flex items-center p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-brand-600 cursor-pointer">
