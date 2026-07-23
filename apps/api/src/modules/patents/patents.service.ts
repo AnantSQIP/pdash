@@ -2,7 +2,8 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { formatPatentHandle, patentScope } from '../../common/financial-year';
-import { CreateClientDto, RegisterPatentsDto, UpdatePatentDto } from './dto';
+import { isPatentNumber, normalizePatentNumber } from '../../common/patent-number';
+import { CreateClientDto, RegisterPatentsDto, UpdateClientDto, UpdatePatentDto } from './dto';
 import { DocumentsService, type UploadedFileLike } from '../documents/documents.service';
 
 // ── Default-DENY selects ────────────────────────────────────────────────────
@@ -56,6 +57,44 @@ export class PatentsService {
       this.prisma.client.update({ where: { id }, data: { deletedAt: now } }),
     ]);
     return { ok: true };
+  }
+
+  /**
+   * Edit a client code / name (#A: fix a typo without delete+recreate). Renaming the CODE
+   * re-mints every non-deleted patent's handle to Pat_<newcode>_<serial> so nothing is left
+   * inconsistent, and is blocked if the new code is already used by another live client.
+   */
+  async updateClient(organizationId: string, id: string, dto: UpdateClientDto) {
+    const client = await this.prisma.client.findFirst({
+      where: { id, organizationId, deletedAt: null }, select: { id: true, code: true },
+    });
+    if (!client) throw new NotFoundException('Client code not found.');
+
+    const data: { name?: string | null; code?: string } = {};
+    if (dto.name !== undefined) data.name = dto.name || null;
+    const newCode = dto.code && dto.code !== client.code ? dto.code : null;
+    if (newCode) {
+      const taken = await this.prisma.client.findFirst({
+        where: { organizationId, code: newCode, deletedAt: null, id: { not: id } }, select: { id: true },
+      });
+      if (taken) throw new BadRequestException(`Client code "${newCode}" is already in use.`);
+      data.code = newCode;
+    }
+    if (!Object.keys(data).length) {
+      return this.prisma.client.findUnique({ where: { id }, select: { id: true, name: true, code: true } });
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.client.update({ where: { id }, data });
+      if (newCode) {
+        const patents = await tx.patent.findMany({
+          where: { clientId: id, deletedAt: null }, select: { id: true, serial: true },
+        });
+        for (const p of patents) {
+          await tx.patent.update({ where: { id: p.id }, data: { handle: formatPatentHandle(newCode, p.serial) } });
+        }
+      }
+    });
+    return this.prisma.client.findUnique({ where: { id }, select: { id: true, name: true, code: true } });
   }
 
   // ── Patents ───────────────────────────────────────────────────────────────
@@ -126,9 +165,15 @@ export class PatentsService {
       where: { id: clientId, organizationId, deletedAt: null }, select: { id: true, code: true },
     });
     if (!client) throw new NotFoundException('Client code not found.');
+    // Only files NAMED like a patent number become patents — reject BEFORE storing anything,
+    // so the caller can skip the bad ones and keep uploading the rest.
+    const fileName = file?.originalname ?? '';
+    if (!isPatentNumber(fileName)) {
+      throw new BadRequestException(`"${fileName || 'file'}" is not named like a patent number — rename it to the patent number (e.g. US1234567.pdf).`);
+    }
+    const realNumber = normalizePatentNumber(fileName).slice(0, 100);
     const doc = await this.documents.upload(file);
     if (!doc) throw new BadRequestException('Upload failed.');
-    const realNumber = ((doc.name || '').replace(/\.[^.]+$/, '').trim() || doc.name || 'document').slice(0, 100);
     // De-dup (#3): if this number already exists for the client, attach the new document to
     // that patent instead of creating a duplicate.
     const dup = await this.prisma.patent.findFirst({

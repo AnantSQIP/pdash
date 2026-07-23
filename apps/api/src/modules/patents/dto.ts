@@ -19,6 +19,23 @@ export class CreateClientDto {
   name?: string; // "Malikie"
 }
 
+export class UpdateClientDto {
+  // New code (optional). Changing it re-mints the client's patent handles. Alphanumeric.
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @Matches(/^[A-Z0-9]+$/, { message: 'Client code must be letters/numbers only (e.g. MLK).' })
+  @MinLength(1)
+  @MaxLength(20)
+  code?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(100)
+  name?: string;
+}
+
 export class RegisterPatentsDto {
   @IsString()
   clientId!: string;

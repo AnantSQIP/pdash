@@ -775,6 +775,8 @@ export const api = {
     list: () => req<ClientSummary[]>('/clients'),
     create: (data: { code: string; name?: string }) =>
       req<ClientSummary>('/clients', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { code?: string; name?: string }) =>
+      req<ClientSummary>(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (id: string) => req<{ ok: boolean }>(`/clients/${id}`, { method: 'DELETE' }),
   },
 

@@ -398,7 +398,23 @@ export class ProjectsService {
     const canViewPatents = actorId ? await this.permissions.check(actorId, 'patent.view') : false;
     const canViewClient = actorId ? await this.permissions.check(actorId, 'patent.manage') : false;
     if (!canViewPatents) delete redacted.patents;
-    if (!canViewClient) { delete redacted.client; delete redacted.clientId; }
+    if (!canViewClient) {
+      delete redacted.client;
+      delete redacted.clientId;
+    } else {
+      // #C: derive the client from the CURRENTLY linked patents, so it can never go stale even
+      // if the project's patents are changed later (the stored clientId is just a hint).
+      const pids = (redacted.patents ?? []).map((x: any) => x.patent?.id).filter(Boolean);
+      const rows = pids.length
+        ? await this.prisma.patent.findMany({
+            where: { id: { in: pids }, deletedAt: null },
+            select: { client: { select: { id: true, name: true, code: true } } },
+          })
+        : [];
+      const uniq = [...new Map(rows.map(r => [r.client.id, r.client])).values()];
+      redacted.client = uniq.length === 1 ? uniq[0] : null;
+      redacted.clientId = (redacted.client as any)?.id ?? null;
+    }
     return redacted;
   }
 
