@@ -5,6 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
@@ -15,6 +17,9 @@ import { getActorId } from '../../common/context/request-context';
 export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 /** Max attachments per message/comment. */
 export const MAX_ATTACHMENTS = 10;
+/** Where document bytes are written on disk (new uploads). Configurable so a container can
+ *  mount a persistent volume; defaults under the working dir for the native/local run. */
+const STORAGE_DIR = process.env.DOCUMENT_STORAGE_DIR || join(process.cwd(), '.data', 'documents');
 
 /** Shape multer produces with memory storage (typed locally — no @types/multer dep). */
 export interface UploadedFileLike {
@@ -90,6 +95,15 @@ export class DocumentsService {
     }
 
     const id = randomUUID();
+    // Store the bytes on disk to keep large files OUT of the database. If the disk is not
+    // writable, fall back to a DB blob so an upload never fails outright.
+    let storagePath: string | null = null;
+    try {
+      await mkdir(STORAGE_DIR, { recursive: true });
+      await writeFile(join(STORAGE_DIR, id), file.buffer);
+      storagePath = id; // stored relative to STORAGE_DIR so the directory can be moved
+    } catch { storagePath = null; }
+
     await this.prisma.$transaction([
       this.prisma.document.create({
         data: {
@@ -99,7 +113,8 @@ export class DocumentsService {
           fileSize: file.buffer.length,
           fileUrl: `/api/v1/documents/${id}/content`,
           uploadedBy: actorId,
-          blob: { create: { data: file.buffer } },
+          storagePath,
+          ...(storagePath ? {} : { blob: { create: { data: file.buffer } } }),
         },
       }),
       ...(projectId ? [this.prisma.projectDocument.create({ data: { projectId, documentId: id } })] : []),
@@ -154,11 +169,12 @@ export class DocumentsService {
       where: { id, deletedAt: null },
       select: {
         ...DOC_SELECT,
+        storagePath: true,
         blob: { select: { data: true } },
         messageAttachments: { select: { message: { select: { channelId: true } } } },
       },
     });
-    if (!doc || !doc.blob) throw new NotFoundException(`Document ${id} not found`);
+    if (!doc || (!doc.storagePath && !doc.blob)) throw new NotFoundException(`Document ${id} not found`);
 
     const channelIds = [...new Set(doc.messageAttachments.map(a => a.message.channelId))];
     if (channelIds.length && doc.uploadedBy !== actorId) {
@@ -169,8 +185,9 @@ export class DocumentsService {
       if (!member) throw new ForbiddenException('You are not a member of this discussion.');
     }
 
-    const { blob, messageAttachments: _ma, ...meta } = doc;
-    return { doc: meta, data: blob.data };
+    const { blob, storagePath, messageAttachments: _ma, ...meta } = doc;
+    const data = storagePath ? await readFile(join(STORAGE_DIR, storagePath)) : blob!.data;
+    return { doc: meta, data };
   }
 
   /**
@@ -244,6 +261,8 @@ export class DocumentsService {
       this.prisma.document.update({ where: { id }, data: { deletedAt: new Date() } }),
       this.prisma.documentBlob.deleteMany({ where: { documentId: id } }),
     ]);
+    // Free the on-disk file too (if this document was stored on disk).
+    if (doc.storagePath) await unlink(join(STORAGE_DIR, doc.storagePath)).catch(() => {});
     await this.events.emit({
       action: EVENTS.DOCUMENT_DELETED,
       entityType: 'DOCUMENT',

@@ -92,7 +92,9 @@ export class PatentsController {
     return this.patents.attachDocument(await this.actor.requireOrgId(), id, file);
   }
 
-  @Get('patents/:id/document/content') @RequirePermission('patent.manage')
+  // Same confidentiality as revealing a real number → org passcode required. The web fetches
+  // this as a blob (carrying the passcode header) rather than a plain link.
+  @Get('patents/:id/document/content') @RequirePermission('patent.manage') @RequirePasscode()
   async documentContent(@Param('id') id: string, @Res() res: Response) {
     const { doc, data } = await this.patents.documentContent(await this.actor.requireOrgId(), id);
     const inline = isInlineSafe(doc.mimeType);

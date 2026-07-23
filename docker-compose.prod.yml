@@ -35,6 +35,10 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       CORS_ORIGINS: ${CORS_ORIGINS}
       AUTH_DEV_TRUST_HEADER: "false"
+      # Uploaded documents (patent PDFs, attachments) live on this mounted volume, NOT in the DB.
+      DOCUMENT_STORAGE_DIR: /app/.data/documents
+    volumes:
+      - docdata:/app/.data
     expose:
       - "4000"
 
@@ -60,3 +64,4 @@ services:
 
 volumes:
   pgdata:
+  docdata:

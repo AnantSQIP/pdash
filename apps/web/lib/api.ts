@@ -115,6 +115,40 @@ async function uploadReq<T>(path: string, form: FormData, retried = false): Prom
   return (text ? JSON.parse(text) : null) as T;
 }
 
+// Blob download variant of req(): same cookie/refresh + step-up passcode handling, so a
+// passcode-gated file can be fetched with the x-org-passcode header (a plain <a> link can't
+// send one). Returns the raw Blob for the caller to open or save.
+async function blobReq(
+  path: string,
+  opts: { retriedRefresh?: boolean; passcodeAttempt?: number } = {},
+  headers: Record<string, string> = {},
+): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`, { credentials: 'include', headers });
+  if (res.status === 401 && !opts.retriedRefresh && !NO_REFRESH.has(path)) {
+    const ok = await refreshOnce();
+    if (ok) return blobReq(path, { ...opts, retriedRefresh: true }, headers);
+  }
+  if (res.status === 403 && (opts.passcodeAttempt ?? 0) < 5) {
+    const body = await res.clone().json().catch(() => null);
+    if (body?.code && PASSCODE_CODES.has(body.code)) {
+      if (body.code !== 'PASSCODE_REQUIRED') cachedPasscode = null;
+      const fresh = cachedPasscode && Date.now() - cachedPasscode.at < PASSCODE_TTL_MS ? cachedPasscode.value : null;
+      const passcode = fresh
+        ?? (passcodeHandler ? await passcodeHandler({ code: body.code, message: body.message, remaining: body.remaining, lockedUntil: body.lockedUntil }) : null);
+      if (passcode) {
+        cachedPasscode = { value: passcode, at: Date.now() };
+        return blobReq(path, { ...opts, passcodeAttempt: (opts.passcodeAttempt ?? 0) + 1 }, { ...headers, 'x-org-passcode': passcode });
+      }
+    }
+  }
+  if (!res.ok) {
+    let message = res.statusText;
+    try { message = (await res.json()).message ?? message; } catch { /* swallow */ }
+    throw new Error(message);
+  }
+  return res.blob();
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type OrgSummary = { id: string; name: string; code: string; status: string; timezone?: string; brandColor?: string };
@@ -769,7 +803,8 @@ export const api = {
       const form = new FormData(); form.append('file', file); form.append('clientId', clientId);
       return uploadReq<PatentOverview>('/patents/from-document', form);
     },
-    documentUrl: (id: string) => `${BASE}/patents/${id}/document/content`,
+    // Passcode-gated blob (opened via an object URL); a plain link can't carry the passcode.
+    downloadDocument: (id: string) => blobReq(`/patents/${id}/document/content`),
   },
 
   taskLists: {
