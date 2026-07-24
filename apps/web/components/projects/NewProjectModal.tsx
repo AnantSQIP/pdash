@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Plus, Lock, Info, Search } from 'lucide-react';
+import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check } from 'lucide-react';
 import clsx from 'clsx';
 
 import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@/lib/api';
@@ -20,9 +20,9 @@ interface NewProjectModalProps {
 export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: NewProjectModalProps) {
   const { org, currentUser, users } = useOrg();
   const { can } = usePermissions();
-  // Someone who cannot approve projects is REQUESTING one: they must nominate the
-  // manager who will own and approve it. Approvers manage their own by default.
-  const canApprove = can('project.approve');
+  // A PID AUTHORITY (project.generate_pid) mints the Project ID themselves. Everyone else
+  // REQUESTS one: they nominate an authority who assigns the PID after the project is created.
+  const canGeneratePid = can('project.generate_pid');
   const canSetClientDue = can('deadline.view.client');
   // Clients/patents are confidential — only patent.view holders (Super Admin by default) see them.
   const canSeePatents = can('patent.view');
@@ -36,22 +36,37 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [startDate, setStartDate] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [clientDueDate, setClientDueDate] = useState('');
-  const [managerId, setManagerId] = useState('');
+  const [pidAssigneeId, setPidAssigneeId] = useState('');
+  const [pid, setPid] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Only people who can approve projects are valid managers — anyone else would leave
-  // the request stranded with nobody able to approve it. The server re-validates.
-  const { data: eligible = [] } = useQuery({
-    queryKey: ['eligible-managers', org?.id],
-    queryFn: () => api.projects.eligibleManagers(),
-    enabled: !!org?.id && !canApprove,
+  // The people who can assign a PID — the request dropdown for non-authorities.
+  const { data: authorities = [] } = useQuery({
+    queryKey: ['pid-authorities', org?.id],
+    queryFn: () => api.projects.pidAuthorities(),
+    enabled: !!org?.id && !canGeneratePid,
     staleTime: 5 * 60_000,
   });
-  const managerOptions = useMemo(
-    () => eligible.filter(u => u.id !== currentUser?.id),
-    [eligible, currentUser],
+  const authorityOptions = useMemo(
+    () => authorities.filter(u => u.id !== currentUser?.id),
+    [authorities, currentUser],
   );
+
+  async function generatePid() {
+    setGenerating(true); setError('');
+    try {
+      const res = await api.projects.generatePid();
+      setPid(res.pid);
+      try { await navigator.clipboard.writeText(res.pid); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* clipboard blocked */ }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not generate a PID.');
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   // Project types + their auto-created task templates (static catalog from the API).
   const { data: projectTypes = [] } = useQuery<ProjectTypeDef[]>({
@@ -67,10 +82,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     queryKey: ['patent-options-all'], queryFn: () => api.patents.options(),
     enabled: canSeePatents, staleTime: 30_000,
   });
-  const { data: pidPreview } = useQuery({
-    queryKey: ['next-pid'], queryFn: () => api.projects.nextPid(), staleTime: 10_000,
-  });
-
   // Filter handles by the search box — needed when there are many patents.
   const filteredPatents = useMemo(() => {
     const q = patentSearch.trim().toLowerCase();
@@ -83,8 +94,8 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canApprove && !managerId) {
-      setError('Choose the project manager who should approve and own this project.');
+    if (!canGeneratePid && !pidAssigneeId) {
+      setError('Choose who should assign the Project ID (PID).');
       return;
     }
     setLoading(true);
@@ -99,7 +110,8 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         startDate: startDate || undefined,
         dueDate: dueDate || undefined,
         clientDueDate: (canSetClientDue && clientDueDate) ? clientDueDate : undefined,
-        managerId: managerId || undefined,
+        pid: canGeneratePid && pid ? pid : undefined,
+        pidAssigneeId: !canGeneratePid ? pidAssigneeId : undefined,
         createdBy,
       });
       onSuccess?.();
@@ -121,9 +133,9 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">{canApprove ? 'New Project' : 'Request a Project'}</h2>
+            <h2 className="text-lg font-semibold text-gray-900">{canGeneratePid ? 'New Project' : 'Request a Project'}</h2>
             <p className="text-sm text-gray-500 mt-0.5">
-              {canApprove ? 'Fill in the details to create a project' : 'Your project manager must approve it before work starts'}
+              {canGeneratePid ? 'Generate the Project ID, then fill in the details' : 'A PID authority will assign the Project ID'}
             </p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors">
@@ -133,21 +145,45 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
-          {!canApprove && (
+          {!canGeneratePid && (
             <div className="flex items-start gap-2 text-xs text-brand-800 bg-brand-50 border border-brand-100 rounded-lg px-3 py-2">
               <Info size={14} className="mt-0.5 shrink-0 text-brand-500" />
               <span>
-                This is a <b>project request</b>. It stays pending until the manager you nominate approves it —
-                they then own the project and you join as a member.
+                You don&apos;t have PID authority, so the project is created with its <b>Project ID pending</b>.
+                The person you choose below is notified to assign the PID — you&apos;ll be notified once it&apos;s set.
               </span>
             </div>
           )}
 
-          {/* Auto-assigned Project ID (PID) — read-only preview; the final ID is set on save. */}
-          {pidPreview?.pid && (
-            <div className="flex items-center justify-between rounded-lg border border-brand-100 bg-brand-50/60 px-3.5 py-2.5">
-              <p className="text-sm font-medium text-brand-800">Project ID (PID)</p>
-              <span className="text-sm font-semibold text-brand-700 font-mono">{pidPreview.pid}</span>
+          {/* Project ID (PID): authorities generate one (copied to clipboard); everyone else picks
+              an authority to request it from (below). */}
+          {canGeneratePid && (
+            <div className="rounded-lg border border-brand-100 bg-brand-50/50 px-3.5 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <KeyRound size={15} className="text-brand-500 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-brand-800">Project ID (PID)</p>
+                    {pid
+                      ? <p className="text-sm font-semibold text-brand-700 font-mono truncate">{pid}</p>
+                      : <p className="text-[11px] text-gray-500">Generate one (copied to your clipboard), or leave blank to auto-assign.</p>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {pid && (
+                    <button type="button" title="Copy"
+                      onClick={() => { navigator.clipboard?.writeText(pid); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                      className="p-1.5 rounded-md text-brand-600 hover:bg-brand-100">
+                      {copied ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+                  )}
+                  <button type="button" onClick={generatePid} disabled={generating}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                    <RefreshCw size={13} className={generating ? 'animate-spin' : ''} />
+                    {pid ? 'Regenerate' : 'Generate PID'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -251,25 +287,25 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             />
           </div>
 
-          {/* Project manager — required for a requester who cannot approve. */}
-          {!canApprove && (
+          {/* Request PID from — required for a requester without PID authority. */}
+          {!canGeneratePid && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Project Manager (approver) <span className="text-red-500">*</span>
+                Request PID from <span className="text-red-500">*</span>
               </label>
               <select
                 required
-                value={managerId}
-                onChange={e => setManagerId(e.target.value)}
+                value={pidAssigneeId}
+                onChange={e => setPidAssigneeId(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
               >
-                <option value="">Select a manager…</option>
-                {managerOptions.map(u => (
+                <option value="">Select who assigns the PID…</option>
+                {authorityOptions.map(u => (
                   <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
                 ))}
               </select>
               <p className="text-[11px] text-gray-400 mt-1">
-                They&apos;ll be notified to review your request. Only people with project-approval rights can be chosen.
+                They&apos;ll be notified to assign a Project ID. Only people with PID authority can be chosen.
               </p>
             </div>
           )}
@@ -341,18 +377,18 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </button>
             <button
               type="submit"
-              disabled={loading || !title.trim() || !projectType || (!canApprove && !managerId)}
+              disabled={loading || !title.trim() || !projectType || (!canGeneratePid && !pidAssigneeId)}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  {canApprove ? 'Creating...' : 'Submitting...'}
+                  {canGeneratePid ? 'Creating...' : 'Submitting...'}
                 </span>
               ) : (
                 <>
                   <Plus size={15} />
-                  {canApprove ? 'Create Project' : 'Submit Request'}
+                  {canGeneratePid ? 'Create Project' : 'Submit Request'}
                 </>
               )}
             </button>

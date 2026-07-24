@@ -211,6 +211,11 @@ export type ProjectTypeDef = {
   comingSoon?: boolean; taskListName?: string; tasks?: string[];
 };
 
+export type PidRequestItem = {
+  id: string; projectId: string; projectTitle: string; projectType: string | null;
+  requestedBy: string; note: string | null; createdAt: string;
+};
+
 export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
   /** The kind of patent-analysis matter (HML, CC_NEW, FTO, …); null for a general project. */
@@ -743,7 +748,20 @@ export const api = {
       title: string; projectType?: string; clientId?: string; patentIds?: string[];
       description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
+      pid?: string; pidAssigneeId?: string;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
+    /** Mint a Project ID on demand (Generate PID). Authority only. */
+    generatePid: () => req<{ pid: string }>('/projects/generate-pid', { method: 'POST' }),
+    /** People who can assign a PID — the request dropdown for non-authorities. */
+    pidAuthorities: () =>
+      req<Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>[]>(
+        '/projects/pid-authorities'),
+    /** My incoming PID requests, as an authority. */
+    pidRequests: () => req<PidRequestItem[]>('/projects/pid-requests'),
+    /** Assign a PID to a pending-request project. */
+    fulfillPidRequest: (id: string, pid: string) =>
+      req<{ pid: string; projectId: string }>(`/projects/pid-requests/${id}/fulfill`,
+        { method: 'POST', body: JSON.stringify({ pid }) }),
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Project requests routed to me as their manager (or, for admins, any pending). Org is

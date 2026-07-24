@@ -56,6 +56,26 @@ export class CreateProjectDto {
   @IsString()
   managerId?: string;
 
+  /**
+   * A Project ID minted via the Generate PID action. Honored ONLY for users who hold
+   * project.generate_pid (ignored otherwise). When such a user omits it, a fresh PID is
+   * minted automatically. A user WITHOUT that permission never supplies a PID — they set
+   * pidAssigneeId instead and the project is created with the PID pending.
+   */
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(40)
+  pid?: string;
+
+  /**
+   * For a requester WITHOUT project.generate_pid: the authority they ask to assign the PID.
+   * The project is created with a pending PID and a request is routed to this person.
+   */
+  @IsOptional()
+  @IsString()
+  pidAssigneeId?: string;
+
   @IsOptional()
   @IsString()
   description?: string;
@@ -128,6 +148,14 @@ export class UpdateProjectDto {
   @Min(0)
   @Max(100)
   completionPercentage?: number;
+}
+
+export class FulfillPidDto {
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
+  @MaxLength(40)
+  pid!: string;
 }
 
 export class ApprovalDto {
