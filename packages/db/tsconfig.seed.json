@@ -18,6 +18,8 @@
     "prisma/reset-passwords.ts",
     "prisma/set-passcode.ts",
     "prisma/regrant-roles.ts",
-    "prisma/update-designations-2026-07.ts"
+    "prisma/update-designations-2026-07.ts",
+    "prisma/reset-operational-data.ts",
+    "prisma/assign-offices.ts"
   ]
 }
