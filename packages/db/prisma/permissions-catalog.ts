@@ -16,6 +16,7 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
+  generate_pid: 'Generate PID',
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -32,7 +33,7 @@ export const ACTION_LABELS: Record<string, string> = {
 
 export const MODULES: ModuleDef[] = [
   { key: 'dashboard',   label: 'Dashboard',    actions: ['view'] },
-  { key: 'project',     label: 'Projects',     actions: ['view', 'create', 'update', 'delete', 'approve'] },
+  { key: 'project',     label: 'Projects',     actions: ['view', 'create', 'update', 'delete', 'approve', 'generate_pid'] },
   { key: 'task',        label: 'Tasks',        actions: ['view', 'create', 'update', 'delete', 'assign'] },
   { key: 'tasklist',    label: 'Task Lists',   actions: ['view', 'create', 'update', 'delete'] },
   { key: 'timesheet',   label: 'Timesheets',   actions: ['view', 'create', 'update', 'delete'] },
@@ -119,7 +120,7 @@ const VIEW_BASICS = [
 // Manager: full operational control over delivery work + org analytics, no system admin.
 const MANAGER_CODES = [
   ...VIEW_BASICS,
-  code('project', 'create'), code('project', 'update'), code('project', 'approve'),
+  code('project', 'create'), code('project', 'update'), code('project', 'approve'), code('project', 'generate_pid'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'),
@@ -174,6 +175,8 @@ const SENIOR_RESEARCH_ASSOCIATE_CODES = [
   code('task', 'assign'),
   code('issue', 'update'),
   code('report', 'export'),
+  // Senior enough to mint a Project ID directly (no request needed).
+  code('project', 'generate_pid'),
 ];
 
 // Senior Consultant: strong delivery lead — full operational control over
@@ -182,7 +185,7 @@ const SENIOR_RESEARCH_ASSOCIATE_CODES = [
 // Manager/HR/Admin).
 const SENIOR_CONSULTANT_CODES = [
   ...VIEW_BASICS,
-  code('project', 'create'), code('project', 'update'), code('project', 'approve'),
+  code('project', 'create'), code('project', 'update'), code('project', 'approve'), code('project', 'generate_pid'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'),

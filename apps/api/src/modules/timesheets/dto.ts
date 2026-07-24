@@ -8,8 +8,11 @@ export class CreateTimesheetDto {
   @IsString()
   userId?: string;
 
+  // OPTIONAL: the task determines the project (PID) + type. Omitting it logs a "buffer" entry
+  // that must have its PID (task) assigned within a week.
   @IsString()
-  taskId!: string;
+  @IsOptional()
+  taskId?: string;
 
   @IsDateString()
   date!: string;
@@ -27,6 +30,12 @@ export class CreateTimesheetDto {
   @IsOptional()
   @MaxLength(2000)
   notes?: string;
+}
+
+export class AssignTimesheetDto {
+  // The task whose project (PID) + type this buffer entry should be assigned to.
+  @IsString()
+  taskId!: string;
 }
 
 export class UpdateTimesheetDto {

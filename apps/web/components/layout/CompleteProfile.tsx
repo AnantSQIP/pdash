@@ -9,13 +9,43 @@ const input =
   'w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none ' +
   'focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition';
 
-function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+// ── Field-format checks (mirror the server rules). Empty is handled by `missing`, so these
+//    only flag a filled-but-malformed value. ──
+const PHONE_RE = /^[6-9]\d{9}$/;
+const PIN_RE = /^\d{6}$/;
+function normPhone(v?: string | null) {
+  let d = String(v ?? '').replace(/\D/g, '');
+  if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+const phoneErr = (v?: string | null) => {
+  const s = String(v ?? '').trim();
+  return !s || PHONE_RE.test(normPhone(s)) ? '' : 'Enter a valid 10-digit mobile number';
+};
+const pinErr = (v?: string | null) => {
+  const s = String(v ?? '').trim();
+  return !s || PIN_RE.test(s.replace(/\s/g, '')) ? '' : 'Enter a valid 6-digit PIN';
+};
+const dobErr = (v?: string | null) => {
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime()) || d.getTime() > Date.now()) return 'Enter a valid date';
+  const age = (Date.now() - d.getTime()) / (365.25 * 864e5);
+  return age < 15 || age > 100 ? 'Check the year' : '';
+};
+
+function Field({ label, required, error, children }: {
+  label: string; required?: boolean; error?: string; children: React.ReactNode;
+}) {
   return (
     <div>
       <label className="block text-xs font-medium text-gray-600 mb-1.5">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       {children}
+      {error && <p className="text-[11px] text-red-500 mt-1">{error}</p>}
     </div>
   );
 }
@@ -58,10 +88,20 @@ export function CompleteProfile() {
   const missing = required.filter(k => !String(f[k] ?? '').trim());
   const permanentNeeded = !f.permanentSameAsCurrent;
   const permanentMissing = permanentNeeded && !String(f.permanentLine1 ?? '').trim();
+  const fieldErrors = {
+    phone: phoneErr(f.phone),
+    alternatePhone: phoneErr(f.alternatePhone),
+    emergencyPhone: phoneErr(f.emergencyPhone),
+    currentPostalCode: pinErr(f.currentPostalCode),
+    permanentPostalCode: permanentNeeded ? pinErr(f.permanentPostalCode) : '',
+    dateOfBirth: dobErr(f.dateOfBirth),
+  };
+  const hasFormatError = Object.values(fieldErrors).some(Boolean);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (missing.length || permanentMissing) { setErr('Please complete every required field.'); return; }
+    if (hasFormatError) { setErr('Please fix the highlighted fields.'); return; }
     setBusy(true); setErr('');
     try {
       await api.profile.updateMe(f);
@@ -97,18 +137,18 @@ export function CompleteProfile() {
           </div>
 
           <Section icon={Phone} title="Contact" note="Your work email is already on file.">
-            <Field label="Work / primary phone" required>
-              <input value={f.phone ?? ''} onChange={set('phone')} placeholder="9876543210" className={input} />
+            <Field label="Work / primary phone" required error={fieldErrors.phone}>
+              <input value={f.phone ?? ''} onChange={set('phone')} placeholder="9876543210" inputMode="tel" className={input} />
             </Field>
-            <Field label="Alternate phone">
-              <input value={f.alternatePhone ?? ''} onChange={set('alternatePhone')} className={input} />
+            <Field label="Alternate phone" error={fieldErrors.alternatePhone}>
+              <input value={f.alternatePhone ?? ''} onChange={set('alternatePhone')} placeholder="9876543210" inputMode="tel" className={input} />
             </Field>
             <Field label="Personal email">
               <input type="email" value={f.personalEmail ?? ''} onChange={set('personalEmail')}
                 placeholder="you@gmail.com" className={input} />
             </Field>
-            <Field label="Date of birth" required>
-              <input type="date" value={f.dateOfBirth ?? ''} onChange={set('dateOfBirth')} className={input} />
+            <Field label="Date of birth" required error={fieldErrors.dateOfBirth}>
+              <input type="date" value={f.dateOfBirth ?? ''} onChange={set('dateOfBirth')} max={new Date().toISOString().slice(0, 10)} className={input} />
             </Field>
           </Section>
 
@@ -153,8 +193,8 @@ export function CompleteProfile() {
             <Field label="State" required>
               <input value={f.currentState ?? ''} onChange={set('currentState')} className={input} />
             </Field>
-            <Field label="PIN / postal code" required>
-              <input value={f.currentPostalCode ?? ''} onChange={set('currentPostalCode')} className={input} />
+            <Field label="PIN / postal code" required error={fieldErrors.currentPostalCode}>
+              <input value={f.currentPostalCode ?? ''} onChange={set('currentPostalCode')} placeholder="560001" inputMode="numeric" className={input} />
             </Field>
             <Field label="Country">
               <input value={f.currentCountry ?? ''} onChange={set('currentCountry')} className={input} />
@@ -187,7 +227,7 @@ export function CompleteProfile() {
                 </div>
                 <Field label="City"><input value={f.permanentCity ?? ''} onChange={set('permanentCity')} className={input} /></Field>
                 <Field label="State"><input value={f.permanentState ?? ''} onChange={set('permanentState')} className={input} /></Field>
-                <Field label="PIN / postal code"><input value={f.permanentPostalCode ?? ''} onChange={set('permanentPostalCode')} className={input} /></Field>
+                <Field label="PIN / postal code" error={fieldErrors.permanentPostalCode}><input value={f.permanentPostalCode ?? ''} onChange={set('permanentPostalCode')} placeholder="560001" inputMode="numeric" className={input} /></Field>
                 <Field label="Country"><input value={f.permanentCountry ?? ''} onChange={set('permanentCountry')} className={input} /></Field>
               </>
             )}
@@ -201,8 +241,8 @@ export function CompleteProfile() {
               <input value={f.emergencyRelationship ?? ''} onChange={set('emergencyRelationship')}
                 placeholder="Mother, Spouse…" className={input} />
             </Field>
-            <Field label="Phone" required>
-              <input value={f.emergencyPhone ?? ''} onChange={set('emergencyPhone')} className={input} />
+            <Field label="Phone" required error={fieldErrors.emergencyPhone}>
+              <input value={f.emergencyPhone ?? ''} onChange={set('emergencyPhone')} placeholder="9876543210" inputMode="tel" className={input} />
             </Field>
           </Section>
 
@@ -216,7 +256,7 @@ export function CompleteProfile() {
             </button>
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || missing.length > 0 || permanentMissing || hasFormatError}
               className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-60"
             >
               {busy && <Loader size={15} className="animate-spin" />}

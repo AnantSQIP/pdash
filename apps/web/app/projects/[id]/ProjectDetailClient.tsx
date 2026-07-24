@@ -233,9 +233,13 @@ export function ProjectDetailClient({ projectId }: Props) {
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
-                {project.code && (
+                {project.code ? (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
                     {project.code}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 font-mono ring-1 ring-amber-200" title="A PID authority will assign the Project ID">
+                    PID pending
                   </span>
                 )}
                 {typeLabel && (

@@ -14,8 +14,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge,
-  ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus, Plane, Flag,
+  ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus, Plane, Flag, Building2,
 } from 'lucide-react';
+
+/** Human label for an office/branch grouping key. */
+const officeLabel = (o: string) =>
+  o === 'GURGAON' ? 'Gurgaon' : o === 'JAIPUR' ? 'Jaipur' : o;
 import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
 
 type RangeKey = 'next-7' | 'next-14' | 'next-30' | 'past-30';
@@ -95,6 +99,27 @@ export default function CapacityPage() {
     (!search || r.name.toLowerCase().includes(search.toLowerCase())) && (!dept || r.department === dept);
   const visibleFwd = useMemo(() => fwdRows.filter(matches), [fwdRows, search, dept]);
   const visibleHist = useMemo(() => histRows.filter(matches), [histRows, search, dept]);
+
+  // Group the forward board by office (Gurgaon, Jaipur, then anything else), A–Z within each.
+  const groupedFwd = useMemo(() => {
+    const ORDER = ['GURGAON', 'JAIPUR'];
+    const byOffice = new Map<string, CapacityRow[]>();
+    for (const r of visibleFwd) {
+      const key = r.office || 'Unassigned';
+      if (!byOffice.has(key)) byOffice.set(key, []);
+      byOffice.get(key)!.push(r);
+    }
+    return [...byOffice.keys()]
+      .sort((a, b) => {
+        const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
+        if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+        return a.localeCompare(b);
+      })
+      .map(office => ({
+        office,
+        rows: byOffice.get(office)!.slice().sort((a, b) => a.name.localeCompare(b.name)),
+      }));
+  }, [visibleFwd]);
 
   // Forward headline numbers a manager acts on.
   const stats = useMemo(() => {
@@ -278,7 +303,14 @@ export default function CapacityPage() {
               ) : (
                 visibleFwd.length === 0
                   ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
-                  : visibleFwd.map(row => (
+                  : groupedFwd.map(g => (
+                    <div key={g.office}>
+                      <div className="sticky top-0 z-[5] flex items-center gap-1.5 px-4 py-1.5 bg-gray-100/95 backdrop-blur border-y border-gray-200 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                        <Building2 size={12} className="text-gray-400" />
+                        {officeLabel(g.office)}
+                        <span className="normal-case font-normal text-gray-400">· {g.rows.length}</span>
+                      </div>
+                      {g.rows.map(row => (
                     <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
                       <button onClick={() => setSelected(row)} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
                         <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={30} />
@@ -318,6 +350,8 @@ export default function CapacityPage() {
                         </button>
                       </div>
                     </div>
+                      ))}
+                    </div>
                   ))
               )}
             </div>
@@ -326,7 +360,7 @@ export default function CapacityPage() {
             <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
               {((isPast
                 ? ['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT']
-                : ['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'HOLIDAY', 'WEEKEND']) as DayState[]).map(s => (
+                : ['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'LEAVE_PENDING', 'HOLIDAY', 'WEEKEND']) as DayState[]).map(s => (
                 <span key={s} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
                   <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[s].dot)} />{STATE_STYLE[s].label}
                 </span>

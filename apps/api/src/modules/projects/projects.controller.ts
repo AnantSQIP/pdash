@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { ApprovalDto, CreateProjectDto, UpdateProjectDto } from './dto';
+import { ApprovalDto, CreateProjectDto, FulfillPidDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -49,6 +49,32 @@ export class ProjectsController {
   @Get('next-pid')
   nextPid() {
     return this.projects.nextPid();
+  }
+
+  /** Mint a Project ID on demand (the "Generate PID" button). Authority only. */
+  @Post('generate-pid') @RequirePermission('project.generate_pid')
+  async generatePid() {
+    return this.projects.generatePid(await this.actor.requireOrgId());
+  }
+
+  /** People who can assign a PID (project.generate_pid) — the request dropdown. */
+  @Get('pid-authorities') @RequirePermission('project.create')
+  async pidAuthorities() {
+    return this.projects.pidAuthorities(await this.actor.requireOrgId());
+  }
+
+  /** My incoming PID requests, as an authority — the fulfilment queue. */
+  @Get('pid-requests') @RequirePermission('project.generate_pid')
+  async pidRequests() {
+    return this.projects.pidRequestsFor(await this.actor.requireOrgId(), this.actor.requireActorId());
+  }
+
+  /** Assign a PID to a pending-request project. */
+  @Post('pid-requests/:id/fulfill') @RequirePermission('project.generate_pid')
+  async fulfillPidRequest(@Param('id') id: string, @Body() dto: FulfillPidDto) {
+    return this.projects.fulfillPidRequest(
+      await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto.pid,
+    );
   }
 
   @Get(':id')

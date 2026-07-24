@@ -3,10 +3,11 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { Plus, LayoutGrid, List, Filter, Search } from 'lucide-react';
+import { Plus, LayoutGrid, List, Filter, Search, KeyRound, Copy, Check, Inbox } from 'lucide-react';
 import clsx from 'clsx';
 import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
+import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
 import { PHASE_META, PRIORITY_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -83,7 +84,31 @@ export function ProjectsClient() {
   const [view, setView] = useState<ViewMode>('grid');
   const [phase, setPhase] = useState<Phase | 'ALL'>('ALL');
   const [showModal, setShowModal] = useState(false);
+  const [showPidRequests, setShowPidRequests] = useState(false);
+  const [pidCopied, setPidCopied] = useState('');
+  const [generating, setGenerating] = useState(false);
   const [search, setSearch] = useState('');
+
+  const canGeneratePid = can('project.generate_pid');
+  // Authorities see their pending PID-request queue count.
+  const { data: pidRequests = [] } = useQuery({
+    queryKey: ['pid-requests'],
+    queryFn: () => api.projects.pidRequests(),
+    enabled: canGeneratePid,
+    staleTime: 30_000,
+  });
+
+  async function handleGeneratePid() {
+    setGenerating(true);
+    try {
+      const res = await api.projects.generatePid();
+      try { await navigator.clipboard.writeText(res.pid); } catch { /* clipboard blocked */ }
+      setPidCopied(res.pid);
+      setTimeout(() => setPidCopied(''), 3000);
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   const { data: rawProjects = [], isLoading: projectsLoading, isError } = useQuery({
     queryKey: ['projects', org?.id],
@@ -141,6 +166,33 @@ export function ProjectsClient() {
               <List size={15} />
             </button>
           </div>
+          {canGeneratePid && (
+            <>
+              <button
+                onClick={() => setShowPidRequests(true)}
+                title="Pending PID requests"
+                className="relative flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <Inbox size={15} />
+                <span className="hidden sm:inline">PID Requests</span>
+                {pidRequests.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center text-[10px] font-bold text-white bg-red-500 rounded-full">
+                    {pidRequests.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={handleGeneratePid}
+                disabled={generating}
+                title="Generate a Project ID and copy it"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
+              >
+                {pidCopied ? <Check size={15} /> : <KeyRound size={15} />}
+                <span className="hidden sm:inline font-mono">{pidCopied || 'Generate PID'}</span>
+                {pidCopied && <Copy size={13} className="text-brand-400" />}
+              </button>
+            </>
+          )}
           {can('project.create') && (
             <button
               onClick={() => setShowModal(true)}
@@ -223,6 +275,13 @@ export function ProjectsClient() {
           onClose={() => setShowModal(false)}
           onSuccess={invalidate}
           createdBy={currentUser?.email ?? 'system'}
+        />
+      )}
+
+      {showPidRequests && (
+        <PidRequestsModal
+          onClose={() => setShowPidRequests(false)}
+          onAssigned={invalidate}
         />
       )}
     </div>

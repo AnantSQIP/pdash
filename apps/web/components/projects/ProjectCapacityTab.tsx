@@ -5,25 +5,35 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Users, Loader, ArrowRight, CalendarRange } from 'lucide-react';
 import { api, type CapacityRow } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { DOW, DayCell, CapacityLegend, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
 import { PersonPanel } from '@/components/capacity/PersonPanel';
+import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 
 const RANGES = [7, 14, 30] as const;
 
 export function ProjectCapacityTab({ projectId }: { projectId: string }) {
+  const qc = useQueryClient();
   const [days, setDays] = useState<number>(14);
   const [selected, setSelected] = useState<CapacityRow | null>(null);
+  // Clicking a free day opens the add-task flow, pre-assigned to that person on that day.
+  const [assign, setAssign] = useState<{ userId: string; date: string } | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['capacity', 'project', projectId, days],
     queryFn: () => api.capacity.forProject(projectId, days),
     staleTime: 60_000,
   });
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: () => api.projects.get(projectId),
+    staleTime: 60_000,
+  });
+  const defaultTaskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
 
   if (isLoading) {
     return <div className="flex items-center justify-center py-16 text-gray-400"><Loader className="animate-spin mr-2" size={18} /> Loading availability…</div>;
@@ -101,7 +111,9 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
                       </button>
                     </td>
                     {row.days.map(d => (
-                      <td key={d.date} className="px-0.5 py-2 w-9"><DayCell day={d} /></td>
+                      <td key={d.date} className="px-0.5 py-2 w-9">
+                        <DayCell day={d} onClick={() => setAssign({ userId: row.userId, date: d.date })} />
+                      </td>
                     ))}
                     <td className="px-4 py-2 text-right">
                       <div className={clsx('text-sm font-semibold', row.availableNow ? 'text-emerald-600' : 'text-gray-500')}>
@@ -117,10 +129,24 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <CapacityLegend states={['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'HOLIDAY', 'WEEKEND']} />
+      <CapacityLegend states={['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'LEAVE_PENDING', 'HOLIDAY', 'WEEKEND']} />
 
       {/* Click a member to see what they're working on — same drill-down as the full board. */}
       {selected && <PersonPanel row={selected} onClose={() => setSelected(null)} />}
+
+      {/* Click a free day → add a task into THIS project, pre-assigned to that person + day. */}
+      {assign && defaultTaskList && (
+        <AddTaskModal
+          projectId={projectId}
+          taskListId={defaultTaskList.id}
+          workflowId={project?.workflowId}
+          initialAssigneeIds={[assign.userId]}
+          initialStartDate={assign.date}
+          initialDueDate={assign.date}
+          onClose={() => setAssign(null)}
+          onSuccess={() => { setAssign(null); qc.invalidateQueries({ queryKey: ['capacity', 'project', projectId] }); }}
+        />
+      )}
     </div>
   );
 }

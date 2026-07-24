@@ -3,10 +3,16 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, type LucideIcon } from 'lucide-react';
+import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, KeyRound, type LucideIcon } from 'lucide-react';
 import { api, type Timesheet } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
+import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
+
+/** A buffer entry (logged without a PID) shows how many of the 7 days remain to assign one. */
+const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId;
+const bufferDaysLeft = (e: Timesheet): number | null =>
+  e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
 
 function fmtHours(h: number): string {
   const whole = Math.floor(h);
@@ -32,6 +38,7 @@ export default function TimesheetsPage() {
   const { currentUser } = useOrg();
   const qc = useQueryClient();
   const [showLog, setShowLog] = useState(false);
+  const [assigning, setAssigning] = useState<Timesheet | null>(null);
   const [billableFilter, setBillableFilter] = useState<'All' | 'Billable' | 'Non-billable'>('All');
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -117,6 +124,7 @@ export default function TimesheetsPage() {
               <table className="w-full text-left min-w-[560px]">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50">
+                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">PID</th>
                     <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Task</th>
                     <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
                     <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Duration</th>
@@ -127,10 +135,35 @@ export default function TimesheetsPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filtered.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-12 text-center text-sm text-gray-400">No time entries yet. Click “Log Time” to add one.</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-gray-400">No time entries yet. Click “Log Time” to add one.</td></tr>
                   )}
                   {filtered.map(entry => (
                     <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3">
+                        {entry.project?.code ? (
+                          <div>
+                            <span className="text-xs font-mono font-medium text-gray-700">{entry.project.code}</span>
+                            {entry.projectType && <span className="block text-[10px] text-gray-400">{entry.projectType}</span>}
+                          </div>
+                        ) : isUnassigned(entry) ? (
+                          <div className="flex items-center gap-2 whitespace-nowrap">
+                            <button onClick={() => setAssigning(entry)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-md hover:bg-brand-100">
+                              <KeyRound size={11} /> Assign PID
+                            </button>
+                            {(() => {
+                              const d = bufferDaysLeft(entry);
+                              return d === null ? null : (
+                                <span className={clsx('text-[10px] font-medium', d < 0 ? 'text-red-500' : d <= 2 ? 'text-amber-600' : 'text-gray-400')}>
+                                  {d < 0 ? 'overdue' : `${d}d left`}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? '—'}</span>
                         {entry.issue && <span className="ml-2 text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
@@ -159,6 +192,7 @@ export default function TimesheetsPage() {
       </div>
 
       {showLog && <LogTimeStandaloneModal onClose={() => setShowLog(false)} onSuccess={invalidate} />}
+      {assigning && <AssignPidModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
     </div>
   );
 }

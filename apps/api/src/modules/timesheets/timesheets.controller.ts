@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { TimesheetsService } from './timesheets.service';
-import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
+import { AssignTimesheetDto, CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 // SECURITY: every route is permission-gated (PermissionGuard is global but opt-in
@@ -26,6 +26,12 @@ export class TimesheetsController {
   @Patch(':id') @RequirePermission('timesheet.update')
   update(@Param('id') id: string, @Body() dto: UpdateTimesheetDto) {
     return this.timesheets.update(id, dto);
+  }
+
+  // Assign a PID (task) to a buffer entry logged without one. Self-scoped in the service.
+  @Post(':id/assign') @RequirePermission('timesheet.create')
+  assign(@Param('id') id: string, @Body() dto: AssignTimesheetDto) {
+    return this.timesheets.assign(id, dto.taskId);
   }
 
   // No @RequirePermission: deleting a timesheet is self-scoped — the service enforces

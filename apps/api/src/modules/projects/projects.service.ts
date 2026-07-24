@@ -68,22 +68,25 @@ export class ProjectsService {
     if (!creator) throw new ForbiddenException('You must be signed in to create a project.');
     const organizationId = creator.organizationId;
 
-    // ── Resolve the project manager (= the approver of this request) ──────────────
-    const creatorCanApprove = await this.permissions.check(creator.id, 'project.approve');
-    let managerId = dto.managerId?.trim() || (creatorCanApprove ? creator.id : '');
-    if (!managerId) {
-      throw new BadRequestException('Select the project manager who should approve and own this project.');
-    }
-    if (managerId !== creator.id) {
-      const manager = await this.prisma.user.findFirst({
-        where: { id: managerId, organizationId, deletedAt: null, status: 'ACTIVE' },
+    // ── PID authority: who assigns the Project ID ─────────────────────────────────
+    // Authorities (project.generate_pid) attach the PID themselves. Everyone else nominates an
+    // authority; the project is created with the PID PENDING and a request is routed to that
+    // person, who becomes the project's MANAGER.
+    const canGeneratePid = await this.permissions.check(creator.id, 'project.generate_pid');
+    let pidAssigneeId = '';
+    if (!canGeneratePid) {
+      pidAssigneeId = dto.pidAssigneeId?.trim() || '';
+      if (!pidAssigneeId) {
+        throw new BadRequestException('Select who should assign the Project ID (PID) for this project.');
+      }
+      const assignee = await this.prisma.user.findFirst({
+        where: { id: pidAssigneeId, organizationId, deletedAt: null, status: 'ACTIVE' },
         select: { id: true },
       });
-      if (!manager) throw new BadRequestException('The selected project manager is not an active member of this organization.');
-    }
-    // The manager must actually be able to approve projects, or the request would strand.
-    if (!(await this.permissions.check(managerId, 'project.approve'))) {
-      throw new BadRequestException('The selected person cannot approve projects. Choose a manager with approval rights.');
+      if (!assignee) throw new BadRequestException('The selected person is not an active member of this organization.');
+      if (!(await this.permissions.check(pidAssigneeId, 'project.generate_pid'))) {
+        throw new BadRequestException('The selected person cannot assign a PID. Choose someone with PID authority.');
+      }
     }
 
     // ── Deadlines: internal is open; the client date is restricted (new project → the
@@ -99,9 +102,11 @@ export class ProjectsService {
     if (clientDue) await this.deadlines.assertMaySetClientDue([], scope);
     this.deadlines.assertOrdered(internalDue, clientDue);
 
-    const members = managerId === creator.id
-      ? [{ userId: creator.id, projectRole: 'MANAGER' }]
-      : [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }];
+    // The creator leads their own project; when a requester nominates an authority, that
+    // authority becomes the MANAGER (senior owner) and the requester joins as a MEMBER.
+    const members = pidAssigneeId
+      ? [{ userId: pidAssigneeId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }]
+      : [{ userId: creator.id, projectRole: 'MANAGER' }];
 
     // A patent-analysis project TYPE (HML, Claim Chart, FTO, …) auto-creates that type's
     // standard workflow as a task list of ready-made tasks. Resolved before the write.
@@ -132,15 +137,12 @@ export class ProjectsService {
       derivedClientId = clientIds[0] ?? null;
     }
 
-    // Allocate the PID atomically (a separate committed statement — the counter lock is
-    // never held across the heavy create tx). FY is computed in IST, so a create just after
-    // midnight on Apr 1 is never mis-bucketed into the previous financial year.
-    const orgRec = await this.prisma.organization.findUnique({
-      where: { id: organizationId }, select: { code: true },
-    });
-    const fy = financialYear(new Date());
-    const pidSerial = await this.sequence.allocate(pidScope(organizationId, fy.label));
-    const pid = formatPid(orgRec?.code ?? 'SQ', fy.label, pidSerial);
+    // An authority attaches a PID now — their own generated one (validated + claimed) or a
+    // freshly minted serial. A requester's project starts with a null (pending) code, which
+    // the nominated authority fills in later via fulfillPidRequest.
+    const pid: string | null = canGeneratePid
+      ? (dto.pid ? await this.claimPid(organizationId, dto.pid) : await this.mintPid(organizationId))
+      : null;
 
     // Projects are usable immediately — they are created ACTIVE, with no approval gate.
     // Project + members + task lists + any template tasks are one transaction so a partial
@@ -204,6 +206,13 @@ export class ProjectsService {
         }
       }
 
+      // A requester's project carries a pending PID request, routed to the chosen authority.
+      if (pidAssigneeId) {
+        await tx.pidRequest.create({
+          data: { organizationId, projectId: created.id, requestedById: creator.id, assigneeId: pidAssigneeId },
+        });
+      }
+
       return created;
     });
 
@@ -213,12 +222,133 @@ export class ProjectsService {
       entityId: project.id,
       organizationId,
       actorId: creator.id,
-      metadata: { projectId: project.id, title: project.title, managerId },
+      metadata: { projectId: project.id, title: project.title, pidPending: !!pidAssigneeId },
     });
+
+    // Route the PID request to the chosen authority (best-effort, outside the tx).
+    if (pidAssigneeId) {
+      await this.notifications.notify(pidAssigneeId, {
+        type: 'project.pid_requested',
+        title: 'PID requested',
+        message: `${creator.firstName} ${creator.lastName} needs a Project ID for "${project.title}".`,
+        link: '/projects',
+      });
+    }
 
     // Projects are billable by default; billability is decided per time entry by each
     // logger, so there is no admin billable-review step on creation any more.
     return this.deadlines.redactProject(project as any, scope);
+  }
+
+  // ── PID generation + request flow ─────────────────────────────────────────
+  /** Mint a fresh PID serial — a real, committed allocation (gap-tolerant). */
+  private async mintPid(organizationId: string): Promise<string> {
+    const orgRec = await this.prisma.organization.findUnique({
+      where: { id: organizationId }, select: { code: true },
+    });
+    const fy = financialYear(new Date());
+    const serial = await this.sequence.allocate(pidScope(organizationId, fy.label));
+    return formatPid(orgRec?.code ?? 'SQ', fy.label, serial);
+  }
+
+  /** Validate + claim a supplied PID: correct shape for this org, not already in use, and the
+   *  FY counter is advanced past it so a future auto-mint can never collide with it. */
+  private async claimPid(organizationId: string, raw: string): Promise<string> {
+    const orgRec = await this.prisma.organization.findUnique({
+      where: { id: organizationId }, select: { code: true },
+    });
+    const orgCode = orgRec?.code ?? 'SQ';
+    const m = new RegExp(`^${orgCode}_(\\d{2})_(\\d{2})_(\\d{1,6})$`).exec(raw.trim().toUpperCase());
+    if (!m) {
+      throw new BadRequestException(`"${raw}" is not a valid Project ID (expected ${orgCode}_YY_YY_NNN).`);
+    }
+    const fyLabel = `${m[1]}_${m[2]}`;
+    const serial = parseInt(m[3], 10);
+    // Canonicalise (zero-pad the serial) so "SQ_26_27_6" and "SQ_26_27_006" can't both be claimed
+    // as distinct-but-equal PIDs — the clash check + ensureAtLeast both key on the canonical form.
+    const pid = formatPid(orgCode, fyLabel, serial);
+    const clash = await this.prisma.project.findFirst({ where: { code: pid }, select: { id: true } });
+    if (clash) throw new BadRequestException(`Project ID ${pid} is already in use.`);
+    await this.sequence.ensureAtLeast(pidScope(organizationId, fyLabel), serial);
+    return pid;
+  }
+
+  /** Mint a PID on demand (the "Generate PID" button). Authority-gated at the controller. */
+  async generatePid(organizationId: string) {
+    return { pid: await this.mintPid(organizationId) };
+  }
+
+  /** Members who may assign a PID (hold project.generate_pid) — the request dropdown. */
+  pidAuthorities(organizationId: string) {
+    return this.prisma.user.findMany({
+      where: {
+        organizationId, deletedAt: null, status: 'ACTIVE',
+        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'project.generate_pid' } } } } } },
+      },
+      select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true },
+      orderBy: [{ firstName: 'asc' }],
+    });
+  }
+
+  /** PENDING PID requests routed to this authority (their fulfilment queue). */
+  async pidRequestsFor(organizationId: string, userId: string) {
+    const rows = await this.prisma.pidRequest.findMany({
+      where: { organizationId, assigneeId: userId, status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+      include: { project: { select: { id: true, title: true, projectType: true } } },
+    });
+    const requesterIds = [...new Set(rows.map(r => r.requestedById))];
+    const requesters = requesterIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: requesterIds } }, select: { id: true, firstName: true, lastName: true } })
+      : [];
+    const nameById = new Map(requesters.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+    return rows.map(r => ({
+      id: r.id,
+      projectId: r.projectId,
+      projectTitle: r.project.title,
+      projectType: r.project.projectType,
+      requestedBy: nameById.get(r.requestedById) ?? 'A colleague',
+      note: r.note,
+      createdAt: r.createdAt,
+    }));
+  }
+
+  /** Assign a PID to a pending-request project (the authority pastes or generates the PID). */
+  async fulfillPidRequest(organizationId: string, userId: string, requestId: string, rawPid: string) {
+    const req = await this.prisma.pidRequest.findFirst({
+      where: { id: requestId, organizationId },
+      select: { id: true, projectId: true, assigneeId: true, requestedById: true, status: true },
+    });
+    if (!req) throw new NotFoundException('PID request not found.');
+    if (req.assigneeId !== userId) throw new ForbiddenException('This PID request is assigned to someone else.');
+    if (req.status !== 'PENDING') throw new BadRequestException('This PID request has already been resolved.');
+
+    const pid = await this.claimPid(organizationId, rawPid);
+    // Atomic: only the first concurrent fulfil flips PENDING → FULFILLED and sets the code;
+    // a P2002 (another project claimed this exact PID in a race) surfaces as a friendly error.
+    try {
+      const ok = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.pidRequest.updateMany({
+          where: { id: req.id, status: 'PENDING' },
+          data: { status: 'FULFILLED', pid, resolvedAt: new Date() },
+        });
+        if (claimed.count === 0) return false;
+        await tx.project.update({ where: { id: req.projectId }, data: { code: pid } });
+        return true;
+      });
+      if (!ok) throw new BadRequestException('This PID request has already been resolved.');
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      throw e;
+    }
+    await this.notifications.notify(req.requestedById, {
+      type: 'project.pid_assigned',
+      title: 'PID assigned',
+      message: `Your project has been assigned Project ID ${pid}.`,
+      link: `/projects/${req.projectId}`,
+    });
+    return { pid, projectId: req.projectId };
   }
 
   /** The catalog of project types (drives the create-form dropdown + task preview). */
