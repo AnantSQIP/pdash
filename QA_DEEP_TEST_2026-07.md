@@ -22,6 +22,8 @@ The portal gates real patent numbers behind `patent.manage` + passcode, and proj
 4. **Real patent numbers are logged as filenames** and read back via the **unguarded `/activity?entityType=DOCUMENT`** IDOR (audit.service.ts:43).
 
 ### Fix plan (priority order)
+> **STATUS 2026-07-24 — P0 batch DONE (commit 41037be):** items 1–4 + 6–7 below implemented + build-verified. Applies on Contabo now and AWS later (pure app-level authz/validation). Item 5 (search scoping + departments authz) and item 8 (admin-reset rank check) roll into Batch B next. AWS-platform items (P1) will be built config-gated so Contabo is unaffected.
+
 **P0 — fix before ANY deploy (confidentiality + integrity; all small, targeted fixes):**
 1. **Guard `GET /documents/:id/content`** by ownership/linked-resource authz (fixes patents + receipts + comment/chat attachments + project files at once); route patent docs only through the passcode'd endpoint.
 2. **Add entity authorization to `comments`** — `assertProjectAccess`/`assertTaskAccess`/`assertIssueAccess` on list/create/delete.
