@@ -287,6 +287,21 @@ export class TasksService {
       throw new BadRequestException(`Status ${dto.statusId} does not belong to this task's workflow`);
     }
 
+    // If the workflow defines an explicit transition graph, honour it — a status change must
+    // follow a defined edge (a null `fromStatusId` = "from any state"). Workflows with NO
+    // transitions configured allow any move (backward-compatible with the current data), so
+    // this only tightens things once an admin actually models the workflow.
+    const currentStatusId = (task as any).currentWorkflowStatusId ?? null;
+    if (task.workflowId && currentStatusId && currentStatusId !== status.id) {
+      const transitions = await this.prisma.workflowTransition.findMany({
+        where: { workflowId: task.workflowId }, select: { fromStatusId: true, toStatusId: true },
+      });
+      if (transitions.length &&
+          !transitions.some(t => (t.fromStatusId === currentStatusId || t.fromStatusId === null) && t.toStatusId === status.id)) {
+        throw new BadRequestException('That status change is not allowed by this workflow.');
+      }
+    }
+
     // Key the reset on the PRIOR status, not the percentage value: only reopening a
     // CLOSED task drops it to 0%. Previously any move to a non-CLOSED status wiped a
     // 100%-but-open task to 0% (e.g. Open@100% → In Progress lost the 100%).

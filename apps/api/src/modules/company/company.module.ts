@@ -211,8 +211,12 @@ export class CompanyService {
 
   async deleteReward(id: string) {
     const organizationId = await this.actor.requireOrgId();
+    const actorId = this.actorId();
     const r = await this.prisma.reward.findFirst({ where: { id, organizationId } });
     if (!r) throw new NotFoundException('Reward not found');
+    // Only the person who gave the recognition may remove it — not any reward.give holder
+    // (which let anyone wipe another giver's recognition / tamper with the leaderboard).
+    if (r.givenById !== actorId) throw new ForbiddenException('You can only remove recognition you gave.');
     await this.prisma.reward.delete({ where: { id } });
     return { ok: true };
   }
