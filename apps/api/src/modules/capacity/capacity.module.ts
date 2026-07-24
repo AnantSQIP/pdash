@@ -37,7 +37,7 @@ export function parseHorizon(raw: string | undefined, fallback = DEFAULT_DAYS): 
 
 export type DayState =
   // Forward (projected-load) states:
-  | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY'
+  | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'LEAVE_PENDING' | 'FREE' | 'LIGHT' | 'BUSY'
   // Past (actual-attendance) states — used by the history view:
   | 'PRESENT' | 'ABSENT' | 'COMPOFF';
 
@@ -59,6 +59,8 @@ export interface CapacityRow {
   name: string;
   designation?: string;
   department?: string;
+  /** Office / branch for board grouping (GURGAON | JAIPUR); undefined if unassigned. */
+  office?: string;
   profilePhoto?: string | null;
   days: CapacityDay[];
   /** Open tasks driving the load — what they're actually busy with. */
@@ -152,7 +154,7 @@ export class CapacityService {
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
-          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true,
+          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true, office: true,
           departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
         },
         orderBy: [{ firstName: 'asc' }],
@@ -162,8 +164,10 @@ export class CapacityService {
         select: { date: true, name: true },
       }),
       this.prisma.leaveRequest.findMany({
-        where: { status: 'APPROVED', startDate: { lt: to }, endDate: { gte: today }, user: { organizationId } },
-        select: { userId: true, startDate: true, endDate: true, leaveType: true },
+        // Include PENDING (tentative) leave so it is VISIBLE on the board — it is shown
+        // distinctly and does NOT reduce capacity until approved.
+        where: { status: { in: ['APPROVED', 'PENDING'] }, startDate: { lt: to }, endDate: { gte: today }, user: { organizationId } },
+        select: { userId: true, startDate: true, endDate: true, leaveType: true, status: true },
       }),
       // Every OPEN task assigned to anyone in scope — capacity is cross-project by design.
       this.prisma.task.findMany({
@@ -185,15 +189,17 @@ export class CapacityService {
     ]);
 
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
-    const leaveByUserDay = new Map<string, string>();
+    const leaveByUserDay = new Map<string, string>();        // APPROVED — reduces capacity
+    const pendingLeaveByUserDay = new Map<string, string>(); // PENDING — shown, but tentative
     for (const lv of leaves) {
       // Clamp the iteration to the visible window BEFORE looping. A leave whose endDate is
       // years out (bad data) would otherwise spin for millions of iterations; the query only
       // guarantees the range OVERLAPS the window, not that it fits inside it.
       const from = startOfUtcDay(lv.startDate) < today ? today : startOfUtcDay(lv.startDate);
       const until = startOfUtcDay(lv.endDate) >= to ? addDays(to, -1) : startOfUtcDay(lv.endDate);
+      const target = lv.status === 'APPROVED' ? leaveByUserDay : pendingLeaveByUserDay;
       for (let d = new Date(from); d <= until; d = addDays(d, 1)) {
-        leaveByUserDay.set(`${lv.userId}|${dayKey(d)}`, lv.leaveType);
+        target.set(`${lv.userId}|${dayKey(d)}`, lv.leaveType);
       }
     }
 
@@ -275,14 +281,24 @@ export class CapacityService {
 
         const load = loadByUserDay.get(`${u.id}|${k}`) ?? 0;
         const utilization = load / DAILY_CAPACITY_HOURS;
+        const free = r1(Math.max(0, DAILY_CAPACITY_HOURS - load));
+        // A PENDING (unapproved) leave is shown tentatively but does NOT free the day — the
+        // capacity still counts until it is approved (the request could be rejected).
+        const pending = pendingLeaveByUserDay.get(`${u.id}|${k}`);
+        if (pending) {
+          return {
+            date: k, state: 'LEAVE_PENDING', load: r1(load), capacity: DAILY_CAPACITY_HOURS,
+            utilization: Math.round(utilization * 100) / 100, free,
+            note: `${pending} leave (pending approval)`,
+          };
+        }
         const state: DayState =
           utilization >= LIGHT_THRESHOLD ? 'BUSY'
             : utilization > FREE_THRESHOLD ? 'LIGHT'
               : 'FREE';
         return {
           date: k, state, load: r1(load), capacity: DAILY_CAPACITY_HOURS,
-          utilization: Math.round(utilization * 100) / 100,
-          free: r1(Math.max(0, DAILY_CAPACITY_HOURS - load)),
+          utilization: Math.round(utilization * 100) / 100, free,
         };
       });
 
@@ -319,6 +335,7 @@ export class CapacityService {
         name: `${u.firstName} ${u.lastName ?? ''}`.trim(),
         designation: u.designation ?? undefined,
         department: u.departmentMemberships[0]?.department?.name ?? undefined,
+        office: u.office ?? undefined,
         profilePhoto: u.profilePhoto,
         days,
         openTasks,
@@ -358,7 +375,7 @@ export class CapacityService {
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
-          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true,
+          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true, office: true,
           departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
         },
         orderBy: [{ firstName: 'asc' }],

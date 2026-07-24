@@ -15,6 +15,7 @@ export const STATE_STYLE: Record<DayState, { cell: string; label: string; dot: s
   LIGHT:      { cell: 'bg-sky-100 hover:bg-sky-200 border-sky-200',               label: 'Light',      dot: 'bg-sky-300' },
   BUSY:       { cell: 'bg-brand-500 hover:bg-brand-600 border-brand-600',         label: 'Busy',       dot: 'bg-brand-500' },
   LEAVE:      { cell: 'bg-purple-100 border-purple-200 bg-stripes-purple',        label: 'On leave',   dot: 'bg-purple-300' },
+  LEAVE_PENDING: { cell: 'bg-purple-50 border-purple-300 border-dashed',          label: 'Leave (pending)', dot: 'bg-purple-200' },
   HOLIDAY:    { cell: 'bg-amber-100 border-amber-200',                            label: 'Holiday',    dot: 'bg-amber-300' },
   WEEKEND:    { cell: 'bg-gray-50 border-gray-100',                               label: 'Weekend',    dot: 'bg-gray-200' },
   // Past (actual-attendance) states:
@@ -56,7 +57,9 @@ export function DayCell({ day, onClick }: { day: CapacityDay; onClick?: () => vo
           style={{ height: `${Math.min(100, day.utilization * 100)}%` }}
         />
       )}
-      {day.state === 'LEAVE' && <Plane size={11} className="absolute inset-0 m-auto text-purple-500" />}
+      {(day.state === 'LEAVE' || day.state === 'LEAVE_PENDING') && (
+        <Plane size={11} className={clsx('absolute inset-0 m-auto', day.state === 'LEAVE' ? 'text-purple-500' : 'text-purple-300')} />
+      )}
       {day.state === 'HOLIDAY' && <Flag size={11} className="absolute inset-0 m-auto text-amber-500" />}
     </button>
   );

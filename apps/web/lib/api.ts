@@ -516,7 +516,7 @@ export type DepartmentSummary = {
 
 // ─── Team capacity / availability ────────────────────────────────────────────
 export type DayState =
-  | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'FREE' | 'LIGHT' | 'BUSY'
+  | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'LEAVE_PENDING' | 'FREE' | 'LIGHT' | 'BUSY'
   | 'PRESENT' | 'ABSENT' | 'COMPOFF';
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
@@ -528,7 +528,7 @@ export type CapacityOpenTask = {
   remainingHours: number; overdue: boolean;
 };
 export type CapacityRow = {
-  userId: string; name: string; designation?: string; department?: string; profilePhoto?: string | null;
+  userId: string; name: string; designation?: string; department?: string; office?: string; profilePhoto?: string | null;
   days: CapacityDay[];
   openTasks: CapacityOpenTask[];
   freeHours: number; committedHours: number; capacityHours: number; utilization: number;
