@@ -14,7 +14,7 @@ function isWeekend(d: Date): boolean { const wd = d.getUTCDay(); return wd === 0
 function r1(n: number): number { return Math.round((n ?? 0) * 10) / 10; }
 
 /** A 48h week over 5 weekdays — the same basis the Performance module uses. */
-const DAILY_CAPACITY_HOURS = 48 / 5; // 9.6h
+const DAILY_CAPACITY_HOURS = 8; // office hours 9am–6pm IST minus a 1h lunch = 8 working hours/day
 /** Assumed effort for a task with no estimate, so unestimated work still consumes time. */
 const DEFAULT_TASK_HOURS = 6;
 /** A day is "free" below this share of capacity — i.e. there's room for real work. */

@@ -559,13 +559,13 @@ export class PerformanceService {
 
     // capacity vs logged per department.
     // Availability-fair denominator: target = Σ_member (businessDays − company holidays −
-    // that member's approved leave) × 9.6h. Excluding holidays/leave means people on approved
+    // that member's approved leave) × 8h. Excluding holidays/leave means people on approved
     // time off no longer drag utilization down. (ATTENDANCE_BILLABLE_PLAN.md, B2.)
     // Snap the window to UTC-day boundaries so the weekday set lines up with the
     // midnight-stamped holiday/leave rows (avoids a boundary-day mismatch).
-    // Work week = 48h over 5 weekdays (Mon–Fri) → 9.6h/day. Weekends are already excluded
-    // by businessDays(); holidays + approved leave are subtracted from availableDays.
-    const DAILY_HOURS = 48 / 5; // 9.6h/day
+    // Office hours 9am–6pm IST minus a 1h lunch = 8 working hours/day over 5 weekdays (Mon–Fri).
+    // Weekends are already excluded by businessDays(); holidays + approved leave are subtracted.
+    const DAILY_HOURS = 8; // 9am–6pm IST minus 1h lunch
     const fromDay = utcDay(from);
     const toDay = utcDay(to);
     const weekdaySet = new Set<string>();
