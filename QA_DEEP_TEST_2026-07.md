@@ -72,7 +72,14 @@ Legend: ☐ pending · ▶ running · ✔ done
 - **Phase 3 — Cross-cutting**
   - ✔ Batch 7 — Event + Audit logs coverage + security sweep — findings below
   - ✔ Batch 8 — Production + AWS-deploy readiness — findings below (verdict: NOT READY, blockers listed)
-- ✔ **Phase 4 — Synthesis** — consolidated at top (EXECUTIVE SUMMARY & FIX PLAN)
+- ✔ **Phase 4 — Synthesis (wave 1)** — consolidated at top (EXECUTIVE SUMMARY & FIX PLAN)
+- **Second wave (gap-closing + dedicated capacity)** — 6 agents running:
+  - ▶ W-1 Discuss/chat (channels, comments, presence, mentions, polls, voice clips)
+  - ▶ W-2 Calendar/meetings + Notifications + reminders/digests
+  - ▶ W-3 Search + config/structure (departments, workflows, statuses, tasklists, tags, organizations, project-groups, rollup, deadlines)
+  - ▶ W-4 Expenses + Rewards + Company/org-chart + Auth UX flows
+  - ▶ W-5 **Team Capacity — forward board (deep)**: load-math correctness, day-state precedence, office grouping, availability, assign-into-day, drill-down
+  - ▶ W-6 **Team Capacity — retrospective + coverage/emergency-leave (deep)**: history states/counts, coverageRisks logic, one-click reassign flow
 
 ## Progress log
 _(append one line per batch as it completes, so this survives a session drop)_
