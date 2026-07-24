@@ -80,6 +80,7 @@ export class TasksService {
    */
   async create(dto: CreateTaskDto) {
     await this.access.assertProjectAccess(getActorId(), dto.projectId);
+    await this.access.assertProjectWritable(dto.projectId); // no new tasks on completed/closed projects
     const taskList = await this.prisma.taskList.findFirst({
       where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null },
     });

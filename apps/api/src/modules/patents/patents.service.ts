@@ -116,11 +116,13 @@ export class PatentsService {
     });
   }
 
-  /** Handle-only options for the project picker (patent.view). All clients when clientId omitted. */
+  /** Handle-only options for the project picker (patent.view = every delivery role). Returns
+   *  ONLY id/handle/serial — never clientId, documentId or documentName, so a non-`patent.manage`
+   *  user can't correlate a handle to its client or to the real number embedded in the filename. */
   patentOptions(organizationId: string, clientId?: string) {
     return this.prisma.patent.findMany({
       where: { organizationId, deletedAt: null, ...(clientId ? { clientId } : {}) },
-      select: PATENT_OVERVIEW_SELECT,
+      select: { id: true, handle: true, serial: true },
       orderBy: [{ clientId: 'asc' }, { serial: 'asc' }],
     });
   }

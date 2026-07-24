@@ -6,6 +6,7 @@ import { EventService } from '../audit-events/event.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { DocumentsService, DOC_SELECT } from '../documents/documents.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { getActorId } from '../../common/context/request-context';
@@ -50,6 +51,7 @@ export class CommentsService {
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
     private readonly documents: DocumentsService,
+    private readonly access: ProjectAccessService,
   ) {}
 
   /** Who to notify about a new comment: task assignees, or an issue's assignee + reporter. */
@@ -66,7 +68,10 @@ export class CommentsService {
     return [...ids];
   }
 
-  list(entityType: string, entityId: string) {
+  async list(entityType: string, entityId: string) {
+    // A comment thread is only for people who can access the underlying matter — otherwise
+    // any user could read a confidential project/task/issue discussion by entityId (IDOR).
+    await this.access.assertEntityAccess(getActorId(), entityType, entityId);
     return this.prisma.comment.findMany({
       where: { entityType, entityId },
       include: {
@@ -105,6 +110,8 @@ export class CommentsService {
   async create(dto: CreateCommentDto) {
     // Author is the verified cookie actor — never a client-supplied id.
     const userId = getActorId() ?? dto.userId ?? 'system';
+    // Can't post into (or notify the participants of) a matter you have no access to.
+    await this.access.assertEntityAccess(getActorId(), dto.entityType, dto.entityId);
     const content = dto.content?.trim() ?? '';
     // Attachments must be the actor's own, still-unattached uploads.
     const documentIds = await this.documents.assertAttachable(dto.documentIds ?? [], userId);
@@ -155,6 +162,7 @@ export class CommentsService {
       include: { attachments: { select: { documentId: true } } },
     });
     if (!comment) throw new NotFoundException(`Comment ${id} not found`);
+    await this.access.assertEntityAccess(getActorId(), comment.entityType, comment.entityId);
     const updated = await this.prisma.comment.update({
       where: { id },
       data: { content: '[deleted]' },

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 
@@ -57,6 +58,7 @@ export class DocumentsService {
     private readonly prisma: PrismaService,
     private readonly events: EventService,
     private readonly permissions: PermissionService,
+    private readonly access: ProjectAccessService,
   ) {}
 
   private actor(): string {
@@ -125,7 +127,9 @@ export class DocumentsService {
       action: EVENTS.DOCUMENT_UPLOADED,
       entityType: 'DOCUMENT',
       entityId: id,
-      metadata: { projectId, taskId, name, size: file.buffer.length, mimeType },
+      // The filename is NOT logged — a patent document's filename is its confidential real
+      // number, and the activity feed must never carry it. Keep only non-sensitive metadata.
+      metadata: { projectId, taskId, size: file.buffer.length, mimeType },
     });
     return this.prisma.document.findUnique({ where: { id }, select: DOC_SELECT });
   }
@@ -158,10 +162,13 @@ export class DocumentsService {
   }
 
   /**
-   * Fetch a document's bytes for streaming. Documents attached to a private
-   * discussion are member-gated exactly like the discussion itself (no admin
-   * bypass — consistent with ChannelsService); everything else is org-internal
-   * and requires only an authenticated actor.
+   * Fetch a document's bytes for streaming, AUTHORISED by whatever the document is linked to.
+   * A document is confidential to the same people who can see the thing it belongs to — a
+   * project file to that project's members, a comment attachment to that matter's members, a
+   * channel attachment to the channel's members, an expense receipt to org expense reviewers.
+   * Patent documents are served ONLY through the passcode-gated patents route, never here.
+   * (Previously this only member-gated channel attachments, so every other document — patent
+   * PDFs, receipts, comment/project files — was downloadable by any authenticated user.)
    */
   async getContent(id: string) {
     const actorId = this.actor();
@@ -172,22 +179,70 @@ export class DocumentsService {
         storagePath: true,
         blob: { select: { data: true } },
         messageAttachments: { select: { message: { select: { channelId: true } } } },
+        commentAttachments: { select: { comment: { select: { entityType: true, entityId: true } } } },
+        projectDocuments: { select: { projectId: true } },
+        taskDocuments: { select: { taskId: true } },
+        policies: { select: { id: true }, take: 1 },
       },
     });
     if (!doc || (!doc.storagePath && !doc.blob)) throw new NotFoundException(`Document ${id} not found`);
 
-    const channelIds = [...new Set(doc.messageAttachments.map(a => a.message.channelId))];
-    if (channelIds.length && doc.uploadedBy !== actorId) {
-      const member = await this.prisma.channelMember.findFirst({
-        where: { channelId: { in: channelIds }, userId: actorId },
-        select: { id: true },
-      });
-      if (!member) throw new ForbiddenException('You are not a member of this discussion.');
-    }
+    await this.assertMayRead(actorId, id, doc);
 
-    const { blob, storagePath, messageAttachments: _ma, ...meta } = doc;
+    const { blob, storagePath, messageAttachments, commentAttachments, projectDocuments, taskDocuments, policies, ...meta } = doc;
     const data = storagePath ? await readFile(join(STORAGE_DIR, storagePath)) : blob!.data;
     return { doc: meta, data };
+  }
+
+  /** Authorize a document read via any of its links; deny if none grant access. */
+  private async assertMayRead(
+    actorId: string,
+    documentId: string,
+    doc: {
+      uploadedBy: string;
+      messageAttachments: { message: { channelId: string } }[];
+      commentAttachments: { comment: { entityType: string; entityId: string } }[];
+      projectDocuments: { projectId: string }[];
+      taskDocuments: { taskId: string }[];
+      policies: { id: string }[];
+    },
+  ): Promise<void> {
+    // Patent documents are the crown jewels — the generic route never serves them; they must
+    // go through the passcode-gated /patents/:id/document/content.
+    const patent = await this.prisma.patent.findFirst({ where: { documentId, deletedAt: null }, select: { id: true } });
+    if (patent) throw new ForbiddenException('This document is only available through the confidential patents portal.');
+
+    // The uploader may always read their own file (covers abandoned/unattached uploads and an
+    // expense receipt, whose claimant IS the uploader).
+    if (doc.uploadedBy === actorId) return;
+
+    // Channel attachment → channel member.
+    const channelIds = [...new Set(doc.messageAttachments.map(a => a.message.channelId))];
+    if (channelIds.length) {
+      const member = await this.prisma.channelMember.findFirst({
+        where: { channelId: { in: channelIds }, userId: actorId }, select: { id: true },
+      });
+      if (member) return;
+    }
+    // Project file → project member/lead.
+    for (const pd of doc.projectDocuments) {
+      if (await this.access.canAccessProject(actorId, pd.projectId)) return;
+    }
+    // Task file → the task's project.
+    for (const td of doc.taskDocuments) {
+      if (await this.access.canAccessTask(actorId, td.taskId)) return;
+    }
+    // Comment attachment → the comment's underlying matter.
+    for (const ca of doc.commentAttachments) {
+      if (await this.access.canAccessEntity(actorId, ca.comment.entityType, ca.comment.entityId)) return;
+    }
+    // Expense receipt → an org expense reviewer (the claimant is covered by the uploader check).
+    const receipt = await this.prisma.expense.findFirst({ where: { receiptDocumentId: documentId }, select: { id: true } });
+    if (receipt && (await this.permissions.check(actorId, 'expense.view.organization'))) return;
+    // Published HR policy attachment → readable by everyone in the org.
+    if (doc.policies.length) return;
+
+    throw new ForbiddenException('You do not have access to this document.');
   }
 
   /**
@@ -267,7 +322,8 @@ export class DocumentsService {
       action: EVENTS.DOCUMENT_DELETED,
       entityType: 'DOCUMENT',
       entityId: id,
-      metadata: { name: doc.name },
+      // Filename intentionally not logged (may be a confidential patent number).
+      metadata: {},
     });
     return { ok: true };
   }
