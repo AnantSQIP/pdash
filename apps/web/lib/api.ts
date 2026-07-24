@@ -276,11 +276,13 @@ export type ApiComment = {
 };
 
 export type Timesheet = {
-  id: string; userId: string; taskId?: string | null; issueId?: string | null; date: string;
+  id: string; userId: string; taskId?: string | null; issueId?: string | null;
+  projectId?: string | null; projectType?: string | null; date: string; createdAt?: string;
   hoursLogged: number; billable: boolean; notes?: string;
   user: { id: string; firstName: string; lastName: string };
   task?: { id: string; title: string } | null;
   issue?: { id: string; title: string } | null;
+  project?: { id: string; code: string | null; projectType: string | null } | null;
 };
 
 export type CalendarEvent = {
@@ -898,10 +900,14 @@ export const api = {
   timesheets: {
     forProject: (projectId: string) => req<Timesheet[]>(`/timesheets?projectId=${projectId}`),
     forUser: (userId: string) => req<Timesheet[]>(`/timesheets?userId=${userId}`),
-    create: (data: { userId: string; taskId: string; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
+    // taskId is optional: omit it to log a "buffer" entry whose PID (task) is assigned later.
+    create: (data: { userId?: string; taskId?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { hoursLogged?: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>(`/timesheets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Assign a PID (task) to a buffer entry logged without one. */
+    assign: (id: string, taskId: string) =>
+      req<Timesheet>(`/timesheets/${id}/assign`, { method: 'POST', body: JSON.stringify({ taskId }) }),
     delete: (id: string) => req<void>(`/timesheets/${id}`, { method: 'DELETE' }),
   },
 

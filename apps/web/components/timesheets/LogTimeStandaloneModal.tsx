@@ -21,6 +21,8 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
+  // Buffer: log the hours now, attach the PID (task) within a week.
+  const [assignLater, setAssignLater] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -39,6 +41,8 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
     enabled: !!projectId,
   });
 
+  const selectedProject = projects.find(p => p.id === projectId);
+
   function pickProject(id: string) {
     setProjectId(id);
     setTaskId(''); // reset the task when the project changes
@@ -46,7 +50,8 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!currentUser || !taskId || !hours) return;
+    if (!currentUser || !hours) return;
+    if (!assignLater && !taskId) return;
     const parsed = parseFloat(hours);
     if (isNaN(parsed) || parsed < 0.25 || parsed > 24) {
       setError('Hours must be between 0.25 and 24');
@@ -56,8 +61,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
     setError('');
     try {
       await api.timesheets.create({
-        userId: currentUser.id, // ignored by the server (owner = the actor) but kept for the type
-        taskId,
+        taskId: assignLater ? undefined : taskId, // omit → buffer entry, assign the PID later
         date,
         hoursLogged: parsed,
         billable,
@@ -86,7 +90,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
               className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
               Cancel
             </button>
-            <button type="submit" form="log-time-standalone-form" disabled={loading || !taskId || !hours}
+            <button type="submit" form="log-time-standalone-form" disabled={loading || !hours || (!assignLater && !taskId)}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               {loading
                 ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</>
@@ -97,27 +101,51 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
       }
     >
       <form id="log-time-standalone-form" onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Project <span className="text-red-500">*</span></label>
-          <select
-            required value={projectId} onChange={e => pickProject(e.target.value)}
-            className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+        {/* Buffer: log now, attach the PID (task) within a week. */}
+        <label className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 px-3.5 py-2.5 cursor-pointer">
+          <span className="min-w-0 mr-3">
+            <span className="text-sm font-medium text-amber-800">Assign PID later</span>
+            <span className="block text-[11px] text-amber-600">Log the hours now and attach the Project ID within a week.</span>
+          </span>
+          <button
+            type="button" role="switch" aria-checked={assignLater} aria-label="Assign PID later"
+            onClick={() => setAssignLater(v => !v)}
+            className={`relative h-5 w-10 shrink-0 rounded-full transition-colors ${assignLater ? 'bg-amber-500' : 'bg-gray-300'}`}
           >
-            <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project'}</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-          </select>
-        </div>
+            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${assignLater ? 'left-[22px]' : 'left-0.5'}`} />
+          </button>
+        </label>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
-          <select
-            required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
-            className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
-          >
-            <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
-            {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-          </select>
-        </div>
+        {!assignLater && (
+          <>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Project ID (PID) <span className="text-red-500">*</span></label>
+              <select
+                required={!assignLater} value={projectId} onChange={e => pickProject(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+              >
+                <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project by its PID'}</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{(p.code ?? 'PID pending')} — {p.title}</option>)}
+              </select>
+              {selectedProject && (
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Project type: <span className="font-medium text-gray-700">{selectedProject.projectType ?? '—'}</span>
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
+              <select
+                required={!assignLater} value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
+              >
+                <option value="">{!projectId ? 'Pick a PID first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
+                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </div>
+          </>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
