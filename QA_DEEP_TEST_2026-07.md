@@ -10,6 +10,39 @@ stood up.
 **Priority order (per request):** Projects → Patents → Performance FIRST, then the whole system,
 then cross-cutting (event/audit logs, security, prod/AWS readiness).
 
+## EXECUTIVE SUMMARY & FIX PLAN (Phase 4 synthesis)
+
+8 persona agents traced the system. **The app is competently built** — profile gate, PII boundary, segregation-of-duties, RBAC anti-escalation, org-session-scoping (newer modules), project redaction, argon2 + refresh-rotation, no SQLi, no XSS, and empty-DB-safe math are all **verified solid**. But there is a **patent-confidentiality collapse** (3 chained CRITs) and the stack is **NOT AWS-ready** without changes.
+
+### The headline: patent confidentiality is defeated today (3 chained CRITs)
+The portal carefully gates real patent numbers behind `patent.manage` + a passcode — but three plumbing leaks route around it, and any ordinary project-creating employee can chain them:
+1. `GET /patents/options` (only needs `patent.view`) returns `documentName` (= the real number, since PDFs must be named by it) and `documentId` → **handle↔real-number correlation, no passcode**.
+2. `GET /documents/:id/content` has **no permission + no passcode** guard → feed it that `documentId` and **download the confidential PDF**.
+3. Those same real numbers are written to Activity/AuditLog as filenames and read back via the **unguarded `/activity?entityType=DOCUMENT`** IDOR.
+
+### Fix plan (priority order)
+**P0 — fix before ANY deploy (confidentiality + integrity; all small, targeted fixes):**
+1. Guard `GET /documents/:id/content` by ownership/linked-resource authz; route patent docs only through the passcode'd endpoint.
+2. Remove `documentName` + `documentId` from `PATENT_OVERVIEW_SELECT` (keep them only in the passcode-gated FULL select).
+3. Stop logging patent-derived filenames; add `DOCUMENT` to `SENSITIVE`; require project/audit scope on `/activity` (+ take org from session).
+4. Block task + timesheet creation on COMPLETED/CLOSED projects (server-side, not just UI).
+5. Close the 24h/day-cap bypasses: route issue-time through `assertDayCap` + future-date check; aggregate the cap by calendar day (not exact instant); dedup inside `assign()`.
+
+**P1 — before AWS deploy (platform blockers — the auditor's verdict is NOT READY):**
+6. Move document storage off the ephemeral container FS → **S3** (or EFS).
+7. Use **RDS/Aurora** (backups/HA/PITR), not a Postgres container.
+8. Take `prisma migrate deploy` **out of the app boot CMD** → a one-off migration job.
+9. Make background sweeps single-runner (leader lock / EventBridge) — or pin `desiredCount=1`.
+10. Shared store (Redis) for throttle + passcode lockout; `/health` returns **503** on DB-down; rebuild the web image with the correct `API_ORIGIN`.
+11. Add audit events for **patent reveal, passcode change, login/failed-login, and approvals** (today none are logged — you can't answer "who revealed the patents / changed the passcode").
+
+**P2 — correctness & hardening:**
+Projects: PID reassign/cancel (stranded null-PID), search membership-scope, pagination on `list`/`tasks`, single-MANAGER invariant, lifecycle `PATCH projectPhase` guard, rate-limit PID requests. Performance: key "completed"/on-time off the completion event not `updatedAt`, one "completed" definition, buffer-hours handling, `@@index([organizationId, createdAt])`, move the heatmap event-load inside the snapshot fallback, enforce `performance.view.organization` (HR's is dead). Attendance: never-punch-out integrity + late-marking for 9–6 + UTC→IST rollover. Cross-cutting: org-from-session in older modules (users/channels/departments/rbac/holiday/audit), structure or redact the free-text project title, tamper-evident audit trail, buffer-timesheet billable/expiry. **Feature gap:** no mandatory 2nd-reviewer QA gate for claim-chart deliverables (the real Squark workflow requires it).
+
+**Counts:** 3 CRIT · ~12 HIGH · ~18 MED · many LOW/NOTE. Full per-batch detail in the FINDINGS section below.
+
+---
+
 ## Personas (mapped to the real roster)
 | # | Persona | Role / perms | Focus |
 |---|---|---|---|
@@ -31,20 +64,21 @@ Legend: ☐ pending · ▶ running · ✔ done
 - **Phase 1 — Core modules (priority)**
   - ✔ Batch 1 — Projects (2 agents: authority + requester/authz) — findings below
   - ✔ Batch 2 — Patents / passcode / RBAC / doc-storage (Super Admin persona) — findings below
-  - ☐ Batch 3 — Performance (metric correctness, per-user vs org-wide, formulas, authz, empty-data, working-hours impact)
+  - ✔ Batch 3 — Performance / Analytics / Reports (Sr Consultant persona) — findings below
 - **Phase 2 — Full system**
   - ☐ Batch 4 — Attendance + Leave + Comp-off + WFH + Timesheets(new PID/buffer) + Capacity(offices/pending leaves)
   - ◐ Batch 5 — HR people-ops (PII/appraisals/comms/approvals) ✔ [Discuss/Calendar/Channels not yet covered]
   - ☐ Batch 6 — Users/RBAC + Profile-gate + Home/Dashboard + Expenses + Rewards
 - **Phase 3 — Cross-cutting**
-  - ☐ Batch 7 — Event logs + Audit logs coverage + security sweep (authz/IDOR/cross-org/leaks)
-  - ☐ Batch 8 — Production + AWS-deploy readiness (env/secrets, migrations, file storage/S3, health, scaling, N+1, indexes, Docker, HTTPS, backups)
-- **Phase 4 — Synthesis** — consolidate + dedupe + severity-rank → final report
+  - ✔ Batch 7 — Event + Audit logs coverage + security sweep — findings below
+  - ✔ Batch 8 — Production + AWS-deploy readiness — findings below (verdict: NOT READY, blockers listed)
+- ✔ **Phase 4 — Synthesis** — consolidated at top (EXECUTIVE SUMMARY & FIX PLAN)
 
 ## Progress log
 _(append one line per batch as it completes, so this survives a session drop)_
 - 2026-07-24: plan created; Phase 0 research launched; working hours changed.
-- 2026-07-24: Batch 1 (Projects) ✔ — 4 HIGH (stranded null-PID, unbounded list, closed-project write bypass, search membership leak), 6 MED, findings recorded. 8-agent fleet running for B2–B8 (Patents, Performance, Tasks/Timesheets/Capacity, Attendance/Leave/Home, HR, Audit/Security/AWS-deploy).
+- 2026-07-24: Batch 1 (Projects) ✔ — 4 HIGH, 6 MED. 8-agent fleet launched for the rest.
+- 2026-07-24: **ALL 8 agents complete** — Projects×2, Patents, Performance, Tasks/Timesheets/Capacity, Attendance/Leave/Home, HR, Audit/Security/AWS. Phase-4 synthesis done (3 CRIT patent-confidentiality chain, AWS NOT-READY with blocker list). Working-hours stale UI copy fixed (perf page 48h→40h). Sweep COMPLETE; fix plan at top of doc.
 
 ---
 
@@ -145,4 +179,45 @@ Each finding: `[SEV] module — summary (file:line) → why it breaks / scenario
 
 **✅ Verified GOOD (major):** **PII boundary is solid** (explicit `PERSONAL_FIELDS` allow-list, redaction by key-deletion, a Manager gets only directory tier, an Employee gets Forbidden; users/search/directory select directory-only; profile audit logs field *keys* not values); **SoD holds on every approval** (expenses block payer==claimant AND payer==approver; all self-review blocked); **appraisal authz correct** (only employee/reviewer/`appraisal.manage` can read; manager can't review a non-report); **no XSS** (no `dangerouslySetInnerHTML`, bodies render React-escaped); **HR scope excludes delivery** (no project/task/patent/capacity codes); **privilege-escalation guard real** (`assertActorMayGrant` blocks HR self-granting Manager/Admin/Super-Admin; every user mutation passcode-gated).
 
-_(next batches append below)_
+## Batch 6 — Performance / Analytics / Reports (Sr Consultant persona)
+
+**HIGH**
+- **"Tasks completed" + "on-time %" keyed off `Task.updatedAt`**, not completion date → any edit to an old closed task re-enters it into "completed this window" AND recomputes on-time against *today* (flips a genuinely-on-time task to late). Distorts headline KPIs + leaderboard (performance.service.ts:135-147,280).
+- **Two divergent "completed" definitions** — KPI/leaderboard use `updatedAt`; trend/heatmap/snapshots use the completion *event* date → the same task disagrees across surfaces (performance.service.ts:136 vs 209/410).
+- **`getOrgHeatmap` always loads the full event window into memory** even when snapshots exist (query outside the `if (!snaps.length)`) → default 365d pulls 100k+ `AnalyticsEvent` rows per heatmap load and throws them away (performance.service.ts:374).
+
+**MED**
+- **Buffer (unassigned) timesheets distort everything** — created `billable:true` with null project; every hours aggregation sums them (inflates hoursLogged/billable/score) but `hoursByProject` drops them → `Σ hoursByProject < hoursLogged` reconciliation gap; buffer hours never expire (performance.service.ts:139,479).
+- Snapshot `activityVolume` **double-counts** timesheets+comments (+2) vs the live path (+1) → rebuilt heatmap ≈ 2× a wiped-org's (performance.service.ts:406).
+- Leaderboard `score` **dominated by raw hoursLogged** (incl. buffer/non-billable) → ranking is gameable by logging hours with no delivery (performance.service.ts:321).
+- Missing **`@@index([organizationId, createdAt])`** on AnalyticsEvent → org scans range-scan the whole table (schema).
+
+**LOW/NOTE** — `performance.view.organization` is granted (HR) but **never enforced** (code checks `analytics.view.organization`) → HR's org-perf access silently fails closed; `performance.view.own` enforced UI-only; snapshot `issuesResolved` always 0 (dead event type); `report.export` gate is decorative (client-side export — no leak found: exports are redacted/internal-only); `assertCanView` doesn't verify target shares org (latent multi-org); UTC-vs-IST day skew.
+- **⚠ Fix from my working-hours change:** performance page copy still said "Capacity assumes a 48h week" (=9.6h) — corrected to 40h to match the 8h/day change (web app/performance/page.tsx:56).
+- **✅ Verified GOOD:** every division is guarded → **a wiped/empty DB yields zeros, not NaN/crash** (genuinely solid).
+
+## Batch 7+8 — Event/Audit logs · Security · AWS-deploy readiness (cross-cutting auditor)
+
+**CRIT**
+- (confirms Batch 2) **`GET /documents/:id/content` unguarded** — no permission, no passcode; only channel-attachment docs are gated, so a patent PDF streams to any authenticated user → download the crown-jewel PDF bypassing `patent.manage`+passcode (documents.controller.ts:33; documents.service.ts:166).
+- **NEW: the real patent number is written to the logs as a filename, then readable via the unguarded `/activity` feed** — `createFromDocument`→`documents.upload` emits `document.uploaded` with `metadata.name = "US1234567.pdf"` to Activity/AuditLog/AnalyticsEvent; `DOCUMENT` isn't in `SENSITIVE`, and `/activity?entityType=DOCUMENT` bypasses the `audit.view` gate → any employee harvests every uploaded patent number **and** the documentIds to feed the download CRIT above (patents.service.ts:163; audit.service.ts:43).
+- **Document storage on ephemeral container FS** → on ECS/Fargate every redeploy permanently loses the files (no blob fallback once `storagePath` set) + 404s across replicas. AWS blocker; needs S3/EFS (documents.service.ts:22,189).
+
+**HIGH**
+- **Audit-coverage holes on exactly the sensitive actions** — NOT logged: **patent reveal**, patent/client CRUD, **org passcode set/change/reset**, **login/logout/failed-login/lockout/password-change**, leave/expense/comp-off **approvals**, attendance punch/regularization. You cannot answer "who revealed the patents" or "who changed the passcode." (`APPROVAL_ACTION` defined but never emitted.)
+- **`/activity` not route-guarded + IDOR** — `?projectId=`/`?entityId=` bypass the org gate with no membership check; `organizationId` taken from the query not the session (audit.service.ts:33-65).
+- **Per-process background timers** (overdue alerts+digests, meeting reminders, channel retention) are `setInterval` per replica with no leader lock → **duplicate notifications** under multi-replica (overdue.module.ts:45; events.service.ts:353; channels.service.ts:509).
+- **Single self-hosted Postgres, no backup/HA/PITR** → must be RDS/Aurora on AWS (docker-compose.prod.yml:8).
+- **`prisma migrate deploy` in the API boot CMD** → crash-loops all replicas if a migration fails; couples cold-start to migration; every scale-up re-attempts it. Move to a one-off job (apps/api/Dockerfile:36).
+
+**MED**
+- Rate-limit + passcode lockout **in-memory** → weaken ×N replicas; need Redis/ElastiCache (app.module.ts:54; passcode.service.ts:27).
+- Audit trail **append-only by convention only** — no triggers/REVOKE/hash-chain; any code path or compromised credential can silently update/delete audit rows (schema.prisma:1527).
+- **Older modules still trust client-supplied `organizationId`** (users-create, channels-list, departments, rbac, holiday-create, audit) → latent cross-tenant IDOR / mass-assignment once multi-org (users.module.ts:168 etc.).
+- **`GET /documents/:id/content` general IDOR** — project "Files" readable by non-members who obtain the cuid (leaks via /activity + listForProject).
+- **`/health` returns 200 when the DB is down** (`degraded`) → ALB keeps a DB-severed task in rotation; return 503 (health.controller.ts:11).
+- Next standalone **bakes `API_ORIGIN` at build time** → must rebuild the web image for AWS networking (apps/web/Dockerfile:20).
+
+**NOTE / ✅ Verified GOOD:** NODE_ENV/weak-JWT is mitigated **via the Docker images** (`validateEnv()` fails boot in prod on missing/short/placeholder JWT secret, on `AUTH_DEV_TRUST_HEADER=true`, on missing CORS) — residual risk only on a **non-Docker native run** without NODE_ENV=production (reactivates the fallback secret — relevant to the local `npm run serve` path). Confirmed-good controls: helmet, `trust proxy 1`, pinned CORS allowlist, 2MB body limits, global `ValidationPipe(whitelist+forbidNonWhitelisted)`, argon2, login throttle + 8-try lockout, refresh-token rotation with reuse-detection + family revoke, `securityVersion` invalidation, graceful shutdown, **no SQL injection** ($queryRaw is parameterized), migration history is fresh-RDS-safe, no CSRF token but low risk (SameSite=lax + same-origin + credentialed CORS).
+
+**AWS-deploy verdict: NOT READY.** Blockers: (1) patent-doc download bypass, (2) patent numbers in logs + /activity IDOR, (3) doc storage → S3/EFS, (4) RDS not container-Postgres, (5) migrations out of boot CMD, (6) single-runner background jobs (or desiredCount=1), (7) shared throttle/lockout + /health 503 + rebuild web image, (8) add audit events for reveal/passcode/auth/approvals.
