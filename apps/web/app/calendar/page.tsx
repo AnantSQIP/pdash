@@ -132,7 +132,7 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
   const attendeeList = [...attendees];
   const { data: freeBusy = [] } = useQuery<FreeBusy[]>({
     queryKey: ['freebusy', attendeeList.sort().join(','), startDate],
-    queryFn: () => api.events.freeBusy(attendeeList, `${startDate}T00:00:00`, `${startDate}T23:59:59`),
+    queryFn: () => api.events.freeBusy(attendeeList, new Date(`${startDate}T00:00:00`).toISOString(), new Date(`${startDate}T23:59:59`).toISOString()),
     enabled: attendees.size > 0 && !!startDate,
     staleTime: 15_000,
   });
@@ -149,8 +149,11 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
         title,
         description: description.trim() || undefined,
         type,
-        startDate: allDay ? startDate : `${startDate}T${startTime}:00`,
-        endDate: allDay ? endDate : `${endDate}T${endTime}:00`,
+        // Send a timezone-correct instant: the browser is IST, so building a Date from the
+        // local parts and serialising to ISO yields the right UTC time (a bare "…T09:00" would
+        // be parsed as UTC on the server and land 5.5h off).
+        startDate: allDay ? startDate : new Date(`${startDate}T${startTime}:00`).toISOString(),
+        endDate: allDay ? endDate : new Date(`${endDate}T${endTime}:00`).toISOString(),
         allDay,
         color: TYPE_COLORS[type],
         createdBy: currentUser.id,

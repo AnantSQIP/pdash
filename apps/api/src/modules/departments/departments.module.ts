@@ -1,12 +1,15 @@
-import { Body, Controller, Delete, Get, Injectable, Module, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Injectable, Module, Param, Post } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
 
 class CreateDepartmentDto {
+  // Ignored — the org is always taken from the session (never the client body).
+  @IsOptional()
   @IsString()
-  organizationId!: string;
+  organizationId?: string;
 
   @IsString()
   @MinLength(1)
@@ -53,19 +56,25 @@ export class DepartmentsService {
     }));
   }
 
-  create(dto: CreateDepartmentDto) {
+  create(organizationId: string, dto: CreateDepartmentDto) {
     return this.prisma.department.create({
       data: {
-        organizationId: dto.organizationId,
+        organizationId,
         name: dto.name,
         description: dto.description ?? null,
       },
     });
   }
 
-  async listMembers(departmentId: string) {
-    const dept = await this.prisma.department.findUnique({ where: { id: departmentId } });
+  /** A department must belong to the actor's org — blocks cross-tenant id access. */
+  private async assertDeptInOrg(departmentId: string, organizationId: string) {
+    const dept = await this.prisma.department.findFirst({ where: { id: departmentId, organizationId } });
     if (!dept) throw new NotFoundException(`Department ${departmentId} not found`);
+    return dept;
+  }
+
+  async listMembers(organizationId: string, departmentId: string) {
+    await this.assertDeptInOrg(departmentId, organizationId);
 
     return this.prisma.departmentMember.findMany({
       where: { departmentId },
@@ -85,9 +94,8 @@ export class DepartmentsService {
     });
   }
 
-  async addMember(departmentId: string, dto: AddDepartmentMemberDto) {
-    const dept = await this.prisma.department.findUnique({ where: { id: departmentId } });
-    if (!dept) throw new NotFoundException(`Department ${departmentId} not found`);
+  async addMember(organizationId: string, departmentId: string, dto: AddDepartmentMemberDto) {
+    const dept = await this.assertDeptInOrg(departmentId, organizationId);
 
     // The member must belong to the same organization as the department.
     const user = await this.prisma.user.findFirst({
@@ -107,7 +115,8 @@ export class DepartmentsService {
     });
   }
 
-  async removeMember(departmentId: string, userId: string) {
+  async removeMember(organizationId: string, departmentId: string, userId: string) {
+    await this.assertDeptInOrg(departmentId, organizationId);
     const member = await this.prisma.departmentMember.findUnique({
       where: { departmentId_userId: { departmentId, userId } },
     });
@@ -121,31 +130,34 @@ export class DepartmentsService {
 
 @Controller('departments')
 class DepartmentsController {
-  constructor(private readonly service: DepartmentsService) {}
+  constructor(
+    private readonly service: DepartmentsService,
+    private readonly actor: ActorContextService,
+  ) {}
 
-  @Get()
-  list(@Query('organizationId') organizationId: string) {
-    return this.service.list(organizationId);
+  @Get() @RequirePermission('department.view')
+  async list() {
+    return this.service.list(await this.actor.requireOrgId());
   }
 
   @Post() @RequirePermission('department.create')
-  create(@Body() dto: CreateDepartmentDto) {
-    return this.service.create(dto);
+  async create(@Body() dto: CreateDepartmentDto) {
+    return this.service.create(await this.actor.requireOrgId(), dto);
   }
 
-  @Get(':id/members')
-  listMembers(@Param('id') id: string) {
-    return this.service.listMembers(id);
+  @Get(':id/members') @RequirePermission('department.view')
+  async listMembers(@Param('id') id: string) {
+    return this.service.listMembers(await this.actor.requireOrgId(), id);
   }
 
   @Post(':id/members') @RequirePermission('department.update')
-  addMember(@Param('id') id: string, @Body() dto: AddDepartmentMemberDto) {
-    return this.service.addMember(id, dto);
+  async addMember(@Param('id') id: string, @Body() dto: AddDepartmentMemberDto) {
+    return this.service.addMember(await this.actor.requireOrgId(), id, dto);
   }
 
   @Delete(':id/members/:userId') @RequirePermission('department.update')
-  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
-    return this.service.removeMember(id, userId);
+  async removeMember(@Param('id') id: string, @Param('userId') userId: string) {
+    return this.service.removeMember(await this.actor.requireOrgId(), id, userId);
   }
 }
 

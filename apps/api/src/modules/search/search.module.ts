@@ -2,6 +2,7 @@ import { Controller, Get, Injectable, Module, Query } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { PermissionService } from '../permissions/permission.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { getActorId } from '../../common/context/request-context';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true, designation: true };
@@ -23,6 +24,7 @@ export class SearchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly access: ProjectAccessService,
   ) {}
 
   async search(actorId: string, organizationId: string, q: string) {
@@ -33,6 +35,9 @@ export class SearchService {
     // Resolve the actor's effective permissions ONCE and gate each category by them.
     const eff = await this.permissions.getEffectivePermissions(actorId);
     const can = (code: string) => eff.isSuperAdmin || eff.codes.includes(code);
+    // Scope projects to what the actor may actually reach (their memberships, or all for a
+    // lead) — the conflict-wall. Previously search returned ANY org project with a member.
+    const projectScope = can('project.view') ? await this.access.projectScopeWhere(actorId, organizationId) : null;
 
     const [people, projects, channels, messages, tasks] = await Promise.all([
       // People — only for those who can view the people directory (search links into the
@@ -43,10 +48,11 @@ export class SearchService {
             select: USER_SELECT, take: 6,
           })
         : Promise.resolve([]),
-      // Projects — only for project.view holders, scoped to this org's projects.
-      can('project.view')
+      // Projects — project.view holders, scoped to the projects the actor is a member of
+      // (or all, for a delivery lead) via projectScopeWhere.
+      projectScope
         ? this.prisma.project.findMany({
-            where: { deletedAt: null, members: { some: { user: { organizationId } } }, OR: [{ title: like }, { code: like }] },
+            where: { deletedAt: null, ...projectScope, OR: [{ title: like }, { code: like }] },
             select: { id: true, title: true, code: true, projectPhase: true }, take: 6, orderBy: { updatedAt: 'desc' },
           })
         : Promise.resolve([]),
