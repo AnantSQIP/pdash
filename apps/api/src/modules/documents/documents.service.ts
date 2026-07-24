@@ -5,22 +5,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
+import { documentStorage } from './document-storage';
 
 /** Per-file upload cap. Multer enforces it at the transport layer too. */
 export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 /** Max attachments per message/comment. */
 export const MAX_ATTACHMENTS = 10;
-/** Where document bytes are written on disk (new uploads). Configurable so a container can
- *  mount a persistent volume; defaults under the working dir for the native/local run. */
-const STORAGE_DIR = process.env.DOCUMENT_STORAGE_DIR || join(process.cwd(), '.data', 'documents');
 
 /** Shape multer produces with memory storage (typed locally — no @types/multer dep). */
 export interface UploadedFileLike {
@@ -97,14 +93,10 @@ export class DocumentsService {
     }
 
     const id = randomUUID();
-    // Store the bytes on disk to keep large files OUT of the database. If the disk is not
-    // writable, fall back to a DB blob so an upload never fails outright.
-    let storagePath: string | null = null;
-    try {
-      await mkdir(STORAGE_DIR, { recursive: true });
-      await writeFile(join(STORAGE_DIR, id), file.buffer);
-      storagePath = id; // stored relative to STORAGE_DIR so the directory can be moved
-    } catch { storagePath = null; }
+    // Store the bytes via the configured driver (local disk on Contabo, S3 on AWS) to keep large
+    // files OUT of the database. If it couldn't be written, fall back to a DB blob so an upload
+    // never fails outright.
+    const storagePath = await documentStorage.put(id, file.buffer);
 
     await this.prisma.$transaction([
       this.prisma.document.create({
@@ -190,7 +182,7 @@ export class DocumentsService {
     await this.assertMayRead(actorId, id, doc);
 
     const { blob, storagePath, messageAttachments, commentAttachments, projectDocuments, taskDocuments, policies, ...meta } = doc;
-    const data = storagePath ? await readFile(join(STORAGE_DIR, storagePath)) : blob!.data;
+    const data = storagePath ? await documentStorage.get(storagePath) : blob!.data;
     return { doc: meta, data };
   }
 
@@ -316,8 +308,8 @@ export class DocumentsService {
       this.prisma.document.update({ where: { id }, data: { deletedAt: new Date() } }),
       this.prisma.documentBlob.deleteMany({ where: { documentId: id } }),
     ]);
-    // Free the on-disk file too (if this document was stored on disk).
-    if (doc.storagePath) await unlink(join(STORAGE_DIR, doc.storagePath)).catch(() => {});
+    // Free the stored bytes too (disk or S3).
+    if (doc.storagePath) await documentStorage.delete(doc.storagePath);
     await this.events.emit({
       action: EVENTS.DOCUMENT_DELETED,
       entityType: 'DOCUMENT',
