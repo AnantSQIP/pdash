@@ -41,6 +41,10 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    // Skip on replicas that aren't the designated background runner (multi-replica AWS) — set
+    // RUN_BACKGROUND_JOBS=false on all but one task to avoid duplicate alerts/digests. Single
+    // instance (Contabo) leaves it unset, so the sweep runs as before.
+    if (process.env.RUN_BACKGROUND_JOBS === 'false') return;
     // Delay the first sweep so boot isn't competing with it, then run hourly.
     this.timer = setInterval(() => void this.sweep(), SWEEP_INTERVAL_MS);
     setTimeout(() => void this.sweep(), BOOT_DELAY_MS).unref?.();

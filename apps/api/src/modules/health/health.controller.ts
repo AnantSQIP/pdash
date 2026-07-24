@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Public } from '../../common/decorators/public.decorator';
 
@@ -16,6 +16,9 @@ export class HealthController {
     } catch {
       db = 'down';
     }
-    return { status: db === 'up' ? 'ok' : 'degraded', db };
+    // Return HTTP 503 (not 200) when the DB is unreachable, so an ALB/ECS health check pulls a
+    // DB-severed task out of rotation instead of keeping it live.
+    if (db !== 'up') throw new ServiceUnavailableException({ status: 'degraded', db });
+    return { status: 'ok', db };
   }
 }
