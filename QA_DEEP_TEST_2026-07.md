@@ -30,11 +30,11 @@ Legend: ☐ pending · ▶ running · ✔ done
   - ✔ Working hours → 9am–6pm IST (8h/day): `DAILY_CAPACITY_HOURS`, perf `DAILY_HOURS` (commit 5aea39f)
 - **Phase 1 — Core modules (priority)**
   - ✔ Batch 1 — Projects (2 agents: authority + requester/authz) — findings below
-  - ☐ Batch 2 — Patents (portal, client codes, register, upload-to-create, reveal, passcode, docs, confidentiality) — P1 + non-super-admin
+  - ✔ Batch 2 — Patents / passcode / RBAC / doc-storage (Super Admin persona) — findings below
   - ☐ Batch 3 — Performance (metric correctness, per-user vs org-wide, formulas, authz, empty-data, working-hours impact)
 - **Phase 2 — Full system**
   - ☐ Batch 4 — Attendance + Leave + Comp-off + WFH + Timesheets(new PID/buffer) + Capacity(offices/pending leaves)
-  - ☐ Batch 5 — Discuss + Calendar + Channels + Notifications + HR (announcements/policies/appraisals/org chart)
+  - ◐ Batch 5 — HR people-ops (PII/appraisals/comms/approvals) ✔ [Discuss/Calendar/Channels not yet covered]
   - ☐ Batch 6 — Users/RBAC + Profile-gate + Home/Dashboard + Expenses + Rewards
 - **Phase 3 — Cross-cutting**
   - ☐ Batch 7 — Event logs + Audit logs coverage + security sweep (authz/IDOR/cross-org/leaks)
@@ -83,5 +83,66 @@ Each finding: `[SEV] module — summary (file:line) → why it breaks / scenario
 - Shared-task M2M access spans projects the actor isn't on; object-access treats MEMBER==MANAGER (latent — only the global perm differentiates today).
 
 **✅ Verified GOOD:** non-authority can't sneak a `pid` in the body (ignored); PID assignee is validated active+same-org+actually-an-authority (no self-pick); org is always session-derived (no cross-tenant enum); project `get()` redaction correct (no client name / real number / clientId to non-privileged); the `INSERT…ON CONFLICT…RETURNING` serial allocator + `updateMany`-guarded fulfil race are well done.
+
+## Batch 2 — Patents / passcode / RBAC / document storage (Super Admin persona)
+
+**CRIT**
+- `/patents/options` (gated only by `patent.view` = every delivery role) returns **`documentName`** — and patent PDFs are *required* to be named by their number — so any Research Associate reads `documentName:"US8300001.pdf"` next to `handle:"Pat_MLE_001"`: the **handle→real-number correlation with NO passcode** (patents.service.ts:13,120; PATENT_OVERVIEW_SELECT).
+- The generic **`GET /documents/:id/content` has NO permission and NO passcode guard** (only channel-attached docs are gated); a `patent.view` user takes the `documentId` from `/patents/options` and **downloads the confidential patent PDF**, fully bypassing the passcode-gated `/patents/:id/document/content` (documents.controller.ts:33; documents.service.ts:166-191).
+
+**HIGH**
+- On-disk document storage has **no read-time fallback** and lives on a local docker volume → on AWS ECS/Fargate (ephemeral FS, multi-replica) a redeploy wipes `/app/.data` → every patent-doc read throws ENOENT (unhandled 500) and the **crown-jewel PDFs are permanently lost**; needs EFS or S3 (documents.service.ts:189; docker-compose.prod.yml:39).
+
+**MED**
+- Passcode brute-force lockout is **in-memory per-instance** (`Map`) → defeated by horizontal scale (5×N guesses) and cleared on every restart; needs Redis/DB (passcode.service.ts:27).
+- Web **caches the passcode 15 min and auto-replays** it silently → an XSS'd/hijacked tab can `reveal()`/`downloadDocument()` within the window with no prompt (lib/api.ts:43-82).
+- A plain **Admin (not Super Admin) can reset the org passcode** with just their own password → can lock out a Super Admin / weaken the step-up (auth.controller.ts:143).
+- Orphaned confidential bytes on replace — old patent doc soft-deleted but file never `unlink`ed / blob never deleted (patents.service.ts:183,228).
+
+**LOW** — no pagination on patents lists; N+1 in `registerPatents`/`updateClient` re-mint; `updatePatent` accepts unvalidated `realNumber` (no dedup).
+
+**✅ Verified GOOD:** org always session-derived; reveal uses FULL_SELECT only behind `patent.manage`+passcode; `patent.manage` is Super-Admin-only + RBAC anti-escalation holds; project get/list/search embed handles only; inline-XSS mitigated (no HTML/SVG inline, nosniff); no path traversal (UUID storagePath); passcode not logged (caveat: ensure AWS ALB access logs don't capture the `x-org-passcode` header).
+
+## Batch 3 — Tasks / Timesheets (PID+buffer) / Issues / Capacity (SRA persona)
+
+**HIGH**
+- **Issue path bypasses the 24h/day cap AND the future-date guard** — `POST /issues` with `hours` writes a timesheet directly with no `assertDayCap` and no future check → log 24h task time + 24h "issue" = **48h/day**, and issue `date` can be in the future (issues.service.ts:63-79).
+- **24h/day cap defeated by a time component in `date`** — `assertDayCap` filters on the exact stored `DateTime`; two entries dated `…T09:00` and `…T14:00` (24h each) both pass since the cap query matches only the exact instant (timesheets.service.ts:70-79; needs direct API — the stock modal sends date-only).
+
+**MED**
+- **Duplicate-entry guard circumvented by buffer→assign** — the buffer path has no dedup and `assign()` has no dedup → identical rows, `Task.actualHours` doubled, billable hours inflated (timesheets.service.ts:164 vs 195-214).
+- **Task status skips the workflow state machine** — `setStatus` checks only shared `workflowId`, never `WorkflowTransition`; any status reachable in one hop (Open→Closed force-closes subtasks + 100%). Config-driven workflow is effectively dead for tasks (tasks.service.ts:276-333).
+- **"Assign PID within a week" is not enforced** — no age check in `assign()`, no expiry job; buffer hours count in personal performance yet never attach to a PID → pad indefinitely (timesheets.service.ts:195; the badge is UI-only).
+- **Capacity: unbounded task fetch + board computed twice per page load** — `/capacity` runs `team()` and `coverageRisks()` which calls `team()` again; both fetch every open org task with no `take` (capacity.module.ts:173,537).
+
+**LOW** — pending-leave days clickable/assignable (no warn); undated tasks dilute load across the whole window; member auto-add runs outside the create tx (orphan on failure); issue-logged timesheets carry `projectId:null` (mis-attributed in projectId-keyed reports).
+
+**NOTE** — capacity comment still says "48h week / 9.6h" but constant is now 8 (cosmetic; perf also uses 8 so cross-module reconciliation is fine). **✅ Verified GOOD:** SRA can't assign non-members / cross-project; subtask IDOR genuinely closed; `actualHours` is a full re-sum (no drift); capacity window arithmetic correct (clamped, no off-by-one); `dto.userId` ignored (owner = actor).
+
+## Batch 4 — Attendance / Leave / WFH / Comp-off / Home / Profile-gate (intern persona)
+
+**HIGH**
+- **Never-punch-out = full PRESENT day forever** — clock-in writes `status:'PRESENT'`; the `<4h ⇒ HALF_DAY` downgrade runs **only** on the punch-out branch and there's no auto-close job → an intern who punches in and never out is a full present day (totalHours null), `attendanceRate` stays 100% (attendance.module.ts:151,161,517). Companion: the overnight-close books a ~21h "present" day from two punches ~21h apart.
+
+**MED**
+- **No late-marking for the new 9am–6pm hours** — punch hardcodes `PRESENT`; `'LATE'` exists + is handled in `getMonth` but the punch flow never derives it. Punch in 2pm→6:30pm (4.5h) = full PRESENT. The 9–6 change ships with zero lateness detection (attendance.module.ts:147).
+- **UTC-day math vs IST office** — all boundaries use `utcDay`/`Date.UTC`; the UTC day rolls at 05:30 IST, so any punch/leave-check/comp-off/regularization done 00:00–05:30 IST lands on the prior calendar day. Normal 9–6 IST hours are safe; setting `TZ=Asia/Kolkata` on AWS will NOT fix it (code uses explicit `getUTC*`) (attendance.module.ts:13,120).
+
+**LOW** — regularization status is employee-chosen not hours-derived (HR-gated); `approveRegularization`/`reject`/`regularize`/`mark` lack the org-scope guard the other approvers have (latent multi-org); leave-quota window filters by `startDate` in the current UTC year (boundary over-count).
+
+**NOTE** — asymmetric WFH/leave overlap (leave doesn't reject an existing approved WFH); Home's two punch buttons can race (UX only, server stays consistent). **✅ Verified GOOD (major):** the **first-login profile gate is robust — no bypass** (stamps `profileCompletedAt` only when complete; partial/empty/null all rejected; Indian-mobile/PIN/DOB rules enforced server-side) — confirms the Phase-3 hardening; intern **cannot see anyone's PII** (not even directory tier); Employee preset is correctly minimal (`patent.view` is intentional + safe — handles only, no real number/client name); **self-approval, quota, and date-range validation all hold** (every approve/reject blocks `req.userId===actor`, quota counts PENDING+APPROVED, one-leave-per-day, zero/over-366/all-past rejected, no backdated/future punch).
+
+## Batch 5 — HR people-ops (PII / approvals / appraisals / company comms) — HR persona
+
+**MED**
+- **Approvals read + non-decision actions are ungated** — any authenticated user can `GET /approvals?entityType=…&entityId=…` / `GET /approvals/:id` and read any approval record + its full action/comment history, and `addAction` only gates APPROVE/REJECT (so anyone can POST a COMMENT/DELEGATE onto any approval) (approvals.module.ts:29-44,96).
+- **Appraisal dead-ends with no manager** — `launch` sets `reviewerId = managerOf ?? null`; an employee with no `UserManager` row gets an appraisal stuck in `PENDING_MANAGER` forever — HR has **no reassign-reviewer / force-complete** endpoint, only `deleteCycle` (appraisals.module.ts:142,262).
+- **People-ops queries unbounded / N+1** — `launch` inserts appraisals in a sequential `for…await create` loop (not `createMany`); `directory()`, `celebrations()`, `policyAckStatus()`, `listCycles` all fetch the full roster with no `take` (company.module.ts:125,166,293).
+
+**LOW** — regularization & comp-off decisions lack the org-scope guard leave/WFH have (latent multi-org — also flagged by the attendance agent); birthday month/day broadcast to all via `GET /company/celebrations` (no permission/opt-out; year/age correctly withheld); announcement/policy edit+delete not author-scoped (any manager can edit a colleague's post).
+
+**NOTE** — reimburse rides on `expense.approve` (no distinct payer perm; SoD per-record is correct but a lone approver can strand a reimbursement); regularization notif routes by literal role-name/email not permission.
+
+**✅ Verified GOOD (major):** **PII boundary is solid** (explicit `PERSONAL_FIELDS` allow-list, redaction by key-deletion, a Manager gets only directory tier, an Employee gets Forbidden; users/search/directory select directory-only; profile audit logs field *keys* not values); **SoD holds on every approval** (expenses block payer==claimant AND payer==approver; all self-review blocked); **appraisal authz correct** (only employee/reviewer/`appraisal.manage` can read; manager can't review a non-report); **no XSS** (no `dangerouslySetInnerHTML`, bodies render React-escaped); **HR scope excludes delivery** (no project/task/patent/capacity codes); **privilege-escalation guard real** (`assertActorMayGrant` blocks HR self-granting Manager/Admin/Super-Admin; every user mutation passcode-gated).
 
 _(next batches append below)_
