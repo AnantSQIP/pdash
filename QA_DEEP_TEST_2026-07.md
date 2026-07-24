@@ -22,7 +22,11 @@ The portal gates real patent numbers behind `patent.manage` + passcode, and proj
 4. **Real patent numbers are logged as filenames** and read back via the **unguarded `/activity?entityType=DOCUMENT`** IDOR (audit.service.ts:43).
 
 ### Fix plan (priority order)
-> **STATUS 2026-07-24 — P0 batch DONE (commit 41037be):** items 1–4 + 6–7 below implemented + build-verified. Applies on Contabo now and AWS later (pure app-level authz/validation). Item 5 (search scoping + departments authz) and item 8 (admin-reset rank check) roll into Batch B next. AWS-platform items (P1) will be built config-gated so Contabo is unaffected.
+> **STATUS 2026-07-24 — P0 + Batch B + Batch C ALL DONE (commits 41037be, 0991785, dc34ab6, e5c1ac4, 6776f94):**
+> - **P0** (4 CRIT + closed-project + 24h-cap) ✓
+> - **Batch B** (app-level, both scenarios): search membership-scoping ✓, departments authz + org-from-session ✓, admin-reset rank check + mustResetPassword write-block ✓, calendar join-link/notes redaction + ICS scoping + IST time + free/busy leave-type mask + reminder guard ✓, capacity load-math (true-span + co-assignee split) ✓, retrospective over-absence (today/pre-join) ✓, workflow-transition conditional enforcement ✓, reward-delete scoped to giver ✓. (Office A–Z sort kept as explicitly requested.)
+> - **Batch C** (AWS, config-gated — inert on Contabo): S3 storage adapter ✓, RUN_BACKGROUND_JOBS single-runner gate ✓, SKIP_BOOT_MIGRATE gate ✓, /health 503-on-DB-down ✓. AWS env switches documented in REBUILD_2026-07_DEPLOY.md.
+> - **Remaining (infra, not code):** RDS/Aurora + Redis for throttle/lockout at multi-replica scale. A few LOW/nuance items (PID reassign/cancel, single-manager invariant, half-day-leave capacity, coverage-reassign leave/project-awareness) left as P2.
 
 **P0 — fix before ANY deploy (confidentiality + integrity; all small, targeted fixes):**
 1. **Guard `GET /documents/:id/content`** by ownership/linked-resource authz (fixes patents + receipts + comment/chat attachments + project files at once); route patent docs only through the passcode'd endpoint.
