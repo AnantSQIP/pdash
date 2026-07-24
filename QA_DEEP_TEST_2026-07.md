@@ -12,21 +12,25 @@ then cross-cutting (event/audit logs, security, prod/AWS readiness).
 
 ## EXECUTIVE SUMMARY & FIX PLAN (Phase 4 synthesis)
 
-8 persona agents traced the system. **The app is competently built** — profile gate, PII boundary, segregation-of-duties, RBAC anti-escalation, org-session-scoping (newer modules), project redaction, argon2 + refresh-rotation, no SQLi, no XSS, and empty-DB-safe math are all **verified solid**. But there is a **patent-confidentiality collapse** (3 chained CRITs) and the stack is **NOT AWS-ready** without changes.
+**14 persona agents across 2 waves** traced essentially the whole system (~all 35 modules + cross-cutting + AWS-deploy). **The app is competently built** — profile gate, PII boundary, segregation-of-duties, RBAC anti-escalation, argon2 + refresh-rotation with reuse-detection, no SQLi, no XSS, expense state machine, channel/poll/presence authz, and empty-DB-safe math are all **verified solid**. But there are **4 CRITs (a confidentiality collapse across two shared read endpoints)** and the stack is **NOT AWS-ready** without changes.
 
-### The headline: patent confidentiality is defeated today (3 chained CRITs)
-The portal carefully gates real patent numbers behind `patent.manage` + a passcode — but three plumbing leaks route around it, and any ordinary project-creating employee can chain them:
-1. `GET /patents/options` (only needs `patent.view`) returns `documentName` (= the real number, since PDFs must be named by it) and `documentId` → **handle↔real-number correlation, no passcode**.
-2. `GET /documents/:id/content` has **no permission + no passcode** guard → feed it that `documentId` and **download the confidential PDF**.
-3. Those same real numbers are written to Activity/AuditLog as filenames and read back via the **unguarded `/activity?entityType=DOCUMENT`** IDOR.
+### The headline: two ungated shared read endpoints + confidential data in selects/logs
+The portal gates real patent numbers behind `patent.manage` + passcode, and projects enforce a member-only conflict-wall — but these route around both, and any ordinary employee can chain them:
+1. **`GET /documents/:id/content` has no permission + no passcode** and only gates *channel* attachments → download ANY confidential document (patent PDFs, **expense receipts, comment/chat attachments, project files**) with just its id (documents.service.ts:166).
+2. **`GET /comments` has zero entity authorization** → read the entire QA discussion thread + attachments of ANY project/task/issue you're not staffed on (comments.module.ts:176).
+3. **`GET /patents/options` (`patent.view` = everyone) returns `documentName`** (= the real number, since PDFs must be named it) + `documentId` → handle↔real-number correlation + the id for #1 (patents.service.ts:13).
+4. **Real patent numbers are logged as filenames** and read back via the **unguarded `/activity?entityType=DOCUMENT`** IDOR (audit.service.ts:43).
 
 ### Fix plan (priority order)
 **P0 — fix before ANY deploy (confidentiality + integrity; all small, targeted fixes):**
-1. Guard `GET /documents/:id/content` by ownership/linked-resource authz; route patent docs only through the passcode'd endpoint.
-2. Remove `documentName` + `documentId` from `PATENT_OVERVIEW_SELECT` (keep them only in the passcode-gated FULL select).
-3. Stop logging patent-derived filenames; add `DOCUMENT` to `SENSITIVE`; require project/audit scope on `/activity` (+ take org from session).
-4. Block task + timesheet creation on COMPLETED/CLOSED projects (server-side, not just UI).
-5. Close the 24h/day-cap bypasses: route issue-time through `assertDayCap` + future-date check; aggregate the cap by calendar day (not exact instant); dedup inside `assign()`.
+1. **Guard `GET /documents/:id/content`** by ownership/linked-resource authz (fixes patents + receipts + comment/chat attachments + project files at once); route patent docs only through the passcode'd endpoint.
+2. **Add entity authorization to `comments`** — `assertProjectAccess`/`assertTaskAccess`/`assertIssueAccess` on list/create/delete.
+3. Remove `documentName` + `documentId` from `PATENT_OVERVIEW_SELECT` (keep only in the passcode-gated FULL select).
+4. Stop logging patent-derived filenames; add `DOCUMENT` to `SENSITIVE`; route-guard `/activity` + scope it (org from session, membership check).
+5. **Scope global project search** to membership (`access.projectScopeWhere`) — closes the conflict-wall leak; and add read-authz to **departments** (+ org-from-session).
+6. Block task + timesheet creation on COMPLETED/CLOSED projects (server-side).
+7. Close the 24h/day-cap bypasses: route issue-time through `assertDayCap` + future-date; aggregate the cap by calendar day; dedup inside `assign()`.
+8. **Admin password-reset:** add a rank check (a non-super can't reset a Super Admin) and enforce `mustResetPassword` server-side (today the admin-known temp password is valid forever).
 
 **P1 — before AWS deploy (platform blockers — the auditor's verdict is NOT READY):**
 6. Move document storage off the ephemeral container FS → **S3** (or EFS).
@@ -37,9 +41,10 @@ The portal carefully gates real patent numbers behind `patent.manage` + a passco
 11. Add audit events for **patent reveal, passcode change, login/failed-login, and approvals** (today none are logged — you can't answer "who revealed the patents / changed the passcode").
 
 **P2 — correctness & hardening:**
-Projects: PID reassign/cancel (stranded null-PID), search membership-scope, pagination on `list`/`tasks`, single-MANAGER invariant, lifecycle `PATCH projectPhase` guard, rate-limit PID requests. Performance: key "completed"/on-time off the completion event not `updatedAt`, one "completed" definition, buffer-hours handling, `@@index([organizationId, createdAt])`, move the heatmap event-load inside the snapshot fallback, enforce `performance.view.organization` (HR's is dead). Attendance: never-punch-out integrity + late-marking for 9–6 + UTC→IST rollover. Cross-cutting: org-from-session in older modules (users/channels/departments/rbac/holiday/audit), structure or redact the free-text project title, tamper-evident audit trail, buffer-timesheet billable/expiry. **Feature gap:** no mandatory 2nd-reviewer QA gate for claim-chart deliverables (the real Squark workflow requires it).
+Projects: PID reassign/cancel (stranded null-PID), search membership-scope, pagination on `list`/`tasks`, single-MANAGER invariant, lifecycle `PATCH projectPhase` guard, rate-limit PID requests. Performance: key "completed"/on-time off the completion event not `updatedAt`, one "completed" definition, buffer-hours handling, `@@index([organizationId, createdAt])`, move the heatmap event-load inside the snapshot fallback, enforce `performance.view.organization` (HR's is dead). Attendance: never-punch-out integrity + late-marking for 9–6 + UTC→IST rollover. Cross-cutting: org-from-session in older modules (users/channels/departments/rbac/holiday/audit), structure or redact the free-text project title, tamper-evident audit trail, buffer-timesheet billable/expiry.
+**Wave-2 additions:** **Calendar** — ICS/list/get leak join-links + private notes org-wide (add attendee-scoping), free/busy leaks leave-type, meeting times off by the IST offset (parse with an explicit offset), MONTHLY recurrence month-end drift, reminder re-entrancy guard. **Capacity** — fix the load denominator (spread over the task's TRUE span, not the window slice; split co-assignee effort), half-day leave = ~4h not 0, "no working days" ≠ "fully booked", pending-leave shouldn't lift the availability rank, exclude *today*/no-data from the absent tally + floor at join date, make coverage suggestions leave-window- and project-aware + decrement across picks, and restore free-first sort within each office group (a regression from the new office grouping). **Discuss** — archived-channel read-only enforcement, channel.* RBAC actually enforced, rate-limit messages/mentions. **Config** — enforce workflow transitions (or drop the config), org update targets session org. **Auth** — lockout enumeration/DoS (uniform message + IP dimension). **Feature gap:** no mandatory 2nd-reviewer QA gate for claim-chart deliverables (the real Squark workflow requires it).
 
-**Counts:** 3 CRIT · ~12 HIGH · ~18 MED · many LOW/NOTE. Full per-batch detail in the FINDINGS section below.
+**Counts (both waves):** **4 CRIT · ~20 HIGH · ~35 MED · many LOW/NOTE.** Full per-batch detail in the FINDINGS + WAVE 2 FINDINGS sections below. Coverage: ~all 35 modules + cross-cutting + AWS-deploy; method = static code-tracing (not live-runtime — a Playwright pass on a seeded test instance is the remaining step).
 
 ---
 
@@ -73,19 +78,20 @@ Legend: ☐ pending · ▶ running · ✔ done
   - ✔ Batch 7 — Event + Audit logs coverage + security sweep — findings below
   - ✔ Batch 8 — Production + AWS-deploy readiness — findings below (verdict: NOT READY, blockers listed)
 - ✔ **Phase 4 — Synthesis (wave 1)** — consolidated at top (EXECUTIVE SUMMARY & FIX PLAN)
-- **Second wave (gap-closing + dedicated capacity)** — 6 agents running:
-  - ▶ W-1 Discuss/chat (channels, comments, presence, mentions, polls, voice clips)
-  - ▶ W-2 Calendar/meetings + Notifications + reminders/digests
-  - ▶ W-3 Search + config/structure (departments, workflows, statuses, tasklists, tags, organizations, project-groups, rollup, deadlines)
-  - ▶ W-4 Expenses + Rewards + Company/org-chart + Auth UX flows
-  - ▶ W-5 **Team Capacity — forward board (deep)**: load-math correctness, day-state precedence, office grouping, availability, assign-into-day, drill-down
-  - ▶ W-6 **Team Capacity — retrospective + coverage/emergency-leave (deep)**: history states/counts, coverageRisks logic, one-click reassign flow
+- ✔ **Second wave (gap-closing + dedicated capacity)** — 6 agents done:
+  - ✔ W-1 Discuss/chat — **CRIT: comments have zero entity authz**; channel/poll/presence solid
+  - ✔ W-2 Calendar/Notifications — HIGH: ICS/list leak join-links org-wide + IST timezone bug
+  - ✔ W-3 Search + config — HIGH: search conflict-wall bypass; departments no-authz; workflow transitions unenforced
+  - ✔ W-4 Expenses/Rewards/Company/Auth — HIGH: admin→SuperAdmin reset takeover; expenses well-hardened
+  - ✔ W-5 **Team Capacity forward board** — HIGH: load-denominator wrong (beyond-window compression + co-assignee full-charge)
+  - ✔ W-6 **Team Capacity retrospective + coverage** — HIGH: over-reports absence; reassign not leave/project-aware
 
 ## Progress log
 _(append one line per batch as it completes, so this survives a session drop)_
 - 2026-07-24: plan created; Phase 0 research launched; working hours changed.
 - 2026-07-24: Batch 1 (Projects) ✔ — 4 HIGH, 6 MED. 8-agent fleet launched for the rest.
-- 2026-07-24: **ALL 8 agents complete** — Projects×2, Patents, Performance, Tasks/Timesheets/Capacity, Attendance/Leave/Home, HR, Audit/Security/AWS. Phase-4 synthesis done (3 CRIT patent-confidentiality chain, AWS NOT-READY with blocker list). Working-hours stale UI copy fixed (perf page 48h→40h). Sweep COMPLETE; fix plan at top of doc.
+- 2026-07-24: **Wave 1 — all 8 agents complete** — Projects×2, Patents, Performance, Tasks/Timesheets/Capacity, Attendance/Leave/Home, HR, Audit/Security/AWS. 3 CRIT (patent chain) + AWS NOT-READY.
+- 2026-07-24: **Wave 2 — all 6 agents complete** — Discuss, Calendar/Notifications, Search/config, Expenses/Auth, +2 dedicated Capacity (forward + retrospective/coverage). Added a 4th CRIT (comments zero authz), calendar leak, admin-reset takeover, capacity load-math bugs. **SWEEP COMPLETE (14 agents, ~all 35 modules).** Final: 4 CRIT · ~20 HIGH · ~35 MED. Exec summary + P0/P1/P2 fix plan at top. Only remaining coverage step = a live-runtime Playwright pass on a seeded test instance (method so far = static code-tracing).
 
 ---
 
@@ -228,3 +234,98 @@ Each finding: `[SEV] module — summary (file:line) → why it breaks / scenario
 **NOTE / ✅ Verified GOOD:** NODE_ENV/weak-JWT is mitigated **via the Docker images** (`validateEnv()` fails boot in prod on missing/short/placeholder JWT secret, on `AUTH_DEV_TRUST_HEADER=true`, on missing CORS) — residual risk only on a **non-Docker native run** without NODE_ENV=production (reactivates the fallback secret — relevant to the local `npm run serve` path). Confirmed-good controls: helmet, `trust proxy 1`, pinned CORS allowlist, 2MB body limits, global `ValidationPipe(whitelist+forbidNonWhitelisted)`, argon2, login throttle + 8-try lockout, refresh-token rotation with reuse-detection + family revoke, `securityVersion` invalidation, graceful shutdown, **no SQL injection** ($queryRaw is parameterized), migration history is fresh-RDS-safe, no CSRF token but low risk (SameSite=lax + same-origin + credentialed CORS).
 
 **AWS-deploy verdict: NOT READY.** Blockers: (1) patent-doc download bypass, (2) patent numbers in logs + /activity IDOR, (3) doc storage → S3/EFS, (4) RDS not container-Postgres, (5) migrations out of boot CMD, (6) single-runner background jobs (or desiredCount=1), (7) shared throttle/lockout + /health 503 + rebuild web image, (8) add audit events for reveal/passcode/auth/approvals.
+
+---
+# WAVE 2 FINDINGS (gap-closing + dedicated capacity)
+
+## W-2 — Calendar / Meetings / Notifications / Reminders
+
+**HIGH**
+- **ICS export leaks every org event to any `calendar.view` user** — `GET /calendar-events/export.ics` selects ALL org events (no attendee/organizer filter) and emits title, description, location, and **join link** → any employee downloads it and reads (and can **join**) confidential client/patent meetings they were never invited to (events.service.ts:246-272). Contradicts free/busy's deliberate title-masking.
+- **GET list + GET :id expose full detail of ALL org events** — `joinUrl`, collaborative `notes`, `description` returned for every event in the org (org-scoped only, not attendee-scoped) → any `calendar.view` holder reads private meeting notes + join links of meetings they don't attend (events.service.ts:52-80).
+- **IST timezone bug — every timed meeting is off by the offset** — the web sends a naive `…T09:00:00` (no offset); the server does `new Date()` which parses in the container TZ (UTC on Contabo, since `financial-year.ts` deliberately converts to IST → the host isn't IST). A 9am IST meeting stores as 09:00 UTC and shows to the IST browser as 2:30pm; reminders fire at the wrong instant (events.service.ts:89; web page.tsx:152). Surfaces in prod, not on an IST dev laptop.
+
+**MED**
+- Reminder/notification text time rendered in **server TZ not IST** (`toLocaleString` with no `timeZone`) — even a correctly-stored instant is written 5.5h off (events.service.ts:46,367).
+- `MeetingReminderService.sweep` has **no re-entrancy guard** (unlike OverdueMonitor) → a slow sweep overlapping the 5-min interval double-sends reminders; multi-replica double-sends always (events.service.ts:343).
+- OverdueMonitor alert/digest dedup is **per-process TOCTOU** → duplicate overdue alerts + duplicate daily digests across replicas (confirms wave-1 flag with the exact window) (overdue.module.ts:112-192).
+- **MONTHLY recurrence uses `setUTCMonth`** → Jan-31 overflows to Mar, day-29/30/31 series land wrong every short month (events.service.ts:136).
+- **free/busy leaks any user's approved LEAVE TYPE + dates** — events are masked to "Busy" but the leave branch pushes `"SICK leave"` etc., and the leave query isn't org-scoped → `/free-busy?userIds=<anyone>` reveals sensitive leave type/dates (events.service.ts:301-333).
+- Unbounded queries — `list()` with no from/to returns all events ever; reminder sweep loads all orgs' events every 5 min; `attendeeIds` has no max-size → recurrence × attendees can insert 100k+ rows in one request (events.service.ts:52,360; dto.ts:89).
+
+**LOW/NOTE** — attendeeIds not validated (bad id → 500); series soft-delete `updateMany` not org-scoped (defense-in-depth); non-numeric `?limit` → NaN take; notification `link` is hardcoded server-side here (no open redirect in this module, but a user-controlled `link` elsewhere would be one).
+- **✅ Verified GOOD:** event update/delete enforce organizer-or-SuperAdmin (no write IDOR); RSVP checks attendee membership; notes editable only by organizer/attendee/SA; **all `/notifications` routes scoped to the actor (no notification IDOR)**; mute/category preferences honored before write; recurrence capped at 365 with overflow rejection (no infinite expansion).
+
+## W-1 — Discuss / Chat / Comments / Presence
+
+**CRIT**
+- **Polymorphic `comments` have ZERO entity authorization** — `GET /comments?entityType=PROJECT&entityId=<matterId>` has no `@RequirePermission` and the service runs a bare `findMany` with **no `assertProjectAccess`/`assertTaskAccess`** → any authenticated user enumerates entityIds and reads the **entire QA discussion thread** (content, author, attachments) of every project/task/issue in the org, even confidential matters they're not staffed on. Direct client↔matter breach (comments.module.ts:176; service list:69).
+
+**HIGH**
+- **Comment-attachment download bypass** — `getContent` only member-gates *channel* attachments; a doc attached to a comment/project/task has empty `channelIds` so the gate is skipped → chain: unguarded `GET /comments` leaks each attachment's `fileUrl` → download the confidential claim-chart/evidence file (documents.service.ts:166). (Broadens the Batch-2 documents CRIT: it's not just patents — comment/project/task/expense attachments are all exposed.)
+- **Comment WRITE IDOR + notification injection** — `comment.create` is org-wide with no entity-access check → a non-member posts a comment (+attachment) onto any member-gated task/issue and **forces a notification** to its assignees/reporter (phishing into locked matters) (comments.module.ts:181; service create:105).
+
+**MED**
+- **Archived channels aren't read-only** — edit/delete/react/vote/pin skip the `archivedAt` check that create-message/create-poll enforce → archive governance is cosmetic (channels.service.ts:276-382).
+- Unbounded message-history query (`limit` uncapped, full include per row); no cursor pagination (channels.service.ts:201).
+- **No rate limiting** on messages/comments/mentions → `@channel` amplification + mention-scan N+1 storm (ThrottlerGuard only on auth).
+- Channel create/read/rename/archive **ignore the `channel.*` RBAC permissions** (membership-only) → the Admin matrix's channel toggles are inert (misleading governance).
+
+**LOW** — `createChannel` trusts client `organizationId` (latent multi-org); comment accepts arbitrary `entityType/entityId` (orphan/junk); comment soft-delete isn't author-scoped + emits no audit; attachments of a soft-deleted channel still downloadable by ex-members; **NOTE:** owner-settable retention auto-purge with no admin/legal-hold path (flag for an IP firm's records policy).
+- **✅ Verified GOOD:** **XSS clean** (React-escaped, links restricted to `^https?://`); **channel messages/polls/read-receipts/saved-messages/presence all solid** — member-gated, no admin bypass, one-vote-per-user, per-user isolation, presence session-scoped. The weakness is isolated to `comments` (+ the shared documents route).
+
+## W-4 — Expenses / Rewards / Company / Auth UX
+
+**HIGH**
+- **Admin password-reset has NO rank check → Super Admin account takeover** — `resetPassword(id)` (gated by `user.manage_access` + passcode) skips the `assertActorMayGrant` rank assertion the other user mutations use, and **returns the plaintext temp password** → an HR/Admin (both hold `user.manage_access`) who has the org passcode resets a **Super Admin**, gets the temp password, and logs in as them. The passcode isn't an independent factor (same population uses it routinely) (users.module.ts:232).
+
+**MED**
+- **Unguarded `GET /documents/:id/content` serves expense receipts (and all context-less docs)** to any authenticated user with the UUID — receipts have no channel link so the gate is skipped; a stale id (e.g. an ex-approver's) stays downloadable forever (documents.service.ts:166; expenses submit-side IS ownership-checked).
+- **Login lockout = enumeration oracle + un-scoped DoS** — a locked existing account returns a distinct `403 "locked"` before the password check vs generic `401` for unknown → confirm any `firstname.lastname@squarkip.com` exists; and lockout is per-account only (no IP dim), so 8 wrong tries locks any known employee for 15 min at will (auth.service.ts:100).
+- **`mustResetPassword` / `profileCompleted` enforced client-side only** — `login` mints a full session regardless; no server guard consults them → an **admin-known temp password stays valid indefinitely** and a user can drive the whole API without ever resetting it (AppShell.tsx:56; auth.service.ts:98).
+
+**LOW** — any `reward.give` holder can delete ANY reward (leaderboard tampering); `giveReward` has no rate-limit/dedup (spam + inflation); celebrations broadcast birthdays (month/day) + service years to all; `/company/directory` exposes every phone+email (no permission); announcement/policy edit+delete not author-scoped.
+- **✅ Verified GOOD (major):** **Expenses are genuinely well-hardened** — no edit endpoint (no edit-after-approval), reimburse requires APPROVED + payer≠claimant≠approver, cancel own+PENDING only, thorough amount/currency/date/max-age validation, receipt-attach ownership-checked, duplicate-claim guard. **Auth token handling is well done** — sha256 refresh hashing, argon2id, rotation with reuse-detection→family-revoke + 15s grace, single-flight client refresh, `securityVersion` invalidation verified in middleware, admin reset clears lockout, self-signup disabled server-side. Self-reward + cross-org reward blocked.
+
+## W-3 — Search + config/structure (departments, workflows, orgs, tasklists, rollup)
+
+**HIGH**
+- **Global project search bypasses the conflict-wall** (confirms Batch 1) — scopes to "any org project with a member," never `members: { some: { userId: actor } }`; `project.view` is in VIEW_BASICS → any intern searches a client/PID fragment and gets title + PID for matters they aren't on. Fix: use `access.projectScopeWhere(actor, org)` (search.module.ts:47).
+
+**MED**
+- **Departments: no read authz + client-supplied `organizationId`** — `GET /departments` / `/:id/members` have no `@RequirePermission` → any authenticated user enumerates all departments + every member's name/email/designation/status; `list` reads org from the query (departments.module.ts:126,33). Writes (`create`/`addMember`) take org from the body / unscoped id → mass-assignment + latent cross-tenant.
+- **Workflow transitions are never enforced** — `allowedRoles`/`conditions` are stored but read nowhere; `setStatus` only checks the status shares the workflow, not that a transition edge exists → the transition config is **zero access control** (confirms the Batch-3 task-status finding) (workflows.module.ts:118; tasks.service.ts:285).
+- **`PATCH /organizations/:id` targets the path id, not the session org** — passcode is verified against the actor's org while the write uses `where:{id}` → an admin with their own passcode could patch another org's name/timezone/color (org.code/status aren't in the DTO — good) (organizations.controller.ts:26).
+
+**LOW/NOTE** — tasklists `list`/`get` no project-access (minor structure dribble); `GET /organizations` ungated (exposes org.code); **rollup progress is an unweighted average** (a 1h task == a 100h task; a CANCELLED/CLOSED task counts 100% → inflates project %); SearchIndex model is **dead/orphaned** (search hits live tables, so no stale-index leak); no workflow/status delete routes exist (in-use corruption not reachable, but transitions are append-only). **✅ GOOD:** search org session-derived + bounded + deletedAt-filtered, people-search gated on `user.view`, no patent/handle searchable; tags module solid; deadlines redaction clean (Task.clientDueDate removed).
+
+## W-5 — 🎯 Team Capacity: forward board (deep)
+
+**HIGH**
+- **Load-spreading denominator is wrong (beyond-window compression)** — a task due *after* the window compresses its FULL remaining effort into only the in-window working days → an 80h deliverable due in 60 days reads **8h/day = BUSY every day** (reality ~1.9h/day). The board's core "who is free?" answer is corrupted for all long-horizon work; the same person's availability even changes when you flip the 7↔30 range (capacity.module.ts:261-268).
+- **A co-assigned task charges its FULL remaining to EVERY assignee (no split)** — a 40h task with 4 assignees books 40h onto all four (160h phantom load) → shared research/QA tasks make the whole team look booked (capacity.module.ts:232,265).
+
+**MED**
+- Approved **HALF-DAY leave zeroes the whole day** (`numDays` 0.5 is never read) → a morning half-day shows the person fully out (unverified — depends how half-days are created).
+- A person with **no working days in the window** (all-leave / window all-holiday) renders red **"Fully booked"** instead of "unavailable/on leave" (capacity.module.ts:317,330).
+- **PENDING leave days count as free AND lift the person UP the "most available" sort** → a manager assigns work to someone whose leave then gets approved (capacity.module.ts:284,355).
+- A task whose span is entirely non-working days **dumps its full load onto today** even if it starts later (the day-1 fallback misfires for future tasks) (capacity.module.ts:262).
+- The board exposes **every user's cross-project task titles + project names + deadlines** with no membership scoping (only `capacity.view` holders — Manager/SrConsultant/Admin — so capped, but a cross-matter leak by design) (capacity.module.ts:173).
+
+**LOW/NOTE**
+- **⚠ From my Phase-5 office grouping:** grouping re-sorts each office **A–Z**, discarding the API's "most available first" (`freeHours` desc) order → the main board no longer shows free-people-first (page.tsx:120 vs capacity.module.ts:355). *(Fix candidate: sort within office by freeHours desc.)*
+- Extend-deadline custom date parsed in local time → stored UTC → **off-by-one** a day earlier in IST (PersonPanel.tsx:46); task assigned to a zero-working-day person silently drops its load; LEAVE_PENDING days remain clickable. **✅ GOOD:** day-state precedence, empty-board (renders zeros, reconciliation `committed+free = capacity+overCommitted` holds), office grouping is drop/dup-safe (Unassigned bucket correct), assign-into-day carries the right person+date.
+
+## W-6 — 🎯 Team Capacity: retrospective + coverage / emergency-leave (deep)
+
+**HIGH**
+- **Retrospective over-reports absence** — the history window includes **today**, and any day with no attendance row falls through to **ABSENT** → every morning the whole team reads "absent" until they punch in, and a recent joiner / post-wipe user shows **every** past working day as ABSENT (no join-date floor, no "no data" state). A manager acting on this sees phantom absenteeism (capacity.module.ts:412).
+
+**MED**
+- **Coverage reassign suggestions are org-wide and NOT validated** against the leave dates or the affected project → a manager can one-click move a CRITICAL patent task onto a person **on leave during that window** or **unrelated to the matter**; `freeHours` is a window total never checked against the task's `dueDate` (capacity.module.ts:582; page.tsx:439).
+- **One-click reassign silently enrolls the cover person into the (confidential) project** via `ensureAssigneesAreMembers` auto-add → conflict-wall breach (or, if `capacity.view` is granted without oversight, it instead **throws** — the dropdown offers unassignable people) (tasks.service.ts:45).
+- One shared suggestion list, **never decremented** across tasks + no free-hours floor → silently overload one person (0h-free people appear assignable).
+- Leave extending **beyond the coverage horizon drops real risks** (false negative); and the **notification and board disagree** (the alert scans the full leave, the board clamps to 14d) → "coverage at risk" alert with nothing on the board to act on (capacity.module.ts:539,606).
+- Never-punched-out + **half-days both read as full PRESENT** in the retrospective (confirms Batch-4 attendance) (capacity.module.ts:425).
+
+**LOW/NOTE** — risk gate keys off **project** priority (task priority ignored → false pos/neg); the past-view sticky date header takes weekend/holiday styling from row[0]'s *personal* state (unreliable); COMPOFF flag is activity-derived (disconnects from the real claim→approve ledger); reassign has a read-modify-write assignee race. **NOTE-PERF:** `coverageRisks` recomputes the whole team board a second time per page load (confirms Batch-3); the capacity board is **oversight-coupled, not independently safe** (task titles/deadlines to any `capacity.view` holder). **✅ GOOD:** all gated on `capacity.view`; reassign is backend-authz'd; horizon/range no off-by-one; empty board renders (data misleading, not the rendering).
