@@ -72,6 +72,9 @@ model User {
   designation    String?
   profilePhoto   String?
   joiningDate    DateTime?
+  // Physical office / branch the member works from — "GURGAON" or "JAIPUR". Groups the
+  // capacity board. Nullable for members not yet assigned to an office.
+  office         String?
   status         String    @default("ACTIVE")
   // ── Auth / credentials ──
   passwordHash      String?
@@ -500,6 +503,8 @@ model Project {
   issues             Issue[]
   client             Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
   patents            ProjectPatent[]
+  timesheets         Timesheet[]
+  pidRequest         PidRequest?
 
   @@index([deletedAt])
   @@index([clientId])
@@ -570,6 +575,30 @@ model SequenceCounter {
   value Int    @default(0)
 
   @@map("sequence_counter")
+}
+
+// A request from a non-authority to have a PID minted for a project they just created in the
+// PID-pending state (project.code = null). Routed to a chosen authority (assigneeId) who holds
+// project.generate_pid; on fulfilment the project's code is set and status → FULFILLED.
+// requestedById / assigneeId are plain user ids (same convention as Project.createdBy).
+model PidRequest {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String    @unique
+  requestedById  String
+  assigneeId     String
+  status         String    @default("PENDING") // PENDING | FULFILLED | CANCELLED
+  pid            String? // the minted PID, once fulfilled
+  note           String?
+  createdAt      DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([assigneeId, status])
+  @@index([requestedById])
+  @@index([organizationId, status])
+  @@map("pid_request")
 }
 
 model ProjectMember {
@@ -1103,22 +1132,32 @@ model Holiday {
 model Timesheet {
   id          String    @id @default(cuid())
   userId      String
-  // A timesheet is logged against EITHER a task OR a technical issue (never both).
+  // Time is logged by PID: the entry resolves to a project (projectId) + a task under it.
+  // projectId stays null during the 1-week "assign the PID later" buffer, after which the
+  // entry must be completed (a PID chosen) before it's counted.
+  projectId   String?
+  // Snapshot of the project's type (HML / FTO / …) at log time, shown on the timesheet.
+  projectType String?
+  // A timesheet is logged against EITHER a task OR a technical issue (never both). Nullable
+  // while the PID is still to be assigned (inside the buffer window).
   taskId      String?
   issueId     String?
   date        DateTime
   hoursLogged Float
   billable    Boolean   @default(true)
   notes       String?
+  createdAt   DateTime  @default(now())
   deletedAt   DateTime?
 
-  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  task  Task?  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  issue Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task    Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  issue   Issue?   @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
   @@index([taskId, date])
   @@index([issueId])
+  @@index([projectId])
   @@map("timesheet")
 }
 
