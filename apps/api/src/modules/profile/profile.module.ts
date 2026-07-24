@@ -168,9 +168,11 @@ export class ProfileService {
     if (!sameAsCurrent) REQUIRED.push(['permanent address', permanentLine1]);
     const missing = REQUIRED.filter(([, v]) => !String(v ?? '').trim()).map(([label]) => label);
 
-    // DOB sanity: a real past date, plausible working age (15–100).
-    if (merged.dateOfBirth) {
-      const dob = new Date(merged.dateOfBirth as string);
+    // DOB sanity: validate ONLY when it's being set/changed in this request — never re-validate
+    // an unchanged stored value, or a legacy bad DOB would block every unrelated edit. A real
+    // past date, plausible working age (15–100).
+    if (dto.dateOfBirth) {
+      const dob = new Date(dto.dateOfBirth);
       const age = (Date.now() - dob.getTime()) / (365.25 * 24 * 3600 * 1000);
       if (Number.isNaN(dob.getTime()) || dob.getTime() > Date.now() || age < 15 || age > 100) {
         throw new BadRequestException('Enter a valid date of birth.');

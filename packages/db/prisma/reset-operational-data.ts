@@ -28,8 +28,13 @@ async function main() {
     console.error('Refusing to run without --yes (this deletes all activity data). Re-run with --yes.');
     process.exit(1);
   }
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PROD_RESET !== 'true') {
-    console.error('Refusing to reset in production. Set ALLOW_PROD_RESET=true to override.');
+  // Prod guard keyed on the DB HOST (a positive signal), NOT on NODE_ENV — which is unreliable
+  // on the server. Any non-local database (e.g. Contabo's "@postgres" host) requires an explicit
+  // ALLOW_PROD_RESET=true, so a stray --yes pointed at production still can't wipe it.
+  const dbUrl = process.env.DATABASE_URL ?? '';
+  const isLocalDb = /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl);
+  if (!isLocalDb && process.env.ALLOW_PROD_RESET !== 'true') {
+    console.error('Refusing to reset a non-local database. Set ALLOW_PROD_RESET=true to override.');
     process.exit(1);
   }
 

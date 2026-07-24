@@ -258,14 +258,18 @@ export class ProjectsService {
       where: { id: organizationId }, select: { code: true },
     });
     const orgCode = orgRec?.code ?? 'SQ';
-    const pid = raw.trim().toUpperCase();
-    const m = new RegExp(`^${orgCode}_(\\d{2})_(\\d{2})_(\\d{1,6})$`).exec(pid);
+    const m = new RegExp(`^${orgCode}_(\\d{2})_(\\d{2})_(\\d{1,6})$`).exec(raw.trim().toUpperCase());
     if (!m) {
       throw new BadRequestException(`"${raw}" is not a valid Project ID (expected ${orgCode}_YY_YY_NNN).`);
     }
+    const fyLabel = `${m[1]}_${m[2]}`;
+    const serial = parseInt(m[3], 10);
+    // Canonicalise (zero-pad the serial) so "SQ_26_27_6" and "SQ_26_27_006" can't both be claimed
+    // as distinct-but-equal PIDs — the clash check + ensureAtLeast both key on the canonical form.
+    const pid = formatPid(orgCode, fyLabel, serial);
     const clash = await this.prisma.project.findFirst({ where: { code: pid }, select: { id: true } });
     if (clash) throw new BadRequestException(`Project ID ${pid} is already in use.`);
-    await this.sequence.ensureAtLeast(pidScope(organizationId, `${m[1]}_${m[2]}`), parseInt(m[3], 10));
+    await this.sequence.ensureAtLeast(pidScope(organizationId, fyLabel), serial);
     return pid;
   }
 
@@ -320,10 +324,24 @@ export class ProjectsService {
     if (req.status !== 'PENDING') throw new BadRequestException('This PID request has already been resolved.');
 
     const pid = await this.claimPid(organizationId, rawPid);
-    await this.prisma.$transaction([
-      this.prisma.project.update({ where: { id: req.projectId }, data: { code: pid } }),
-      this.prisma.pidRequest.update({ where: { id: req.id }, data: { status: 'FULFILLED', pid, resolvedAt: new Date() } }),
-    ]);
+    // Atomic: only the first concurrent fulfil flips PENDING → FULFILLED and sets the code;
+    // a P2002 (another project claimed this exact PID in a race) surfaces as a friendly error.
+    try {
+      const ok = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.pidRequest.updateMany({
+          where: { id: req.id, status: 'PENDING' },
+          data: { status: 'FULFILLED', pid, resolvedAt: new Date() },
+        });
+        if (claimed.count === 0) return false;
+        await tx.project.update({ where: { id: req.projectId }, data: { code: pid } });
+        return true;
+      });
+      if (!ok) throw new BadRequestException('This PID request has already been resolved.');
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      throw e;
+    }
     await this.notifications.notify(req.requestedById, {
       type: 'project.pid_assigned',
       title: 'PID assigned',

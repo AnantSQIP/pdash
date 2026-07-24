@@ -198,7 +198,9 @@ export class TimesheetsService {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
-    if (entry.taskId) throw new BadRequestException('This entry already has a project/task assigned.');
+    // Only a buffer entry (no task AND no issue) can be assigned — an issue-logged entry must
+    // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
+    if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be staffed on the task's project.
