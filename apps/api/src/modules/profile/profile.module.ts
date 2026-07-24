@@ -1,5 +1,5 @@
 import {
-  Body, Controller, ForbiddenException, Get, Injectable, Module, NotFoundException, Param, Put,
+  BadRequestException, Body, Controller, ForbiddenException, Get, Injectable, Module, NotFoundException, Param, Put,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
@@ -108,7 +108,16 @@ export class ProfileService {
     const organizationId = await this.actor.requireOrgId();
     const user = await this.prisma.user.findFirst({
       where: { id: targetUserId, organizationId, deletedAt: null },
-      select: { id: true },
+      select: {
+        id: true, phone: true, profileCompletedAt: true,
+        profile: {
+          select: {
+            dateOfBirth: true, currentLine1: true, currentCity: true, currentState: true,
+            currentPostalCode: true, permanentSameAsCurrent: true, permanentLine1: true,
+            emergencyName: true, emergencyRelationship: true, emergencyPhone: true,
+          },
+        },
+      },
     });
     if (!user) throw new NotFoundException('User not found');
 
@@ -128,6 +137,55 @@ export class ProfileService {
       data.dateOfBirth = dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
     }
 
+    // ── Gate enforcement (root fix) ──────────────────────────────────────────
+    // The first-login gate must clear ONLY when the required joining details are all present
+    // and valid. A field the DTO leaves undefined keeps its stored value, so an HR correction
+    // that touches one field never wipes the gate. This is server-side; the client checks too.
+    const existing = user.profile;
+    const merged = {
+      phone: dto.phone !== undefined ? dto.phone : user.phone,
+      dateOfBirth: dto.dateOfBirth !== undefined ? dto.dateOfBirth : (existing?.dateOfBirth ?? null),
+      currentLine1: dto.currentLine1 !== undefined ? dto.currentLine1 : existing?.currentLine1,
+      currentCity: dto.currentCity !== undefined ? dto.currentCity : existing?.currentCity,
+      currentState: dto.currentState !== undefined ? dto.currentState : existing?.currentState,
+      currentPostalCode: dto.currentPostalCode !== undefined ? dto.currentPostalCode : existing?.currentPostalCode,
+      emergencyName: dto.emergencyName !== undefined ? dto.emergencyName : existing?.emergencyName,
+      emergencyRelationship: dto.emergencyRelationship !== undefined ? dto.emergencyRelationship : existing?.emergencyRelationship,
+      emergencyPhone: dto.emergencyPhone !== undefined ? dto.emergencyPhone : existing?.emergencyPhone,
+    };
+    const sameAsCurrent = dto.permanentSameAsCurrent !== undefined
+      ? dto.permanentSameAsCurrent : existing?.permanentSameAsCurrent;
+    const permanentLine1 = dto.permanentLine1 !== undefined ? dto.permanentLine1 : existing?.permanentLine1;
+
+    const REQUIRED: [string, unknown][] = [
+      ['work phone', merged.phone], ['date of birth', merged.dateOfBirth],
+      ['current address', merged.currentLine1], ['city', merged.currentCity],
+      ['state', merged.currentState], ['PIN code', merged.currentPostalCode],
+      ['emergency contact name', merged.emergencyName],
+      ['emergency contact relationship', merged.emergencyRelationship],
+      ['emergency contact phone', merged.emergencyPhone],
+    ];
+    if (!sameAsCurrent) REQUIRED.push(['permanent address', permanentLine1]);
+    const missing = REQUIRED.filter(([, v]) => !String(v ?? '').trim()).map(([label]) => label);
+
+    // DOB sanity: a real past date, plausible working age (15–100).
+    if (merged.dateOfBirth) {
+      const dob = new Date(merged.dateOfBirth as string);
+      const age = (Date.now() - dob.getTime()) / (365.25 * 24 * 3600 * 1000);
+      if (Number.isNaN(dob.getTime()) || dob.getTime() > Date.now() || age < 15 || age > 100) {
+        throw new BadRequestException('Enter a valid date of birth.');
+      }
+    }
+
+    const isComplete = missing.length === 0;
+    // First-login self-completion must actually be complete — never let a partial submit slip
+    // the gate open with an empty record.
+    if (scope.self && !user.profileCompletedAt && !isComplete) {
+      throw new BadRequestException(`Please fill in every required field: ${missing.join(', ')}.`);
+    }
+    // Stamp the gate only when complete; never un-complete an already-completed profile.
+    const profileCompletedAt = isComplete ? (user.profileCompletedAt ?? new Date()) : user.profileCompletedAt;
+
     await this.prisma.$transaction(async (tx) => {
       await tx.userProfile.upsert({
         where: { userId: targetUserId },
@@ -139,8 +197,7 @@ export class ProfileService {
         where: { id: targetUserId },
         data: {
           ...(phone !== undefined ? { phone: phone || null } : {}),
-          // Filling it in clears the first-sign-in gate.
-          profileCompletedAt: new Date(),
+          profileCompletedAt,
         },
       });
     });
