@@ -8,6 +8,18 @@ function dayKey(d: Date): string {
 function utcDay(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
+// SquarkIP runs on IST (Asia/Kolkata, no DST). Due dates are stored at UTC midnight and
+// carry no time-of-day, so "on time" must be judged on the DATE in the org timezone, not on
+// a raw instant comparison — otherwise any same-day close after 05:30 IST (i.e. essentially
+// every on-time close during 9–6 office hours) reads as late.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function istDayKey(d: Date): string {
+  return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+/** A task closed on or before its due DATE (both compared as IST calendar days) is on time. */
+function isOnTime(updatedAt: Date, dueDate: Date): boolean {
+  return istDayKey(updatedAt) <= dayKey(dueDate);
+}
 function pct(n: number, d: number): number {
   return d > 0 ? Math.round((n / d) * 100) : 0;
 }
@@ -144,7 +156,7 @@ export class PerformanceService {
       this.prisma.analyticsEvent.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
     ]);
     const withDue = completed.filter(t => t.dueDate);
-    const onTime = withDue.filter(t => t.dueDate && t.updatedAt <= t.dueDate).length;
+    const onTime = withDue.filter(t => t.dueDate && isOnTime(t.updatedAt, t.dueDate)).length;
     return {
       tasksCompleted: completed.length,
       onTimeRate: pct(onTime, withDue.length),
@@ -290,22 +302,28 @@ export class PerformanceService {
     const acc = new Map<string, Acc>();
     const at = (id: string) => { let x = acc.get(id); if (!x) { x = { tasksCompleted: 0, withDueCount: 0, onTime: 0, hoursLogged: 0, issuesResolved: 0, activityVolume: 0 }; acc.set(id, x); } return x; };
 
+    // Per-task DISTINCT aggregates for the org totals — a task with N assignees is counted
+    // ONCE here (summing the per-user figures would inflate it N×). The per-user map below
+    // still credits every assignee, which is correct for the leaderboard.
+    let distinctCompleted = 0, distinctWithDue = 0, distinctOnTime = 0;
     for (const t of completedTasks) {
+      distinctCompleted++;
+      if (t.dueDate) { distinctWithDue++; if (isOnTime(t.updatedAt, t.dueDate)) distinctOnTime++; }
       for (const a of t.assignees) {
         const x = at(a.userId);
         x.tasksCompleted++;
-        if (t.dueDate) { x.withDueCount++; if (t.updatedAt <= t.dueDate) x.onTime++; }
+        if (t.dueDate) { x.withDueCount++; if (isOnTime(t.updatedAt, t.dueDate)) x.onTime++; }
       }
     }
     for (const h of hoursByUser) at(h.userId).hoursLogged = Math.round((h._sum.hoursLogged ?? 0) * 10) / 10;
     for (const r of resolvedByUser) if (r.assigneeId) at(r.assigneeId).issuesResolved = r._count._all;
     for (const a of activityByUser) at(a.userId).activityVolume = a._count._all;
 
-    const out = new Map<string, { tasksCompleted: number; withDueCount: number; onTimeRate: number; hoursLogged: number; issuesResolved: number; activityVolume: number }>();
+    const perUser = new Map<string, { tasksCompleted: number; withDueCount: number; onTimeRate: number; hoursLogged: number; issuesResolved: number; activityVolume: number }>();
     for (const [id, x] of acc) {
-      out.set(id, { tasksCompleted: x.tasksCompleted, withDueCount: x.withDueCount, onTimeRate: pct(x.onTime, x.withDueCount), hoursLogged: x.hoursLogged, issuesResolved: x.issuesResolved, activityVolume: x.activityVolume });
+      perUser.set(id, { tasksCompleted: x.tasksCompleted, withDueCount: x.withDueCount, onTimeRate: pct(x.onTime, x.withDueCount), hoursLogged: x.hoursLogged, issuesResolved: x.issuesResolved, activityVolume: x.activityVolume });
     }
-    return out;
+    return { perUser, distinct: { tasksCompleted: distinctCompleted, withDueCount: distinctWithDue, onTime: distinctOnTime } };
   }
 
   async getOrgPerformance(organizationId: string, days = 30) {
@@ -329,8 +347,8 @@ export class PerformanceService {
     ]);
     const zeroM = { tasksCompleted: 0, withDueCount: 0, onTimeRate: 0, hoursLogged: 0, issuesResolved: 0, activityVolume: 0 };
     const rows = users.map(u => {
-      const cur = curM.get(u.id) ?? zeroM;
-      const prev = prevM.get(u.id) ?? zeroM;
+      const cur = curM.perUser.get(u.id) ?? zeroM;
+      const prev = prevM.perUser.get(u.id) ?? zeroM;
       return {
         userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
         department: u.departmentMemberships[0]?.department?.name ?? undefined,
@@ -342,18 +360,20 @@ export class PerformanceService {
     rows.sort((a, b) => b.score - a.score);
 
     const sum = (f: (r: typeof rows[number]) => number) => Math.round(rows.reduce((s, r) => s + f(r), 0) * 10) / 10;
-    const rated = rows.filter(r => r.withDueCount > 0);
-    const avgOnTimeRate = rated.length ? Math.round(rated.reduce((s, r) => s + r.onTimeRate, 0) / rated.length) : 0;
+    // A true org-wide ratio (Σ on-time ÷ Σ with-a-due-date, over DISTINCT tasks), not an
+    // unweighted mean of per-person rates. tasksCompleted is likewise the distinct count so a
+    // multi-assignee task isn't counted once per assignee in the headline total.
+    const avgOnTimeRate = pct(curM.distinct.onTime, curM.distinct.withDueCount);
     const activeProjects = await this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE', members: { some: { user: { organizationId } } } } });
 
     return {
       periodDays: days,
       totals: {
-        users: users.length, tasksCompleted: sum(r => r.tasksCompleted), hoursLogged: sum(r => r.hoursLogged),
+        users: users.length, tasksCompleted: curM.distinct.tasksCompleted, hoursLogged: sum(r => r.hoursLogged),
         activeProjects, avgOnTimeRate,
       },
       previousTotals: {
-        tasksCompleted: rows.reduce((s, r) => s + r.prevCompleted, 0),
+        tasksCompleted: prevM.distinct.tasksCompleted,
         hoursLogged: Math.round(rows.reduce((s, r) => s + r.prevHours, 0) * 10) / 10,
       },
       leaderboard: rows.map(({ prevScore, prevHours, prevCompleted, withDueCount, ...r }) => r),
@@ -559,13 +579,13 @@ export class PerformanceService {
 
     // capacity vs logged per department.
     // Availability-fair denominator: target = Σ_member (businessDays − company holidays −
-    // that member's approved leave) × 9.6h. Excluding holidays/leave means people on approved
+    // that member's approved leave) × 8h. Excluding holidays/leave means people on approved
     // time off no longer drag utilization down. (ATTENDANCE_BILLABLE_PLAN.md, B2.)
     // Snap the window to UTC-day boundaries so the weekday set lines up with the
     // midnight-stamped holiday/leave rows (avoids a boundary-day mismatch).
-    // Work week = 48h over 5 weekdays (Mon–Fri) → 9.6h/day. Weekends are already excluded
-    // by businessDays(); holidays + approved leave are subtracted from availableDays.
-    const DAILY_HOURS = 48 / 5; // 9.6h/day
+    // Office hours 9am–6pm IST minus a 1h lunch = 8 working hours/day over 5 weekdays (Mon–Fri).
+    // Weekends are already excluded by businessDays(); holidays + approved leave are subtracted.
+    const DAILY_HOURS = 8; // 9am–6pm IST minus 1h lunch
     const fromDay = utcDay(from);
     const toDay = utcDay(to);
     const weekdaySet = new Set<string>();

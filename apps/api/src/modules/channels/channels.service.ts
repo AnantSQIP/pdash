@@ -505,6 +505,8 @@ export class ChannelRetentionService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    // Only the designated background runner sweeps (see RUN_BACKGROUND_JOBS); unset on Contabo.
+    if (process.env.RUN_BACKGROUND_JOBS === 'false') return;
     setTimeout(() => this.safeSweep(), 60_000);
     setInterval(() => this.safeSweep(), 6 * 60 * 60_000);
   }

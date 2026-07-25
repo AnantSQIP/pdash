@@ -229,7 +229,26 @@ export class UsersService {
     });
   }
 
+  /**
+   * A password reset hands the caller a temp password and forces re-login as the target, so it
+   * is effectively account takeover — it must obey the same rank rule as granting roles: a
+   * non-Super-Admin may not reset a Super Admin, nor anyone who holds permissions they lack.
+   */
+  private async assertMayResetPassword(targetUserId: string): Promise<void> {
+    const actorId = getActorId();
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    const actor = await this.permissions.getEffectivePermissions(actorId);
+    if (actor.isSuperAdmin || actorId === targetUserId) return;
+    const target = await this.permissions.getEffectivePermissions(targetUserId);
+    if (target.isSuperAdmin) throw new ForbiddenException('Only a Super Admin may reset a Super Admin.');
+    const actorCodes = new Set(actor.codes);
+    if (target.codes.some(c => !actorCodes.has(c))) {
+      throw new ForbiddenException('You cannot reset a user who holds permissions you do not have.');
+    }
+  }
+
   async resetPassword(id: string) {
+    await this.assertMayResetPassword(id);
     const target = await this.prisma.user.findFirst({ where: { id, deletedAt: null }, select: { id: true, email: true } });
     if (!target) throw new NotFoundException(`User ${id} not found`);
     const tempPassword = generateTempPassword();

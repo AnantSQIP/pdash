@@ -53,7 +53,7 @@ export default function PerformancePage() {
           <span>
             All figures below cover the <b className="text-gray-800">last {days} days</b>
             {' '}(through today). Trend lines are <b className="text-gray-800">per day</b>; pie/donut/bullet charts are
-            {' '}<b className="text-gray-800">totals over the window</b>. Capacity assumes a 48h week (Mon–Fri).
+            {' '}<b className="text-gray-800">totals over the window</b>. Capacity assumes a 40h week (Mon–Fri, 9am–6pm IST).
           </span>
         </div>
         {tab === 'me' && currentUser && <UserPerfPanel userId={currentUser.id} days={days} />}

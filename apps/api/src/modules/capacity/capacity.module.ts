@@ -14,7 +14,7 @@ function isWeekend(d: Date): boolean { const wd = d.getUTCDay(); return wd === 0
 function r1(n: number): number { return Math.round((n ?? 0) * 10) / 10; }
 
 /** A 48h week over 5 weekdays — the same basis the Performance module uses. */
-const DAILY_CAPACITY_HOURS = 48 / 5; // 9.6h
+const DAILY_CAPACITY_HOURS = 8; // office hours 9am–6pm IST minus a 1h lunch = 8 working hours/day
 /** Assumed effort for a task with no estimate, so unestimated work still consumes time. */
 const DEFAULT_TASK_HOURS = 6;
 /** A day is "free" below this share of capacity — i.e. there's room for real work. */
@@ -154,7 +154,7 @@ export class CapacityService {
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
-          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true, office: true,
+          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true, office: true, joiningDate: true,
           departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
         },
         orderBy: [{ firstName: 'asc' }],
@@ -227,6 +227,8 @@ export class CapacityService {
       if (project?.deletedAt) continue; // archived project — not real work any more
       const estimate = task.estimatedHours ?? DEFAULT_TASK_HOURS;
       const remaining = Math.max(0, estimate * (1 - (task.completionPercentage ?? 0) / 100));
+      // A co-assigned task's remaining effort is SHARED, not duplicated in full onto each person.
+      const perAssignee = remaining / Math.max(1, task.assignees.length);
       const overdue = !!task.dueDate && startOfUtcDay(task.dueDate) < today;
 
       for (const { userId } of task.assignees) {
@@ -262,7 +264,15 @@ export class CapacityService {
         let span = workable.filter(d => d >= startsAt && d <= endsAt);
         if (!span.length) span = [workable[0]]; // overdue / same-day: put it on the first workable day
 
-        const perDay = remaining / span.length;
+        // Denominator = working days over the task's TRUE span, INCLUDING any BEYOND the visible
+        // window — otherwise a task due far in the future compresses its whole effort into the
+        // window and the person reads as fully booked every day.
+        let denom = span.length;
+        if (endsAt >= to) {
+          const cappedEnd = endsAt > addDays(to, 365) ? addDays(to, 365) : endsAt; // guard bad data
+          for (let d = new Date(to); d <= cappedEnd; d = addDays(d, 1)) if (!isWeekend(d)) denom++;
+        }
+        const perDay = perAssignee / Math.max(1, denom);
         for (const d of span) {
           const k = `${userId}|${dayKey(d)}`;
           loadByUserDay.set(k, (loadByUserDay.get(k) ?? 0) + perDay);
@@ -375,7 +385,7 @@ export class CapacityService {
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
-          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true, office: true,
+          id: true, firstName: true, lastName: true, designation: true, profilePhoto: true, office: true, joiningDate: true,
           departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
         },
         orderBy: [{ firstName: 'asc' }],
@@ -434,6 +444,11 @@ export class CapacityService {
         if (holiday) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: holiday };
         if (leave || att?.status === 'ON_LEAVE') { onLeave++; return { date: k, state: 'LEAVE', load: 0, capacity: 0, utilization: 0, free: 0, note: `${leave ?? 'leave'}` }; }
         if (worked) { present++; return { date: k, state: 'PRESENT', load: hours, capacity: 0, utilization: 0, free: 0, note: hours ? `${hours}h logged` : 'Present' }; }
+        // Today (before anyone punches in) and days BEFORE the person joined are not absences —
+        // there's no attendance expectation yet, so don't flag them red or count them.
+        if (k === dayKey(today) || (u.joiningDate && d < startOfUtcDay(u.joiningDate))) {
+          return { date: k, state: 'PRESENT', load: 0, capacity: 0, utilization: 0, free: 0, note: k === dayKey(today) ? 'Today — in progress' : 'Before joining' };
+        }
         absent++;
         return { date: k, state: 'ABSENT', load: 0, capacity: 0, utilization: 0, free: 0 };
       });

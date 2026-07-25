@@ -59,3 +59,21 @@ docker compose -f docker-compose.prod.yml --env-file .env.production exec -T pos
 
 Steps 1–3 are safe and non-destructive. Step 4 wipes the team's real activity data — do it only
 when you intend to start the workspace fresh.
+
+---
+
+## AWS-readiness switches (built, OFF by default — Contabo behaves exactly as now)
+
+The QA sweep's AWS-platform fixes are all **config-gated**. On Contabo none of these env vars are
+set, so nothing changes. When you move to AWS (ECS/Fargate), set them:
+
+| Env var | On Contabo | On AWS |
+|---|---|---|
+| `DOCUMENT_STORAGE_DRIVER` | unset → local disk volume | `s3` (also set `DOCUMENT_S3_BUCKET`, optional `DOCUMENT_S3_PREFIX`; region/creds from the task role). Then `npm i @aws-sdk/client-s3` in the image. Fixes ephemeral-FS document loss. |
+| `RUN_BACKGROUND_JOBS` | unset → all sweeps run | set `false` on every task **except one** — stops duplicate overdue alerts / meeting reminders / retention sweeps across replicas. |
+| `SKIP_BOOT_MIGRATE` | unset → migrates on boot | set `true` and run `prisma migrate deploy` as a one-off pre-deploy job, so a bad migration can't crash-loop every task. |
+| `/health` | already returns 503 on DB-down (use it as the ALB/ECS health check) | same |
+
+Still recommended for AWS (infra, not code): managed **RDS/Aurora** instead of the Postgres
+container, and a shared store (Redis/ElastiCache) for the rate-limiter + passcode lockout if you
+run more than one task. See `QA_DEEP_TEST_2026-07.md` (P1) for the full list.

@@ -9,10 +9,10 @@
 // role, a fixed 2-column (wide/narrow) grid left one side empty for some roles. The
 // masonry auto-distributes whatever cards render so both/all columns stay balanced.
 import {
-  PersonaBanner, OrgStatsRow, MyPerformanceCard,
+  PersonaBanner, WorkspaceErrorBanner, OrgStatsRow, MyPerformanceCard,
   MyTasksCard, MyProjectsCard, ProjectStatusCard, QuickStatsCard,
   OrgPerformanceCard, TeamAttendanceCard, LeaveApprovalsCard, PeopleOpsCard,
-  AdminShortcutsCard, QuickAccessCard, ProjectApprovalsCard, TeamAvailabilityCard,
+  AdminShortcutsCard, QuickAccessCard, PidRequestsCard, TeamAvailabilityCard,
 } from '@/components/home/sections';
 
 export default function HomeDashboardPage() {
@@ -20,13 +20,14 @@ export default function HomeDashboardPage() {
     <div className="min-h-full">
       {/* Full-width top zone — the banner now carries the Punch In/Out button, top-right. */}
       <PersonaBanner />
+      <WorkspaceErrorBanner />
       <OrgStatsRow />
       <MyPerformanceCard />
 
       {/* Balanced masonry — cards flow to keep columns even regardless of which render. */}
       <div className="px-4 py-4 sm:px-6 sm:py-6">
-        <div className="columns-1 lg:columns-2 2xl:columns-3 gap-4 sm:gap-6 [&>*]:mb-4 sm:[&>*]:mb-6 [&>*]:break-inside-avoid">
-          <ProjectApprovalsCard />
+        <div className="columns-1 md:columns-2 2xl:columns-3 gap-4 sm:gap-6 [&>*]:mb-4 sm:[&>*]:mb-6 [&>*]:break-inside-avoid">
+          <PidRequestsCard />
           <TeamAvailabilityCard />
           <LeaveApprovalsCard />
           <MyTasksCard />

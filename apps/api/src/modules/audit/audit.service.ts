@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@pdash/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 import { getActorId } from '../../common/context/request-context';
 
 const ACTOR_SELECT = { id: true, firstName: true, lastName: true, email: true };
@@ -28,34 +29,40 @@ export class AuditService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly access: ProjectAccessService,
   ) {}
 
-  async listActivity(q: ActivityQuery) {
-    // Confidential RBAC/user activity must never be exposed to callers without
-    // audit.view — regardless of how they scope the query. Previously any
-    // entityId/entityType filter bypassed the org-wide gate, so an Employee could
-    // read role/permission history via ?entityId=<roleId>.
-    const SENSITIVE = ['Role', 'Permission', 'PermissionGroup', 'User', 'ROLE', 'PERMISSION', 'USER'];
+  /**
+   * Activity feed. Org is ALWAYS session-derived. An `audit.view` holder may read org-wide
+   * activity; everyone else may read ONLY the activity of a specific project/task/issue they
+   * can access. Previously any `?projectId=`/`?entityId=` filter bypassed the gate with no
+   * membership check, so any user could read any matter's history (and its document filenames).
+   */
+  async listActivity(q: ActivityQuery, organizationId: string) {
     const actorId = getActorId();
     const hasAudit = actorId ? await this.permissions.check(actorId, 'audit.view') : false;
+    const where: Prisma.ActivityWhereInput = { organizationId };
 
-    // Org-wide (unscoped) activity always requires audit.view.
-    if (!q.projectId && !q.entityId && !hasAudit) {
-      throw new ForbiddenException('audit.view is required to read org-wide activity.');
-    }
-
-    const where: Prisma.ActivityWhereInput = {};
-    if (q.organizationId) where.organizationId = q.organizationId;
-    if (q.entityType) {
-      if (!hasAudit && SENSITIVE.includes(q.entityType)) {
-        throw new ForbiddenException('audit.view is required to read this activity.');
+    if (hasAudit) {
+      if (q.entityType) where.entityType = q.entityType;
+      if (q.entityId) where.entityId = q.entityId;
+      if (q.projectId) where.metadata = { path: ['projectId'], equals: q.projectId };
+    } else {
+      // Non-audit users: scope to one delivery matter they can access — never org-wide, never
+      // sensitive (RBAC/user) activity, which lives under entity types not whitelisted here.
+      const et = (q.entityType ?? '').toUpperCase();
+      if (q.projectId) {
+        await this.access.assertProjectAccess(actorId, q.projectId);
+        where.metadata = { path: ['projectId'], equals: q.projectId };
+      } else if (q.entityId && ['PROJECT', 'TASK', 'ISSUE'].includes(et)) {
+        await this.access.assertEntityAccess(actorId, et, q.entityId);
+        where.entityType = et;
+        where.entityId = q.entityId;
+      } else {
+        throw new ForbiddenException('You may only read the activity of a project, task or issue you have access to.');
       }
-      where.entityType = q.entityType;
-    } else if (!hasAudit) {
-      where.entityType = { notIn: SENSITIVE };
     }
-    if (q.entityId) where.entityId = q.entityId;
-    if (q.projectId) where.metadata = { path: ['projectId'], equals: q.projectId };
+
     return this.prisma.activity.findMany({
       where,
       include: { actor: { select: ACTOR_SELECT } },

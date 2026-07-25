@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
@@ -6,6 +6,8 @@ import { CreateIssueDto, UpdateIssueDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 
+// A person cannot log more than a full day across all entries — same cap as timesheets.
+const MAX_HOURS_PER_DAY = 24;
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true };
 const TS_SELECT = { id: true, hoursLogged: true, billable: true, date: true } as const;
 
@@ -62,17 +64,34 @@ export class IssuesService {
   /** Raise a technical issue → also logs the time it cost as a non-billable timesheet. */
   async create(dto: CreateIssueDto) {
     await this.access.assertProjectAccess(getActorId(), dto.projectId);
+    await this.access.assertProjectWritable(dto.projectId); // no new issue-time on completed/closed projects
     const reportedBy = getActorId() ?? 'system';
     const hours = dto.hours && dto.hours > 0 ? dto.hours : 0;
-    const date = dto.date ? new Date(dto.date) : new Date();
+    // Issue time feeds capacity/performance exactly like a timesheet, so it must obey the same
+    // rules: normalise to the calendar-day boundary, reject a future date, and enforce the
+    // 24h/day cap across ALL the user's entries (this path previously bypassed both).
+    const entryDay = new Date((dto.date ? String(dto.date) : new Date().toISOString()).slice(0, 10));
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    if (isNaN(entryDay.getTime())) throw new BadRequestException('A valid date is required.');
+    if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
+    if (hours > 0) {
+      const dayAgg = await this.prisma.timesheet.aggregate({
+        where: { userId: reportedBy, date: entryDay, deletedAt: null }, _sum: { hoursLogged: true },
+      });
+      if ((dayAgg._sum.hoursLogged ?? 0) + hours > MAX_HOURS_PER_DAY) {
+        const left = Math.max(0, MAX_HOURS_PER_DAY - (dayAgg._sum.hoursLogged ?? 0));
+        throw new BadRequestException(`That would exceed ${MAX_HOURS_PER_DAY}h logged for the day — ${left}h remaining.`);
+      }
+    }
     const issue = await this.prisma.$transaction(async (tx) => {
       const created = await tx.issue.create({
         data: { projectId: dto.projectId, title: dto.title, description: dto.description ?? null, reportedBy },
       });
-      // The issue's cost is recorded as NON-BILLABLE time against the issue (no task).
+      // The issue's cost is recorded as NON-BILLABLE time against the issue (also carries the
+      // projectId so issue time is attributed in project/performance reports).
       if (hours > 0) {
         await tx.timesheet.create({
-          data: { userId: reportedBy, issueId: created.id, taskId: null, date, hoursLogged: hours, billable: false, notes: dto.title },
+          data: { userId: reportedBy, issueId: created.id, taskId: null, projectId: dto.projectId, date: entryDay, hoursLogged: hours, billable: false, notes: dto.title },
         });
       }
       return tx.issue.findUnique({ where: { id: created.id }, include: this.include });

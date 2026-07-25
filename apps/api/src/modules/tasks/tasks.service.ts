@@ -80,6 +80,7 @@ export class TasksService {
    */
   async create(dto: CreateTaskDto) {
     await this.access.assertProjectAccess(getActorId(), dto.projectId);
+    await this.access.assertProjectWritable(dto.projectId); // no new tasks on completed/closed projects
     const taskList = await this.prisma.taskList.findFirst({
       where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null },
     });
@@ -195,6 +196,10 @@ export class TasksService {
       where: {
         deletedAt: null,
         assignees: { some: { userId } },
+        // Only tasks in a project the user is STILL an active member of. A leftover
+        // TaskAssignee row after someone is removed from a project used to surface that
+        // project on their Home — where the chip then 403s on click. Gate it at the source.
+        projectTasks: { some: { project: { members: { some: { userId, isActive: true } } } } },
       },
       orderBy: { dueDate: 'asc' },
       include: {
@@ -284,6 +289,21 @@ export class TasksService {
     // The target status must belong to the task's own workflow.
     if (task.workflowId && status.workflowId && status.workflowId !== task.workflowId) {
       throw new BadRequestException(`Status ${dto.statusId} does not belong to this task's workflow`);
+    }
+
+    // If the workflow defines an explicit transition graph, honour it — a status change must
+    // follow a defined edge (a null `fromStatusId` = "from any state"). Workflows with NO
+    // transitions configured allow any move (backward-compatible with the current data), so
+    // this only tightens things once an admin actually models the workflow.
+    const currentStatusId = (task as any).currentWorkflowStatusId ?? null;
+    if (task.workflowId && currentStatusId && currentStatusId !== status.id) {
+      const transitions = await this.prisma.workflowTransition.findMany({
+        where: { workflowId: task.workflowId }, select: { fromStatusId: true, toStatusId: true },
+      });
+      if (transitions.length &&
+          !transitions.some(t => (t.fromStatusId === currentStatusId || t.fromStatusId === null) && t.toStatusId === status.id)) {
+        throw new BadRequestException('That status change is not allowed by this workflow.');
+      }
     }
 
     // Key the reset on the PRIOR status, not the percentage value: only reopening a

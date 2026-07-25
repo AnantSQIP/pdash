@@ -33,4 +33,7 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json
 EXPOSE 4000
 # Apply migrations then start. (DATABASE_URL must be reachable at runtime.)
-CMD ["sh", "-c", "npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma && node apps/api/dist/main.js"]
+# On Contabo (single instance) SKIP_BOOT_MIGRATE is unset, so migrations run on boot as before.
+# On AWS (multiple replicas) set SKIP_BOOT_MIGRATE=true and run `prisma migrate deploy` as a
+# one-off pre-deploy job, so a bad migration can't crash-loop every task.
+CMD ["sh", "-c", "if [ \"$SKIP_BOOT_MIGRATE\" != \"true\" ]; then npx prisma migrate deploy --schema=packages/db/prisma/schema.prisma; fi && node apps/api/dist/main.js"]

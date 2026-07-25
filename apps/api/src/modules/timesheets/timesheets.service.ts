@@ -133,12 +133,13 @@ export class TimesheetsService {
     const billable = dto.billable ?? true;
 
     // ── Buffer entry: log hours now, assign the PID (task) later (within a week). No task yet
-    //    means no project/type; the 24h/day cap still applies. ──
+    //    means no project/type; the 24h/day cap still applies. `entryDay` is normalised to the
+    //    calendar-day boundary so the cap can't be side-stepped with a time component. ──
     if (!dto.taskId) {
-      await this.assertDayCap(actorId, new Date(dto.date), dto.hoursLogged);
+      await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
       const entry = await this.prisma.timesheet.create({
         data: {
-          userId: actorId, date: new Date(dto.date), hoursLogged: dto.hoursLogged, billable, notes: dto.notes,
+          userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged, billable, notes: dto.notes,
         },
         include: INCLUDE,
       });
@@ -159,14 +160,16 @@ export class TimesheetsService {
     // You can only log time on a task in a project you are staffed on (or as a lead).
     await this.access.assertTaskAccess(actorId, dto.taskId);
     const { projectId, projectType } = await this.projectOfTask(dto.taskId);
+    // No time may be booked to a completed/closed client matter (was UI-only before).
+    if (projectId) await this.access.assertProjectWritable(projectId);
 
     // Reject an identical re-submission (same task, day and hours) — a double-billing vector.
     const dupe = await this.prisma.timesheet.findFirst({
-      where: { userId: actorId, taskId: dto.taskId, date: new Date(dto.date), hoursLogged: dto.hoursLogged, deletedAt: null },
+      where: { userId: actorId, taskId: dto.taskId, date: entryDay, hoursLogged: dto.hoursLogged, deletedAt: null },
       select: { id: true },
     });
     if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
-    await this.assertDayCap(actorId, new Date(dto.date), dto.hoursLogged);
+    await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
 
     const entry = await this.prisma.timesheet.create({
       data: {
@@ -174,7 +177,7 @@ export class TimesheetsService {
         taskId: dto.taskId,
         projectId,
         projectType,
-        date: new Date(dto.date),
+        date: entryDay,
         hoursLogged: dto.hoursLogged,
         billable,
         notes: dto.notes,
@@ -206,6 +209,13 @@ export class TimesheetsService {
     // The entry's OWNER must be staffed on the task's project.
     await this.access.assertTaskAccess(entry.userId, taskId);
     const { projectId, projectType } = await this.projectOfTask(taskId);
+    if (projectId) await this.access.assertProjectWritable(projectId);
+    // Don't let buffer→assign duplicate an existing identical task entry (double-billing).
+    const dupe = await this.prisma.timesheet.findFirst({
+      where: { userId: entry.userId, taskId, date: entry.date, hoursLogged: entry.hoursLogged, deletedAt: null, id: { not: id } },
+      select: { id: true },
+    });
+    if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
     const updated = await this.prisma.timesheet.update({
       where: { id }, data: { taskId, projectId, projectType }, include: INCLUDE,
     });

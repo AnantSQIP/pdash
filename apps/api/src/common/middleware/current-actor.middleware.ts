@@ -21,8 +21,9 @@ export class CurrentActorMiddleware implements NestMiddleware {
     private readonly prisma: PrismaService,
   ) {}
 
-  async use(req: Request, _res: Response, next: NextFunction) {
+  async use(req: Request, res: Response, next: NextFunction) {
     let actorId: string | null = null;
+    let mustResetPassword = false;
 
     const token = (req as any).cookies?.access_token as string | undefined;
     if (token) {
@@ -35,15 +36,28 @@ export class CurrentActorMiddleware implements NestMiddleware {
           // tokens. Also stops tokens for deleted/inactive users.
           const user = await this.prisma.user.findUnique({
             where: { id: sub },
-            select: { securityVersion: true, status: true, deletedAt: true },
+            select: { securityVersion: true, status: true, deletedAt: true, mustResetPassword: true },
           });
           const savOk = payload.sav == null || payload.sav === user?.securityVersion;
           if (user && user.deletedAt == null && user.status === 'ACTIVE' && savOk) {
             actorId = sub;
+            mustResetPassword = user.mustResetPassword;
           }
         }
       } catch {
         actorId = null; // expired/invalid → unauthenticated
+      }
+    }
+
+    // A user who still owes a forced password change (e.g. after an admin reset, when the
+    // admin knows the temp password) may READ (to render the "set a new password" screen) and
+    // use /auth/* (to actually change it), but may NOT make changes anywhere else until they do.
+    if (actorId && mustResetPassword) {
+      const method = req.method.toUpperCase();
+      const isWrite = method === 'POST' || method === 'PATCH' || method === 'PUT' || method === 'DELETE';
+      if (isWrite && !/\/auth\//.test(req.path)) {
+        res.status(403).json({ statusCode: 403, message: 'Set a new password before making changes.' });
+        return;
       }
     }
 

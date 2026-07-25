@@ -6,7 +6,7 @@ import { api, type EffectivePermissions } from './api';
 import { useOrg } from './org-context';
 
 // Highest-privilege first. The user's "persona" is the first of these they hold.
-const ROLE_PRIORITY = ['Super Admin', 'Admin', 'Manager', 'HR', 'Senior Consultant', 'Consultant', 'Employee'];
+const ROLE_PRIORITY = ['Super Admin', 'Admin', 'Manager', 'HR', 'Senior Consultant', 'Consultant', 'Senior Research Associate', 'Employee'];
 
 type PermissionsValue = {
   codes: string[];

@@ -44,16 +44,28 @@ export class EventsService {
   }
 
   private formatWhen(d: Date, allDay?: boolean) {
+    // Render in the org's timezone (IST) — the API container runs UTC, so an un-zoned format
+    // would show meeting times ~5.5h off in notification text.
     return allDay
-      ? new Date(d).toLocaleDateString('en-US', { dateStyle: 'medium' } as Intl.DateTimeFormatOptions)
-      : new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+      ? new Date(d).toLocaleDateString('en-US', { dateStyle: 'medium', timeZone: 'Asia/Kolkata' } as Intl.DateTimeFormatOptions)
+      : new Date(d).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
   }
 
-  list(organizationId: string, from?: string, to?: string) {
+  /** Strip the sensitive fields (video join link + private notes) from an event for a viewer
+   *  who is neither its organizer nor an attendee. The shared calendar still shows time/title. */
+  private redactEvent<T extends { createdBy: string; joinUrl?: string | null; notes?: string | null; attendees: { userId: string }[] }>(
+    event: T, viewerId: string | null,
+  ): T {
+    const isParty = !!viewerId && (event.createdBy === viewerId || event.attendees.some(a => a.userId === viewerId));
+    return isParty ? event : { ...event, joinUrl: null, notes: null };
+  }
+
+  async list(organizationId: string, from?: string, to?: string) {
     if (from && to && new Date(from) > new Date(to)) {
       throw new BadRequestException('The "from" date must be on or before the "to" date.');
     }
-    return this.prisma.calendarEvent.findMany({
+    const viewerId = getActorId();
+    const events = await this.prisma.calendarEvent.findMany({
       where: {
         organizationId,
         deletedAt: null,
@@ -65,6 +77,8 @@ export class EventsService {
       include: { attendees: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } } },
       orderBy: { startDate: 'asc' },
     });
+    // Non-attendees see the meeting on the shared calendar but not its join link / private notes.
+    return events.map(e => this.redactEvent(e, viewerId));
   }
 
   async get(id: string) {
@@ -76,7 +90,7 @@ export class EventsService {
       include: { attendees: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } } },
     });
     if (!event) throw new NotFoundException(`Event ${id} not found`);
-    return event;
+    return this.redactEvent(event, getActorId());
   }
 
   async create(dto: CreateEventDto) {
@@ -242,13 +256,18 @@ export class EventsService {
     });
   }
 
-  /** iCalendar export of the org's events in a ±window (download / subscribe). */
+  /** iCalendar export of the actor's OWN calendar (events they organize or are invited to) in
+   *  a ±window. Previously exported EVERY org event incl. join links — a leak. */
   async exportIcs(organizationId: string): Promise<string> {
+    const actorId = getActorId() ?? '__none__';
     const now = Date.now();
     const from = new Date(now - 30 * 86_400_000);
     const to = new Date(now + 120 * 86_400_000);
     const events = await this.prisma.calendarEvent.findMany({
-      where: { organizationId, deletedAt: null, startDate: { gte: from, lte: to } },
+      where: {
+        organizationId, deletedAt: null, startDate: { gte: from, lte: to },
+        OR: [{ createdBy: actorId }, { attendees: { some: { userId: actorId } } }],
+      },
       orderBy: { startDate: 'asc' },
     });
     const fmt = (d: Date) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -313,8 +332,8 @@ export class EventsService {
         select: { title: true, startDate: true, endDate: true, allDay: true, createdBy: true, attendees: { select: { userId: true } } },
       }),
       this.prisma.leaveRequest.findMany({
-        where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: toD }, endDate: { gte: fromD } },
-        select: { userId: true, startDate: true, endDate: true, leaveType: true },
+        where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
+        select: { userId: true, startDate: true, endDate: true },
       }),
     ]);
     const busy = new Map<string, { start: string; end: string; title: string; allDay: boolean }[]>();
@@ -329,7 +348,8 @@ export class EventsService {
       on.forEach(uid => busy.get(uid)!.push({ start: e.startDate.toISOString(), end, title: 'Busy', allDay: e.allDay }));
     }
     for (const l of leaves) {
-      busy.get(l.userId)?.push({ start: l.startDate.toISOString(), end: l.endDate.toISOString(), title: `${l.leaveType} leave`, allDay: true });
+      // Show a busy block for the leave, but never the leave TYPE (e.g. "Sick") — that's private.
+      busy.get(l.userId)?.push({ start: l.startDate.toISOString(), end: l.endDate.toISOString(), title: 'Leave', allDay: true });
     }
     return ids.map(userId => ({ userId, busy: busy.get(userId) ?? [] }));
   }
@@ -343,17 +363,24 @@ export class EventsService {
 @Injectable()
 export class MeetingReminderService implements OnModuleInit {
   private readonly logger = new Logger(MeetingReminderService.name);
+  private running = false;
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
   ) {}
 
   onModuleInit() {
+    // Skip background sweeps when this replica isn't the designated runner (multi-replica AWS).
+    if (process.env.RUN_BACKGROUND_JOBS === 'false') return;
     setTimeout(() => this.safeSweep(), 30_000);
     setInterval(() => this.safeSweep(), 5 * 60_000);
   }
   private async safeSweep() {
+    // Re-entrancy guard: a slow sweep overlapping the 5-min tick would otherwise double-remind.
+    if (this.running) return;
+    this.running = true;
     try { await this.sweep(); } catch (e) { this.logger.warn(`meeting reminder sweep failed: ${String(e)}`); }
+    finally { this.running = false; }
   }
   async sweep() {
     const now = new Date();
@@ -364,7 +391,7 @@ export class MeetingReminderService implements OnModuleInit {
     for (const e of events) {
       const remindAt = new Date(e.startDate.getTime() - (e.reminderMinutes ?? 0) * 60_000);
       if (remindAt > now) continue; // window not reached yet
-      const when = new Date(e.startDate).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+      const when = new Date(e.startDate).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
       await this.notifications.notify([e.createdBy, ...e.attendees.map(a => a.userId)], {
         type: 'meeting.reminder', title: 'Meeting starting soon',
         message: `"${e.title}" starts ${when}.`, link: '/calendar',
