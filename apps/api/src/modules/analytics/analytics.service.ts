@@ -41,7 +41,9 @@ export class AnalyticsService {
     // Tasks and time are scoped the same way: a lead sees the org's, a member sees their
     // own. Time-logged reflects the actor's own hours for a member (their week), the whole
     // org for a lead (the team's week) — never another employee's hours to a member.
-    const taskProjectWhere = { project: projectWhere, task: { deletedAt: null } };
+    // Tasks are counted as DISTINCT tasks (a task attached to two in-scope projects via the
+    // ProjectTask M2M must not be counted twice), so these reconcile with the /projects list.
+    const inScope = { deletedAt: null, projectTasks: { some: { project: projectWhere } } } as const;
 
     const [projects, taskCounts, timesheetHours, overdueCount, dueTodayCount] = await Promise.all([
       this.prisma.project.findMany({
@@ -49,7 +51,7 @@ export class AnalyticsService {
         select: { id: true, projectPhase: true, completionPercentage: true, dueDate: true },
       }),
 
-      this.prisma.projectTask.count({ where: taskProjectWhere }),
+      this.prisma.task.count({ where: inScope }),
 
       this.prisma.timesheet.aggregate({
         where: {
@@ -60,22 +62,16 @@ export class AnalyticsService {
         _sum: { hoursLogged: true },
       }),
 
-      this.prisma.projectTask.count({
-        where: {
-          project: projectWhere,
-          task: { deletedAt: null, dueDate: { lt: startOfToday }, currentStatus: { type: { not: 'CLOSED' } } },
-        },
+      this.prisma.task.count({
+        where: { ...inScope, dueDate: { lt: startOfToday }, currentStatus: { type: { not: 'CLOSED' } } },
       }),
 
-      this.prisma.projectTask.count({
+      this.prisma.task.count({
         where: {
-          project: projectWhere,
-          task: {
-            deletedAt: null,
-            dueDate: { gte: startOfToday, lt: endOfToday },
-            currentStatus: { type: { not: 'CLOSED' } },
-            completionPercentage: { not: 100 },
-          },
+          ...inScope,
+          dueDate: { gte: startOfToday, lt: endOfToday },
+          currentStatus: { type: { not: 'CLOSED' } },
+          completionPercentage: { not: 100 },
         },
       }),
     ]);

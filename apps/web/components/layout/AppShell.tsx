@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { Loader, Menu } from 'lucide-react';
@@ -14,17 +14,29 @@ import { NotificationToaster } from '@/components/layout/NotificationToaster';
 const PUBLIC_ROUTES = ['/login', '/signup'];
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { isAuthed, loading, user } = useAuth();
+  const { isAuthed, loading, user, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const isPublic = PUBLIC_ROUTES.includes(pathname);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const bouncedRef = useRef(false);
 
   useEffect(() => {
     if (loading) return;
-    if (!isAuthed && !isPublic) router.replace('/login');
+    if (!isAuthed && !isPublic) {
+      // A revoked/expired session can leave its 14-day cookie physically present. The edge
+      // middleware treats that cookie as "authed" and would bounce /login → /home forever
+      // (an infinite redirect loop, e.g. right after an admin resets your password). Clear
+      // the cookies via logout() FIRST so the redirect to /login actually sticks.
+      if (!bouncedRef.current) {
+        bouncedRef.current = true;
+        logout().finally(() => router.replace('/login'));
+      }
+      return;
+    }
+    bouncedRef.current = false;
     if (isAuthed && isPublic) router.replace('/home');
-  }, [loading, isAuthed, isPublic, pathname, router]);
+  }, [loading, isAuthed, isPublic, pathname, router, logout]);
 
   // Close the mobile drawer whenever the route changes.
   useEffect(() => { setDrawerOpen(false); }, [pathname]);
@@ -78,7 +90,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Image src="/fav.png" alt="Squark Dashboard" width={26} height={26} className="rounded-md" />
           <span className="font-bold tracking-tight">Squark Dashboard</span>
         </header>
-        <div className="flex-1 overflow-y-auto min-h-0">{children}</div>
+        <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">{children}</div>
       </div>
       <GlobalSearch />
       <NotificationToaster />

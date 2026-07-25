@@ -196,6 +196,10 @@ export class TasksService {
       where: {
         deletedAt: null,
         assignees: { some: { userId } },
+        // Only tasks in a project the user is STILL an active member of. A leftover
+        // TaskAssignee row after someone is removed from a project used to surface that
+        // project on their Home — where the chip then 403s on click. Gate it at the source.
+        projectTasks: { some: { project: { members: { some: { userId, isActive: true } } } } },
       },
       orderBy: { dueDate: 'asc' },
       include: {

@@ -12,7 +12,7 @@ export class TasksController {
     return this.tasks.create(dto);
   }
 
-  @Get()
+  @Get() @RequirePermission('task.view')
   list(
     @Query('projectId') projectId?: string,
     @Query('userId') userId?: string,
