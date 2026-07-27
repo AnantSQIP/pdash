@@ -289,16 +289,21 @@ export class ProjectsService {
     return this.deadlines.redactProject(project as any, scope);
   }
 
-  // ── PID lifecycle: generate → (attach | release | expire) → discontinue ───────────
+  // ── PID lifecycle: generate → (attach | expire) → discontinue ─────────────────────
   //
-  // Every generated PID becomes a PidReservation. The serial allocator hands out the SMALLEST
-  // free serial, treating RESERVED / ATTACHED / DISCONTINUED reservations AND existing project
-  // codes as taken, while RELEASED / EXPIRED serials are reclaimable (reused next). Integrity:
-  // a serial is never reused once a higher serial has gone live or a project used it.
+  // Every generated PID is a PidReservation. The serial is a CONTINUING SERIES: the next PID is
+  // (highest live serial + 1). "Live" = RESERVED or ATTACHED reservations, DISCONTINUED ones
+  // (a used-then-closed number is never reused), and existing project codes.
+  //
+  // A PID generated but NOT attached within 5 minutes is DESTROYED (the row is deleted — no
+  // track of it). Because it's gone, if it was the TAIL (nothing generated after it) the series
+  // rewinds and the SAME serial is handed out next — a reclaim. If someone else generated after
+  // it, that higher serial keeps the max up, so the destroyed number becomes a permanent gap and
+  // the series continues past it. DISCONTINUED = a working PID whose project was closed (kept in
+  // the ledger); an expired-unused PID leaves no record at all.
 
-  private static readonly RESERVE_MS = 5 * 60 * 1000;   // 5-minute allocation window
-  private static readonly RELEASE_GRACE_MS = 60 * 1000; // 1-minute manual "give the key back" window
-  private static readonly MAX_AHEAD = 1000;             // reject a fat-fingered serial far ahead
+  private static readonly RESERVE_MS = 5 * 60 * 1000; // 5-minute allocation window
+  private static readonly MAX_AHEAD = 1000;           // reject a fat-fingered serial far ahead
 
   private async orgCodeOf(organizationId: string): Promise<string> {
     const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { code: true } });
@@ -337,38 +342,20 @@ export class ProjectsService {
     return taken;
   }
 
-  /** The smallest free serial (a reclaimed RELEASED/EXPIRED serial is reused before a fresh one). */
-  private async nextFreeSerial(organizationId: string, fyLabel: string, orgCode: string): Promise<number> {
+  /** The next serial in the continuing series = (highest taken serial) + 1. A destroyed (expired,
+   *  deleted) tail serial isn't counted here, so it's reclaimed; a higher live serial keeps the
+   *  max up, so a gapped number is never reused. */
+  private async nextSerial(organizationId: string, fyLabel: string, orgCode: string): Promise<number> {
     const taken = await this.takenSerials(organizationId, fyLabel, orgCode);
-    let s = 1;
-    while (taken.has(s)) s++;
-    return s;
+    return (taken.size ? Math.max(...taken) : 0) + 1;
   }
 
-  /** True if any serial ABOVE this one is currently live (RESERVED/ATTACHED) — meaning this one,
-   *  on release/expiry, must be DISCONTINUED rather than reclaimed. */
-  private async hasHigherLive(organizationId: string, fyLabel: string, serial: number): Promise<boolean> {
-    const higher = await this.prisma.pidReservation.findFirst({
-      where: { organizationId, fyLabel, serial: { gt: serial }, status: { in: ['RESERVED', 'ATTACHED'] } },
-      select: { id: true },
-    });
-    return !!higher;
-  }
-
-  /** Auto-expire RESERVED reservations past their 5-min window, applying reclaim-vs-discontinue. */
+  /** DESTROY reservations generated but not attached within the 5-min window — the row is deleted
+   *  so there is NO track of the number. The series reclaims the serial only if it was the tail. */
   private async sweepExpired(organizationId?: string): Promise<void> {
-    const now = new Date();
-    const stale = await this.prisma.pidReservation.findMany({
-      where: { status: 'RESERVED', expiresAt: { lt: now }, ...(organizationId ? { organizationId } : {}) },
-      select: { id: true, organizationId: true, fyLabel: true, serial: true },
+    await this.prisma.pidReservation.deleteMany({
+      where: { status: 'RESERVED', expiresAt: { lt: new Date() }, ...(organizationId ? { organizationId } : {}) },
     });
-    for (const r of stale) {
-      const discontinue = await this.hasHigherLive(r.organizationId, r.fyLabel, r.serial);
-      await this.prisma.pidReservation.update({
-        where: { id: r.id },
-        data: { status: discontinue ? 'DISCONTINUED' : 'EXPIRED', resolvedAt: now },
-      });
-    }
   }
 
   /**
@@ -403,10 +390,10 @@ export class ProjectsService {
       return { pid: res.pid, reservationId: res.id };
     }
 
-    // No PID supplied — auto-assign the smallest free serial (retry the rare unique-race).
+    // No PID supplied — auto-assign the next serial in the series (retry the rare unique-race).
     const fy = financialYear(new Date());
     for (let attempt = 0; attempt < 5; attempt++) {
-      const serial = await this.nextFreeSerial(organizationId, fy.label, orgCode);
+      const serial = await this.nextSerial(organizationId, fy.label, orgCode);
       const pid = formatPid(orgCode, fy.label, serial);
       try {
         const res = await this.prisma.pidReservation.create({
@@ -430,9 +417,8 @@ export class ProjectsService {
   }
 
   /**
-   * The "Generate PID" button. Reserves the smallest free serial for 5 minutes. A user may hold
-   * only ONE un-attached PID at a time. Returns the countdown so the UI can show it + offer the
-   * 1-minute "give back" option.
+   * The "Generate PID" button. Reserves the next serial in the series for 5 minutes. A user may
+   * hold only ONE un-attached PID at a time; it auto-destroys after 5 min if not attached.
    */
   async generatePid(organizationId: string, userId: string) {
     await this.sweepExpired(organizationId);
@@ -441,29 +427,11 @@ export class ProjectsService {
       select: { pid: true },
     });
     if (existing) {
-      throw new BadRequestException(`You already hold an un-attached Project ID (${existing.pid}). Attach it to a project — or give it back — before generating another.`);
+      throw new BadRequestException(`You already hold an un-attached Project ID (${existing.pid}). Attach it to a project — or wait for it to expire — before generating another.`);
     }
     const { pid, reservationId } = await this.ensureReservation(organizationId, userId);
     const res = await this.prisma.pidReservation.findUnique({ where: { id: reservationId }, select: { createdAt: true, expiresAt: true } });
-    return { pid, reservationId, createdAt: res?.createdAt, expiresAt: res?.expiresAt, releaseUntil: res ? new Date(res.createdAt.getTime() + ProjectsService.RELEASE_GRACE_MS) : undefined };
-  }
-
-  /** Manually give an un-attached PID back to the system (within 1 min of generating it). The
-   *  serial is reclaimed if nothing higher went live meanwhile, otherwise it's discontinued. */
-  async releasePid(organizationId: string, userId: string) {
-    const res = await this.prisma.pidReservation.findFirst({
-      where: { organizationId, generatedById: userId, status: 'RESERVED' },
-    });
-    if (!res) throw new BadRequestException('You have no un-attached Project ID to give back.');
-    if (Date.now() - res.createdAt.getTime() > ProjectsService.RELEASE_GRACE_MS) {
-      throw new BadRequestException('The 1-minute window to give this Project ID back has passed — attach it, or let it auto-expire.');
-    }
-    const discontinue = await this.hasHigherLive(organizationId, res.fyLabel, res.serial);
-    await this.prisma.pidReservation.update({
-      where: { id: res.id },
-      data: { status: discontinue ? 'DISCONTINUED' : 'RELEASED', resolvedAt: new Date() },
-    });
-    return { released: true, discontinued: discontinue, pid: res.pid };
+    return { pid, reservationId, createdAt: res?.createdAt, expiresAt: res?.expiresAt };
   }
 
   /** The caller's current un-attached PID (for the countdown), or null. */
@@ -473,13 +441,8 @@ export class ProjectsService {
       where: { organizationId, generatedById: userId, status: 'RESERVED' },
       select: { pid: true, createdAt: true, expiresAt: true },
     });
-    if (!res) return { reservation: null as null | { pid: string; createdAt: Date; expiresAt: Date; releaseUntil: Date } };
-    return {
-      reservation: {
-        pid: res.pid, createdAt: res.createdAt, expiresAt: res.expiresAt,
-        releaseUntil: new Date(res.createdAt.getTime() + ProjectsService.RELEASE_GRACE_MS),
-      },
-    };
+    if (!res) return { reservation: null as null | { pid: string; createdAt: Date; expiresAt: Date } };
+    return { reservation: { pid: res.pid, createdAt: res.createdAt, expiresAt: res.expiresAt } };
   }
 
   /** Attach a PID to a project that currently has none (e.g. a reopened one). Authority only. */
@@ -544,12 +507,14 @@ export class ProjectsService {
     const rows = await this.prisma.pidRequest.findMany({
       where: { organizationId, assigneeId: userId, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
+      // NOTE: the PID reviewer may NOT see the project TYPE or the project MANAGER — those are
+      // the requester's decisions, deliberately withheld from the reviewer. Everything else is
+      // shown so they can verify/correct it before assigning the PID.
       include: {
         project: {
           select: {
-            id: true, title: true, description: true, projectType: true, priority: true,
+            id: true, title: true, description: true, priority: true,
             startDate: true, dueDate: true,
-            members: { where: { projectRole: 'MANAGER', isActive: true }, select: { user: { select: { firstName: true, lastName: true } } } },
           },
         },
       },
@@ -564,11 +529,9 @@ export class ProjectsService {
       projectId: r.projectId,
       projectTitle: r.project.title,
       description: r.project.description,
-      projectType: r.project.projectType,
       priority: r.project.priority,
       startDate: r.project.startDate,
       dueDate: r.project.dueDate,
-      manager: r.project.members[0] ? `${r.project.members[0].user.firstName} ${r.project.members[0].user.lastName}`.trim() : null,
       requestedBy: nameById.get(r.requestedById) ?? 'A colleague',
       note: r.note,
       createdAt: r.createdAt,
@@ -677,7 +640,7 @@ export class ProjectsService {
     if (!creator) return { pid: null as string | null };
     const orgCode = await this.orgCodeOf(creator.organizationId);
     const fy = financialYear(new Date());
-    const serial = await this.nextFreeSerial(creator.organizationId, fy.label, orgCode);
+    const serial = await this.nextSerial(creator.organizationId, fy.label, orgCode);
     return { pid: formatPid(orgCode, fy.label, serial) };
   }
 

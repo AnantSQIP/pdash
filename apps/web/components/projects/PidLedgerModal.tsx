@@ -10,13 +10,11 @@ import { formatDateTimeIST } from '@/lib/date';
 const STATUS_META: Record<PidLedgerEntry['status'], { label: string; cls: string }> = {
   ATTACHED:     { label: 'Working',      cls: 'bg-green-100 text-green-700' },
   RESERVED:     { label: 'Reserved',     cls: 'bg-amber-100 text-amber-700' },
-  RELEASED:     { label: 'Released',     cls: 'bg-gray-100 text-gray-500' },
-  EXPIRED:      { label: 'Expired',      cls: 'bg-gray-100 text-gray-500' },
   DISCONTINUED: { label: 'Discontinued', cls: 'bg-red-100 text-red-700' },
 };
 
-type FilterKey = 'All' | 'Working' | 'Discontinued' | 'Reclaimed';
-const FILTERS: FilterKey[] = ['All', 'Working', 'Discontinued', 'Reclaimed'];
+type FilterKey = 'All' | 'Working' | 'Discontinued' | 'Reserved';
+const FILTERS: FilterKey[] = ['All', 'Working', 'Discontinued', 'Reserved'];
 
 /** Admin/Super-Admin ledger of every Project ID — working, discontinued, and full history. */
 export function PidLedgerModal({ onClose }: { onClose: () => void }) {
@@ -28,9 +26,9 @@ export function PidLedgerModal({ onClose }: { onClose: () => void }) {
   });
 
   const filtered = useMemo(() => rows.filter(r => {
-    if (filter === 'Working') return r.status === 'ATTACHED' || r.status === 'RESERVED';
+    if (filter === 'Working') return r.status === 'ATTACHED';
     if (filter === 'Discontinued') return r.status === 'DISCONTINUED';
-    if (filter === 'Reclaimed') return r.status === 'RELEASED' || r.status === 'EXPIRED';
+    if (filter === 'Reserved') return r.status === 'RESERVED';
     return true;
   }), [rows, filter]);
 

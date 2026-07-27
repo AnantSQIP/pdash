@@ -620,7 +620,7 @@ export function PidRequestsCard() {
               <div className="flex-1 min-w-0">
                 <Link href={`/projects/${p.projectId}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 truncate block">{p.projectTitle}</Link>
                 <p className="text-xs text-gray-500 truncate">
-                  {p.projectType ? `${p.projectType.replace(/_/g, ' ')} · ` : ''}requested {relativePast(p.createdAt)}{p.note ? ` · ${p.note}` : ''}
+                  requested {relativePast(p.createdAt)}{p.note ? ` · ${p.note}` : ''}
                 </p>
               </div>
               <button disabled={busy} onClick={() => fulfill.mutate(p.id)}
