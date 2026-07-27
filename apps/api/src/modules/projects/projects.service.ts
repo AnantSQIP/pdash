@@ -9,7 +9,7 @@ import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
-import { CreateProjectDto, UpdateProjectDto, ApprovalDto } from './dto';
+import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
@@ -507,14 +507,14 @@ export class ProjectsService {
     const rows = await this.prisma.pidRequest.findMany({
       where: { organizationId, assigneeId: userId, status: 'PENDING' },
       orderBy: { createdAt: 'asc' },
-      // NOTE: the PID reviewer may NOT see the project TYPE or the project MANAGER — those are
-      // the requester's decisions, deliberately withheld from the reviewer. Everything else is
-      // shown so they can verify/correct it before assigning the PID.
+      // The reviewer sees + edits everything they may set on the requester's behalf, including
+      // the project TYPE and the project MANAGER, before assigning the PID.
       include: {
         project: {
           select: {
-            id: true, title: true, description: true, priority: true,
+            id: true, title: true, description: true, projectType: true, priority: true,
             startDate: true, dueDate: true,
+            members: { where: { projectRole: 'MANAGER', isActive: true }, select: { userId: true } },
           },
         },
       },
@@ -529,6 +529,8 @@ export class ProjectsService {
       projectId: r.projectId,
       projectTitle: r.project.title,
       description: r.project.description,
+      projectType: r.project.projectType,
+      managerId: r.project.members[0]?.userId ?? null,
       priority: r.project.priority,
       startDate: r.project.startDate,
       dueDate: r.project.dueDate,
@@ -543,7 +545,7 @@ export class ProjectsService {
    * before assigning the PID. Access is via the request (assignee), not project membership —
    * the authority is deliberately not a member. Only a PENDING request's project is editable.
    */
-  async editPidRequestProject(organizationId: string, userId: string, requestId: string, dto: UpdateProjectDto) {
+  async editPidRequestProject(organizationId: string, userId: string, requestId: string, dto: ReviewPidProjectDto) {
     const req = await this.prisma.pidRequest.findFirst({
       where: { id: requestId, organizationId },
       select: { id: true, projectId: true, assigneeId: true, status: true },
@@ -565,16 +567,42 @@ export class ProjectsService {
       throw new BadRequestException('Due date cannot be before the start date.');
     }
 
+    // The reviewer may set the project TYPE (rejecting a "coming soon" one).
+    if (dto.projectType) {
+      const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
+      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+    }
+
     const updated = await this.prisma.project.update({
       where: { id: req.projectId },
       data: {
         title: dto.title,
         description: dto.description,
         priority: dto.priority,
+        ...(dto.projectType === undefined ? {} : { projectType: dto.projectType || null }),
         ...(startDate === undefined ? {} : { startDate }),
         ...(dueDate === undefined ? {} : { dueDate }),
       },
     });
+
+    // The reviewer may (re)assign the project MANAGER: demote the current one, promote the chosen
+    // person (added as an active member if not already on the project).
+    if (dto.managerId) {
+      const mgr = await this.prisma.user.findFirst({
+        where: { id: dto.managerId, organizationId, deletedAt: null, status: 'ACTIVE' }, select: { id: true },
+      });
+      if (!mgr) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
+      await this.prisma.projectMember.updateMany({
+        where: { projectId: req.projectId, projectRole: 'MANAGER', userId: { not: dto.managerId } },
+        data: { projectRole: 'MEMBER' },
+      });
+      await this.prisma.projectMember.upsert({
+        where: { projectId_userId: { projectId: req.projectId, userId: dto.managerId } },
+        update: { projectRole: 'MANAGER', isActive: true },
+        create: { projectId: req.projectId, userId: dto.managerId, projectRole: 'MANAGER' },
+      });
+    }
+
     await this.events.emit({
       action: EVENTS.PROJECT_UPDATED, entityType: 'PROJECT', entityId: req.projectId,
       metadata: { via: 'pid-review', title: updated.title },

@@ -157,6 +157,46 @@ export class UpdateProjectDto {
   completionPercentage?: number;
 }
 
+// The PID reviewer's edit — everything they may verify/correct before attaching the PID,
+// INCLUDING the project type and the project manager (which they set on the requester's behalf).
+export class ReviewPidProjectDto {
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
+  @MaxLength(100)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+
+  @IsOptional()
+  @IsIn(PROJECT_PRIORITIES)
+  priority?: string;
+
+  /** The project type — the reviewer picks it (drives the auto-created task template). */
+  @IsOptional()
+  @IsIn(PROJECT_TYPE_VALUES)
+  projectType?: string;
+
+  /** The project manager (userId) — the reviewer assigns the owner. */
+  @IsOptional()
+  @IsString()
+  managerId?: string;
+
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  dueDate?: string | null;
+}
+
 export class FulfillPidDto {
   @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))

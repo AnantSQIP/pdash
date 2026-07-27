@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, UpdateProjectDto } from './dto';
+import { ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -83,7 +83,7 @@ export class ProjectsController {
 
   /** Verify/edit the pending project's details before assigning its PID (assignee-gated). */
   @Patch('pid-requests/:id/project') @RequirePermission('project.generate_pid')
-  async editPidRequestProject(@Param('id') id: string, @Body() dto: UpdateProjectDto) {
+  async editPidRequestProject(@Param('id') id: string, @Body() dto: ReviewPidProjectDto) {
     return this.projects.editPidRequestProject(
       await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto,
     );
