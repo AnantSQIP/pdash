@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { TasksService } from './tasks.service';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateTaskDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 @Controller('tasks')
@@ -41,6 +41,12 @@ export class TasksController {
   @Put(':id/assignees') @RequirePermission('task.assign')
   setAssignees(@Param('id') id: string, @Body() dto: SetAssigneesDto) {
     return this.tasks.setAssignees(id, dto);
+  }
+
+  /** Role-based staffing (PM/Reviewer/Analyst + per-person hours). */
+  @Put(':id/staffing') @RequirePermission('task.assign')
+  setStaffing(@Param('id') id: string, @Body() dto: SetStaffingDto) {
+    return this.tasks.setStaffing(id, dto);
   }
 
   @Delete(':id') @RequirePermission('task.delete')

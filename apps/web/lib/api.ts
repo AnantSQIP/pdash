@@ -173,10 +173,14 @@ export type WorkflowStatus = {
 
 // The assignee projection the API actually returns (see tasks.service taskInclude):
 // a join-row userId plus a lightweight user (NOT a full UserSummary — no email/status).
+export type TaskRole = 'PM' | 'REVIEWER' | 'ANALYST';
 export type AssigneeRef = {
   userId: string;
+  role?: TaskRole | null;
+  estimatedHours?: number | null;
   user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'>;
 };
+export type StaffingEntry = { userId: string; role: TaskRole; estimatedHours: number };
 
 export type Subtask = {
   id: string; taskId: string; title: string; status: string; priority: string;
@@ -211,8 +215,18 @@ export type ProjectTypeDef = {
   comingSoon?: boolean; taskListName?: string; tasks?: string[];
 };
 
+export type PidLedgerEntry = {
+  id: string; pid: string; fyLabel: string; serial: number;
+  status: 'RESERVED' | 'ATTACHED' | 'RELEASED' | 'EXPIRED' | 'DISCONTINUED';
+  generatedBy: string;
+  project: { id: string; title: string; phase: string | null } | null;
+  createdAt: string; expiresAt: string; resolvedAt: string | null;
+};
+
 export type PidRequestItem = {
   id: string; projectId: string; projectTitle: string; projectType: string | null;
+  description?: string | null; priority?: string | null;
+  startDate?: string | null; dueDate?: string | null; manager?: string | null;
   requestedBy: string; note: string | null; createdAt: string;
 };
 
@@ -753,14 +767,26 @@ export const api = {
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
       pid?: string; pidAssigneeId?: string;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
-    /** Mint a Project ID on demand (Generate PID). Authority only. */
-    generatePid: () => req<{ pid: string }>('/projects/generate-pid', { method: 'POST' }),
+    /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
+    generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string; releaseUntil?: string }>('/projects/generate-pid', { method: 'POST' }),
+    /** Give an un-attached PID back to the system (within 1 min). */
+    releasePid: () => req<{ released: boolean; discontinued: boolean; pid: string }>('/projects/release-pid', { method: 'POST' }),
+    /** My current un-attached PID (countdown), or null. */
+    myPidReservation: () => req<{ reservation: { pid: string; createdAt: string; expiresAt: string; releaseUntil: string } | null }>('/projects/pid-reservation'),
+    /** The full PID ledger (working / discontinued / history). Admin + Super Admin only. */
+    pidLedger: () => req<PidLedgerEntry[]>('/projects/pid-ledger'),
+    /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */
+    attachPid: (id: string, pid?: string) =>
+      req<{ pid: string; projectId: string }>(`/projects/${id}/attach-pid`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
     /** People who can assign a PID — the request dropdown for non-authorities. */
     pidAuthorities: () =>
       req<Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>[]>(
         '/projects/pid-authorities'),
     /** My incoming PID requests, as an authority. */
     pidRequests: () => req<PidRequestItem[]>('/projects/pid-requests'),
+    /** Verify/edit a pending-request project's details before assigning its PID (assignee-gated). */
+    editPidRequestProject: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'startDate' | 'dueDate'>>) =>
+      req<ApiProject>(`/projects/pid-requests/${id}/project`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Assign a PID to a pending-request project. */
     fulfillPidRequest: (id: string, pid: string) =>
       req<{ pid: string; projectId: string }>(`/projects/pid-requests/${id}/fulfill`,
@@ -859,6 +885,9 @@ export const api = {
       req<ApiTask>(`/tasks/${id}/status`, { method: 'PUT', body: JSON.stringify({ statusId }) }),
     setAssignees: (id: string, assigneeIds: string[]) =>
       req<ApiTask>(`/tasks/${id}/assignees`, { method: 'PUT', body: JSON.stringify({ assigneeIds }) }),
+    /** Role-based staffing (PM/Reviewer/Analyst + per-person hours). */
+    setStaffing: (id: string, assignees: StaffingEntry[]) =>
+      req<ApiTask>(`/tasks/${id}/staffing`, { method: 'PUT', body: JSON.stringify({ assignees }) }),
     delete: (id: string) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),
     createSubtask: (taskId: string, data: { title: string; priority?: string; dueDate?: string; assigneeIds?: string[] }) =>
       req<Subtask>(`/tasks/${taskId}/subtasks`, { method: 'POST', body: JSON.stringify(data) }),

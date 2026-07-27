@@ -3,11 +3,12 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { Plus, LayoutGrid, List, Filter, Search, KeyRound, Copy, Check, Inbox } from 'lucide-react';
+import { Plus, LayoutGrid, List, Filter, Search, KeyRound, Copy, Check, Inbox, ScrollText } from 'lucide-react';
 import clsx from 'clsx';
 import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
+import { PidLedgerModal } from '@/components/projects/PidLedgerModal';
 import { PHASE_META, PRIORITY_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -87,6 +88,7 @@ export function ProjectsClient() {
   const [phase, setPhase] = useState<Phase | 'ALL'>('ALL');
   const [showModal, setShowModal] = useState(false);
   const [showPidRequests, setShowPidRequests] = useState(false);
+  const [showLedger, setShowLedger] = useState(false);
   const [pidCopied, setPidCopied] = useState('');
   const [generating, setGenerating] = useState(false);
   const [search, setSearch] = useState('');
@@ -200,6 +202,16 @@ export function ProjectsClient() {
               </button>
             </>
           )}
+          {can('user.manage_access') && (
+            <button
+              onClick={() => setShowLedger(true)}
+              title="Project ID ledger — working, discontinued & history"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <ScrollText size={15} />
+              <span className="hidden sm:inline">PID Ledger</span>
+            </button>
+          )}
           {can('project.create') && (
             <button
               onClick={() => setShowModal(true)}
@@ -308,6 +320,8 @@ export function ProjectsClient() {
           onAssigned={invalidate}
         />
       )}
+
+      {showLedger && <PidLedgerModal onClose={() => setShowLedger(false)} />}
     </div>
   );
 }

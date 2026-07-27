@@ -601,6 +601,37 @@ model PidRequest {
   @@map("pid_request")
 }
 
+// Every Project ID an authority generates. The lifecycle enforces the 5-minute allocation
+// window, the "one un-attached PID per user" rule, serial reclaim vs. discontinuation, and
+// the discontinue-on-close rule — with a full, auditable history for admins.
+//
+// status:
+//   RESERVED     — generated, un-attached, inside the 5-min window (blocks the serial + the user)
+//   ATTACHED     — attached to a project (a "working" PID; blocks the serial)
+//   RELEASED     — manually given back within 1 min; serial is RECLAIMABLE (reused next)
+//   EXPIRED      — auto-expired after 5 min unattached; serial is RECLAIMABLE
+//   DISCONTINUED — permanently retired (a higher serial was live at release/expiry, OR its
+//                  attached project was closed); the serial is NEVER reused (a permanent gap)
+model PidReservation {
+  id             String    @id @default(cuid())
+  organizationId String
+  fyLabel        String
+  serial         Int
+  pid            String
+  generatedById  String
+  status         String    @default("RESERVED")
+  projectId      String?
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  resolvedAt     DateTime?
+
+  @@unique([organizationId, pid])
+  @@index([organizationId, fyLabel, status])
+  @@index([generatedById, status])
+  @@index([projectId])
+  @@map("pid_reservation")
+}
+
 model ProjectMember {
   id          String   @id @default(cuid())
   projectId   String
@@ -717,6 +748,11 @@ model TaskAssignee {
   id     String @id @default(cuid())
   taskId String
   userId String
+  // Role on this task: PM (one) | REVIEWER (many) | ANALYST (many). Null = a legacy plain assignee.
+  role   String?
+  // Per-person estimated hours. Mandatory for the new role-based staffing; the task's total
+  // estimated hours is the SUM of these across everyone assigned.
+  estimatedHours Float?
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

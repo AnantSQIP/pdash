@@ -6,7 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw,
+  CheckCircle2, Archive, RotateCcw, KeyRound,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -51,6 +51,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [showAddTask, setShowAddTask] = useState(false);
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
+  const [attachingPid, setAttachingPid] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
 
@@ -127,6 +128,22 @@ export function ProjectDetailClient({ projectId }: Props) {
     qc.invalidateQueries({ queryKey: ['tasks-me'] });
     qc.invalidateQueries({ queryKey: ['analytics-dashboard'] });
     qc.invalidateQueries({ queryKey: ['activity'] }); // L29: refresh activity feeds after a change
+  }
+
+  // A reopened (or otherwise pending) project needs a fresh PID — an authority attaches one
+  // (auto-assigned from the next free serial). The old PID stayed discontinued on close.
+  async function handleAttachPid() {
+    setAttachingPid(true);
+    try {
+      const r = await api.projects.attachPid(projectId);
+      toast(`Project ID ${r.pid} attached`, 'success');
+      qc.invalidateQueries({ queryKey: ['project', projectId] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not attach a Project ID', 'error');
+    } finally {
+      setAttachingPid(false);
+    }
   }
 
   async function handleMove(taskId: string, statusId: string) {
@@ -244,9 +261,21 @@ export function ProjectDetailClient({ projectId }: Props) {
                     {project.code}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 font-mono ring-1 ring-amber-200" title="A PID authority will assign the Project ID">
-                    PID pending
-                  </span>
+                  <>
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 font-mono ring-1 ring-amber-200" title="A PID authority will assign the Project ID">
+                      PID pending
+                    </span>
+                    {can('project.generate_pid') && (
+                      <button
+                        onClick={handleAttachPid}
+                        disabled={attachingPid}
+                        title="Attach a fresh Project ID to this project"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-brand-700 border border-brand-200 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 transition-colors"
+                      >
+                        <KeyRound size={12} /> {attachingPid ? 'Attaching…' : 'Attach PID'}
+                      </button>
+                    )}
+                  </>
                 )}
                 {typeLabel && (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-brand-50 text-brand-700 ring-1 ring-brand-100">

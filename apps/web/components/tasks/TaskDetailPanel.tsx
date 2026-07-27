@@ -17,8 +17,11 @@ import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeIds, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate, toUtcDay, isPastDue, formatDateTimeIST } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
+import { TaskStaffing } from './TaskStaffing';
 
-type PanelTab = 'details' | 'assignees' | 'subtasks' | 'comments' | 'activity';
+// 'staffing' replaces the old 'assignees' tab. 'subtasks' | 'comments' | 'activity' remain in the
+// type (their code below is preserved) but are hidden from the tab bar per the new task flow.
+type PanelTab = 'details' | 'staffing' | 'assignees' | 'subtasks' | 'comments' | 'activity';
 
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 
@@ -426,12 +429,11 @@ function TaskDetailPanelInner({
   const toggleAssignee = (userId: string) =>
     commitAssignees(assigneeIds.includes(userId) ? assigneeIds.filter(x => x !== userId) : [...assigneeIds, userId]);
 
+  // New task flow: Details + Staffing only. Subtasks / Comments / Activity are intentionally
+  // hidden (their code is preserved below but unreachable).
   const TABS: { key: PanelTab; label: string }[] = [
     { key: 'details', label: 'Details' },
-    { key: 'assignees', label: `Assignees${assigneeIds.length > 0 ? ` (${assigneeIds.length})` : ''}` },
-    { key: 'subtasks', label: `Subtasks${subtasks.length > 0 ? ` (${subtasks.length})` : ''}` },
-    { key: 'comments', label: `Comments${comments.length > 0 ? ` (${comments.length})` : ''}` },
-    { key: 'activity', label: 'Activity' },
+    { key: 'staffing', label: 'Staffing' },
   ];
 
   return (
@@ -441,7 +443,7 @@ function TaskDetailPanelInner({
       aria-modal="true"
       aria-label={`Task: ${title}`}
       tabIndex={-1}
-      className="fixed inset-y-0 right-0 w-full sm:w-[480px] bg-white shadow-2xl border-l border-gray-200 z-50 flex flex-col focus:outline-none"
+      className="fixed inset-0 bg-white z-50 flex flex-col focus:outline-none"
     >
 
       {/* ── HEADER ──────────────────────────────────────────────── */}
@@ -712,7 +714,14 @@ function TaskDetailPanelInner({
           </div>
         )}
 
-        {/* ── ASSIGNEES ───────────────────────────────────────────── */}
+        {/* ── STAFFING (PM / Reviewers / Analysts + per-person hours) ── */}
+        {panelTab === 'staffing' && (
+          <div className="px-4 sm:px-6 py-5">
+            <TaskStaffing task={task} readOnly={readOnly} canAssign={canAssign} onSaved={u => emitUpdated(task.id, u)} />
+          </div>
+        )}
+
+        {/* ── ASSIGNEES (legacy — hidden; preserved) ─────────────────── */}
         {panelTab === 'assignees' && (
           <div className="px-4 sm:px-6 py-5 space-y-4">
             {/* Assigned by — who delegated the task (distinct from the assignees below). */}

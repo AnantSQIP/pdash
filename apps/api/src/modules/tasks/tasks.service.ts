@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateTaskDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
@@ -414,6 +414,55 @@ export class TasksService {
     return this.get(id);
   }
 
+  /**
+   * Role-based staffing: replace a task's people with { userId, role (PM|REVIEWER|ANALYST),
+   * estimatedHours } entries. At most one PM; hours are mandatory per person; the task's total
+   * estimatedHours becomes the SUM. Auto-adds not-yet-members (like setAssignees).
+   */
+  async setStaffing(id: string, dto: SetStaffingDto) {
+    await this.access.assertTaskAccess(getActorId(), id);
+    await this.access.assertTaskWritable(id);
+    const before = await this.getRaw(id);
+
+    const entries = dto.assignees ?? [];
+    // One person per row (dedupe by userId — the unique(taskId,userId) would otherwise reject it).
+    const seen = new Set<string>();
+    for (const e of entries) {
+      if (seen.has(e.userId)) throw new BadRequestException('The same person can only be added once.');
+      seen.add(e.userId);
+      if (!(e.estimatedHours > 0)) throw new BadRequestException('Estimated hours are required for every person on the task.');
+    }
+    if (entries.filter(e => e.role === 'PM').length > 1) {
+      throw new BadRequestException('A task can have only one Project Manager.');
+    }
+
+    await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), entries.map(e => e.userId));
+    const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
+    const totalHours = entries.reduce((s, e) => s + e.estimatedHours, 0);
+    const assignedById = entries.length ? (getActorId() ?? null) : null;
+
+    await this.prisma.$transaction([
+      this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
+      this.prisma.taskAssignee.createMany({
+        data: entries.map(e => ({ taskId: id, userId: e.userId, role: e.role, estimatedHours: e.estimatedHours })),
+        skipDuplicates: true,
+      }),
+      // The task's estimate is the sum of the per-person hours (drives the capacity board).
+      this.prisma.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } }),
+    ]);
+
+    const added = entries.map(e => e.userId).filter(uid => !prev.has(uid));
+    await this.notifications.notify(added, {
+      type: 'task.assigned', title: 'New task assigned',
+      message: `You were assigned to "${before.title}".`,
+    });
+    await this.events.emit({
+      action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: id,
+      metadata: { projectId: (before as any).projectTasks?.[0]?.projectId, title: before.title, added, staffing: true },
+    });
+    return this.get(id);
+  }
+
   async softDelete(id: string) {
     await this.access.assertTaskAccess(getActorId(), id);
     await this.access.assertTaskWritable(id); // no deleting a completed/closed matter's tasks
@@ -552,7 +601,7 @@ export class TasksService {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
-        select: { userId: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
+        select: { userId: true, role: true, estimatedHours: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
@@ -572,7 +621,7 @@ export class TasksService {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
-        select: { userId: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
+        select: { userId: true, role: true, estimatedHours: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
