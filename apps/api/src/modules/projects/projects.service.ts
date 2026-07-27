@@ -351,10 +351,18 @@ export class ProjectsService {
   }
 
   /** DESTROY reservations generated but not attached within the 5-min window — the row is deleted
-   *  so there is NO track of the number. The series reclaims the serial only if it was the tail. */
+   *  so there is NO track of the number. The series reclaims the serial only if it was the tail.
+   *  Also cleans up any legacy EXPIRED/RELEASED rows from the previous model (they left a "track"
+   *  that no longer belongs and would break the ledger's status map). */
   private async sweepExpired(organizationId?: string): Promise<void> {
     await this.prisma.pidReservation.deleteMany({
-      where: { status: 'RESERVED', expiresAt: { lt: new Date() }, ...(organizationId ? { organizationId } : {}) },
+      where: {
+        OR: [
+          { status: 'RESERVED', expiresAt: { lt: new Date() } },
+          { status: { in: ['EXPIRED', 'RELEASED'] } },
+        ],
+        ...(organizationId ? { organizationId } : {}),
+      },
     });
   }
 
@@ -467,9 +475,9 @@ export class ProjectsService {
 
   /** Admin/Super-Admin PID ledger: every reservation with its status + project + person. */
   async allReservations(organizationId: string) {
-    await this.sweepExpired(organizationId);
+    await this.sweepExpired(organizationId); // destroys expired + any legacy EXPIRED/RELEASED rows
     const rows = await this.prisma.pidReservation.findMany({
-      where: { organizationId },
+      where: { organizationId, status: { in: ['RESERVED', 'ATTACHED', 'DISCONTINUED'] } },
       orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
       take: 1000,
     });

@@ -85,7 +85,9 @@ export function PidLedgerModal({ onClose }: { onClose: () => void }) {
                     <tr><td colSpan={6} className="px-3 py-10 text-center text-sm text-gray-400">No Project IDs in this view yet.</td></tr>
                   )}
                   {filtered.map(r => {
-                    const meta = STATUS_META[r.status];
+                    // Fall back for any unmapped/legacy status so the ledger can never crash on it.
+                    const meta = STATUS_META[r.status]
+                      ?? { label: r.status ? r.status.charAt(0) + r.status.slice(1).toLowerCase() : 'Unknown', cls: 'bg-gray-100 text-gray-500' };
                     return (
                       <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-3 py-2.5 text-xs font-mono font-medium text-gray-800 whitespace-nowrap">{r.pid}</td>
