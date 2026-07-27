@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check } from 'lucide-react';
+import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock, Undo2 } from 'lucide-react';
 import clsx from 'clsx';
 
 import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@/lib/api';
@@ -37,11 +37,37 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [dueDate, setDueDate] = useState('');
   const [clientDueDate, setClientDueDate] = useState('');
   const [pidAssigneeId, setPidAssigneeId] = useState('');
+  const [managerId, setManagerId] = useState('');
   const [pid, setPid] = useState('');
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);   // reservation countdown
+  const [releaseUntil, setReleaseUntil] = useState<string | null>(null); // 1-min give-back window
+  const [now, setNow] = useState(() => Date.now());
   const [generating, setGenerating] = useState(false);
+  const [releasing, setReleasing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Restore an outstanding (un-attached) reservation when the modal opens, so its countdown
+  // continues and the authority isn't blocked from creating without a clue why.
+  useEffect(() => {
+    if (!canGeneratePid) return;
+    api.projects.myPidReservation().then(r => {
+      if (r.reservation) { setPid(r.reservation.pid); setExpiresAt(r.reservation.expiresAt); setReleaseUntil(r.reservation.releaseUntil); }
+    }).catch(() => { /* ignore */ });
+  }, [canGeneratePid]);
+
+  // Tick the countdown; clear a reservation that has expired (the server will have expired it too).
+  useEffect(() => {
+    if (!expiresAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
+  const secsLeft = expiresAt ? Math.max(0, Math.round((new Date(expiresAt).getTime() - now) / 1000)) : 0;
+  const canRelease = !!releaseUntil && now < new Date(releaseUntil).getTime();
+  useEffect(() => {
+    if (expiresAt && secsLeft === 0) { setPid(''); setExpiresAt(null); setReleaseUntil(null); }
+  }, [expiresAt, secsLeft]);
 
   // The people who can assign a PID — the request dropdown for non-authorities.
   const { data: authorities = [] } = useQuery({
@@ -55,16 +81,41 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     [authorities, currentUser],
   );
 
+  // The people a requester may nominate as Project Manager — equal-or-higher seniority than
+  // them, alphabetical, self excluded (all enforced server-side). Separate from PID authority.
+  const { data: managers = [] } = useQuery({
+    queryKey: ['eligible-managers', org?.id],
+    queryFn: () => api.projects.eligibleManagers(),
+    enabled: !!org?.id && !canGeneratePid,
+    staleTime: 5 * 60_000,
+  });
+
   async function generatePid() {
     setGenerating(true); setError('');
     try {
       const res = await api.projects.generatePid();
       setPid(res.pid);
+      setExpiresAt(res.expiresAt ?? null);
+      setReleaseUntil(res.releaseUntil ?? null);
+      setNow(Date.now());
       try { await navigator.clipboard.writeText(res.pid); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* clipboard blocked */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate a PID.');
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function releasePid() {
+    setReleasing(true); setError('');
+    try {
+      const r = await api.projects.releasePid();
+      setPid(''); setExpiresAt(null); setReleaseUntil(null);
+      if (r.discontinued) setError(`PID ${r.pid} was discontinued (a newer PID was already in use). Generate a new one.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not release the PID.');
+    } finally {
+      setReleasing(false);
     }
   }
 
@@ -94,6 +145,10 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canGeneratePid && !managerId) {
+      setError('Select a Project Manager for this project.');
+      return;
+    }
     if (!canGeneratePid && !pidAssigneeId) {
       setError('Choose who should assign the Project ID (PID).');
       return;
@@ -111,6 +166,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         dueDate: dueDate || undefined,
         clientDueDate: (canSetClientDue && clientDueDate) ? clientDueDate : undefined,
         pid: canGeneratePid && pid ? pid : undefined,
+        managerId: !canGeneratePid ? managerId : undefined,
         pidAssigneeId: !canGeneratePid ? pidAssigneeId : undefined,
         createdBy,
       });
@@ -166,7 +222,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                     <p className="text-sm font-medium text-brand-800">Project ID (PID)</p>
                     {pid
                       ? <p className="text-sm font-semibold text-brand-700 font-mono truncate">{pid}</p>
-                      : <p className="text-[11px] text-gray-500">Generate one (copied to your clipboard), or leave blank to auto-assign.</p>}
+                      : <p className="text-[11px] text-gray-500">Generate one (reserved for 5 min), or leave blank to auto-assign on create.</p>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -177,13 +233,28 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                       {copied ? <Check size={14} /> : <Copy size={14} />}
                     </button>
                   )}
-                  <button type="button" onClick={generatePid} disabled={generating}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-                    <RefreshCw size={13} className={generating ? 'animate-spin' : ''} />
-                    {pid ? 'Regenerate' : 'Generate PID'}
-                  </button>
+                  {/* One un-attached PID at a time: while one is reserved, offer only "give it back". */}
+                  {pid && expiresAt ? (
+                    canRelease ? (
+                      <button type="button" onClick={releasePid} disabled={releasing} title="Give this PID back to the system (within 1 min)"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                        <Undo2 size={13} className={releasing ? 'animate-pulse' : ''} /> Give back
+                      </button>
+                    ) : null
+                  ) : (
+                    <button type="button" onClick={generatePid} disabled={generating}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                      <RefreshCw size={13} className={generating ? 'animate-spin' : ''} /> Generate PID
+                    </button>
+                  )}
                 </div>
               </div>
+              {pid && expiresAt && (
+                <p className="mt-2 text-[11px] text-amber-700 flex items-center gap-1">
+                  <Clock size={11} /> Reserved — attach it within {Math.floor(secsLeft / 60)}m {String(secsLeft % 60).padStart(2, '0')}s or it’s released automatically.
+                  {canRelease && ' You can still give it back for the next minute.'}
+                </p>
+              )}
             </div>
           )}
 
@@ -287,6 +358,29 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             />
           </div>
 
+          {/* Project Manager — required for a requester; equal-or-higher seniority only. */}
+          {!canGeneratePid && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Project Manager <span className="text-red-500">*</span>
+              </label>
+              <select
+                required
+                value={managerId}
+                onChange={e => setManagerId(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+              >
+                <option value="">Select a project manager…</option>
+                {managers.map(u => (
+                  <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">
+                The senior owner of this project. Only people at your level or above are listed.
+              </p>
+            </div>
+          )}
+
           {/* Request PID from — required for a requester without PID authority. */}
           {!canGeneratePid && (
             <div>
@@ -377,7 +471,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </button>
             <button
               type="submit"
-              disabled={loading || !title.trim() || !projectType || (!canGeneratePid && !pidAssigneeId)}
+              disabled={loading || !title.trim() || !projectType || (!canGeneratePid && (!managerId || !pidAssigneeId))}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (

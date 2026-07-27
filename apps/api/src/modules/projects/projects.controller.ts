@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { ApprovalDto, CreateProjectDto, FulfillPidDto, UpdateProjectDto } from './dto';
+import { ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -51,10 +51,28 @@ export class ProjectsController {
     return this.projects.nextPid();
   }
 
-  /** Mint a Project ID on demand (the "Generate PID" button). Authority only. */
+  /** Reserve a Project ID (the "Generate PID" button) for 5 minutes. Authority only. */
   @Post('generate-pid') @RequirePermission('project.generate_pid')
   async generatePid() {
-    return this.projects.generatePid(await this.actor.requireOrgId());
+    return this.projects.generatePid(await this.actor.requireOrgId(), this.actor.requireActorId());
+  }
+
+  /** Manually give an un-attached PID back to the system (within 1 min). Authority only. */
+  @Post('release-pid') @RequirePermission('project.generate_pid')
+  async releasePid() {
+    return this.projects.releasePid(await this.actor.requireOrgId(), this.actor.requireActorId());
+  }
+
+  /** My current un-attached PID (for the countdown), or null. Authority only. */
+  @Get('pid-reservation') @RequirePermission('project.generate_pid')
+  async myReservation() {
+    return this.projects.myReservation(await this.actor.requireOrgId(), this.actor.requireActorId());
+  }
+
+  /** The full PID ledger (working / discontinued / history). Admin + Super Admin only. */
+  @Get('pid-ledger') @RequirePermission('user.manage_access')
+  async pidLedger() {
+    return this.projects.allReservations(await this.actor.requireOrgId());
   }
 
   /** People who can assign a PID (project.generate_pid) — the request dropdown. */
@@ -67,6 +85,14 @@ export class ProjectsController {
   @Get('pid-requests') @RequirePermission('project.generate_pid')
   async pidRequests() {
     return this.projects.pidRequestsFor(await this.actor.requireOrgId(), this.actor.requireActorId());
+  }
+
+  /** Verify/edit the pending project's details before assigning its PID (assignee-gated). */
+  @Patch('pid-requests/:id/project') @RequirePermission('project.generate_pid')
+  async editPidRequestProject(@Param('id') id: string, @Body() dto: UpdateProjectDto) {
+    return this.projects.editPidRequestProject(
+      await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto,
+    );
   }
 
   /** Assign a PID to a pending-request project. */
@@ -111,6 +137,14 @@ export class ProjectsController {
   @Post(':id/reopen') @RequirePermission('project.update')
   reopen(@Param('id') id: string) {
     return this.projects.reopen(id);
+  }
+
+  /** Attach a fresh PID to a project that has none (e.g. a reopened one). Authority only. */
+  @Post(':id/attach-pid') @RequirePermission('project.generate_pid')
+  async attachPid(@Param('id') id: string, @Body() dto: AttachPidDto) {
+    return this.projects.attachPidToProject(
+      await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto.pid,
+    );
   }
 
   @Post(':id/approve') @RequirePermission('project.approve')

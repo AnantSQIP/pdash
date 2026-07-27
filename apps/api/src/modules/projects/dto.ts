@@ -52,9 +52,9 @@ export class CreateProjectDto {
   createdBy?: string;
 
   /**
-   * The project manager who owns this project and APPROVES it. Required when the
-   * requester cannot approve projects themselves (e.g. an Employee/intern raising a
-   * project request); defaults to the requester when they can approve.
+   * The Project Manager who OWNS this project (becomes its MANAGER). Required for a requester
+   * WITHOUT project.generate_pid; must be of equal-or-higher seniority than the creator. This is
+   * separate from pidAssigneeId (the PID authority who assigns the Project ID).
    */
   @IsOptional()
   @IsString()
@@ -164,6 +164,16 @@ export class FulfillPidDto {
   @MaxLength(40)
   @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
   pid!: string;
+}
+
+export class AttachPidDto {
+  // Optional: a specific (reserved/typed) PID to attach. Omitted → an auto-assigned serial.
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(40)
+  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
+  pid?: string;
 }
 
 export class ApprovalDto {
