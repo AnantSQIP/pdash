@@ -57,6 +57,17 @@ export function hourIST(now: Date = new Date()): number {
   return Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hour12: false, timeZone: ORG_TZ }).format(now)) % 24;
 }
 
+/** A short date + time-of-day for a real TIMESTAMP, in the org timezone (IST), e.g.
+ *  "25 Jul, 09:05 am". Use for comment/activity timestamps so the whole app reads en-IN/IST. */
+export function formatDateTimeIST(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-IN', {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: ORG_TZ,
+  });
+}
+
 /** Long, human date in the org timezone (IST), e.g. "Friday, 25 July 2026". */
 export function longDateIST(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-IN', {

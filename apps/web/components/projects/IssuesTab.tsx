@@ -6,6 +6,7 @@ import { Plus, AlertTriangle, X, Loader, Trash2, Receipt } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Issue } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 
@@ -87,6 +88,7 @@ function RaiseIssueModal({ projectId, onClose, onSuccess }: {
 
 export default function IssuesTab({ projectId }: { projectId: string }) {
   const { can } = usePermissions();
+  const { toast } = useToast();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -103,8 +105,9 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
   async function deleteIssue(id: string) {
     if (!confirm('Delete this issue and its non-billable time entry?')) return;
     setDeletingId(id);
-    try { await api.issues.delete(id); invalidate(); }
-    catch { /* ignore */ } finally { setDeletingId(null); }
+    try { await api.issues.delete(id); invalidate(); toast('Issue deleted.', 'info'); }
+    catch (e) { toast(e instanceof Error ? e.message : 'Could not delete the issue.', 'error'); }
+    finally { setDeletingId(null); }
   }
 
   const totalHours = issues.reduce((s, i) => s + (i.hours ?? 0), 0);

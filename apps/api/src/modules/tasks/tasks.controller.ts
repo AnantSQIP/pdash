@@ -23,7 +23,7 @@ export class TasksController {
     return [];
   }
 
-  @Get(':id')
+  @Get(':id') @RequirePermission('task.view')
   get(@Param('id') id: string) {
     return this.tasks.get(id);
   }
@@ -55,7 +55,7 @@ export class TasksController {
     return this.tasks.createSubtask(taskId, dto);
   }
 
-  @Get(':id/subtasks')
+  @Get(':id/subtasks') @RequirePermission('task.view')
   listSubtasks(@Param('id') taskId: string) {
     return this.tasks.listSubtasks(taskId);
   }

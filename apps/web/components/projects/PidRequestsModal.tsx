@@ -87,7 +87,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
             onChange={e => setPid(e.target.value.toUpperCase())}
             placeholder="SQ_26_27_001"
             className="w-full pl-8 pr-3 py-2 text-sm font-mono border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
-            onKeyDown={e => { if (e.key === 'Enter' && pid.trim()) assign.mutate(); }}
+            onKeyDown={e => { if (e.key === 'Enter' && pid.trim() && !assign.isPending) assign.mutate(); }}
           />
         </div>
         <button type="button" onClick={generate} disabled={generating} title="Generate a PID"

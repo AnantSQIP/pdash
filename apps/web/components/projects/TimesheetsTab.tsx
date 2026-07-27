@@ -7,6 +7,8 @@ import { Plus, Clock, DollarSign, Users, Trash2, Loader } from 'lucide-react';
 import { api, type Timesheet, type ApiTask, type ApiProject } from '@/lib/api';
 import { LogTimeModal } from './LogTimeModal';
 import { Avatar } from '@/components/Avatar';
+import { useOrg } from '@/lib/org-context';
+import { useToast } from '@/components/ui/Toast';
 
 function fmtHours(h: number): string {
   const whole = Math.floor(h);
@@ -16,6 +18,8 @@ function fmtHours(h: number): string {
 
 export default function TimesheetsTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
+  const { currentUser } = useOrg();
   const [showLogModal, setShowLogModal] = useState(false);
   const [billableFilter, setBillableFilter] = useState<'All' | 'Billable' | 'Non-billable'>('All');
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -51,7 +55,10 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
     try {
       await api.timesheets.delete(id);
       invalidate();
-    } catch {} finally { setDeletingId(null); }
+      toast('Time entry deleted.', 'info');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not delete the time entry.', 'error');
+    } finally { setDeletingId(null); }
   }
 
   const filtered = entries.filter(e => {
@@ -188,16 +195,20 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
                       <span className="text-xs text-gray-500 truncate block" title={entry.notes}>{entry.notes ?? '—'}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => deleteEntry(entry.id)}
-                        disabled={deletingId === entry.id}
-                        className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
-                        title="Delete"
-                      >
-                        {deletingId === entry.id
-                          ? <Loader size={13} className="animate-spin" />
-                          : <Trash2 size={13} />}
-                      </button>
+                      {/* Only your own entries are deletable (the server enforces owner-or-admin);
+                          showing the button on everyone's rows made a colleague's click a silent no-op. */}
+                      {entry.userId === currentUser?.id && (
+                        <button
+                          onClick={() => deleteEntry(entry.id)}
+                          disabled={deletingId === entry.id}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                          title="Delete"
+                        >
+                          {deletingId === entry.id
+                            ? <Loader size={13} className="animate-spin" />
+                            : <Trash2 size={13} />}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

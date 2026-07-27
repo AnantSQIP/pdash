@@ -12,8 +12,11 @@ export const EVENTS = {
   TASK_ASSIGNED: 'task.assigned',
   SUBTASK_CREATED: 'subtask.created',
   SUBTASK_CLOSED: 'subtask.closed',
+  SUBTASK_REOPENED: 'subtask.reopened',
+  SUBTASK_DELETED: 'subtask.deleted',
   // Projects
   PROJECT_CREATED: 'project.created',
+  PROJECT_MEMBER_ADDED: 'project.member_added',
   PROJECT_UPDATED: 'project.updated',
   PROJECT_APPROVED: 'project.approved',
   PROJECT_REJECTED: 'project.rejected',

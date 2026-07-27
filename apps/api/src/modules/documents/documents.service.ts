@@ -186,6 +186,25 @@ export class DocumentsService {
     return { doc: meta, data };
   }
 
+  /**
+   * TRUSTED read for the confidential patents portal ONLY. The generic getContent() hard-refuses
+   * any patent-linked document (crown-jewels never leave via the generic route), which also made
+   * the portal's own passcode-gated download self-refuse. This bypasses ONLY that patent refusal —
+   * the caller (PatentsService, reached only via `patent.manage` + org passcode + org-scoped
+   * patent lookup) has already authorized the read. It performs no other ACL check, so it must
+   * never be wired to a non-patents route.
+   */
+  async getContentForPatentPortal(documentId: string) {
+    const doc = await this.prisma.document.findFirst({
+      where: { id: documentId, deletedAt: null },
+      select: { ...DOC_SELECT, storagePath: true, blob: { select: { data: true } } },
+    });
+    if (!doc || (!doc.storagePath && !doc.blob)) throw new NotFoundException(`Document ${documentId} not found`);
+    const { blob, storagePath, ...meta } = doc;
+    const data = storagePath ? await documentStorage.get(storagePath) : blob!.data;
+    return { doc: meta, data };
+  }
+
   /** Authorize a document read via any of its links; deny if none grant access. */
   private async assertMayRead(
     actorId: string,
@@ -200,8 +219,11 @@ export class DocumentsService {
     },
   ): Promise<void> {
     // Patent documents are the crown jewels — the generic route never serves them; they must
-    // go through the passcode-gated /patents/:id/document/content.
-    const patent = await this.prisma.patent.findFirst({ where: { documentId, deletedAt: null }, select: { id: true } });
+    // go through the passcode-gated /patents/:id/document/content. Match the patent link
+    // regardless of the patent's deleted state: a SOFT-DELETED patent's document must STAY
+    // refused here (previously `deletedAt: null` let a deleted patent's real-number-named PDF
+    // fall back to the uploader/link ACL and be downloaded without the passcode).
+    const patent = await this.prisma.patent.findFirst({ where: { documentId }, select: { id: true } });
     if (patent) throw new ForbiddenException('This document is only available through the confidential patents portal.');
 
     // The uploader may always read their own file (covers abandoned/unattached uploads and an
@@ -244,6 +266,10 @@ export class DocumentsService {
    * Files that arrived as discussion attachments carry source 'discussion'.
    */
   async listForProject(projectId: string) {
+    // Conflict wall: only a member (or an oversight lead in-org) may list a matter's files.
+    // Without this any document.view holder could enumerate another matter's filenames + task
+    // titles by id — and for a patent firm a filename can itself be a confidential real number.
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true } });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 

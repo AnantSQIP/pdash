@@ -65,6 +65,24 @@ export class TasksService {
       if (existing) await this.prisma.projectMember.update({ where: { id: existing.id }, data: { isActive: true } });
       else await this.prisma.projectMember.create({ data: { projectId: primary, userId: uid, projectRole: 'MEMBER' } });
     }
+
+    // GOVERNANCE: auto-adding someone to a matter via assignment grants them FULL project
+    // access (potentially a confidential client matter). That must be auditable and visible —
+    // record a membership event and tell the person they were added — so a silent enrolment
+    // can't happen. Previously the add left no trace and no notice.
+    const project = await this.prisma.project.findUnique({ where: { id: primary }, select: { title: true } });
+    await this.events.emit({
+      action: EVENTS.PROJECT_MEMBER_ADDED,
+      entityType: 'PROJECT',
+      entityId: primary,
+      metadata: { addedUserIds: outsiders, via: 'task-assignment', projectTitle: project?.title },
+    });
+    await this.notifications.notify(outsiders, {
+      type: 'project.member_added',
+      title: 'Added to a project',
+      message: `You were added to "${project?.title ?? 'a project'}" because you were assigned work on it.`,
+      link: `/projects/${primary}`,
+    });
   }
 
   /** Resolve the project(s) a task belongs to (for assignee-membership checks). */
@@ -235,6 +253,7 @@ export class TasksService {
 
   async update(id: string, dto: UpdateTaskDto) {
     await this.access.assertTaskAccess(getActorId(), id);
+    await this.access.assertTaskWritable(id); // no edits on a completed/closed matter's tasks
     const before = await this.getRaw(id);
 
     const internalDue = resolveDate(dto.dueDate, before.dueDate);
@@ -280,14 +299,21 @@ export class TasksService {
    */
   async setStatus(id: string, dto: SetStatusDto) {
     await this.access.assertTaskAccess(getActorId(), id);
+    await this.access.assertTaskWritable(id); // no card moves on a completed/closed matter
     const task = await this.getRaw(id);
 
     const status = await this.prisma.workflowStatus.findUnique({
       where: { id: dto.statusId },
     });
     if (!status) throw new NotFoundException(`WorkflowStatus ${dto.statusId} not found`);
-    // The target status must belong to the task's own workflow.
-    if (task.workflowId && status.workflowId && status.workflowId !== task.workflowId) {
+    // The workflow this task follows. Legacy/seed tasks created before workflowId was
+    // backfilled carry null — adopt the target status's workflow rather than leaving the task
+    // workflow-less. A null workflowId used to DISABLE both guards below, letting a card jump
+    // to any status of any workflow with no membership or edge enforcement.
+    const effectiveWorkflowId = task.workflowId ?? status.workflowId ?? null;
+
+    // The target status must belong to the task's workflow.
+    if (effectiveWorkflowId && status.workflowId && status.workflowId !== effectiveWorkflowId) {
       throw new BadRequestException(`Status ${dto.statusId} does not belong to this task's workflow`);
     }
 
@@ -296,9 +322,9 @@ export class TasksService {
     // transitions configured allow any move (backward-compatible with the current data), so
     // this only tightens things once an admin actually models the workflow.
     const currentStatusId = (task as any).currentWorkflowStatusId ?? null;
-    if (task.workflowId && currentStatusId && currentStatusId !== status.id) {
+    if (effectiveWorkflowId && currentStatusId && currentStatusId !== status.id) {
       const transitions = await this.prisma.workflowTransition.findMany({
-        where: { workflowId: task.workflowId }, select: { fromStatusId: true, toStatusId: true },
+        where: { workflowId: effectiveWorkflowId }, select: { fromStatusId: true, toStatusId: true },
       });
       if (transitions.length &&
           !transitions.some(t => (t.fromStatusId === currentStatusId || t.fromStatusId === null) && t.toStatusId === status.id)) {
@@ -315,6 +341,9 @@ export class TasksService {
         where: { id },
         data: {
           currentWorkflowStatusId: status.id,
+          // Backfill the workflow on a legacy null-workflow task, so its subsequent moves are
+          // edge-enforced instead of unguarded.
+          ...(task.workflowId ? {} : effectiveWorkflowId ? { workflowId: effectiveWorkflowId } : {}),
           completionPercentage: status.type === 'CLOSED'
             ? 100
             : (wasClosed ? 0 : task.completionPercentage),
@@ -323,18 +352,17 @@ export class TasksService {
       });
 
       if (status.type === 'CLOSED') {
+        // A closed task carries no open work — close its still-open subtasks.
         await tx.subtask.updateMany({
-          where: { taskId: id, deletedAt: null },
+          where: { taskId: id, deletedAt: null, status: { not: 'CLOSED' } },
           data: { status: 'CLOSED' },
         });
-      } else if (wasClosed) {
-        // D2: reopening a completed task must reopen its subtasks too — otherwise the
-        // subtask bar stays 100% while the task reads 0%/Open.
-        await tx.subtask.updateMany({
-          where: { taskId: id, deletedAt: null },
-          data: { status: 'OPEN' },
-        });
       }
+      // NOTE: reopening a task does NOT blind-reopen its subtasks. The old cascade reopened
+      // ALL subtasks, destroying the state of ones a person had genuinely completed before the
+      // task was closed. Completed subtask work stays completed; a specific subtask can be
+      // reopened individually. (The subtask bar reading 100% under a reopened task is honest —
+      // the work really was done — not an inconsistency.)
 
       return u;
     });
@@ -354,6 +382,7 @@ export class TasksService {
 
   async setAssignees(id: string, dto: SetAssigneesDto) {
     await this.access.assertTaskAccess(getActorId(), id);
+    await this.access.assertTaskWritable(id); // no reassigning (or auto-adding members) on a closed matter
     const before = await this.getRaw(id);
     // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
     await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), dto.assigneeIds);
@@ -387,6 +416,7 @@ export class TasksService {
 
   async softDelete(id: string) {
     await this.access.assertTaskAccess(getActorId(), id);
+    await this.access.assertTaskWritable(id); // no deleting a completed/closed matter's tasks
     const task = await this.getRaw(id);
     const result = await this.prisma.task.update({
       where: { id },
@@ -433,7 +463,13 @@ export class TasksService {
 
   async createSubtask(taskId: string, dto: CreateSubtaskDto) {
     await this.access.assertTaskAccess(getActorId(), taskId);
-    await this.getRaw(taskId);
+    await this.access.assertTaskWritable(taskId); // no new subtasks on a completed/closed matter
+    const parent = await this.getRaw(taskId);
+    // Don't hang open work off a completed task — reopen it first. Otherwise a CLOSED task
+    // silently carries an OPEN subtask (the close cascade only runs at close-time).
+    if ((parent as any).currentStatus?.type === 'CLOSED') {
+      throw new BadRequestException('This task is complete — reopen it before adding subtasks.');
+    }
     await this.ensureAssigneesAreMembers(await this.projectIdsForTask(taskId), dto.assigneeIds ?? []);
     const subtask = await this.prisma.subtask.create({
       data: {
@@ -466,8 +502,11 @@ export class TasksService {
     });
   }
 
-  /** Fetch a subtask, asserting it really belongs to the parent task named in the URL. */
+  /** Fetch a subtask, asserting it really belongs to the parent task named in the URL and that
+   *  the parent task itself is live (not soft-deleted). */
   private async getSubtaskOfParent(parentTaskId: string, subtaskId: string) {
+    const parent = await this.prisma.task.findFirst({ where: { id: parentTaskId, deletedAt: null }, select: { id: true } });
+    if (!parent) throw new NotFoundException(`Task ${parentTaskId} not found`);
     const subtask = await this.prisma.subtask.findFirst({ where: { id: subtaskId, deletedAt: null } });
     if (!subtask || subtask.taskId !== parentTaskId) throw new NotFoundException(`Subtask ${subtaskId} not found`);
     await this.access.assertTaskAccess(getActorId(), subtask.taskId);
@@ -475,19 +514,37 @@ export class TasksService {
   }
 
   async closeSubtask(parentTaskId: string, subtaskId: string) {
-    await this.getSubtaskOfParent(parentTaskId, subtaskId);
-    return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'CLOSED' } });
+    const subtask = await this.getSubtaskOfParent(parentTaskId, subtaskId);
+    await this.access.assertTaskWritable(parentTaskId); // no subtask changes on a completed/closed matter
+    const updated = await this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'CLOSED' } });
+    await this.events.emit({
+      action: EVENTS.SUBTASK_CLOSED, entityType: 'SUBTASK', entityId: subtaskId,
+      metadata: { taskId: parentTaskId, title: subtask.title },
+    });
+    return updated;
   }
 
   /** Reopen a closed subtask (there was previously no way back once closed / after a parent-close cascade). */
   async reopenSubtask(parentTaskId: string, subtaskId: string) {
-    await this.getSubtaskOfParent(parentTaskId, subtaskId);
-    return this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'OPEN' } });
+    const subtask = await this.getSubtaskOfParent(parentTaskId, subtaskId);
+    await this.access.assertTaskWritable(parentTaskId);
+    const updated = await this.prisma.subtask.update({ where: { id: subtaskId }, data: { status: 'OPEN' } });
+    await this.events.emit({
+      action: EVENTS.SUBTASK_REOPENED, entityType: 'SUBTASK', entityId: subtaskId,
+      metadata: { taskId: parentTaskId, title: subtask.title },
+    });
+    return updated;
   }
 
   async softDeleteSubtask(parentTaskId: string, subtaskId: string) {
-    await this.getSubtaskOfParent(parentTaskId, subtaskId);
-    return this.prisma.subtask.update({ where: { id: subtaskId }, data: { deletedAt: new Date() } });
+    const subtask = await this.getSubtaskOfParent(parentTaskId, subtaskId);
+    await this.access.assertTaskWritable(parentTaskId);
+    const deleted = await this.prisma.subtask.update({ where: { id: subtaskId }, data: { deletedAt: new Date() } });
+    await this.events.emit({
+      action: EVENTS.SUBTASK_DELETED, entityType: 'SUBTASK', entityId: subtaskId,
+      metadata: { taskId: parentTaskId, title: subtask.title },
+    });
+    return deleted;
   }
 
   private taskInclude() {

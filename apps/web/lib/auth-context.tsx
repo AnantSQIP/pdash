@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useCallback, useMemo, useEffect, ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type AuthUser } from './api';
+import { api, clearPasscodeCache, type AuthUser } from './api';
 
 type Result = { ok: boolean; error?: string };
 
@@ -55,6 +55,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try { await api.auth.logout(); } catch { /* ignore */ }
     try { localStorage.removeItem(IDLE_KEY); } catch { /* storage blocked */ }
+    // Drop the in-memory org passcode so the next user on this browser can't inherit it (the
+    // patents reveal / doc-download step-up was reusable across a soft logout→login otherwise).
+    clearPasscodeCache();
     qc.clear();
     qc.setQueryData(['auth-me'], null);
   }, [qc]);

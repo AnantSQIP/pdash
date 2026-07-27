@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayNotEmpty, IsArray, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class CreateClientDto {
@@ -44,7 +44,9 @@ export class RegisterPatentsDto {
   // Pat_<code>_<serial> handle. Blank entries are dropped server-side.
   @IsArray()
   @ArrayNotEmpty()
+  @ArrayMaxSize(500)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   realNumbers!: string[];
 }
 

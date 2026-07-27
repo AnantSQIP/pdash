@@ -65,7 +65,9 @@ export default function PatentsPortalPage() {
     onError: e => setErr(msg(e)),
   });
   const register = useMutation({
-    mutationFn: () => api.patents.register({ clientId: selected!, realNumbers: numbersText.split(/[\n,]/).map(s => s.trim()).filter(Boolean) }),
+    // Split on NEWLINES only — a comma is a legal thousands-separator in a patent number
+    // ("US 9,876,543 B2"), so splitting on it shredded one number into junk rows. One per line.
+    mutationFn: () => api.patents.register({ clientId: selected!, realNumbers: numbersText.split(/\n/).map(s => s.trim()).filter(Boolean) }),
     onSuccess: () => { setNumbersText(''); setErr(''); qc.invalidateQueries({ queryKey: ['patents', selected] }); qc.invalidateQueries({ queryKey: ['clients'] }); },
     onError: e => setErr(msg(e)),
   });
@@ -286,13 +288,16 @@ export default function PatentsPortalPage() {
                     </span>
                     {/* Attached patent document (PDF/media) — view + attach/replace */}
                     <span className="shrink-0 flex items-center gap-1">
-                      {p.documentName && (
-                        <button type="button" onClick={() => openDoc(p.id)} title={p.documentName}
-                          className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline max-w-[130px]">
-                          <FileText size={13} className="shrink-0" /> <span className="truncate">{p.documentName}</span>
+                      {/* Show a generic "Document" link (never the filename — an upload's filename
+                          is the confidential real number and must not appear on this passcode-free
+                          list). The bytes come from the passcode-gated document route by patent id. */}
+                      {p.documentId && (
+                        <button type="button" onClick={() => openDoc(p.id)} title="View document (passcode required)"
+                          className="inline-flex items-center gap-1 text-xs text-brand-600 hover:underline">
+                          <FileText size={13} className="shrink-0" /> <span>Document</span>
                         </button>
                       )}
-                      <label title={p.documentName ? 'Replace document' : 'Attach PDF/media'}
+                      <label title={p.documentId ? 'Replace document' : 'Attach PDF/media'}
                         className="inline-flex items-center p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-brand-600 cursor-pointer">
                         {attachDoc.isPending && attachDoc.variables?.id === p.id ? <Loader size={14} className="animate-spin" /> : <Paperclip size={14} />}
                         <input type="file" className="hidden" accept=".pdf,image/*,application/*"

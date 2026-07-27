@@ -47,16 +47,15 @@ export class ProjectsService {
   }
 
   /**
-   * D2: any user may REQUEST a project — including an Employee/intern, who holds
-   * project.create but NOT project.approve. The project starts in PLANNING awaiting
-   * approval, and a generic Approval record is raised.
-   *
-   * Every project has a designated MANAGER, who is also its approver:
-   *   • a requester who can approve projects manages their own by default;
-   *   • a requester who CANNOT (intern/employee/consultant) must nominate a manager
-   *     who holds project.approve — the request is routed to that person, and the
-   *     requester joins as an ordinary MEMBER.
-   * The mandatory "General" task list is created in the same transaction.
+   * Create (or request) a project. Projects are created ACTIVE and usable immediately — there is
+   * NO approval gate. What differs is the PID:
+   *   • a PID authority (project.generate_pid) attaches the PID now (generated or claimed) and
+   *     becomes the project's MANAGER;
+   *   • everyone else nominates an authority — the project is created with the PID PENDING
+   *     (code=null), the nominated authority becomes MANAGER and is sent a PID request to fulfil,
+   *     and the requester joins as an ordinary MEMBER.
+   * The mandatory "General" task list (and any project-type template tasks) are created in the
+   * same transaction, so a partial failure never leaves a half-built workflow.
    */
   async create(dto: CreateProjectDto) {
     // Identity & org come from the verified cookie actor — never the client body
@@ -108,6 +107,13 @@ export class ProjectsService {
       ? [{ userId: pidAssigneeId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }]
       : [{ userId: creator.id, projectRole: 'MANAGER' }];
 
+    // A "coming soon" type (MONETIZATION) is shown-but-disabled in the UI; reject it server-side
+    // too so a direct API call can't create a live project of an unbuilt type.
+    if (dto.projectType) {
+      const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
+      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+    }
+
     // A patent-analysis project TYPE (HML, Claim Chart, FTO, …) auto-creates that type's
     // standard workflow as a task list of ready-made tasks. Resolved before the write.
     const template = templateFor(dto.projectType);
@@ -147,7 +153,9 @@ export class ProjectsService {
     // Projects are usable immediately — they are created ACTIVE, with no approval gate.
     // Project + members + task lists + any template tasks are one transaction so a partial
     // failure never leaves a project with a half-built workflow.
-    const project = await this.prisma.$transaction(async (tx) => {
+    let project: any;
+    try {
+    project = await this.prisma.$transaction(async (tx) => {
       const created = await tx.project.create({
         data: {
           code: pid,
@@ -215,6 +223,12 @@ export class ProjectsService {
 
       return created;
     });
+    } catch (e: any) {
+      // A concurrent create claiming the same PID (or any unique-code race) → friendly message,
+      // mirroring fulfillPidRequest instead of surfacing a raw 500.
+      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      throw e;
+    }
 
     await this.events.emit({
       action: EVENTS.PROJECT_CREATED,
@@ -258,12 +272,31 @@ export class ProjectsService {
       where: { id: organizationId }, select: { code: true },
     });
     const orgCode = orgRec?.code ?? 'SQ';
-    const m = new RegExp(`^${orgCode}_(\\d{2})_(\\d{2})_(\\d{1,6})$`).exec(raw.trim().toUpperCase());
+    // Escape the org code before interpolating it — a code with a regex metacharacter would
+    // otherwise mis-validate (defensive; the code is "SQ" today).
+    const esc = orgCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp(`^${esc}_(\\d{2})_(\\d{2})_(\\d{1,6})$`).exec(raw.trim().toUpperCase());
     if (!m) {
       throw new BadRequestException(`"${raw}" is not a valid Project ID (expected ${orgCode}_YY_YY_NNN).`);
     }
-    const fyLabel = `${m[1]}_${m[2]}`;
+    const fyStart = parseInt(m[1], 10);
+    const fyEnd = parseInt(m[2], 10);
     const serial = parseInt(m[3], 10);
+    // The two FY halves must be consecutive years (26_27), and the serial must be >= 1 — reject
+    // SQ_26_27_000 / SQ_26_29_001 / SQ_99_00_001 before they become a canonical project code.
+    if (fyEnd !== (fyStart + 1) % 100) {
+      throw new BadRequestException(`"${raw}" has an invalid financial year — the two years must be consecutive (e.g. ${orgCode}_26_27_001).`);
+    }
+    if (serial < 1) throw new BadRequestException('A Project ID serial must be 1 or greater.');
+    const fyLabel = `${m[1]}_${m[2]}`;
+    // Guard the sequence from a fat-finger: ensureAtLeast ratchets the FY counter to the serial
+    // (GREATEST) and is irreversible, so a typo like _10000 instead of _1000 would permanently
+    // skip thousands of client PIDs. Reject a serial implausibly far ahead of the current counter.
+    const MAX_AHEAD = 1000;
+    const current = await this.sequence.peek(pidScope(organizationId, fyLabel));
+    if (serial > current + MAX_AHEAD) {
+      throw new BadRequestException(`Project ID serial ${serial} is too far ahead of the current sequence (next is ~${current + 1}). Please check the number.`);
+    }
     // Canonicalise (zero-pad the serial) so "SQ_26_27_6" and "SQ_26_27_006" can't both be claimed
     // as distinct-but-equal PIDs — the clash check + ensureAtLeast both key on the canonical form.
     const pid = formatPid(orgCode, fyLabel, serial);
@@ -437,7 +470,9 @@ export class ProjectsService {
             user: { select: { id: true, firstName: true, lastName: true } },
           },
         },
-        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } },
+        // Count active members too, so cards/rows show the true "+N" overflow (was capped at the
+        // take:5 preview, e.g. a 10-member project showed "+1" instead of "+6").
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
       },
     });
     return this.deadlines.redactProjects(projects, await this.deadlines.scope());
@@ -551,6 +586,16 @@ export class ProjectsService {
   async update(id: string, dto: UpdateProjectDto) {
     await this.access.assertProjectAccess(getActorId(), id);
     const existing = await this.getRaw(id);
+    // The generic edit may only move a project between the NON-terminal phases
+    // (IDEA/PLANNING/ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
+    // actions — Complete/Close (which stamp completedAt/closedAt + emit canonical events) and
+    // Delete (ARCHIVED) — so a plain edit can no longer slip a project into
+    // COMPLETED/CLOSED/ARCHIVED/CANCELLED, which used to leave it visible AND still writable
+    // for billable time (the writability lock only checks COMPLETED/CLOSED).
+    if (dto.projectPhase !== undefined && dto.projectPhase !== existing.projectPhase
+        && ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'].includes(dto.projectPhase)) {
+      throw new BadRequestException('Use Complete, Close or Delete to change a project to that state — it cannot be set by editing.');
+    }
     // #14: reject an inverted date range (dueDate before startDate). Compare against
     // the incoming value or the current one so a partial edit is still validated.
     const start = resolveDate(dto.startDate, existing.startDate);
@@ -760,6 +805,7 @@ export class ProjectsService {
   async addMember(projectId: string, userId: string, projectRole?: string) {
     await this.getRaw(projectId);
     await this.access.assertProjectAccess(getActorId(), projectId);
+    await this.access.assertProjectWritable(projectId); // no staffing a completed/closed matter
     const user = await this.prisma.user.findFirst({ where: { id: userId, deletedAt: null }, select: { organizationId: true } });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
     // The Project row has no organizationId column (org is reached through members), so

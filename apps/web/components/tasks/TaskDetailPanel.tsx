@@ -9,12 +9,13 @@ import {
 import clsx from 'clsx';
 import { api, type ApiTask, type ApiComment, type WorkflowStatus, type ActivityItem } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { userInitials } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeIds, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
-import { formatDate, toUtcDay, isPastDue } from '@/lib/date';
+import { formatDate, toUtcDay, isPastDue, formatDateTimeIST } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 
 type PanelTab = 'details' | 'assignees' | 'subtasks' | 'comments' | 'activity';
@@ -77,12 +78,15 @@ function activityMeta(action: string) {
 interface TaskDetailPanelProps {
   task: ApiTask | null;
   projectId: string;
+  /** True when the parent matter is COMPLETED/CLOSED — its tasks are read-only (server 403s
+   *  on any write). The panel greys out its edit controls instead of failing on click. */
+  projectClosed?: boolean;
   onClose: () => void;
   onUpdated?: (task: ApiTask) => void;
   onDeleted?: () => void;
 }
 
-export function TaskDetailPanel({ task, projectId, onClose, onUpdated, onDeleted }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ task, projectId, projectClosed, onClose, onUpdated, onDeleted }: TaskDetailPanelProps) {
   if (!task) return null;
 
   return (
@@ -91,6 +95,7 @@ export function TaskDetailPanel({ task, projectId, onClose, onUpdated, onDeleted
       <TaskDetailPanelInner
         task={task}
         projectId={projectId}
+        projectClosed={projectClosed}
         onClose={onClose}
         onUpdated={onUpdated}
         onDeleted={onDeleted}
@@ -100,15 +105,17 @@ export function TaskDetailPanel({ task, projectId, onClose, onUpdated, onDeleted
 }
 
 function TaskDetailPanelInner({
-  task, projectId, onClose, onUpdated, onDeleted,
+  task, projectId, projectClosed, onClose, onUpdated, onDeleted,
 }: {
   task: ApiTask;
   projectId: string;
+  projectClosed?: boolean;
   onClose: () => void;
   onUpdated?: (task: ApiTask) => void;
   onDeleted?: () => void;
 }) {
   const { currentUser, users } = useOrg();
+  const { can } = usePermissions();
   const qc = useQueryClient();
   const { toast } = useToast();
 
@@ -136,6 +143,8 @@ function TaskDetailPanelInner({
   const panelRef = useRef<HTMLDivElement>(null);
   const savingRef = useRef(false);                 // an assignee PUT is in flight
   const dirtyRef = useRef<string[] | null>(null);  // latest unsaved assignee ids (coalesced)
+  const addingSubRef = useRef(false);              // a subtask POST is in flight (dupe guard)
+  const deletingRef = useRef(false);               // a delete is in flight (dupe guard)
   const mountedRef = useRef(true);
   const currentTaskId = useRef(task.id);
   currentTaskId.current = task.id;                 // always the task currently shown
@@ -171,21 +180,22 @@ function TaskDetailPanelInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Workflow statuses
-  const { data: statuses = [] } = useQuery<WorkflowStatus[]>({
+  // Workflow statuses. If this fails, the status menu + "Mark Complete" have no data to work
+  // with — surface it (statusesError) rather than silently offering a broken control.
+  const { data: statuses = [], isError: statusesError } = useQuery<WorkflowStatus[]>({
     queryKey: ['workflow-statuses', task.workflowId ?? 'default'],
     queryFn: () => api.workflows.statuses(task.workflowId ?? 'default'),
     staleTime: 5 * 60 * 1000,
   });
 
   // Subtasks (live from API)
-  const { data: subtasks = [], refetch: refetchSubtasks } = useQuery({
+  const { data: subtasks = [], refetch: refetchSubtasks, isLoading: subtasksLoading, isError: subtasksError } = useQuery({
     queryKey: ['subtasks', task.id],
     queryFn: () => api.tasks.listSubtasks(task.id),
   });
 
   // Comments (live from API)
-  const { data: comments = [], refetch: refetchComments } = useQuery<ApiComment[]>({
+  const { data: comments = [], refetch: refetchComments, isLoading: commentsLoading, isError: commentsError } = useQuery<ApiComment[]>({
     queryKey: ['comments', 'task', task.id],
     queryFn: () => api.comments.list('task', task.id),
   });
@@ -202,6 +212,11 @@ function TaskDetailPanelInner({
 
   const currentStatus = task.currentStatus;
   const closed = isTaskClosed(task);
+  // A task inside a COMPLETED/CLOSED matter is read-only server-side (every write 403s).
+  // Grey the controls out rather than letting each click fail with a generic error toast.
+  const readOnly = !!projectClosed;
+  const canAssign = can('task.assign');
+  const canDelete = can('task.delete');
   const statusName = currentStatus?.name ?? 'Open';
   const statusColor = currentStatus?.colorHex ?? '#64748b';
   const flagColor = PRIORITY_FLAG_COLOR[task.priority] ?? 'text-gray-400';
@@ -227,32 +242,43 @@ function TaskDetailPanelInner({
 
   // ── API handlers ─────────────────────────────────────────────────────────────
 
+  // Only propagate a save's result to the parent if THIS task is still the one shown. A
+  // save that returns AFTER the user closed or switched the panel must not call onUpdated —
+  // the parent's setSelectedTask(updated) would re-open the panel the user just closed. Only
+  // flushAssignees was guarded before; every other on-blur/auto-save path shared the bug.
+  function emitUpdated(forTaskId: string, updated: ApiTask) {
+    if (mountedRef.current && currentTaskId.current === forTaskId) onUpdated?.(updated);
+  }
+
   async function saveTitle() {
     const trimmed = title.trim();
     setEditingTitle(false);
     if (!trimmed || trimmed === task.title) { setTitle(task.title); return; }
+    const forId = task.id;
     try {
-      const updated = await api.tasks.update(task.id, { title: trimmed });
-      onUpdated?.(updated);
+      const updated = await api.tasks.update(forId, { title: trimmed });
+      emitUpdated(forId, updated);
     } catch (e) { setTitle(task.title); toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function saveDesc() {
     setEditDesc(false);
     if (desc === (task.description ?? '')) return;
+    const forId = task.id;
     try {
-      const updated = await api.tasks.update(task.id, { description: desc });
-      onUpdated?.(updated);
+      const updated = await api.tasks.update(forId, { description: desc });
+      emitUpdated(forId, updated);
     } catch (e) { setDesc(task.description ?? ''); toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
 
   async function changeStatus(statusId: string) {
     setShowStatusMenu(false);
     if (statusId === task.currentWorkflowStatusId) return;
+    const forId = task.id;
     try {
-      const updated = await api.tasks.setStatus(task.id, statusId);
-      setProgress(updated.completionPercentage);
-      onUpdated?.(updated);
+      const updated = await api.tasks.setStatus(forId, statusId);
+      if (mountedRef.current && currentTaskId.current === forId) setProgress(updated.completionPercentage);
+      emitUpdated(forId, updated);
       refetchSubtasks(); // moving to a CLOSED status closes subtasks server-side
     } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
   }
@@ -260,6 +286,11 @@ function TaskDetailPanelInner({
   // Toggle completion via the workflow (single source of truth = status), so every
   // view agrees. Reopening moves back to the first OPEN status.
   async function toggleComplete() {
+    // Don't misreport a failed statuses load as "no closed status configured".
+    if (statusesError || statuses.length === 0) {
+      toast('Couldn’t load the workflow statuses — please try again.', 'error');
+      return;
+    }
     const target = closed
       ? statuses.find(s => s.type === OPEN_TYPE)
       : statuses.find(s => s.type === CLOSED_TYPE);
@@ -272,9 +303,10 @@ function TaskDetailPanelInner({
 
   async function saveProgress(pct: number) {
     if (pct === task.completionPercentage) return;
+    const forId = task.id;
     try {
-      const updated = await api.tasks.update(task.id, { completionPercentage: pct });
-      onUpdated?.(updated);
+      const updated = await api.tasks.update(forId, { completionPercentage: pct });
+      emitUpdated(forId, updated);
     } catch (e) {
       setProgress(task.completionPercentage);
       toast(e instanceof Error ? e.message : 'Failed to update progress', 'error');
@@ -288,17 +320,18 @@ function TaskDetailPanelInner({
    * Moving the deadline forward re-arms the overdue alert, server-side.
    */
   async function savePlan(patch: Partial<Pick<ApiTask, 'priority' | 'startDate' | 'dueDate' | 'estimatedHours'>>) {
+    const forId = task.id;
     setSavingPlan(true);
     try {
-      const updated = await api.tasks.update(task.id, patch);
-      onUpdated?.(updated);
+      const updated = await api.tasks.update(forId, patch);
+      emitUpdated(forId, updated);
       qc.invalidateQueries({ queryKey: ['tasks'] });
       qc.invalidateQueries({ queryKey: ['capacity'] }); // the board is computed from these
     } catch (e) {
       setPlan(planOf(task)); // snap back to what the server still believes
       toast(e instanceof Error ? e.message : 'Could not save', 'error');
     } finally {
-      setSavingPlan(false);
+      if (mountedRef.current && currentTaskId.current === forId) setSavingPlan(false);
     }
   }
 
@@ -313,18 +346,22 @@ function TaskDetailPanelInner({
 
   async function addSubtask() {
     const t = newSub.trim();
-    if (!t) return;
+    if (!t || addingSubRef.current) return; // guard held-Enter / double-fire → duplicate subtasks
+    addingSubRef.current = true;
+    setNewSub(''); // clear immediately so a second Enter has nothing to resubmit
     try {
       await api.tasks.createSubtask(task.id, { title: t });
-      setNewSub('');
       refetchSubtasks();
-    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
+    } catch (e) {
+      setNewSub(t); // restore the text so the edit isn't lost on failure
+      toast(e instanceof Error ? e.message : 'Action failed', 'error');
+    } finally { addingSubRef.current = false; }
   }
 
   async function postComment() {
     const text = newComment.trim();
     const hasFiles = commentFiles.documentIds.length > 0;
-    if ((!text && !hasFiles) || commentFiles.uploading || !currentUser) return;
+    if ((!text && !hasFiles) || commentFiles.uploading || !currentUser || posting) return; // held-Enter dupe guard
     setPosting(true);
     try {
       await api.comments.create({
@@ -342,11 +379,16 @@ function TaskDetailPanelInner({
   }
 
   async function deleteTask() {
+    if (deletingRef.current) return; // a double-click used to fire a second delete → spurious 404
     if (!window.confirm('Delete this task? This cannot be undone.')) return;
+    deletingRef.current = true;
     try {
       await api.tasks.delete(task.id);
       onDeleted?.();
-    } catch (e) { toast(e instanceof Error ? e.message : 'Action failed', 'error'); }
+    } catch (e) {
+      deletingRef.current = false; // only re-arm on failure; success unmounts the panel
+      toast(e instanceof Error ? e.message : 'Action failed', 'error');
+    }
   }
 
   // ── Assignees: optimistic UI, debounced single PUT (no per-click churn) ────────
@@ -409,15 +451,21 @@ function TaskDetailPanelInner({
           <div className="relative">
             <button
               onClick={() => setShowStatusMenu(prev => !prev)}
+              disabled={readOnly}
               aria-haspopup="menu"
               aria-expanded={showStatusMenu}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 hover:bg-gray-200 transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 hover:bg-gray-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusColor }} />
               {statusName}
               <ChevronDown size={11} />
             </button>
 
+            {showStatusMenu && statuses.length === 0 && (
+              <div role="menu" className="absolute top-full left-0 mt-1 w-48 bg-white rounded-xl border border-gray-200 shadow-lg z-30 py-2 px-3 text-xs text-gray-500">
+                {statusesError ? 'Couldn’t load statuses.' : 'No statuses configured.'}
+              </div>
+            )}
             {showStatusMenu && statuses.length > 0 && (
               // z-30 so it sits above the sticky tab bar below it (which is z-10) — otherwise
               // the menu is painted UNDER the tabs and reads as "disappearing behind them".
@@ -460,9 +508,12 @@ function TaskDetailPanelInner({
             />
           ) : (
             <h2
-              className="text-xl font-bold text-gray-900 cursor-pointer hover:bg-gray-50 rounded-md px-2 py-0.5 -mx-2 transition-colors"
-              onClick={() => setEditingTitle(true)}
-              title="Click to edit"
+              className={clsx(
+                'text-xl font-bold text-gray-900 rounded-md px-2 py-0.5 -mx-2 transition-colors',
+                readOnly ? 'cursor-default' : 'cursor-pointer hover:bg-gray-50',
+              )}
+              onClick={() => { if (!readOnly) setEditingTitle(true); }}
+              title={readOnly ? undefined : 'Click to edit'}
             >
               {title}
             </h2>
@@ -524,6 +575,13 @@ function TaskDetailPanelInner({
         {panelTab === 'details' && (
           <div className="px-4 sm:px-6 py-5 space-y-5">
 
+            {readOnly && (
+              <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <Lock size={12} className="shrink-0" />
+                This project is completed or closed. Its tasks are read-only — reopen the project to make changes.
+              </div>
+            )}
+
             {/* Description */}
             <div>
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Description</p>
@@ -538,12 +596,15 @@ function TaskDetailPanelInner({
                 />
               ) : (
                 <div
-                  className="min-h-[60px] text-sm rounded-lg p-3 cursor-pointer hover:bg-gray-50 border border-dashed border-transparent hover:border-gray-200 transition-colors"
-                  onClick={() => setEditDesc(true)}
+                  className={clsx(
+                    'min-h-[60px] text-sm rounded-lg p-3 border border-dashed border-transparent transition-colors',
+                    readOnly ? 'cursor-default' : 'cursor-pointer hover:bg-gray-50 hover:border-gray-200',
+                  )}
+                  onClick={() => { if (!readOnly) setEditDesc(true); }}
                 >
                   {desc
                     ? <span className="text-gray-700 whitespace-pre-wrap">{desc}</span>
-                    : <span className="italic text-gray-400">Click to add description...</span>}
+                    : <span className="italic text-gray-400">{readOnly ? 'No description.' : 'Click to add description...'}</span>}
                 </div>
               )}
             </div>
@@ -557,7 +618,7 @@ function TaskDetailPanelInner({
               <input
                 type="range" min={0} max={100} step={5}
                 value={progress}
-                disabled={closed}
+                disabled={closed || readOnly}
                 onChange={e => setProgress(Number(e.target.value))}
                 onPointerUp={() => saveProgress(progress)}
                 onKeyUp={e => { if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') saveProgress(progress); }}
@@ -583,8 +644,9 @@ function TaskDetailPanelInner({
                 <Field label="Priority">
                   <select
                     value={plan.priority}
+                    disabled={readOnly}
                     onChange={e => { const priority = e.target.value; setPlan(p => ({ ...p, priority })); savePlan({ priority }); }}
-                    className={planInput}
+                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
                   >
                     {PRIORITIES.map(p => (
                       <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>
@@ -597,6 +659,7 @@ function TaskDetailPanelInner({
                     type="number" min={0} max={1000} step={0.5}
                     value={plan.estimatedHours}
                     placeholder="Not set"
+                    disabled={readOnly}
                     onChange={e => setPlan(p => ({ ...p, estimatedHours: e.target.value }))}
                     onBlur={e => {
                       const raw = e.target.value.trim();
@@ -605,7 +668,7 @@ function TaskDetailPanelInner({
                       if ((task.estimatedHours ?? null) === next) return;
                       savePlan({ estimatedHours: next });
                     }}
-                    className={planInput}
+                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
                   />
                 </Field>
 
@@ -614,12 +677,13 @@ function TaskDetailPanelInner({
                     type="date"
                     value={plan.startDate}
                     max={plan.dueDate || undefined}
+                    disabled={readOnly}
                     onChange={e => {
                       const startDate = e.target.value;
                       setPlan(p => ({ ...p, startDate }));
                       savePlan({ startDate: startDate || null });
                     }}
-                    className={planInput}
+                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
                   />
                 </Field>
 
@@ -628,12 +692,13 @@ function TaskDetailPanelInner({
                     type="date"
                     value={plan.dueDate}
                     min={plan.startDate || undefined}
+                    disabled={readOnly}
                     onChange={e => {
                       const dueDate = e.target.value;
                       setPlan(p => ({ ...p, dueDate }));
                       savePlan({ dueDate: dueDate || null });
                     }}
-                    className={planInput}
+                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
                   />
                 </Field>
               </div>
@@ -679,58 +744,67 @@ function TaskDetailPanelInner({
                     <span key={u.id} className="inline-flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full bg-brand-50 text-brand-700 text-sm">
                       <Avatar user={u} size={20} />
                       {u.firstName} {u.lastName}
-                      <button
-                        onClick={() => toggleAssignee(u.id)}
-                        aria-label={`Remove ${u.firstName} ${u.lastName}`}
-                        className="ml-0.5 rounded-full hover:bg-brand-100 p-0.5 transition-colors"
-                      >
-                        <X size={12} />
-                      </button>
+                      {canAssign && !readOnly && (
+                        <button
+                          onClick={() => toggleAssignee(u.id)}
+                          aria-label={`Remove ${u.firstName} ${u.lastName}`}
+                          className="ml-0.5 rounded-full hover:bg-brand-100 p-0.5 transition-colors"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
                     </span>
                   ))}
                 </div>
               )}
             </div>
 
-            {/* Search + add */}
-            <div>
-              <div className="relative mb-2">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  value={assigneeSearch}
-                  onChange={e => setAssigneeSearch(e.target.value)}
-                  placeholder="Search people to assign…"
-                  aria-label="Search people to assign"
-                  className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-                />
+            {/* Search + add — only shown to roles that hold task.assign (Employees/HR don't; the
+                editor used to render for them and 403 on save) and only while the matter is open. */}
+            {canAssign && !readOnly ? (
+              <div>
+                <div className="relative mb-2">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    value={assigneeSearch}
+                    onChange={e => setAssigneeSearch(e.target.value)}
+                    placeholder="Search people to assign…"
+                    aria-label="Search people to assign"
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+                  {filteredUsers.length === 0 && (
+                    <p className="text-sm text-gray-400 px-3 py-3 text-center">No people match “{assigneeSearch}”.</p>
+                  )}
+                  {filteredUsers.map(u => {
+                    const on = assigneeIds.includes(u.id);
+                    return (
+                      <button
+                        key={u.id} type="button" role="checkbox" aria-checked={on}
+                        onClick={() => toggleAssignee(u.id)}
+                        className={clsx('w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors',
+                          on ? 'bg-brand-50/60 text-brand-800' : 'hover:bg-gray-50 text-gray-700')}
+                      >
+                        <Avatar user={u} size={26} />
+                        <span className="flex-1 min-w-0 truncate">
+                          {u.firstName} {u.lastName}
+                          {u.designation && <span className="text-gray-400"> · {u.designation}</span>}
+                        </span>
+                        <span className={clsx('w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                          on ? 'bg-brand-600 border-brand-600' : 'border-gray-300 bg-white')}>
+                          {on && <Check size={11} className="text-white" />}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
-                {filteredUsers.length === 0 && (
-                  <p className="text-sm text-gray-400 px-3 py-3 text-center">No people match “{assigneeSearch}”.</p>
-                )}
-                {filteredUsers.map(u => {
-                  const on = assigneeIds.includes(u.id);
-                  return (
-                    <button
-                      key={u.id} type="button" role="checkbox" aria-checked={on}
-                      onClick={() => toggleAssignee(u.id)}
-                      className={clsx('w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left transition-colors',
-                        on ? 'bg-brand-50/60 text-brand-800' : 'hover:bg-gray-50 text-gray-700')}
-                    >
-                      <Avatar user={u} size={26} />
-                      <span className="flex-1 min-w-0 truncate">
-                        {u.firstName} {u.lastName}
-                        {u.designation && <span className="text-gray-400"> · {u.designation}</span>}
-                      </span>
-                      <span className={clsx('w-4 h-4 rounded border flex items-center justify-center shrink-0',
-                        on ? 'bg-brand-600 border-brand-600' : 'border-gray-300 bg-white')}>
-                        {on && <Check size={11} className="text-white" />}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            ) : (
+              <p className="text-xs text-gray-400 italic">
+                {readOnly ? 'This project is completed or closed — assignees can’t be changed.' : 'You don’t have permission to change assignees.'}
+              </p>
+            )}
           </div>
         )}
 
@@ -744,6 +818,20 @@ function TaskDetailPanelInner({
               </div>
             </div>
 
+            {/* Distinguish a failed load from a genuinely empty checklist — otherwise an error
+                reads as "no subtasks" and a checklist item could be silently re-added. */}
+            {subtasksError ? (
+              <div className="text-sm text-gray-500 text-center py-6">
+                <p className="text-red-500">Couldn’t load subtasks.</p>
+                <button onClick={() => refetchSubtasks()} className="mt-2 text-brand-600 hover:underline">Retry</button>
+              </div>
+            ) : subtasksLoading ? (
+              <p className="text-sm text-gray-400 text-center py-6 flex items-center justify-center gap-2">
+                <Loader size={14} className="animate-spin" /> Loading subtasks…
+              </p>
+            ) : subtasks.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">No subtasks yet. Break this task into steps below.</p>
+            ) : (
             <div>
               {subtasks.map(s => {
                 const done = s.status === CLOSED_TYPE;
@@ -751,11 +839,13 @@ function TaskDetailPanelInner({
                   <div key={s.id} className="flex items-center gap-3 py-2.5 border-b last:border-0 group">
                     <button
                       onClick={() => toggleSubtask(s.id, s.status)}
+                      disabled={readOnly}
                       role="checkbox" aria-checked={done}
                       aria-label={done ? `Reopen ${s.title}` : `Mark ${s.title} done`}
                       title={done ? 'Completed — click to reopen' : 'Mark done'}
                       className={clsx(
-                        'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors cursor-pointer',
+                        'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
+                        readOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                         done ? 'bg-green-500 border-green-500 hover:bg-green-600' : 'border-gray-300 hover:border-green-400',
                       )}
                     >
@@ -775,14 +865,17 @@ function TaskDetailPanelInner({
                 );
               })}
             </div>
+            )}
 
-            <input
-              className="mt-3 w-full text-sm border border-dashed border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-gray-400 placeholder:text-gray-300"
-              placeholder="Add a subtask... (Enter to save)"
-              value={newSub}
-              onChange={e => setNewSub(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') addSubtask(); }}
-            />
+            {!closed && !readOnly && (
+              <input
+                className="mt-3 w-full text-sm border border-dashed border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-gray-400 placeholder:text-gray-300"
+                placeholder="Add a subtask... (Enter to save)"
+                value={newSub}
+                onChange={e => setNewSub(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addSubtask(); }}
+              />
+            )}
           </div>
         )}
 
@@ -790,14 +883,22 @@ function TaskDetailPanelInner({
         {panelTab === 'comments' && (
           <div className="px-4 sm:px-6 py-4">
             <div className="space-y-4 mb-4">
-              {comments.length === 0 && (
+              {/* A failed load must NOT read as "no comments" — that invites a duplicate re-post. */}
+              {commentsError ? (
+                <div className="text-sm text-gray-500 text-center py-6">
+                  <p className="text-red-500">Couldn’t load comments.</p>
+                  <button onClick={() => refetchComments()} className="mt-2 text-brand-600 hover:underline">Retry</button>
+                </div>
+              ) : commentsLoading ? (
+                <p className="text-sm text-gray-400 text-center py-6 flex items-center justify-center gap-2">
+                  <Loader size={14} className="animate-spin" /> Loading comments…
+                </p>
+              ) : comments.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-6">No comments yet. Be the first to comment.</p>
-              )}
+              ) : null}
               {comments.map((c) => {
                 const name = c.user ? `${c.user.firstName} ${c.user.lastName}` : 'Unknown';
-                const timeStr = new Date(c.createdAt).toLocaleString('en-US', {
-                  month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                });
+                const timeStr = formatDateTimeIST(c.createdAt);
                 return (
                   <div key={c.id} className="flex gap-3">
                     <Avatar user={c.user} size={32} className="shrink-0" />
@@ -868,7 +969,7 @@ function TaskDetailPanelInner({
                   {activity.map(item => {
                     const meta = activityMeta(item.action);
                     const who = item.actor ? `${item.actor.firstName} ${item.actor.lastName}` : 'Someone';
-                    const when = new Date(item.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    const when = formatDateTimeIST(item.createdAt);
                     return (
                       <div key={item.id} className="flex gap-3 pl-2 pb-4 relative">
                         <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center shrink-0 z-10', meta.color)}>
@@ -892,9 +993,10 @@ function TaskDetailPanelInner({
       <div className="shrink-0 border-t border-gray-100 px-4 sm:px-6 py-3.5 flex items-center gap-2 flex-wrap">
         <button
           onClick={toggleComplete}
-          title={closed ? 'Click to reopen' : 'Mark this task complete'}
+          disabled={readOnly}
+          title={readOnly ? 'This project is completed or closed — reopen it to make changes' : closed ? 'Click to reopen' : 'Mark this task complete'}
           className={clsx(
-            'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors',
+            'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
             closed
               ? 'bg-green-600 text-white hover:bg-green-700'
               : 'border border-green-400 text-green-600 hover:bg-green-50',
@@ -902,12 +1004,17 @@ function TaskDetailPanelInner({
         >
           <Check size={14} />{closed ? 'Completed' : 'Mark Complete'}
         </button>
-        <button
-          onClick={deleteTask}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-        >
-          <Trash2 size={14} /> Delete
-        </button>
+        {/* Only roles that actually hold task.delete see Delete — it used to render for everyone
+            (Consultant/SRA/Employee/HR) and 403 on click. */}
+        {canDelete && (
+          <button
+            onClick={deleteTask}
+            disabled={readOnly}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Trash2 size={14} /> Delete
+          </button>
+        )}
         <div className="flex-1" />
         <span className="text-[11px] text-gray-400 hidden sm:inline">Changes save automatically</span>
         <button

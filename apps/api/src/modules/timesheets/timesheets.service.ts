@@ -132,6 +132,25 @@ export class TimesheetsService {
     // project-level override or admin authority. Defaults to billable when not specified.
     const billable = dto.billable ?? true;
 
+    // ── "Other" entry: miscellaneous NON-PROJECT time (admin, internal meetings, training).
+    //    Always non-billable, never tied to a project/task, and never a PID buffer to assign —
+    //    it stands on its own. The 24h/day cap still applies. ──
+    if (dto.category === 'OTHER') {
+      await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
+      const entry = await this.prisma.timesheet.create({
+        data: {
+          userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
+          billable: false, category: 'OTHER', notes: dto.notes,
+        },
+        include: INCLUDE,
+      });
+      await this.events.emit({
+        action: EVENTS.TIME_LOGGED, entityType: 'TIMESHEET', entityId: entry.id, actorId,
+        metadata: { category: 'OTHER', hours: dto.hoursLogged, billable: false },
+      });
+      return entry;
+    }
+
     // ── Buffer entry: log hours now, assign the PID (task) later (within a week). No task yet
     //    means no project/type; the 24h/day cap still applies. `entryDay` is normalised to the
     //    calendar-day boundary so the cap can't be side-stepped with a time component. ──
@@ -204,6 +223,8 @@ export class TimesheetsService {
     // Only a buffer entry (no task AND no issue) can be assigned — an issue-logged entry must
     // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
+    // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a PID.
+    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a PID.');
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be staffed on the task's project.
@@ -227,9 +248,13 @@ export class TimesheetsService {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
+    // No editing logged time against a completed/closed client matter (create() already
+    // enforces this on new entries; edits/deletes must match, or hours stay mutable after close).
+    if (entry.projectId) await this.access.assertProjectWritable(entry.projectId);
 
-    // An issue-raised entry is non-billable by rule — it can never be flipped to billable.
-    const billable = entry.issueId ? false : dto.billable;
+    // An issue-raised entry AND "Other" (non-project) time are non-billable by rule — neither
+    // can ever be flipped to billable.
+    const billable = (entry.issueId || entry.category === 'OTHER') ? false : dto.billable;
 
     // Re-enforce the 24h/day cap if the hours are being raised.
     if (dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged) {
@@ -260,6 +285,8 @@ export class TimesheetsService {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
+    // A closed matter's ledger is frozen — deleting an entry would silently change its billed total.
+    if (entry.projectId) await this.access.assertProjectWritable(entry.projectId);
     const deleted = await this.prisma.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
     if (entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
     return deleted;
