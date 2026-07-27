@@ -1,4 +1,4 @@
-import { IsBoolean, IsDateString, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class CreateTimesheetDto {
   // IGNORED by the server — the owner is derived from the authenticated actor.
@@ -13,6 +13,12 @@ export class CreateTimesheetDto {
   @IsString()
   @IsOptional()
   taskId?: string;
+
+  // OPTIONAL: "OTHER" logs miscellaneous non-project time (admin, internal meetings, training).
+  // It's always non-billable and is never a PID buffer to assign. Omitted for normal entries.
+  @IsIn(['OTHER'])
+  @IsOptional()
+  category?: string;
 
   @IsDateString()
   date!: string;

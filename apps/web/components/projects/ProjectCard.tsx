@@ -3,6 +3,7 @@ import { CheckSquare, Users, Calendar, ArrowUpRight } from 'lucide-react';
 import clsx from 'clsx';
 import { MockProject, PHASE_META, PRIORITY_META } from '@/lib/mock-data';
 import { progressColor, progressTrack } from '@/lib/progress';
+import { formatDate } from '@/lib/date';
 
 interface ProjectCardProps {
   project: MockProject;
@@ -43,7 +44,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             {project.code
               ? <span className="block text-[11px] font-mono text-gray-400 mb-0.5">{project.code}</span>
               : <span className="block text-[11px] font-mono text-amber-500 mb-0.5">PID pending</span>}
-            <h3 className="font-semibold text-gray-900 text-base leading-tight group-hover:text-brand-600 transition-colors line-clamp-1">
+            <h3 title={project.title} className="font-semibold text-gray-900 text-base leading-tight group-hover:text-brand-600 transition-colors line-clamp-1">
               {project.title}
             </h3>
           </div>
@@ -100,7 +101,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </span>
             <span className="flex items-center gap-1">
               <Calendar size={13} />
-              {new Date(project.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              {formatDate(project.dueDate)}
             </span>
           </div>
         </div>

@@ -4,7 +4,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
-import { startOfUtcDay } from '../../common/dates';
+import { startOfUtcDay, startOfIstDay } from '../../common/dates';
 
 function daysLate(due: Date, today: Date): number {
   return Math.max(0, Math.round((today.getTime() - startOfUtcDay(due).getTime()) / 86_400_000));
@@ -114,7 +114,7 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async alertNewlyOverdue(): Promise<number> {
-    const today = startOfUtcDay(new Date());
+    const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const tasks = (await this.overdueTasks(today)).filter(t => !t.overdueNotifiedAt);
     if (!tasks.length) return 0;
 
@@ -152,7 +152,7 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
 
   /** Once per UTC day: one summary per manager of everything still overdue they own. */
   private async sendDailyDigests(): Promise<number> {
-    const today = startOfUtcDay(new Date());
+    const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const tasks = await this.overdueTasks(today);
     if (!tasks.length) return 0;
 

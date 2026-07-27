@@ -1142,6 +1142,10 @@ model Timesheet {
   // while the PID is still to be assigned (inside the buffer window).
   taskId      String?
   issueId     String?
+  // Non-project work category. null = a normal project/buffer/issue entry (the default, so
+  // existing rows are unaffected). "OTHER" = miscellaneous non-project time (admin, internal
+  // meetings, training) — never billable, never a PID buffer to assign.
+  category    String?
   date        DateTime
   hoursLogged Float
   billable    Boolean   @default(true)

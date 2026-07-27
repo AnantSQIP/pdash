@@ -9,8 +9,11 @@ import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
 import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 
-/** A buffer entry (logged without a PID) shows how many of the 7 days remain to assign one. */
-const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId;
+/** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
+const isOther = (e: Timesheet) => e.category === 'OTHER';
+/** A buffer entry (logged without a PID) shows how many of the 7 days remain to assign one.
+ *  "Other" entries have no task/issue/project either, so exclude them explicitly. */
+const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e);
 const bufferDaysLeft = (e: Timesheet): number | null =>
   e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
 
@@ -145,6 +148,8 @@ export default function TimesheetsPage() {
                             <span className="text-xs font-mono font-medium text-gray-700">{entry.project.code}</span>
                             {entry.projectType && <span className="block text-[10px] text-gray-400">{entry.projectType}</span>}
                           </div>
+                        ) : isOther(entry) ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">Other</span>
                         ) : isUnassigned(entry) ? (
                           <div className="flex items-center gap-2 whitespace-nowrap">
                             <button onClick={() => setAssigning(entry)}
@@ -165,7 +170,7 @@ export default function TimesheetsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? '—'}</span>
+                        <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? (isOther(entry) ? 'Non-project time' : '—')}</span>
                         {entry.issue && <span className="ml-2 text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>

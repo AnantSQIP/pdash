@@ -132,18 +132,22 @@ export function ProjectDetailClient({ projectId }: Props) {
   async function handleMove(taskId: string, statusId: string) {
     const status = statuses.find(s => s.id === statusId);
     const movedTask = tasks.find(t => t.id === taskId);
-    // Optimistic: update cache immediately so the card stays in the new column
-    qc.setQueryData<ApiTask[]>(['tasks', projectId], old =>
+    const key = ['tasks', projectId] as const;
+    const snapshot = qc.getQueryData<ApiTask[]>(key); // for rollback if the move is rejected
+    // Optimistic: patch BOTH the status object (Board column) AND currentWorkflowStatusId (the
+    // id the Task List <select> binds to) — patching only currentStatus left the dropdown
+    // snapping straight back to the old value.
+    qc.setQueryData<ApiTask[]>(key, old =>
       (old ?? []).map(t => t.id === taskId
-        ? { ...t, currentStatus: status ?? t.currentStatus }
+        ? { ...t, currentStatus: status ?? t.currentStatus, currentWorkflowStatusId: statusId }
         : t));
     try {
       await api.tasks.setStatus(taskId, statusId);
       toast(`"${movedTask?.title ?? 'Task'}" moved to ${status?.name ?? 'new status'}`, 'success');
+      invalidateTasks(); // refetch truth (progress bar etc.) — only on success
     } catch (e) {
+      if (snapshot) qc.setQueryData(key, snapshot); // roll the card back where it came from
       toast(e instanceof Error ? e.message : 'Could not update the task status', 'error');
-    } finally {
-      invalidateTasks(); // refetches tasks + project → progress bar re-syncs
     }
   }
 
@@ -203,10 +207,12 @@ export function ProjectDetailClient({ projectId }: Props) {
   }
 
   if (projError || !project) {
+    // Honest copy instead of blaming a local dev server — this page 403s legitimately whenever
+    // you open a matter you're not staffed on, or 404s for a moved/deleted project.
     return (
       <div className="flex flex-col h-full items-center justify-center text-center px-8">
-        <p className="text-gray-500 font-medium">Could not load project</p>
-        <p className="text-sm text-gray-400 mt-1">Make sure the API server is running on port 4000</p>
+        <p className="text-gray-600 font-medium">Couldn&apos;t open this project</p>
+        <p className="text-sm text-gray-500 mt-1 max-w-sm">It may have been moved, or you don&apos;t have access to it.</p>
         <Link href="/projects" className="mt-4 text-sm text-brand-600 hover:underline">← Back to Projects</Link>
       </div>
     );
@@ -230,8 +236,8 @@ export function ProjectDetailClient({ projectId }: Props) {
             <ArrowLeft size={14} /> All Projects
           </Link>
 
-          <div className="flex items-start justify-between gap-4">
-            <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 {project.code ? (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
@@ -257,9 +263,9 @@ export function ProjectDetailClient({ projectId }: Props) {
                 </span>
                 <span className={clsx('text-xs font-semibold', priority.color)}>{priority.label} Priority</span>
               </div>
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{project.title}</h1>
+              <h1 title={project.title} className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{project.title}</h1>
               {project.description && (
-                <p className="text-sm text-gray-500 mt-1 max-w-xl">{project.description}</p>
+                <p className="text-sm text-gray-500 mt-1 max-w-xl line-clamp-2">{project.description}</p>
               )}
               {project.patents && project.patents.length > 0 && (
                 <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -371,7 +377,7 @@ export function ProjectDetailClient({ projectId }: Props) {
         </div>
 
         {/* Tabs */}
-        <nav className="flex items-center gap-1 px-6 overflow-x-auto">
+        <nav className="flex items-center gap-1 px-4 sm:px-6 overflow-x-auto">
           {TABS.map((tab: Tab) => (
             <button
               key={tab}
@@ -437,6 +443,7 @@ export function ProjectDetailClient({ projectId }: Props) {
       <TaskDetailPanel
         task={selectedTask}
         projectId={projectId}
+        projectClosed={['COMPLETED', 'CLOSED'].includes(project.projectPhase)}
         onClose={() => setSelectedTask(null)}
         onUpdated={updated => {
           setSelectedTask(updated);
@@ -615,6 +622,7 @@ function TaskListView({
 // ── Overview View ──────────────────────────────────────────────────────────────
 
 function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[] }) {
+  const { toast } = useToast();
   const statusCounts: Record<string, { count: number; color: string }> = {};
   for (const t of tasks) {
     const name = t.currentStatus?.name ?? 'Open';
@@ -637,15 +645,15 @@ function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[
   const refresh = () => { qc.invalidateQueries({ queryKey: ['project', project.id] }); qc.invalidateQueries({ queryKey: ['projects'] }); };
   async function addMember(userId: string) {
     setBusy(true);
-    try { await api.projects.addMember(project.id, userId); setAdding(false); refresh(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not add member.'); }
+    try { await api.projects.addMember(project.id, userId); setAdding(false); refresh(); toast('Member added.', 'success'); }
+    catch (e) { toast(e instanceof Error ? e.message : 'Could not add member.', 'error'); }
     finally { setBusy(false); }
   }
   async function removeMember(userId: string) {
     if (!window.confirm('Remove this member from the project?')) return;
     setBusy(true);
-    try { await api.projects.removeMember(project.id, userId); refresh(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not remove member.'); }
+    try { await api.projects.removeMember(project.id, userId); refresh(); toast('Member removed.', 'info'); }
+    catch (e) { toast(e instanceof Error ? e.message : 'Could not remove member.', 'error'); }
     finally { setBusy(false); }
   }
 

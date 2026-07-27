@@ -105,6 +105,8 @@ export class IssuesService {
 
   async update(id: string, dto: UpdateIssueDto) {
     await this.get(id);
+    const cur = await this.prisma.issue.findFirst({ where: { id, deletedAt: null }, select: { projectId: true } });
+    if (cur) await this.access.assertProjectWritable(cur.projectId); // no edits on a completed/closed matter
     const issue = await this.prisma.issue.update({
       where: { id },
       data: { title: dto.title, description: dto.description },

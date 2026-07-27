@@ -58,8 +58,10 @@ export function PersonaBanner() {
   const greeting = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
   return (
     <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-start justify-between gap-4">
-      <div className="flex items-center gap-3 min-w-0">
-        <Avatar user={currentUser} size={44} className="hidden sm:block" />
+      <div className="flex items-start gap-3 min-w-0">
+        {/* Wrap the avatar so the responsive hide lives on a container — passing a `display`
+            class straight to <Avatar> overrides its own flex and makes the initials overflow. */}
+        <div className="hidden sm:block shrink-0"><Avatar user={currentUser} size={40} /></div>
         <div className="min-w-0">
           {/* Greeting + date are pinned to IST and stamped consistently on server & client. */}
           <h1 suppressHydrationWarning className="text-2xl font-bold text-gray-900 truncate">

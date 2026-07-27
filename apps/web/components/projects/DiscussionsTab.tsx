@@ -6,6 +6,7 @@ import { MessageSquare, Send, Trash2 } from 'lucide-react';
 import { api, ApiComment } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
@@ -66,6 +67,7 @@ function CommentRow({
 export default function DiscussionsTab({ projectId }: { projectId: string }) {
   const { currentUser } = useOrg();
   const { can } = usePermissions();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const queryKey = ['comments', 'PROJECT', projectId] as const;
@@ -104,6 +106,8 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
       await queryClient.invalidateQueries({ queryKey });
       // Shared files also land in the project's Files tab.
       await queryClient.invalidateQueries({ queryKey: ['project-documents', projectId] });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not post your message.', 'error');
     } finally {
       setSending(false);
     }
@@ -115,6 +119,8 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
     try {
       await api.comments.delete(id);
       await queryClient.invalidateQueries({ queryKey });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not delete the message.', 'error');
     } finally {
       setDeletingId(null);
     }

@@ -1,13 +1,16 @@
 import { BadRequestException, Body, Controller, Get, Injectable, Module, Param, Post } from '@nestjs/common';
 import { NotFoundException } from '@nestjs/common';
-import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { Prisma } from '@pdash/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 class CreateWorkflowDto {
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
+  @MaxLength(60)
   name!: string;
 
   @IsOptional()
@@ -16,12 +19,18 @@ class CreateWorkflowDto {
 }
 
 class CreateWorkflowStatusDto {
+  // Cap the status name — it renders inside fixed-width inline pills/`<select>`s across the
+  // board, list and panel; an over-long name balloons the Status column into a horizontal
+  // scroll and overflows the header pill.
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
+  @MaxLength(32)
   name!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(9)
   colorHex?: string;
 
   @IsOptional()

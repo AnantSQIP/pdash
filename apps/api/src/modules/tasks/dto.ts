@@ -72,8 +72,12 @@ export class CreateTaskDto {
 }
 
 export class UpdateTaskDto {
+  // Trim + require ≥1 char, mirroring CreateTaskDto — a PATCH could otherwise blank the title
+  // ({title:""} or whitespace), leaving an empty heading / table cell / kanban card / a11y label.
   @IsOptional()
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
   @MaxLength(200)
   title?: string;
 
@@ -125,6 +129,7 @@ export class SetAssigneesDto {
 
 export class CreateSubtaskDto {
   @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
   @MaxLength(200)
   title!: string;

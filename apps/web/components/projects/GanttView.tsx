@@ -120,7 +120,9 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
     const paddedStart = addDays(min, -3);
     const snappedStart = new Date(paddedStart.getFullYear(), paddedStart.getMonth(), 1);
     const paddedEnd = addDays(max, 5);
-    const span = Math.max(daysBetween(snappedStart, paddedEnd), 14);
+    // Cap the span (~10 years) so a single far-future / malformed task date can't blow the
+    // timeline up to millions of px + a runaway month/week loop that freezes the browser.
+    const span = Math.min(Math.max(daysBetween(snappedStart, paddedEnd), 14), 3660);
     return { timelineStart: startOfDay(snappedStart), totalDays: span };
   }, [rows, project.startDate, project.dueDate, today]);
 

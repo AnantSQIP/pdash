@@ -5,11 +5,15 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
   MinLength,
 } from 'class-validator';
+
+/** PID shape (org-agnostic): ORGCODE_YY_YY_serial. The service re-checks against the real org code. */
+const PID_PATTERN = /^[A-Z0-9]+_\d{2}_\d{2}_\d{1,6}$/i;
 import { Transform } from 'class-transformer';
 import { PROJECT_TYPE_VALUES } from './project-templates';
 
@@ -66,6 +70,7 @@ export class CreateProjectDto {
   @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MaxLength(40)
+  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
   pid?: string;
 
   /**
@@ -78,6 +83,7 @@ export class CreateProjectDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   description?: string;
 
   @IsOptional()
@@ -114,6 +120,7 @@ export class UpdateProjectDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   description?: string;
 
   @IsOptional()
@@ -155,6 +162,7 @@ export class FulfillPidDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
   @MaxLength(40)
+  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
   pid!: string;
 }
 

@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SequenceService } from '../../common/sequence/sequence.service';
+import { EventService } from '../audit-events/event.service';
 import { formatPatentHandle, patentScope } from '../../common/financial-year';
 import { isPatentNumber, normalizePatentNumber } from '../../common/patent-number';
 import { CreateClientDto, RegisterPatentsDto, UpdateClientDto, UpdatePatentDto } from './dto';
@@ -9,8 +10,12 @@ import { DocumentsService, type UploadedFileLike } from '../documents/documents.
 // ── Default-DENY selects ────────────────────────────────────────────────────
 // The confidential `realNumber` is NEVER put in the OVERVIEW select — only the passcode-gated
 // `revealPatents` uses FULL_SELECT. So even a super admin never receives real numbers without
-// clearing the org passcode.
-const PATENT_OVERVIEW_SELECT = { id: true, handle: true, serial: true, clientId: true, documentId: true, documentName: true } as const;
+// clearing the org passcode. `documentName` is likewise EXCLUDED from the overview: an
+// upload-created patent's filename IS its real number, so returning it on the passcode-free
+// overview leaked the very secret the reveal gate protects. The overview exposes only
+// `documentId` (a boolean-equivalent "has a document") — the bytes/name come from the
+// passcode-gated document route.
+const PATENT_OVERVIEW_SELECT = { id: true, handle: true, serial: true, clientId: true, documentId: true } as const;
 const PATENT_FULL_SELECT = {
   id: true, handle: true, serial: true, clientId: true, realNumber: true, createdAt: true, documentId: true, documentName: true,
 } as const;
@@ -22,7 +27,30 @@ export class PatentsService {
     private readonly prisma: PrismaService,
     private readonly sequence: SequenceService,
     private readonly documents: DocumentsService,
+    private readonly events: EventService,
   ) {}
+
+  /**
+   * The confidential read paths (reveal, document download) FAIL CLOSED when the org has no
+   * step-up passcode configured. The global PasscodeGuard no-ops in that case (so a fresh org
+   * can still do ordinary RBAC actions), but for the patent crown-jewels that would silently
+   * expose real numbers on RBAC alone — so here we deny until a passcode exists.
+   */
+  private async assertPasscodeConfigured(organizationId: string): Promise<void> {
+    const org = await this.prisma.organization.findUnique({
+      where: { id: organizationId }, select: { securityPasscodeHash: true },
+    });
+    if (!org?.securityPasscodeHash) {
+      throw new ForbiddenException('Set an organization passcode before viewing confidential patent data.');
+    }
+  }
+
+  /** Normalise + validate a real patent number the same way on EVERY entry path (register,
+   *  edit, upload) so the same patent can't be stored as two divergent strings + two handles. */
+  private cleanRealNumber(raw: string): string | null {
+    const norm = normalizePatentNumber(raw).slice(0, 100);
+    return isPatentNumber(norm) ? norm : null;
+  }
 
   // ── Client codes (patent.manage) ──────────────────────────────────────────
   listClients(organizationId: string) {
@@ -52,10 +80,19 @@ export class PatentsService {
     });
     if (!client) throw new NotFoundException('Client code not found.');
     const now = new Date();
+    // Soft-delete the client's patents AND their linked documents together (a live doc under a
+    // deleted patent would otherwise fall back to the generic ACL and leak the real-number PDF).
+    const docIds = (await this.prisma.patent.findMany({
+      where: { clientId: id, deletedAt: null, documentId: { not: null } }, select: { documentId: true },
+    })).map(p => p.documentId!).filter(Boolean);
     await this.prisma.$transaction([
       this.prisma.patent.updateMany({ where: { clientId: id, deletedAt: null }, data: { deletedAt: now } }),
       this.prisma.client.update({ where: { id }, data: { deletedAt: now } }),
+      ...(docIds.length ? [this.prisma.document.updateMany({ where: { id: { in: docIds }, deletedAt: null }, data: { deletedAt: now } })] : []),
     ]);
+    await this.events.emit({
+      action: 'patent.client_deleted', entityType: 'CLIENT', entityId: id, organizationId, metadata: { patentDocs: docIds.length },
+    });
     return { ok: true };
   }
 
@@ -93,7 +130,14 @@ export class PatentsService {
           await tx.patent.update({ where: { id: p.id }, data: { handle: formatPatentHandle(newCode, p.serial) } });
         }
       }
-    });
+    // A code rename re-mints every handle; give the transaction room so a client with a large
+    // portfolio doesn't hit the default 5s interactive-tx timeout (P2028) and roll the rename back.
+    }, { timeout: 120_000, maxWait: 10_000 });
+    if (newCode) {
+      await this.events.emit({
+        action: 'patent.client_recoded', entityType: 'CLIENT', entityId: id, organizationId, metadata: { from: client.code, to: newCode },
+      });
+    }
     return this.prisma.client.findUnique({ where: { id }, select: { id: true, name: true, code: true } });
   }
 
@@ -108,12 +152,19 @@ export class PatentsService {
   }
 
   /** REVEAL — the confidential real patent numbers. patent.manage + org passcode (controller). */
-  revealPatents(organizationId: string, clientId?: string) {
-    return this.prisma.patent.findMany({
+  async revealPatents(organizationId: string, clientId?: string) {
+    await this.assertPasscodeConfigured(organizationId);
+    const rows = await this.prisma.patent.findMany({
       where: { organizationId, deletedAt: null, ...(clientId ? { clientId } : {}) },
       select: { ...PATENT_FULL_SELECT, client: { select: CLIENT_MINI } },
       orderBy: [{ clientId: 'asc' }, { serial: 'asc' }],
     });
+    // Audit the unmasking of client numbers (WHO + how many + which client — never the numbers).
+    await this.events.emit({
+      action: 'patent.revealed', entityType: 'PATENT', entityId: clientId ?? 'all',
+      organizationId, metadata: { clientId: clientId ?? null, count: rows.length },
+    });
+    return rows;
   }
 
   /** Handle-only options for the project picker (patent.view = every delivery role). Returns
@@ -135,8 +186,21 @@ export class PatentsService {
     });
     if (!client) throw new NotFoundException('Client not found.');
 
-    const wanted = [...new Set(dto.realNumbers.map(n => n.trim()).filter(Boolean))];
-    if (!wanted.length) throw new BadRequestException('Provide at least one patent number.');
+    // Normalise + validate to the SAME canonical form the upload path uses, so a number entered
+    // both ways can't create two patents; reject entries that don't look like a patent number
+    // (this path previously stored any free text verbatim).
+    const cleaned: string[] = [];
+    const rejected: string[] = [];
+    for (const raw of dto.realNumbers.map(n => n.trim()).filter(Boolean)) {
+      const clean = this.cleanRealNumber(raw);
+      if (clean) cleaned.push(clean); else rejected.push(raw);
+    }
+    const wanted = [...new Set(cleaned)];
+    if (!wanted.length) {
+      throw new BadRequestException(
+        rejected.length ? `None of the entries look like a patent number (e.g. US1234567).` : 'Provide at least one patent number.',
+      );
+    }
     // Skip numbers already registered for this client — no duplicate patents (#3).
     const seen = new Set((await this.prisma.patent.findMany({
       where: { clientId: client.id, deletedAt: null, realNumber: { in: wanted } },
@@ -154,6 +218,10 @@ export class PatentsService {
         select: PATENT_OVERVIEW_SELECT,
       }));
     }
+    await this.events.emit({
+      action: 'patent.registered', entityType: 'PATENT', entityId: client.id,
+      organizationId, metadata: { clientId: client.id, created: created.length, skippedDuplicate: numbers.length !== wanted.length, rejected: rejected.length },
+    });
     return created;
   }
 
@@ -200,20 +268,39 @@ export class PatentsService {
 
   async updatePatent(organizationId: string, id: string, dto: UpdatePatentDto) {
     const patent = await this.prisma.patent.findFirst({
-      where: { id, organizationId, deletedAt: null }, select: { id: true },
+      where: { id, organizationId, deletedAt: null }, select: { id: true, clientId: true },
     });
     if (!patent) throw new NotFoundException('Patent not found.');
-    return this.prisma.patent.update({
-      where: { id }, data: { realNumber: dto.realNumber }, select: PATENT_OVERVIEW_SELECT,
+    // Same normalise+validate as the register/upload paths — an edit can't reintroduce a
+    // divergent/garbage real number.
+    const clean = this.cleanRealNumber(dto.realNumber);
+    if (!clean) throw new BadRequestException(`"${dto.realNumber}" doesn't look like a patent number (e.g. US1234567).`);
+    const updated = await this.prisma.patent.update({
+      where: { id }, data: { realNumber: clean }, select: PATENT_OVERVIEW_SELECT,
     });
+    await this.events.emit({
+      action: 'patent.updated', entityType: 'PATENT', entityId: id,
+      organizationId, metadata: { clientId: patent.clientId },
+    });
+    return updated;
   }
 
   async deletePatent(organizationId: string, id: string) {
     const patent = await this.prisma.patent.findFirst({
-      where: { id, organizationId, deletedAt: null }, select: { id: true },
+      where: { id, organizationId, deletedAt: null }, select: { id: true, clientId: true, documentId: true },
     });
     if (!patent) throw new NotFoundException('Patent not found.');
-    await this.prisma.patent.update({ where: { id }, data: { deletedAt: new Date() } });
+    const now = new Date();
+    // Soft-delete the linked document TOO — otherwise the (still-live) document reverts to the
+    // generic document ACL and its real-number-named PDF becomes downloadable without the passcode.
+    await this.prisma.$transaction([
+      this.prisma.patent.update({ where: { id }, data: { deletedAt: now } }),
+      ...(patent.documentId ? [this.prisma.document.updateMany({ where: { id: patent.documentId, deletedAt: null }, data: { deletedAt: now } })] : []),
+    ]);
+    await this.events.emit({
+      action: 'patent.deleted', entityType: 'PATENT', entityId: id,
+      organizationId, metadata: { clientId: patent.clientId },
+    });
     return { ok: true };
   }
 
@@ -233,12 +320,20 @@ export class PatentsService {
     return { documentId: doc.id, documentName: doc.name };
   }
 
-  /** The bytes of a patent's attached document (streamed by the controller, patent.manage only). */
+  /** The bytes of a patent's attached document (streamed by the controller, patent.manage + passcode). */
   async documentContent(organizationId: string, id: string) {
+    await this.assertPasscodeConfigured(organizationId);
     const patent = await this.prisma.patent.findFirst({
-      where: { id, organizationId, deletedAt: null }, select: { documentId: true },
+      where: { id, organizationId, deletedAt: null }, select: { documentId: true, clientId: true },
     });
     if (!patent?.documentId) throw new NotFoundException('No document attached to this patent.');
-    return this.documents.getContent(patent.documentId);
+    // Trusted portal read — authorization (patent.manage + passcode + org scope) is already done;
+    // the generic getContent() would self-refuse this as a patent document.
+    const result = await this.documents.getContentForPatentPortal(patent.documentId);
+    await this.events.emit({
+      action: 'patent.document_downloaded', entityType: 'PATENT', entityId: id,
+      organizationId, metadata: { clientId: patent.clientId },
+    });
+    return result;
   }
 }

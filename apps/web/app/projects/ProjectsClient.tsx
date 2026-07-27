@@ -11,6 +11,7 @@ import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
 import { PHASE_META, PRIORITY_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useToast } from '@/components/ui/Toast';
 import { api, type ApiProject } from '@/lib/api';
 
 type ViewMode = 'grid' | 'list';
@@ -79,6 +80,7 @@ function StatPill({
 export function ProjectsClient() {
   const { org, currentUser, loading: orgLoading } = useOrg();
   const { can } = usePermissions();
+  const { toast } = useToast();
   const qc = useQueryClient();
 
   const [view, setView] = useState<ViewMode>('grid');
@@ -102,9 +104,14 @@ export function ProjectsClient() {
     setGenerating(true);
     try {
       const res = await api.projects.generatePid();
-      try { await navigator.clipboard.writeText(res.pid); } catch { /* clipboard blocked */ }
+      let copied = true;
+      try { await navigator.clipboard.writeText(res.pid); } catch { copied = false; }
       setPidCopied(res.pid);
       setTimeout(() => setPidCopied(''), 3000);
+      toast(copied ? `PID ${res.pid} copied to clipboard.` : `PID ${res.pid} generated.`, 'success');
+    } catch (e) {
+      // Was a silent failure — the button just re-enabled with no signal.
+      toast(e instanceof Error ? e.message : 'Could not generate a PID.', 'error');
     } finally {
       setGenerating(false);
     }
@@ -214,10 +221,11 @@ export function ProjectsClient() {
         <StatPill label="Closed"    value={stats.closed}    color="text-slate-600"  dot="bg-slate-400" />
       </div>
 
-      {/* Filters + search row */}
-      <div className="flex items-center gap-3 px-4 sm:px-6 py-3 bg-gray-50 border-b border-gray-200 shrink-0 overflow-x-auto">
+      {/* Filters + search row. NOTE: no `overflow-x-auto` here — it silently forces overflow-y
+          to `auto` too, which clipped the search autocomplete dropdown. Wrap instead. */}
+      <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6 py-3 bg-gray-50 border-b border-gray-200 shrink-0">
         <ProjectSearch value={search} onChange={setSearch} suggestions={projects} />
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {PHASES.map(({ value: v, label }) => (
             <button
               key={v}
@@ -244,18 +252,34 @@ export function ProjectsClient() {
         )}
         {isError && (
           <div className="flex flex-col items-center justify-center h-64 text-center">
-            <p className="text-gray-500 font-medium">Could not load projects</p>
-            <p className="text-sm text-gray-400 mt-1">Make sure the API server is running on port 4000</p>
+            <p className="text-gray-600 font-medium">Couldn&apos;t load your projects</p>
+            <p className="text-sm text-gray-500 mt-1">Something went wrong. Please refresh and try again.</p>
           </div>
         )}
         {!isLoading && !isError && filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-64 text-center">
-            <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
-              <Filter size={24} className="text-gray-400" />
+          projects.length === 0 ? (
+            // True first-run (an empty workspace) — not a filter mismatch. Offer the create CTA.
+            <div className="flex flex-col items-center justify-center h-64 text-center">
+              <div className="w-16 h-16 bg-brand-50 rounded-2xl flex items-center justify-center mb-4">
+                <Plus size={24} className="text-brand-500" />
+              </div>
+              <p className="text-gray-700 font-medium">No projects yet</p>
+              <p className="text-sm text-gray-500 mt-1 max-w-sm">Projects group your patent-analysis work — create your first to get started.</p>
+              {can('project.create') && (
+                <button onClick={() => setShowModal(true)} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700">
+                  <Plus size={15} /> New Project
+                </button>
+              )}
             </div>
-            <p className="text-gray-500 font-medium">No projects match your filter</p>
-            <p className="text-sm text-gray-400 mt-1">Try a different phase or search term</p>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-64 text-center">
+              <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
+                <Filter size={24} className="text-gray-400" />
+              </div>
+              <p className="text-gray-600 font-medium">No projects match your filter</p>
+              <p className="text-sm text-gray-500 mt-1">Try a different phase or search term.</p>
+            </div>
+          )
         )}
         {!isLoading && !isError && filtered.length > 0 && (
           view === 'grid' ? (

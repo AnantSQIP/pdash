@@ -5,7 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
-import { startOfUtcDay } from '../../common/dates';
+import { startOfUtcDay, startOfIstDay } from '../../common/dates';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -145,7 +145,7 @@ export class CapacityService {
     days = DEFAULT_DAYS,
     onlyUserIds?: string[],
   ): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[] }> {
-    const today = startOfUtcDay(new Date());
+    const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
     const to = addDays(today, horizon);
     const userFilter = onlyUserIds ? { id: { in: onlyUserIds.length ? onlyUserIds : ['__none__'] } } : {};
@@ -375,7 +375,7 @@ export class CapacityService {
    * Drives the "Past 30 days" range option.
    */
   async teamHistory(organizationId: string, days = 30, onlyUserIds?: string[]) {
-    const today = startOfUtcDay(new Date());
+    const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const span = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : 30));
     const from = addDays(today, -(span - 1)); // inclusive window [from, today]
     const toExcl = addDays(today, 1);
@@ -504,7 +504,7 @@ export class CapacityService {
         },
       },
     });
-    const today = startOfUtcDay(new Date());
+    const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     return tasks.map(t => {
       const project = t.projectTasks[0]?.project;
       const estimate = t.estimatedHours ?? DEFAULT_TASK_HOURS;
@@ -550,7 +550,7 @@ export class CapacityService {
    * reassign the work to. Drives the "Coverage at risk" panel.
    */
   async coverageRisks(organizationId: string, days = DEFAULT_DAYS) {
-    const today = startOfUtcDay(new Date());
+    const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
     const to = addDays(today, horizon);
 
