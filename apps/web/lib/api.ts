@@ -223,10 +223,10 @@ export type PidLedgerEntry = {
   createdAt: string; expiresAt: string; resolvedAt: string | null;
 };
 
-// The PID reviewer deliberately does NOT receive the project type or manager.
 export type PidRequestItem = {
   id: string; projectId: string; projectTitle: string;
   description?: string | null; priority?: string | null;
+  projectType?: string | null; managerId?: string | null;
   startDate?: string | null; dueDate?: string | null;
   requestedBy: string; note: string | null; createdAt: string;
 };
@@ -783,8 +783,8 @@ export const api = {
         '/projects/pid-authorities'),
     /** My incoming PID requests, as an authority. */
     pidRequests: () => req<PidRequestItem[]>('/projects/pid-requests'),
-    /** Verify/edit a pending-request project's details before assigning its PID (assignee-gated). */
-    editPidRequestProject: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'startDate' | 'dueDate'>>) =>
+    /** Verify/edit a pending-request project's details (incl. type + manager) before assigning its PID. */
+    editPidRequestProject: (id: string, data: { title?: string; description?: string; priority?: string; projectType?: string | null; managerId?: string; startDate?: string | null; dueDate?: string | null }) =>
       req<ApiProject>(`/projects/pid-requests/${id}/project`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Assign a PID to a pending-request project. */
     fulfillPidRequest: (id: string, pid: string) =>

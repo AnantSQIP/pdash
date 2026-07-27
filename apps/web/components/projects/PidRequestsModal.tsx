@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, KeyRound, RefreshCw, Check, Loader, Inbox, ChevronDown, ChevronUp, Save } from 'lucide-react';
-import { api, type PidRequestItem } from '@/lib/api';
+import { api, type PidRequestItem, type ProjectTypeDef } from '@/lib/api';
+import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
@@ -70,11 +71,14 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 const inputCls = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition';
 
 function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }) {
+  const { users } = useOrg();
   const [open, setOpen] = useState(false);
   // Editable project fields, seeded from the request's project detail.
   const [title, setTitle] = useState(req.projectTitle);
   const [description, setDescription] = useState(req.description ?? '');
   const [priority, setPriority] = useState(req.priority ?? 'MEDIUM');
+  const [projectType, setProjectType] = useState(req.projectType ?? '');
+  const [managerId, setManagerId] = useState(req.managerId ?? '');
   const [startDate, setStartDate] = useState(toDay(req.startDate));
   const [dueDate, setDueDate] = useState(toDay(req.dueDate));
   const [pid, setPid] = useState('');
@@ -82,9 +86,19 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
   const [err, setErr] = useState('');
   const [saved, setSaved] = useState(false);
 
+  const { data: types = [] } = useQuery<ProjectTypeDef[]>({
+    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: Infinity,
+  });
+  const sortedUsers = useMemo(
+    () => [...users].sort((a, b) => `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase())),
+    [users],
+  );
+
   const save = useMutation({
     mutationFn: () => api.projects.editPidRequestProject(req.id, {
       title: title.trim(), description, priority,
+      projectType: projectType || null,
+      managerId: managerId || undefined,
       startDate: startDate || null, dueDate: dueDate || null,
     }),
     onSuccess: () => { setErr(''); setSaved(true); setTimeout(() => setSaved(false), 1500); },
@@ -124,6 +138,24 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
           <Field label="Description">
             <textarea rows={2} value={description} onChange={e => setDescription(e.target.value)} className={`${inputCls} resize-none`} />
           </Field>
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field label="Project Type">
+              <select value={projectType} onChange={e => setProjectType(e.target.value)} className={`${inputCls} bg-white`}>
+                <option value="">None</option>
+                {types.map(t => (
+                  <option key={t.value} value={t.value} disabled={t.comingSoon}>{t.label}{t.comingSoon ? ' — coming soon' : ''}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Project Manager">
+              <select value={managerId} onChange={e => setManagerId(e.target.value)} className={`${inputCls} bg-white`}>
+                <option value="">Unassigned</option>
+                {sortedUsers.map(u => (
+                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}{u.designation ? ` — ${u.designation}` : ''}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
           <div className="grid grid-cols-3 gap-2.5">
             <Field label="Priority">
               <select value={priority} onChange={e => setPriority(e.target.value)} className={`${inputCls} bg-white`}>
