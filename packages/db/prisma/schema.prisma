@@ -1146,6 +1146,9 @@ model Timesheet {
   // existing rows are unaffected). "OTHER" = miscellaneous non-project time (admin, internal
   // meetings, training) — never billable, never a PID buffer to assign.
   category    String?
+  // A short label for the entry. Used by "OTHER" (non-project) time, which has no task to take
+  // its name from; null for normal task/buffer entries (they show the task title instead).
+  title       String?
   date        DateTime
   hoursLogged Float
   billable    Boolean   @default(true)

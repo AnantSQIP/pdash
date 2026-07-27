@@ -277,7 +277,7 @@ export type ApiComment = {
 
 export type Timesheet = {
   id: string; userId: string; taskId?: string | null; issueId?: string | null;
-  projectId?: string | null; projectType?: string | null; category?: string | null;
+  projectId?: string | null; projectType?: string | null; category?: string | null; title?: string | null;
   date: string; createdAt?: string;
   hoursLogged: number; billable: boolean; notes?: string;
   user: { id: string; firstName: string; lastName: string };
@@ -902,7 +902,7 @@ export const api = {
     forProject: (projectId: string) => req<Timesheet[]>(`/timesheets?projectId=${projectId}`),
     forUser: (userId: string) => req<Timesheet[]>(`/timesheets?userId=${userId}`),
     // taskId is optional: omit it to log a "buffer" entry whose PID (task) is assigned later.
-    create: (data: { userId?: string; taskId?: string; category?: 'OTHER'; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
+    create: (data: { userId?: string; taskId?: string; category?: 'OTHER'; title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { hoursLogged?: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>(`/timesheets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

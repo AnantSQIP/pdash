@@ -9,17 +9,16 @@ import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 
 /**
- * Log time from the standalone Timesheets module. Three ways to log:
- *  • Project task — pick a PROJECT (PID) then a TASK within it (only ones you're staffed on).
- *  • Assign PID later — a "buffer" entry: log the hours now, attach the PID within a week.
- *  • Other — miscellaneous NON-PROJECT time (admin, internal meetings, training). Always
- *    non-billable and never tied to a project/task.
+ * Log time from the standalone Timesheets module. Two options:
+ *  • Project task — pick a PROJECT (PID) then a TASK within it. An "Assign PID later" toggle
+ *    lets you log the hours now and attach the PID within a week (a "buffer" entry).
+ *  • Other — miscellaneous NON-PROJECT time (admin, internal meetings, training): a titled
+ *    entry, always non-billable, never tied to a project/task.
  */
-type LogMode = 'task' | 'buffer' | 'other';
+type LogMode = 'task' | 'other';
 
 const MODES: { key: LogMode; label: string }[] = [
   { key: 'task', label: 'Project task' },
-  { key: 'buffer', label: 'Assign PID later' },
   { key: 'other', label: 'Other' },
 ];
 
@@ -28,29 +27,33 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
   const [mode, setMode] = useState<LogMode>('task');
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
+  const [title, setTitle] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
+  // Buffer: log the hours now, attach the PID (task) within a week (Project-task option only).
+  const [assignLater, setAssignLater] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const isTaskMode = mode === 'task';
   const isOther = mode === 'other';
+  // Pickers show for a normal project-task entry — not while "assign PID later" is on.
+  const showPickers = mode === 'task' && !assignLater;
 
   // Projects the actor may see (the API already scopes to their memberships).
   const { data: projects = [], isLoading: loadingProjects } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
-    enabled: !!org?.id && isTaskMode,
+    enabled: !!org?.id && showPickers,
     staleTime: 30_000,
   });
 
-  // Tasks of the chosen project — fetched only once a project is picked (task mode only).
+  // Tasks of the chosen project — fetched only once a project is picked.
   const { data: tasks = [], isLoading: loadingTasks } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.tasks.list(projectId),
-    enabled: isTaskMode && !!projectId,
+    enabled: showPickers && !!projectId,
   });
 
   const selectedProject = projects.find(p => p.id === projectId);
@@ -60,13 +63,13 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
     setTaskId(''); // reset the task when the project changes
   }
 
-  const canSubmit = !!hours && (!isTaskMode || !!taskId) && (!isOther || !!notes.trim()) && !loading;
+  const canSubmit = !!hours && (!showPickers || !!taskId) && (!isOther || !!title.trim()) && !loading;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!currentUser || !hours || loading) return;
-    if (isTaskMode && !taskId) return;
-    if (isOther && !notes.trim()) { setError('Please describe the work in Notes.'); return; }
+    if (showPickers && !taskId) return;
+    if (isOther && !title.trim()) { setError('Please give this time a title.'); return; }
     const parsed = parseFloat(hours);
     if (isNaN(parsed) || parsed < 0.25 || parsed > 24) {
       setError('Hours must be between 0.25 and 24');
@@ -76,11 +79,12 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
     setError('');
     try {
       await api.timesheets.create({
-        taskId: isTaskMode ? taskId : undefined,   // buffer/other omit the task
-        category: isOther ? 'OTHER' : undefined,   // "OTHER" = non-project, non-billable
+        taskId: showPickers ? taskId : undefined,   // buffer/other omit the task
+        category: isOther ? 'OTHER' : undefined,     // "OTHER" = non-project, non-billable
+        title: isOther ? title.trim() : undefined,   // the label for a non-project entry
         date,
         hoursLogged: parsed,
-        billable: isOther ? false : billable,      // "Other" time is always non-billable
+        billable: isOther ? false : billable,        // "Other" time is always non-billable
         notes: notes.trim() || undefined,
       });
       onSuccess();
@@ -117,63 +121,82 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
       }
     >
       <form id="log-time-standalone-form" onSubmit={handleSubmit} className="space-y-4">
-        {/* What is this time against? */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Log against</label>
-          <div className="grid grid-cols-3 gap-2">
-            {MODES.map(m => (
-              <button
-                key={m.key} type="button" onClick={() => setMode(m.key)}
-                aria-pressed={mode === m.key}
-                className={clsx('px-2 py-2 text-xs font-medium rounded-lg border transition-colors',
-                  mode === m.key ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
+        {/* Two options: a project task, or other (non-project) time. */}
+        <div className="grid grid-cols-2 gap-2">
+          {MODES.map(m => (
+            <button
+              key={m.key} type="button" onClick={() => setMode(m.key)}
+              aria-pressed={mode === m.key}
+              className={clsx('px-2 py-2 text-sm font-medium rounded-lg border transition-colors',
+                mode === m.key ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}
+            >
+              {m.label}
+            </button>
+          ))}
         </div>
 
-        {mode === 'buffer' && (
-          <p className="text-[11px] text-amber-700 bg-amber-50/60 border border-amber-200 rounded-lg px-3 py-2">
-            Log the hours now and attach the Project ID (PID) within a week.
-          </p>
-        )}
-        {isOther && (
-          <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-            Non-project time — admin, internal meetings, training and the like. This time is always <span className="font-medium">non-billable</span>.
-          </p>
-        )}
-
-        {isTaskMode && (
+        {/* ── PROJECT TASK ────────────────────────────────────────── */}
+        {mode === 'task' && (
           <>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Project ID (PID) <span className="text-red-500">*</span></label>
-              <select
-                required={isTaskMode} value={projectId} onChange={e => pickProject(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+            {/* Assign PID later — a toggle inside the Project-task option (buffer entry). */}
+            <label className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 px-3.5 py-2.5 cursor-pointer">
+              <span className="min-w-0 mr-3">
+                <span className="text-sm font-medium text-amber-800">Assign PID later</span>
+                <span className="block text-[11px] text-amber-600">Log the hours now and attach the Project ID within a week.</span>
+              </span>
+              <button
+                type="button" role="switch" aria-checked={assignLater} aria-label="Assign PID later"
+                onClick={() => setAssignLater(v => !v)}
+                className={`relative h-5 w-10 shrink-0 rounded-full transition-colors ${assignLater ? 'bg-amber-500' : 'bg-gray-300'}`}
               >
-                <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project by its PID'}</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{(p.code ?? 'PID pending')} — {p.title}</option>)}
-              </select>
-              {selectedProject && (
-                <p className="text-[11px] text-gray-500 mt-1">
-                  Project type: <span className="font-medium text-gray-700">{selectedProject.projectType ?? '—'}</span>
-                </p>
-              )}
-            </div>
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${assignLater ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+            </label>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
-              <select
-                required={isTaskMode} value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
-              >
-                <option value="">{!projectId ? 'Pick a PID first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
-                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-              </select>
-            </div>
+            {showPickers && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Project ID (PID) <span className="text-red-500">*</span></label>
+                  <select
+                    required={showPickers} value={projectId} onChange={e => pickProject(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+                  >
+                    <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project by its PID'}</option>
+                    {projects.map(p => <option key={p.id} value={p.id}>{(p.code ?? 'PID pending')} — {p.title}</option>)}
+                  </select>
+                  {selectedProject && (
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Project type: <span className="font-medium text-gray-700">{selectedProject.projectType ?? '—'}</span>
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
+                  <select
+                    required={showPickers} value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
+                    className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
+                  >
+                    <option value="">{!projectId ? 'Pick a PID first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
+                    {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
           </>
+        )}
+
+        {/* ── OTHER (non-project) ─────────────────────────────────── */}
+        {isOther && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Title <span className="text-red-500">*</span></label>
+            <input
+              type="text" required value={title} onChange={e => setTitle(e.target.value)}
+              placeholder="e.g. Team meeting, Training, Admin"
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+            />
+            <p className="text-[11px] text-gray-500 mt-1">Non-project time (admin, meetings, training) — always non-billable.</p>
+          </div>
         )}
 
         <div className="grid grid-cols-2 gap-4">
@@ -195,12 +218,10 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Notes {isOther && <span className="text-red-500">*</span>}
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Notes</label>
           <input
-            type="text" required={isOther} value={notes} onChange={e => setNotes(e.target.value)}
-            placeholder={isOther ? 'What was this time for? (e.g. team meeting, training)' : 'What did you work on?'}
+            type="text" value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder={isOther ? 'Any extra detail (optional)' : 'What did you work on?'}
             className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
           />
         </div>

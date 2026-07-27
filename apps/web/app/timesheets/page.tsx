@@ -170,7 +170,7 @@ export default function TimesheetsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? (isOther(entry) ? 'Non-project time' : '—')}</span>
+                        <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? (isOther(entry) ? (entry.title ?? 'Non-project time') : '—')}</span>
                         {entry.issue && <span className="ml-2 text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
