@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock, Undo2 } from 'lucide-react';
+import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock } from 'lucide-react';
 import clsx from 'clsx';
 
 import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@/lib/api';
@@ -40,10 +40,8 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [managerId, setManagerId] = useState('');
   const [pid, setPid] = useState('');
   const [expiresAt, setExpiresAt] = useState<string | null>(null);   // reservation countdown
-  const [releaseUntil, setReleaseUntil] = useState<string | null>(null); // 1-min give-back window
   const [now, setNow] = useState(() => Date.now());
   const [generating, setGenerating] = useState(false);
-  const [releasing, setReleasing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -53,20 +51,19 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   useEffect(() => {
     if (!canGeneratePid) return;
     api.projects.myPidReservation().then(r => {
-      if (r.reservation) { setPid(r.reservation.pid); setExpiresAt(r.reservation.expiresAt); setReleaseUntil(r.reservation.releaseUntil); }
+      if (r.reservation) { setPid(r.reservation.pid); setExpiresAt(r.reservation.expiresAt); }
     }).catch(() => { /* ignore */ });
   }, [canGeneratePid]);
 
-  // Tick the countdown; clear a reservation that has expired (the server will have expired it too).
+  // Tick the countdown; clear a reservation that has expired (the server destroys it too).
   useEffect(() => {
     if (!expiresAt) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [expiresAt]);
   const secsLeft = expiresAt ? Math.max(0, Math.round((new Date(expiresAt).getTime() - now) / 1000)) : 0;
-  const canRelease = !!releaseUntil && now < new Date(releaseUntil).getTime();
   useEffect(() => {
-    if (expiresAt && secsLeft === 0) { setPid(''); setExpiresAt(null); setReleaseUntil(null); }
+    if (expiresAt && secsLeft === 0) { setPid(''); setExpiresAt(null); }
   }, [expiresAt, secsLeft]);
 
   // The people who can assign a PID — the request dropdown for non-authorities.
@@ -96,26 +93,12 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
       const res = await api.projects.generatePid();
       setPid(res.pid);
       setExpiresAt(res.expiresAt ?? null);
-      setReleaseUntil(res.releaseUntil ?? null);
       setNow(Date.now());
       try { await navigator.clipboard.writeText(res.pid); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* clipboard blocked */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate a PID.');
     } finally {
       setGenerating(false);
-    }
-  }
-
-  async function releasePid() {
-    setReleasing(true); setError('');
-    try {
-      const r = await api.projects.releasePid();
-      setPid(''); setExpiresAt(null); setReleaseUntil(null);
-      if (r.discontinued) setError(`PID ${r.pid} was discontinued (a newer PID was already in use). Generate a new one.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not release the PID.');
-    } finally {
-      setReleasing(false);
     }
   }
 
@@ -233,15 +216,8 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                       {copied ? <Check size={14} /> : <Copy size={14} />}
                     </button>
                   )}
-                  {/* One un-attached PID at a time: while one is reserved, offer only "give it back". */}
-                  {pid && expiresAt ? (
-                    canRelease ? (
-                      <button type="button" onClick={releasePid} disabled={releasing} title="Give this PID back to the system (within 1 min)"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50">
-                        <Undo2 size={13} className={releasing ? 'animate-pulse' : ''} /> Give back
-                      </button>
-                    ) : null
-                  ) : (
+                  {/* One un-attached PID at a time — while one is reserved, no re-generate. */}
+                  {!(pid && expiresAt) && (
                     <button type="button" onClick={generatePid} disabled={generating}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
                       <RefreshCw size={13} className={generating ? 'animate-spin' : ''} /> Generate PID
@@ -251,8 +227,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               </div>
               {pid && expiresAt && (
                 <p className="mt-2 text-[11px] text-amber-700 flex items-center gap-1">
-                  <Clock size={11} /> Reserved — attach it within {Math.floor(secsLeft / 60)}m {String(secsLeft % 60).padStart(2, '0')}s or it’s released automatically.
-                  {canRelease && ' You can still give it back for the next minute.'}
+                  <Clock size={11} /> Reserved — attach it within {Math.floor(secsLeft / 60)}m {String(secsLeft % 60).padStart(2, '0')}s, or the number is released and reused.
                 </p>
               )}
             </div>

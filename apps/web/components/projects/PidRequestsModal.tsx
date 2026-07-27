@@ -110,7 +110,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
         <div className="min-w-0">
           <p className="text-sm font-medium text-gray-900 truncate">{title || req.projectTitle}</p>
           <p className="text-[11px] text-gray-400 truncate">
-            {req.projectType ? `${req.projectType} · ` : ''}requested by {req.requestedBy}{req.manager ? ` · PM: ${req.manager}` : ''}
+            requested by {req.requestedBy}
           </p>
         </div>
         {open ? <ChevronUp size={16} className="text-gray-400 shrink-0" /> : <ChevronDown size={16} className="text-gray-400 shrink-0" />}

@@ -217,16 +217,17 @@ export type ProjectTypeDef = {
 
 export type PidLedgerEntry = {
   id: string; pid: string; fyLabel: string; serial: number;
-  status: 'RESERVED' | 'ATTACHED' | 'RELEASED' | 'EXPIRED' | 'DISCONTINUED';
+  status: 'RESERVED' | 'ATTACHED' | 'DISCONTINUED';
   generatedBy: string;
   project: { id: string; title: string; phase: string | null } | null;
   createdAt: string; expiresAt: string; resolvedAt: string | null;
 };
 
+// The PID reviewer deliberately does NOT receive the project type or manager.
 export type PidRequestItem = {
-  id: string; projectId: string; projectTitle: string; projectType: string | null;
+  id: string; projectId: string; projectTitle: string;
   description?: string | null; priority?: string | null;
-  startDate?: string | null; dueDate?: string | null; manager?: string | null;
+  startDate?: string | null; dueDate?: string | null;
   requestedBy: string; note: string | null; createdAt: string;
 };
 
@@ -768,11 +769,9 @@ export const api = {
       pid?: string; pidAssigneeId?: string;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
-    generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string; releaseUntil?: string }>('/projects/generate-pid', { method: 'POST' }),
-    /** Give an un-attached PID back to the system (within 1 min). */
-    releasePid: () => req<{ released: boolean; discontinued: boolean; pid: string }>('/projects/release-pid', { method: 'POST' }),
+    generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string }>('/projects/generate-pid', { method: 'POST' }),
     /** My current un-attached PID (countdown), or null. */
-    myPidReservation: () => req<{ reservation: { pid: string; createdAt: string; expiresAt: string; releaseUntil: string } | null }>('/projects/pid-reservation'),
+    myPidReservation: () => req<{ reservation: { pid: string; createdAt: string; expiresAt: string } | null }>('/projects/pid-reservation'),
     /** The full PID ledger (working / discontinued / history). Admin + Super Admin only. */
     pidLedger: () => req<PidLedgerEntry[]>('/projects/pid-ledger'),
     /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */

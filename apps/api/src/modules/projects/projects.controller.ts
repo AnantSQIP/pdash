@@ -57,12 +57,6 @@ export class ProjectsController {
     return this.projects.generatePid(await this.actor.requireOrgId(), this.actor.requireActorId());
   }
 
-  /** Manually give an un-attached PID back to the system (within 1 min). Authority only. */
-  @Post('release-pid') @RequirePermission('project.generate_pid')
-  async releasePid() {
-    return this.projects.releasePid(await this.actor.requireOrgId(), this.actor.requireActorId());
-  }
-
   /** My current un-attached PID (for the countdown), or null. Authority only. */
   @Get('pid-reservation') @RequirePermission('project.generate_pid')
   async myReservation() {
