@@ -20,6 +20,13 @@ export class CreateTimesheetDto {
   @IsOptional()
   category?: string;
 
+  // A short label for the entry — required for "OTHER" time (it has no task to name it),
+  // ignored for normal task/buffer entries.
+  @IsString()
+  @IsOptional()
+  @MaxLength(200)
+  title?: string;
+
   @IsDateString()
   date!: string;
 

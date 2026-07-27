@@ -136,17 +136,19 @@ export class TimesheetsService {
     //    Always non-billable, never tied to a project/task, and never a PID buffer to assign —
     //    it stands on its own. The 24h/day cap still applies. ──
     if (dto.category === 'OTHER') {
+      const title = dto.title?.trim();
+      if (!title) throw new BadRequestException('A title is required for "Other" time.');
       await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
       const entry = await this.prisma.timesheet.create({
         data: {
           userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
-          billable: false, category: 'OTHER', notes: dto.notes,
+          billable: false, category: 'OTHER', title, notes: dto.notes,
         },
         include: INCLUDE,
       });
       await this.events.emit({
         action: EVENTS.TIME_LOGGED, entityType: 'TIMESHEET', entityId: entry.id, actorId,
-        metadata: { category: 'OTHER', hours: dto.hoursLogged, billable: false },
+        metadata: { category: 'OTHER', title, hours: dto.hoursLogged, billable: false },
       });
       return entry;
     }
