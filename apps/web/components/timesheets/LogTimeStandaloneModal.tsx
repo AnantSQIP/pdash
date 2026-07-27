@@ -10,11 +10,12 @@ import { Modal } from '@/components/ui/Modal';
 
 /**
  * Log time from the standalone Timesheets module. Two options:
- *  • Project task — pick a project by TITLE; its PID auto-fills (mandatory). "Assign PID later"
- *    logs the hours now and attaches the PID within a week (a "buffer" entry), so the PID/task
- *    are skipped.
- *  • Other — miscellaneous NON-PROJECT time (admin, internal meetings, training): a titled
- *    entry, always non-billable, never tied to a project/task.
+ *  • Project task — always pick the project (by TITLE) and the TASK, so every entry records
+ *    what it was for. The PID auto-fills from the project and is mandatory — UNLESS you turn
+ *    on "Assign PID later" (the project's PID isn't minted yet), which just hides the PID
+ *    field; the project + task are still chosen. The PID appears in the list once it exists.
+ *  • Other — miscellaneous NON-PROJECT time (admin, meetings, training): a titled entry,
+ *    always non-billable, never tied to a project/task.
  */
 type LogMode = 'task' | 'other';
 
@@ -33,21 +34,20 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
-  // Buffer: log the hours now, attach the PID (task) within a week (Project-task option only).
+  // The project's PID isn't ready yet: hide the PID field + drop its requirement. The project
+  // and task are STILL selected, so the entry still records what it's for.
   const [assignLater, setAssignLater] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const isTask = mode === 'task';
   const isOther = mode === 'other';
-  // Project + PID + Task are picked for a normal project-task entry — not while
-  // "assign PID later" is on (a buffer entry logs without them).
-  const showPickers = mode === 'task' && !assignLater;
 
   // Projects the actor may see (the API already scopes to their memberships).
   const { data: projects = [], isLoading: loadingProjects } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
-    enabled: !!org?.id && showPickers,
+    enabled: !!org?.id && isTask,
     staleTime: 30_000,
   });
 
@@ -55,12 +55,13 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
   const { data: tasks = [], isLoading: loadingTasks } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.tasks.list(projectId),
-    enabled: showPickers && !!projectId,
+    enabled: isTask && !!projectId,
   });
 
   const selectedProject = projects.find(p => p.id === projectId);
   const pid = selectedProject?.code ?? '';       // the PID auto-fills from the chosen project
   const hasPid = !!pid;
+  const needPid = isTask && !assignLater;         // PID is required unless "assign PID later" is on
 
   function pickProject(id: string) {
     setProjectId(id);
@@ -68,15 +69,17 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
   }
 
   const canSubmit = !!hours
-    && (mode !== 'task' || assignLater || (!!taskId && hasPid))  // PID + task mandatory unless buffer
+    && (!isTask || (!!projectId && !!taskId && (!needPid || hasPid)))  // project + task always; PID unless buffer
     && (!isOther || !!title.trim())
     && !loading;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!currentUser || !hours || loading) return;
-    if (showPickers && !hasPid) { setError('This project has no PID yet — turn on “Assign PID later” to log without one.'); return; }
-    if (showPickers && !taskId) return;
+    if (isTask) {
+      if (!projectId || !taskId) return;
+      if (needPid && !hasPid) { setError('This project has no PID yet — turn on “Assign PID later” to log without one.'); return; }
+    }
     if (isOther && !title.trim()) { setError('Please give this time a title.'); return; }
     const parsed = parseFloat(hours);
     if (isNaN(parsed) || parsed < 0.25 || parsed > 24) {
@@ -87,12 +90,12 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
     setError('');
     try {
       await api.timesheets.create({
-        taskId: showPickers ? taskId : undefined,   // buffer/other omit the task
-        category: isOther ? 'OTHER' : undefined,     // "OTHER" = non-project, non-billable
-        title: isOther ? title.trim() : undefined,   // the label for a non-project entry
+        taskId: isTask ? taskId : undefined,       // the task records the project (+ PID when it exists)
+        category: isOther ? 'OTHER' : undefined,   // "OTHER" = non-project, non-billable
+        title: isOther ? title.trim() : undefined, // the label for a non-project entry
         date,
         hoursLogged: parsed,
-        billable: isOther ? false : billable,        // "Other" time is always non-billable
+        billable: isOther ? false : billable,      // "Other" time is always non-billable
         notes: notes.trim() || undefined,
       });
       onSuccess();
@@ -144,13 +147,13 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
         </div>
 
         {/* ── PROJECT TASK ────────────────────────────────────────── */}
-        {mode === 'task' && (
+        {isTask && (
           <>
-            {/* Assign PID later — a toggle inside the Project-task option (buffer entry). */}
+            {/* Assign PID later — hides only the PID field; project + task stay selectable. */}
             <label className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 px-3.5 py-2.5 cursor-pointer">
               <span className="min-w-0 mr-3">
                 <span className="text-sm font-medium text-amber-800">Assign PID later</span>
-                <span className="block text-[11px] text-amber-600">Log the hours now and attach the Project ID within a week.</span>
+                <span className="block text-[11px] text-amber-600">The project’s PID isn’t ready yet — still pick the project &amp; task; the PID attaches once it’s minted.</span>
               </span>
               <button
                 type="button" role="switch" aria-checked={assignLater} aria-label="Assign PID later"
@@ -161,48 +164,46 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
               </button>
             </label>
 
-            {showPickers && (
-              <>
-                {/* Project title — pick the project by its name. */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Project title <span className="text-red-500">*</span></label>
-                  <select
-                    required value={projectId} onChange={e => pickProject(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
-                  >
-                    <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project'}</option>
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-                  </select>
-                </div>
+            {/* Project title — always shown. */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Project title <span className="text-red-500">*</span></label>
+              <select
+                required value={projectId} onChange={e => pickProject(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+              >
+                <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project'}</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+              </select>
+            </div>
 
-                {/* PID — auto-fills from the selected project; mandatory (read-only). */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">PID <span className="text-red-500">*</span></label>
-                  <input
-                    type="text" readOnly value={pid}
-                    placeholder={!projectId ? 'Select a project first' : 'This project has no PID yet — use “Assign PID later”'}
-                    className="w-full px-3.5 py-2.5 text-sm font-mono border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed focus:outline-none"
-                  />
-                  {selectedProject?.projectType && (
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      Project type: <span className="font-medium text-gray-700">{selectedProject.projectType}</span>
-                    </p>
-                  )}
-                </div>
-
-                {/* Task */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
-                  <select
-                    required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
-                    className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
-                  >
-                    <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
-                    {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-                  </select>
-                </div>
-              </>
+            {/* PID — auto-fills from the project; hidden while "Assign PID later" is on. */}
+            {!assignLater && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">PID <span className="text-red-500">*</span></label>
+                <input
+                  type="text" readOnly value={pid}
+                  placeholder={!projectId ? 'Select a project first' : 'This project has no PID yet — use “Assign PID later”'}
+                  className="w-full px-3.5 py-2.5 text-sm font-mono border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed focus:outline-none"
+                />
+                {selectedProject?.projectType && (
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Project type: <span className="font-medium text-gray-700">{selectedProject.projectType}</span>
+                  </p>
+                )}
+              </div>
             )}
+
+            {/* Task — always shown. */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
+              <select
+                required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
+              >
+                <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
+                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </div>
           </>
         )}
 
