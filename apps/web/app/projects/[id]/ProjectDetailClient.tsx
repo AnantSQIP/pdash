@@ -56,12 +56,13 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
 
   // Lifecycle: Complete → Close → Reopen.
-  async function runLifecycle(action: 'complete' | 'close' | 'reopen') {
+  async function runLifecycle(action: 'complete' | 'close' | 'reopen' | 'reinitialize') {
     if (lifecycleBusy) return;
     const confirms: Record<typeof action, string | null> = {
       complete: 'Mark this project complete? Its work is treated as finished.',
-      close: 'Close this project? It moves to the Closed section (you can reopen it later).',
+      close: 'Close this project? It moves to the Closed section (its Project ID is retired).',
       reopen: null,
+      reinitialize: 'Re-initialize this project for a returning client? It reopens with the SAME Project ID and reuses all the existing data.',
     };
     const msg = confirms[action];
     if (msg && !window.confirm(msg)) return;
@@ -70,7 +71,7 @@ export function ProjectDetailClient({ projectId }: Props) {
       await api.projects[action](projectId);
       qc.invalidateQueries({ queryKey: ['project', projectId] });
       qc.invalidateQueries({ queryKey: ['projects'] });
-      toast(action === 'complete' ? 'Project marked complete' : action === 'close' ? 'Project closed' : 'Project reopened', 'success');
+      toast(action === 'complete' ? 'Project marked complete' : action === 'close' ? 'Project closed' : action === 'reinitialize' ? 'Project re-initialized (same PID)' : 'Project reopened', 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
     } finally {
@@ -333,11 +334,23 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <Archive size={14} /> Close
                 </button>
               )}
-              {can('project.update') && ['COMPLETED', 'CLOSED'].includes(project.projectPhase) && (
+              {/* A COMPLETED project re-initializes IN PLACE keeping the SAME PID (returning client). */}
+              {can('project.update') && project.projectPhase === 'COMPLETED' && (
+                <button
+                  onClick={() => runLifecycle('reinitialize')}
+                  disabled={lifecycleBusy}
+                  title="Re-initialize for a returning client — same Project ID, existing data reused"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
+                >
+                  <RotateCcw size={14} /> Re-initialize
+                </button>
+              )}
+              {/* A CLOSED project reopens with a FRESH PID (the old one was discontinued on close). */}
+              {can('project.update') && project.projectPhase === 'CLOSED' && (
                 <button
                   onClick={() => runLifecycle('reopen')}
                   disabled={lifecycleBusy}
-                  title="Reopen this project and return it to Active"
+                  title="Reopen this project (it will need a fresh Project ID)"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
                   <RotateCcw size={14} /> Reopen
