@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -10,12 +11,32 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 /** PID shape (org-agnostic): ORGCODE_YY_YY_serial. The service re-checks against the real org code. */
 const PID_PATTERN = /^[A-Z0-9]+_\d{2}_\d{2}_\d{1,6}$/i;
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { PROJECT_TYPE_VALUES } from './project-templates';
+
+/** Inline custom project type — a name + task list, optionally saved as an org-wide template. */
+export class CustomTypeDto {
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
+  @MaxLength(60)
+  label!: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  tasks?: string[];
+
+  /** true = also persist this as a reusable org-wide ProjectTemplate. */
+  @IsOptional()
+  @IsBoolean()
+  save?: boolean;
+}
 
 // Task/project priority is a fixed set — free-text used to be stored verbatim.
 export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
@@ -29,10 +50,19 @@ export class CreateProjectDto {
   @MaxLength(100)
   title!: string;
 
-  /** The kind of matter (HML, Claim Chart, FTO, …). Drives the auto-created task template. */
+  /** The kind of matter — a built-in type value OR a saved custom-template value. Drives the
+   *  auto-created task template. Not restricted to the built-ins any more (org templates add more). */
   @IsOptional()
-  @IsIn(PROJECT_TYPE_VALUES)
+  @IsString()
+  @MaxLength(60)
   projectType?: string;
+
+  /** Inline custom type (the "+ Create new type" option): a one-off type name + its task list.
+   *  When `save` is true it is ALSO persisted as an org-wide reusable ProjectTemplate. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CustomTypeDto)
+  customType?: CustomTypeDto;
 
   /** The client/matter (drives the "{Type} - {Client}" title + the confidential patent picker). */
   @IsOptional()

@@ -39,10 +39,10 @@ export class ProjectsController {
     return this.projects.eligibleManagers(await this.actor.requireOrgId());
   }
 
-  /** The catalog of project types + their auto-created task templates (for the create form). */
+  /** The catalog of project types (built-ins + org custom templates) + their task templates. */
   @Get('types')
-  projectTypes() {
-    return this.projects.projectTypes();
+  async projectTypes() {
+    return this.projects.projectTypes(await this.actor.requireOrgId());
   }
 
   /** Non-binding preview of the PID the next created project would receive. */

@@ -144,9 +144,30 @@ export class ProjectsService {
       if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
     }
 
-    // A patent-analysis project TYPE (HML, Claim Chart, FTO, …) auto-creates that type's
-    // standard workflow as a task list of ready-made tasks. Resolved before the write.
-    const template = templateFor(dto.projectType);
+    // Resolve the project TYPE template that auto-creates a task list. Three sources:
+    //   1. a built-in type (templateFor),
+    //   2. an INLINE one-off custom type ("+ Create new type") — used for this project, and
+    //      persisted as a reusable org-wide ProjectTemplate when `save` is set,
+    //   3. a saved org ProjectTemplate value.
+    let template = templateFor(dto.projectType);
+    let effectiveType: string | null = dto.projectType ?? null;
+    if (dto.customType?.label) {
+      const label = dto.customType.label.trim();
+      const tasks = (dto.customType.tasks ?? []).map(t => t.trim()).filter(Boolean);
+      const value = (`CUSTOM_${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`).slice(0, 60) || 'CUSTOM';
+      effectiveType = value;
+      template = { value, label, description: '', taskListName: label, tasks };
+      if (dto.customType.save) {
+        await this.prisma.projectTemplate.upsert({
+          where: { organizationId_value: { organizationId, value } },
+          create: { organizationId, value, label, taskListName: label, tasks, isActive: true, createdBy: creator.id },
+          update: { label, taskListName: label, tasks, isActive: true },
+        });
+      }
+    } else if (!template && dto.projectType) {
+      const db = await this.prisma.projectTemplate.findFirst({ where: { organizationId, value: dto.projectType, isActive: true } });
+      if (db) template = { value: db.value, label: db.label, description: db.description ?? '', taskListName: db.taskListName ?? db.label, tasks: db.tasks };
+    }
 
     // ── Patent linkage (Phase 1) — the client is DERIVED from the patents, never picked.
     // Only patent.view holders (Super Admin by default, or anyone granted it) may attach
@@ -193,7 +214,7 @@ export class ProjectsService {
           code: pid,
           title: dto.title,
           description: dto.description,
-          projectType: dto.projectType ?? null,
+          projectType: effectiveType,
           clientId: derivedClientId,
           projectPhase: 'ACTIVE',
           priority: dto.priority ?? 'MEDIUM',
@@ -679,9 +700,19 @@ export class ProjectsService {
     return { pid, projectId: req.projectId };
   }
 
-  /** The catalog of project types (drives the create-form dropdown + task preview). */
-  projectTypes() {
-    return PROJECT_TYPES;
+  /** The catalog of project types — built-ins + the org's saved custom templates. Drives the
+   *  create-form dropdown + task preview. */
+  async projectTypes(organizationId: string) {
+    const custom = await this.prisma.projectTemplate.findMany({
+      where: { organizationId, isActive: true }, orderBy: { label: 'asc' },
+    });
+    return [
+      ...PROJECT_TYPES,
+      ...custom.map(c => ({
+        value: c.value, label: c.label, description: c.description ?? 'Custom project type',
+        taskListName: c.taskListName ?? c.label, tasks: c.tasks, custom: true,
+      })),
+    ];
   }
 
   /**
