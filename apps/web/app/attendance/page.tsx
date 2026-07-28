@@ -5,13 +5,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { format } from 'date-fns';
 import {
-  Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil, Home,
+  Clock, LogIn, LogOut, CalendarDays, Plane, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil, Home, MapPin,
 } from 'lucide-react';
 import {
   api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest, type WfhRequestItem,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { getCurrentLocation, mapLink } from '@/lib/geolocation';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 
@@ -88,7 +89,8 @@ export default function AttendancePage() {
 
   async function punch() {
     if (busy) return; setBusy(true);
-    try { await api.attendance.punch(); invalidate('attn-today', 'attn-month', 'attn-org'); }
+    // Location is mandatory — capture it first; a denial blocks the punch with a clear message.
+    try { await api.attendance.punch(await getCurrentLocation()); invalidate('attn-today', 'attn-month', 'attn-org'); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
     finally { setBusy(false); }
   }
@@ -136,6 +138,18 @@ export default function AttendancePage() {
                     </p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{clockedIn ? fmtElapsed(elapsed) : (today?.checkOut ? 'Day complete' : 'Not clocked in')}</p>
                     <p className="text-xs text-gray-500 mt-1">In {timeOf(today?.checkIn)} · Out {timeOf(today?.checkOut)}{today?.totalHours != null ? ` · ${today.totalHours}h` : ''}</p>
+                    {/* Punch locations (captured on each punch) */}
+                    {(today?.checkInLat != null || today?.checkOutLat != null) && (
+                      <p className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                        <MapPin size={11} className="text-gray-400" />
+                        {today?.checkInLat != null && today?.checkInLng != null && (
+                          <a href={mapLink(today.checkInLat, today.checkInLng)} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">In location</a>
+                        )}
+                        {today?.checkOutLat != null && today?.checkOutLng != null && (
+                          <a href={mapLink(today.checkOutLat, today.checkOutLng)} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">Out location</a>
+                        )}
+                      </p>
+                    )}
                   </div>
                   {clockedIn || dayComplete ? (
                     <button onClick={() => punch()} disabled={busy || dayComplete}

@@ -9,6 +9,7 @@ import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { formatTimeIST, fmtHours, plural, todayUtc, toUtcDay } from '@/lib/date';
+import { getCurrentLocation } from '@/lib/geolocation';
 import { homeKeys } from './keys';
 
 /**
@@ -43,7 +44,8 @@ export function usePunch() {
   });
 
   const punch = useMutation({
-    mutationFn: () => api.attendance.punch(),
+    // Location is mandatory — capture it first and block the punch if the browser denies it.
+    mutationFn: async () => api.attendance.punch(await getCurrentLocation()),
     onSuccess: (row) => {
       // The overnight-close path returns YESTERDAY's row (it closed the forgotten shift
       // without opening today's). Only write it into today's cache when it really is today;
