@@ -11,21 +11,24 @@ import { fmtHours } from '@/lib/date';
 type Row = { userId: string; hours: string };
 const rowsFor = (task: ApiTask, role: TaskRole): Row[] =>
   (task.assignees ?? []).filter(a => a.role === role).map(a => ({ userId: a.userId, hours: a.estimatedHours != null ? String(a.estimatedHours) : '' }));
-const pmOf = (task: ApiTask): Row => {
+// The task's PM defaults to the project's manager (defaultManagerId) until the task sets its own
+// — so every task inherits the project's PM, but it can be changed per task.
+const pmOf = (task: ApiTask, defaultManagerId?: string | null): Row => {
   const pm = (task.assignees ?? []).find(a => a.role === 'PM');
-  return pm ? { userId: pm.userId, hours: pm.estimatedHours != null ? String(pm.estimatedHours) : '' } : { userId: '', hours: '' };
+  if (pm) return { userId: pm.userId, hours: pm.estimatedHours != null ? String(pm.estimatedHours) : '' };
+  return { userId: defaultManagerId ?? '', hours: '' };
 };
 
 /**
  * Role-based task staffing: one Project Manager, many Reviewers, many Analysts — each with a
  * mandatory estimated-hours value. The task's total estimate is the sum, saved server-side.
  */
-export function TaskStaffing({ task, readOnly, canAssign, onSaved }: {
-  task: ApiTask; readOnly?: boolean; canAssign: boolean; onSaved?: (t: ApiTask) => void;
+export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSaved }: {
+  task: ApiTask; readOnly?: boolean; canAssign: boolean; defaultManagerId?: string | null; onSaved?: (t: ApiTask) => void;
 }) {
   const { users } = useOrg();
   const { toast } = useToast();
-  const [pm, setPm] = useState<Row>(() => pmOf(task));
+  const [pm, setPm] = useState<Row>(() => pmOf(task, defaultManagerId));
   const [reviewers, setReviewers] = useState<Row[]>(() => rowsFor(task, 'REVIEWER'));
   const [analysts, setAnalysts] = useState<Row[]>(() => rowsFor(task, 'ANALYST'));
   const [saving, setSaving] = useState(false);
