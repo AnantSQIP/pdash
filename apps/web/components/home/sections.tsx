@@ -682,7 +682,6 @@ export function QuickAccessCard() {
     { href: '/tasks',      label: 'My Tasks',   Icon: CheckSquare,   color: 'text-brand-600',  perm: 'task.view' },
     { href: '/projects',   label: 'Projects',   Icon: FolderKanban,  color: 'text-green-600',  perm: 'project.view' },
     { href: '/calendar',   label: 'Calendar',   Icon: CalendarDays,  color: 'text-orange-600', perm: 'calendar.view' },
-    { href: '/discuss',    label: 'Discuss',    Icon: MessageCircle, color: 'text-purple-600', perm: 'channel.view' },
     { href: '/timesheets', label: 'Timesheets', Icon: Timer,         color: 'text-brand-600',  perm: ['timesheet.view', 'timesheet.create'] },
     { href: '/reports',    label: 'Reports',    Icon: FileText,      color: 'text-amber-600',  perm: ['report.view', 'report.export'] },
     { href: '/attendance', label: 'Attendance', Icon: Clock,         color: 'text-blue-600',   perm: 'attendance.view.own' },

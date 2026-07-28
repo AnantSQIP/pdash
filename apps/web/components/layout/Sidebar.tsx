@@ -6,7 +6,7 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
-  MessagesSquare, Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
+  Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
   ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
@@ -39,7 +39,6 @@ const NAV: NavItem[] = [
   { href: '/attendance',  icon: Fingerprint,     label: 'Attendance',  perm: 'attendance.view.own' },
   { href: '/expenses',    icon: Receipt,         label: 'Expenses',    perm: 'expense.view.own' },
   { href: '/reports',     icon: FileBarChart,    label: 'Reports',     perm: ['report.view', 'report.export'] },
-  { href: '/discuss',     icon: MessagesSquare,  label: 'Discuss',     perm: 'channel.view' },
   // Company feed, HR policies and the org chart — readable by everyone (no perm).
   { href: '/company',     icon: Megaphone,       label: 'Company' },
   { href: '/users',       icon: Users,           label: 'People',      perm: 'user.view' },
