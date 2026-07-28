@@ -29,6 +29,10 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
 
   const [title, setTitle] = useState('');
   const [projectType, setProjectType] = useState('');
+  // "+ Create new type" — an inline custom type (name + tasks), optionally saved org-wide.
+  const [customLabel, setCustomLabel] = useState('');
+  const [customTasks, setCustomTasks] = useState('');   // one task per line
+  const [saveTemplate, setSaveTemplate] = useState(false);
   const [patentIds, setPatentIds] = useState<string[]>([]);
   const [patentSearch, setPatentSearch] = useState('');
   const [description, setDescription] = useState('');
@@ -138,10 +142,17 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     }
     setLoading(true);
     setError('');
+    const isCustom = projectType === '__custom__';
+    if (isCustom && !customLabel.trim()) { setError('Give the new project type a name.'); return; }
     try {
       await api.projects.create({
         title,
-        projectType: projectType || undefined,
+        projectType: isCustom ? undefined : (projectType || undefined),
+        customType: isCustom ? {
+          label: customLabel.trim(),
+          tasks: customTasks.split('\n').map(t => t.trim()).filter(Boolean),
+          save: saveTemplate,
+        } : undefined,
         patentIds: patentIds.length ? patentIds : undefined,
         description: description || undefined,
         priority,
@@ -247,11 +258,39 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               <option value="">Select a type…</option>
               {projectTypes.map(t => (
                 <option key={t.value} value={t.value} disabled={t.comingSoon}>
-                  {t.label}{t.comingSoon ? ' — coming soon' : ''}
+                  {t.label}{t.comingSoon ? ' — coming soon' : ''}{t.custom ? ' (custom)' : ''}
                 </option>
               ))}
+              <option value="__custom__">+ Create a new type…</option>
             </select>
-            {selectedType && (
+
+            {/* Inline custom type — name + task list; optionally saved for the whole org. */}
+            {projectType === '__custom__' ? (
+              <div className="mt-2 rounded-lg border border-brand-100 bg-brand-50/40 px-3 py-3 space-y-2.5">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">New type name <span className="text-red-500">*</span></label>
+                  <input
+                    value={customLabel} onChange={e => setCustomLabel(e.target.value)}
+                    placeholder="e.g. Standard Essentiality Study"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Tasks — one per line</label>
+                  <textarea
+                    rows={4} value={customTasks} onChange={e => setCustomTasks(e.target.value)}
+                    placeholder={'Understanding + KFs\nSearch strategies\nReport Preparation'}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white resize-none"
+                  />
+                  <p className="text-[11px] text-gray-400 mt-1">These become the project's tasks. Leave blank for no preset tasks.</p>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                  <input type="checkbox" checked={saveTemplate} onChange={e => setSaveTemplate(e.target.checked)}
+                    className="rounded border-gray-300 text-brand-600 focus:ring-brand-500" />
+                  Save this type for everyone in the organisation (reusable later)
+                </label>
+              </div>
+            ) : selectedType && (
               <div className="mt-2">
                 <p className="text-[11px] text-gray-400">{selectedType.description}</p>
                 {selectedType.tasks && selectedType.tasks.length > 0 && (
@@ -446,7 +485,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             </button>
             <button
               type="submit"
-              disabled={loading || !title.trim() || !projectType || (!canGeneratePid && (!managerId || !pidAssigneeId))}
+              disabled={loading || !title.trim() || !projectType || (projectType === '__custom__' && !customLabel.trim()) || (!canGeneratePid && (!managerId || !pidAssigneeId))}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (

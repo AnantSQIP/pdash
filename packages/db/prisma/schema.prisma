@@ -632,6 +632,27 @@ model PidReservation {
   @@map("pid_reservation")
 }
 
+// A custom project-type template saved by an Admin/Manager/PM — org-wide, reusable by anyone.
+// Folded into the built-in PROJECT_TYPES so it appears in the New Project type dropdown and
+// auto-creates its task list on project creation, exactly like a built-in type.
+model ProjectTemplate {
+  id             String   @id @default(cuid())
+  organizationId String
+  value          String   // stable slug used as Project.projectType (unique per org)
+  label          String
+  description    String?
+  taskListName   String?
+  tasks          String[] // ordered task titles auto-created under the list
+  isActive       Boolean  @default(true)
+  createdBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, value])
+  @@index([organizationId, isActive])
+  @@map("project_template")
+}
+
 model ProjectMember {
   id          String   @id @default(cuid())
   projectId   String

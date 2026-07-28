@@ -212,7 +212,7 @@ export type ApiTask = {
 /** A selectable project type + its auto-created task template (from GET /projects/types). */
 export type ProjectTypeDef = {
   value: string; label: string; description: string;
-  comingSoon?: boolean; taskListName?: string; tasks?: string[];
+  comingSoon?: boolean; taskListName?: string; tasks?: string[]; custom?: boolean;
 };
 
 export type PidLedgerEntry = {
@@ -773,6 +773,7 @@ export const api = {
       description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
       pid?: string; pidAssigneeId?: string;
+      customType?: { label: string; tasks: string[]; save?: boolean };
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
     generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string }>('/projects/generate-pid', { method: 'POST' }),

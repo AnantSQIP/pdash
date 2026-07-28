@@ -19,116 +19,98 @@ export interface ProjectTypeDef {
   taskListName?: string;
   /** Ordered task titles auto-created under that list. */
   tasks?: string[];
+  /** true when this came from a saved org custom template (not a built-in). */
+  custom?: boolean;
 }
+
+// The FTO / Landscape workflow is shared (identical task list).
+const FTO_LANDSCAPE_TASKS = [
+  'Proposal',
+  'Understanding + KFs',
+  'Taxonomy Creation',
+  'Initial Search Strategies',
+  'Final Search Strategies',
+  '1st Level Screening',
+  '2nd Level Screening - Detailed',
+  'Results Mapping',
+  'Iteration',
+  'Report Preparation',
+  'QC',
+];
 
 export const PROJECT_TYPES: ProjectTypeDef[] = [
   {
-    value: 'HML',
-    label: 'HML Ranking',
-    description: 'Rank a set of patents High / Medium / Low against a client feature set.',
-    taskListName: 'HML Workflow',
+    value: 'INFRINGEMENT',
+    label: 'Infringement Search',
+    description: 'Infringement analysis workflow — HML ranking through claim-chart preparation.',
+    taskListName: 'Infringement Search',
     tasks: [
-      '1st Level pass',
-      '2nd Level pass — Final list',
-      'Patent Analysis — Detailed for defendants',
-      'Report',
-    ],
-  },
-  {
-    value: 'CC_CLIENT',
-    label: 'Claim Chart — From Client',
-    description: 'Verify and strengthen a client-provided claim chart / infringement theory.',
-    taskListName: 'Claim Chart (From Client)',
-    tasks: [
-      'Theory Verify',
-      'Client Q&A',
-      'Additional Research on defendants',
-    ],
-  },
-  {
-    value: 'CC_NEW',
-    label: 'Claim Chart — New',
-    description: 'Build an evidence-of-use / infringement claim chart from scratch.',
-    taskListName: 'Claim Chart (New)',
-    tasks: [
-      'Understanding Claim',
-      'Research on Defendants',
-      'Finalising Chart',
+      'HML Ranking',
+      'Infringement Analysis',
+      'Testing',
+      'Reverse Engineering',
+      'Claim Chart Preparation',
     ],
   },
   {
     value: 'NOVELTY',
-    label: 'Novelty / Patentability Search',
-    description: 'Pre-filing search assessing novelty (§102) and non-obviousness (§103).',
+    label: 'Novelty Search',
+    description: 'Pre-filing novelty / patentability search.',
     taskListName: 'Novelty Search',
     tasks: [
-      'Define Scope & Search Strategy',
-      'Database Search',
-      'Non-Patent Literature Sweep',
-      'Reference Analysis & Ranking',
-      'Patentability Opinion & QC',
+      'Understanding + KFs',
+      'Search strategies',
+      'Iterations',
+      'Report Preparation',
     ],
   },
   {
     value: 'INVALIDITY',
-    label: 'Prior Art & Invalidation',
-    description: 'Invalidation-grade search producing element-by-element invalidity charts.',
+    label: 'Invalidity Search',
+    description: 'Invalidation-grade prior-art search.',
     taskListName: 'Invalidity Search',
     tasks: [
-      'Search Strategy Development',
-      'Exhaustive Multi-Database Search',
-      'NPL & Standards Sweep',
-      'Reference Selection & Claim Mapping',
-      'QC Review',
+      'Understanding + KFs',
+      'File Wrapper/History',
+      'Exclusion list',
+      'Search strategies',
+      'Iterations',
+      'Report Preparation',
     ],
   },
   {
     value: 'FTO',
-    label: 'Freedom to Operate',
-    description: 'Clearance against live, in-force patents, with risk rating and design-arounds.',
-    taskListName: 'FTO Workflow',
-    tasks: [
-      'Define Product & Features',
-      'Landscape & Search (live patents)',
-      'Mapping & Risk Rating',
-      'Opinion & Design-Around',
-    ],
+    label: 'FTO Search',
+    description: 'Freedom-to-operate clearance search.',
+    taskListName: 'FTO Search',
+    tasks: FTO_LANDSCAPE_TASKS,
   },
   {
-    value: 'REVERSE_ENGINEERING',
-    label: 'Reverse Engineering',
-    description: 'Teardown → court-ready technical evidence of use aligned to claim language.',
-    taskListName: 'Reverse Engineering',
-    tasks: [
-      'Sample Acquisition & Chain-of-Custody',
-      'RE Analysis (delayer / firmware / protocol)',
-      'Evidence Extraction',
-      'Claim Mapping',
-      'Expert-Ready Report',
-    ],
-  },
-  {
-    value: 'RISK_STRATEGY',
-    label: 'Risk & Strategy',
-    description: 'IP risk-exposure matrix, gap/whitespace analysis and a de-risk roadmap.',
-    taskListName: 'Risk & Strategy',
-    tasks: [
-      'Map Portfolio & Products',
-      'Identify Risks & Gaps',
-      'Score & Prioritise',
-      'De-Risk Roadmap',
-    ],
+    value: 'LANDSCAPE',
+    label: 'Landscape Search',
+    description: 'Patent landscape / whitespace search.',
+    taskListName: 'Landscape Search',
+    tasks: FTO_LANDSCAPE_TASKS,
   },
   {
     value: 'MONETIZATION',
     label: 'Patent Monetization',
-    description: 'End-to-end licensing programme (portfolio ranking → campaign). Coming soon.',
-    comingSoon: true,
+    description: 'Patent monetization / licensing engagement.',
+  },
+  {
+    value: 'REVERSE_ENGINEERING',
+    label: 'Reverse Engineering',
+    description: 'Product teardown and technical evidence of use.',
+  },
+  {
+    value: 'RISK_STRATEGY',
+    label: 'Risk & Strategy',
+    description: 'IP risk-exposure and strategy engagement.',
   },
   {
     value: 'GENERAL',
     label: 'General / Other',
-    description: 'A general project with no preset patent-analysis workflow.',
+    description: 'A general project with no preset workflow.',
   },
 ];
 
