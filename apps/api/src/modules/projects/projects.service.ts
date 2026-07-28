@@ -485,16 +485,36 @@ export class ProjectsService {
     const projectIds = [...new Set(rows.map(r => r.projectId).filter(Boolean) as string[])];
     const [users, projects] = await Promise.all([
       userIds.length ? this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [],
-      projectIds.length ? this.prisma.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, title: true, projectPhase: true } }) : [],
+      // Full context for the Super-Admin detail view: type, deadline, and active members + roles.
+      projectIds.length ? this.prisma.project.findMany({
+        where: { id: { in: projectIds } },
+        select: {
+          id: true, title: true, projectPhase: true, projectType: true, dueDate: true,
+          members: { where: { isActive: true }, select: { projectRole: true, user: { select: { firstName: true, lastName: true } } } },
+        },
+      }) : [],
     ]);
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
     const projById = new Map(projects.map(p => [p.id, p]));
-    return rows.map(r => ({
-      id: r.id, pid: r.pid, fyLabel: r.fyLabel, serial: r.serial, status: r.status,
-      generatedBy: userById.get(r.generatedById) ?? '—',
-      project: r.projectId ? { id: r.projectId, title: projById.get(r.projectId)?.title ?? '(deleted)', phase: projById.get(r.projectId)?.projectPhase ?? null } : null,
-      createdAt: r.createdAt, expiresAt: r.expiresAt, resolvedAt: r.resolvedAt,
-    }));
+    return rows.map(r => {
+      const p = r.projectId ? projById.get(r.projectId) : undefined;
+      return {
+        id: r.id, pid: r.pid, fyLabel: r.fyLabel, serial: r.serial, status: r.status,
+        generatedBy: userById.get(r.generatedById) ?? '—',
+        project: r.projectId ? {
+          id: r.projectId,
+          title: p?.title ?? '(deleted)',
+          phase: p?.projectPhase ?? null,
+          type: p?.projectType ?? null,
+          dueDate: p?.dueDate ?? null,
+          members: (p?.members ?? []).map(m => ({
+            name: `${m.user.firstName} ${m.user.lastName}`.trim(),
+            role: m.projectRole ?? 'MEMBER',
+          })),
+        } : null,
+        createdAt: r.createdAt, expiresAt: r.expiresAt, resolvedAt: r.resolvedAt,
+      };
+    });
   }
 
   /** Members who may assign a PID (hold project.generate_pid) — the request dropdown. */
@@ -1079,6 +1099,39 @@ export class ProjectsService {
     await this.notifyMembers(project, actorId, {
       type: 'project.reopened', title: 'Project reopened',
       message: `"${project.title}" was reopened and is active again.`,
+    });
+    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+  }
+
+  /**
+   * Re-initialize a COMPLETED project (a returning client) — reopen it in place KEEPING the SAME
+   * PID and all its existing data/context, so nothing is re-entered. This differs from reopen():
+   *   • complete() does NOT discontinue the PID, so a completed project still holds its ATTACHED
+   *     reservation + code — we keep both.
+   *   • reopen() (used for CLOSED projects) clears the code because a closed project's PID was
+   *     discontinued and can't be revived; re-initialize must not do that.
+   * Only a COMPLETED project can be re-initialized; a CLOSED one stays archived.
+   */
+  async reinitialize(id: string) {
+    await this.access.assertProjectAccess(getActorId(), id);
+    const project = await this.getRaw(id);
+    const phase = (project as { projectPhase: string }).projectPhase;
+    if (phase !== 'COMPLETED') {
+      throw new BadRequestException('Only a completed project can be re-initialized. A closed project must be reopened (and gets a fresh PID).');
+    }
+    const actorId = getActorId();
+    // Back to ACTIVE, clear completedAt, KEEP code (PID) + its ATTACHED reservation untouched.
+    const updated = await this.prisma.project.update({
+      where: { id },
+      data: { projectPhase: 'ACTIVE', completedAt: null },
+    });
+    await this.events.emit({
+      action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
+      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title, reinitialized: true },
+    });
+    await this.notifyMembers(project, actorId, {
+      type: 'project.reopened', title: 'Project re-initialized',
+      message: `"${project.title}" was re-initialized for a returning client — same Project ID, existing data reused.`,
     });
     return this.deadlines.redactProject(updated, await this.deadlines.scope());
   }

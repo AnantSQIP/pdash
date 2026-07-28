@@ -133,6 +133,12 @@ export class ProjectsController {
     return this.projects.reopen(id);
   }
 
+  /** Re-initialize a COMPLETED project for a returning client — same PID, existing data reused. */
+  @Post(':id/reinitialize') @RequirePermission('project.update')
+  reinitialize(@Param('id') id: string) {
+    return this.projects.reinitialize(id);
+  }
+
   /** Attach a fresh PID to a project that has none (e.g. a reopened one). Authority only. */
   @Post(':id/attach-pid') @RequirePermission('project.generate_pid')
   async attachPid(@Param('id') id: string, @Body() dto: AttachPidDto) {
