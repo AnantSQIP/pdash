@@ -222,7 +222,7 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
       {showLogModal && (
         <LogTimeModal
           projectId={projectId}
-          tasks={tasks}
+          tasks={tasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id))}
           onClose={() => setShowLogModal(false)}
           onSuccess={invalidate}
         />

@@ -107,6 +107,25 @@ export class ProjectAccessService {
     }
   }
 
+  /** Is this user an assignee (PM / reviewer / analyst / plain) of the task? */
+  async isTaskAssignee(userId: string, taskId: string): Promise<boolean> {
+    const a = await this.prisma.taskAssignee.findFirst({ where: { taskId, userId }, select: { id: true } });
+    return !!a;
+  }
+
+  /**
+   * Time-logging rule: a person may only log/assign time on a task they are STAFFED on.
+   * Project membership grants VIEW access to every task in the project, but NOT the right to
+   * log hours against work you aren't assigned to (the bug: any project member could log time
+   * on any task). Assignment is same-org by construction, so no extra tenant check is needed.
+   */
+  async assertTaskAssignee(userId: string | null, taskId: string): Promise<void> {
+    if (!userId) throw new ForbiddenException('Not authenticated.');
+    if (!(await this.isTaskAssignee(userId, taskId))) {
+      throw new ForbiddenException('You can only log time on a task you are assigned to. Ask a lead to add you to the task first.');
+    }
+  }
+
   /** Boolean form of assertEntityAccess (no throw) — for "may read via any link" checks. */
   async canAccessEntity(actorId: string, entityType: string, entityId: string): Promise<boolean> {
     try { await this.assertEntityAccess(actorId, entityType, entityId); return true; } catch { return false; }
