@@ -84,12 +84,14 @@ interface TaskDetailPanelProps {
   /** True when the parent matter is COMPLETED/CLOSED — its tasks are read-only (server 403s
    *  on any write). The panel greys out its edit controls instead of failing on click. */
   projectClosed?: boolean;
+  /** The project's manager — pre-fills a task's PM so every task inherits the project PM. */
+  defaultManagerId?: string | null;
   onClose: () => void;
   onUpdated?: (task: ApiTask) => void;
   onDeleted?: () => void;
 }
 
-export function TaskDetailPanel({ task, projectId, projectClosed, onClose, onUpdated, onDeleted }: TaskDetailPanelProps) {
+export function TaskDetailPanel({ task, projectId, projectClosed, defaultManagerId, onClose, onUpdated, onDeleted }: TaskDetailPanelProps) {
   if (!task) return null;
 
   return (
@@ -99,6 +101,7 @@ export function TaskDetailPanel({ task, projectId, projectClosed, onClose, onUpd
         task={task}
         projectId={projectId}
         projectClosed={projectClosed}
+        defaultManagerId={defaultManagerId}
         onClose={onClose}
         onUpdated={onUpdated}
         onDeleted={onDeleted}
@@ -108,11 +111,12 @@ export function TaskDetailPanel({ task, projectId, projectClosed, onClose, onUpd
 }
 
 function TaskDetailPanelInner({
-  task, projectId, projectClosed, onClose, onUpdated, onDeleted,
+  task, projectId, projectClosed, defaultManagerId, onClose, onUpdated, onDeleted,
 }: {
   task: ApiTask;
   projectId: string;
   projectClosed?: boolean;
+  defaultManagerId?: string | null;
   onClose: () => void;
   onUpdated?: (task: ApiTask) => void;
   onDeleted?: () => void;
@@ -304,17 +308,6 @@ function TaskDetailPanelInner({
     await changeStatus(target.id);
   }
 
-  async function saveProgress(pct: number) {
-    if (pct === task.completionPercentage) return;
-    const forId = task.id;
-    try {
-      const updated = await api.tasks.update(forId, { completionPercentage: pct });
-      emitUpdated(forId, updated);
-    } catch (e) {
-      setProgress(task.completionPercentage);
-      toast(e instanceof Error ? e.message : 'Failed to update progress', 'error');
-    }
-  }
 
   /**
    * Persist one field of the plan. An emptied date is sent as `null`, which CLEARS it —
@@ -429,10 +422,6 @@ function TaskDetailPanelInner({
   const toggleAssignee = (userId: string) =>
     commitAssignees(assigneeIds.includes(userId) ? assigneeIds.filter(x => x !== userId) : [...assigneeIds, userId]);
 
-  // Progress is set from a dropdown (no slider). Always include the current value so an
-  // off-step percentage (e.g. 35%) still renders as the selected option.
-  const pctOptions = Array.from(new Set([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, progress]))
-    .filter(n => n >= 0 && n <= 100).sort((a, b) => a - b);
 
   return (
     <div
@@ -591,7 +580,7 @@ function TaskDetailPanelInner({
 
               <div>
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Staffing</p>
-                <TaskStaffing task={task} readOnly={readOnly} canAssign={canAssign} onSaved={u => emitUpdated(task.id, u)} />
+                <TaskStaffing task={task} readOnly={readOnly} canAssign={canAssign} defaultManagerId={defaultManagerId} onSaved={u => emitUpdated(task.id, u)} />
               </div>
             </div>
 
@@ -611,18 +600,6 @@ function TaskDetailPanelInner({
                   {PRIORITIES.map(p => <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>)}
                 </select>
               </Field>
-
-              {/* Progress — a dropdown (the manual slider is removed). */}
-              <Field label="Progress">
-                <select
-                  value={progress} disabled={closed || readOnly}
-                  onChange={e => { const pct = Number(e.target.value); setProgress(pct); saveProgress(pct); }}
-                  className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
-                >
-                  {pctOptions.map(p => <option key={p} value={p}>{p}%</option>)}
-                </select>
-              </Field>
-              {closed && <p className="text-[11px] text-gray-400 -mt-2">Complete (100%) — reopen to change.</p>}
 
               <Field label="Start Date">
                 <input
