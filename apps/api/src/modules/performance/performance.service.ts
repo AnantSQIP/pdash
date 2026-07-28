@@ -148,7 +148,9 @@ export class PerformanceService {
         where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: from, lt: to } },
         select: { dueDate: true, updatedAt: true },
       }),
-      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
+      // Delivery performance excludes "Other" (non-project) time — admin/meeting/training hours
+      // shouldn't inflate a person's delivery hours or score. (billable already excludes it.)
+      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, category: { not: 'OTHER' }, date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
       this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, billable: true, date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
       this.prisma.issue.count({ where: { reportedBy: userId, deletedAt: null, createdAt: { gte: from, lt: to } } }),
       this.prisma.issue.count({ where: { assigneeId: userId, deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to } } }),
@@ -208,7 +210,7 @@ export class PerformanceService {
 
     // live fallback aggregates (used where snapshots are absent)
     const [sheets, events] = await Promise.all([
-      this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: since } }, select: { date: true, hoursLogged: true } }),
+      this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, category: { not: 'OTHER' }, date: { gte: since } }, select: { date: true, hoursLogged: true } }),
       this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
     ]);
     const liveHours = new Map<string, number>();
@@ -293,7 +295,7 @@ export class PerformanceService {
         where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
         select: { dueDate: true, updatedAt: true, assignees: { select: { userId: true } } },
       }),
-      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
+      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, category: { not: 'OTHER' }, date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
       this.prisma.issue.groupBy({ by: ['assigneeId'], where: { deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to }, assignee: { organizationId } }, _count: { _all: true } }),
       this.prisma.analyticsEvent.groupBy({ by: ['userId'], where: { organizationId, createdAt: { gte: from, lt: to } }, _count: { _all: true } }),
     ]);
@@ -415,7 +417,7 @@ export class PerformanceService {
     for (const u of users) {
       const userId = u.id;
       const [sheets, events, comments] = await Promise.all([
-        this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: since } }, select: { date: true, hoursLogged: true, billable: true } }),
+        this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, category: { not: 'OTHER' }, date: { gte: since } }, select: { date: true, hoursLogged: true, billable: true } }),
         this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
         this.prisma.comment.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true } }),
       ]);
@@ -539,7 +541,7 @@ export class PerformanceService {
     const [hoursByUser, tasks, issues, projects] = await Promise.all([
       this.prisma.timesheet.groupBy({
         by: ['userId'],
-        where: { userId: { in: userIds }, deletedAt: null, date: { gte: from, lt: to } },
+        where: { userId: { in: userIds }, deletedAt: null, category: { not: 'OTHER' }, date: { gte: from, lt: to } },
         _sum: { hoursLogged: true },
       }),
       this.prisma.task.findMany({
@@ -685,7 +687,7 @@ export class PerformanceService {
     } else {
       // live fallback when snapshots aren't built yet
       const [sheets, events] = await Promise.all([
-        this.prisma.timesheet.findMany({ where: { userId: { in: userIds }, deletedAt: null, date: { gte: since } }, select: { userId: true, date: true, hoursLogged: true, billable: true } }),
+        this.prisma.timesheet.findMany({ where: { userId: { in: userIds }, deletedAt: null, category: { not: 'OTHER' }, date: { gte: since } }, select: { userId: true, date: true, hoursLogged: true, billable: true } }),
         this.prisma.analyticsEvent.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
       ]);
       for (const s of sheets) {

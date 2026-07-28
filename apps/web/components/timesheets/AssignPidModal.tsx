@@ -8,7 +8,7 @@ import { Modal } from '@/components/ui/Modal';
 
 /** Attach a PID (project) + task to a buffer time-entry that was logged without one. */
 export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; onClose: () => void; onDone: () => void }) {
-  const { org } = useOrg();
+  const { org, currentUser } = useOrg();
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
   const [error, setError] = useState('');
@@ -16,9 +16,11 @@ export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; 
   const { data: projects = [], isLoading: lp } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id], queryFn: () => api.projects.list(org!.id), enabled: !!org?.id, staleTime: 30_000,
   });
-  const { data: tasks = [], isLoading: lt } = useQuery<ApiTask[]>({
+  const { data: allTasks = [], isLoading: lt } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId], queryFn: () => api.tasks.list(projectId), enabled: !!projectId,
   });
+  // Only tasks you're assigned to — the server rejects logging/assigning time on others.
+  const tasks = allTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id));
   const selectedProject = projects.find(p => p.id === projectId);
 
   const assign = useMutation({
@@ -60,7 +62,7 @@ export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; 
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
           <select required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
             className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white disabled:bg-gray-50 disabled:text-gray-400">
-            <option value="">{!projectId ? 'Pick a PID first' : lt ? 'Loading…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
+            <option value="">{!projectId ? 'Pick a PID first' : lt ? 'Loading…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
             {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
           </select>
         </div>

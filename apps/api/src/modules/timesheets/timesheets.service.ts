@@ -178,8 +178,9 @@ export class TimesheetsService {
       select: { id: true },
     });
     if (!task) throw new NotFoundException(`Task ${dto.taskId} not found`);
-    // You can only log time on a task in a project you are staffed on (or as a lead).
-    await this.access.assertTaskAccess(actorId, dto.taskId);
+    // You can only log time on a task you are ASSIGNED to — project membership grants view,
+    // not the right to book hours against work you aren't staffed on.
+    await this.access.assertTaskAssignee(actorId, dto.taskId);
     const { projectId, projectType } = await this.projectOfTask(dto.taskId);
     // No time may be booked to a completed/closed client matter (was UI-only before).
     if (projectId) await this.access.assertProjectWritable(projectId);
@@ -229,8 +230,8 @@ export class TimesheetsService {
     if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a PID.');
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
-    // The entry's OWNER must be staffed on the task's project.
-    await this.access.assertTaskAccess(entry.userId, taskId);
+    // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).
+    await this.access.assertTaskAssignee(entry.userId, taskId);
     const { projectId, projectType } = await this.projectOfTask(taskId);
     if (projectId) await this.access.assertProjectWritable(projectId);
     // Don't let buffer→assign duplicate an existing identical task entry (double-billing).

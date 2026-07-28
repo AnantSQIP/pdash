@@ -52,11 +52,14 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
   });
 
   // Tasks of the chosen project — fetched only once a project is picked.
-  const { data: tasks = [], isLoading: loadingTasks } = useQuery<ApiTask[]>({
+  const { data: allTasks = [], isLoading: loadingTasks } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.tasks.list(projectId),
     enabled: isTask && !!projectId,
   });
+  // You can only log time on tasks you're ASSIGNED to (the server enforces this) — so only
+  // offer your own tasks, not every task in the project.
+  const tasks = allTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id));
 
   const selectedProject = projects.find(p => p.id === projectId);
   const pid = selectedProject?.code ?? '';       // the PID auto-fills from the chosen project
@@ -200,7 +203,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => 
                 required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
               >
-                <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks in this project' : 'Select a task'}</option>
+                <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
                 {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
               </select>
             </div>

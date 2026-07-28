@@ -179,7 +179,9 @@ export class CapacityService {
         select: {
           id: true, title: true, priority: true, startDate: true, dueDate: true,
           estimatedHours: true, completionPercentage: true,
-          assignees: { select: { userId: true } },
+          // Per-person estimated hours (role-based staffing). When present, each person's own
+          // hours drive their capacity — NOT an even split of the task total.
+          assignees: { select: { userId: true, estimatedHours: true } },
           projectTasks: {
             select: { project: { select: { id: true, title: true, deletedAt: true } } },
             take: 1,
@@ -225,13 +227,17 @@ export class CapacityService {
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
       if (project?.deletedAt) continue; // archived project — not real work any more
-      const estimate = task.estimatedHours ?? DEFAULT_TASK_HOURS;
-      const remaining = Math.max(0, estimate * (1 - (task.completionPercentage ?? 0) / 100));
-      // A co-assigned task's remaining effort is SHARED, not duplicated in full onto each person.
-      const perAssignee = remaining / Math.max(1, task.assignees.length);
+      const done = (task.completionPercentage ?? 0) / 100;
+      // Fallback (legacy tasks with no per-person hours): split the task estimate evenly.
+      const evenSplit = (task.estimatedHours ?? DEFAULT_TASK_HOURS) / Math.max(1, task.assignees.length);
       const overdue = !!task.dueDate && startOfUtcDay(task.dueDate) < today;
 
-      for (const { userId } of task.assignees) {
+      for (const a of task.assignees) {
+        const userId = a.userId;
+        // Each person's OWN estimated hours drive their capacity; fall back to the even split
+        // when a legacy task never recorded per-person hours.
+        const personEstimate = a.estimatedHours != null ? a.estimatedHours : evenSplit;
+        const remaining = Math.max(0, personEstimate * (1 - done));
         const list = openByUser.get(userId) ?? [];
         list.push({
           id: task.id,
@@ -272,7 +278,7 @@ export class CapacityService {
           const cappedEnd = endsAt > addDays(to, 365) ? addDays(to, 365) : endsAt; // guard bad data
           for (let d = new Date(to); d <= cappedEnd; d = addDays(d, 1)) if (!isWeekend(d)) denom++;
         }
-        const perDay = perAssignee / Math.max(1, denom);
+        const perDay = remaining / Math.max(1, denom);
         for (const d of span) {
           const k = `${userId}|${dayKey(d)}`;
           loadByUserDay.set(k, (loadByUserDay.get(k) ?? 0) + perDay);
