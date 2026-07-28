@@ -56,17 +56,10 @@ export class SearchService {
             select: { id: true, title: true, code: true, projectPhase: true }, take: 6, orderBy: { updatedAt: 'desc' },
           })
         : Promise.resolve([]),
-      // Channels — membership-gated (no admin bypass), like the Discuss module.
-      this.prisma.channel.findMany({
-        where: { organizationId, deletedAt: null, name: like, members: { some: { userId: actorId } } },
-        select: { id: true, name: true }, take: 6,
-      }),
-      // Messages — only in channels the actor belongs to.
-      this.prisma.message.findMany({
-        where: { content: like, deletedAt: null, channel: { deletedAt: null, members: { some: { userId: actorId } } } },
-        select: { id: true, channelId: true, content: true, createdAt: true, channel: { select: { name: true } }, user: { select: { firstName: true, lastName: true } } },
-        orderBy: { createdAt: 'desc' }, take: 8,
-      }),
+      // Channels + messages — the Discuss module was removed, so search returns none (kept in
+      // the response shape for type stability; no dead /discuss deep-links are produced).
+      Promise.resolve([] as { id: string; name: string }[]),
+      Promise.resolve([] as { id: string; channelId: string; content: string; createdAt: Date; channel: { name: string }; user: { firstName: string; lastName: string | null } }[]),
       // Tasks — task.view holders, further scoped to tasks the actor is assigned to or a
       // member of the owning project.
       can('task.view')

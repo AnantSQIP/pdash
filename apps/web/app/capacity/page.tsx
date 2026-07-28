@@ -47,6 +47,7 @@ export default function CapacityPage() {
   const [range, setRange] = useState<RangeKey>('next-14');
   const [search, setSearch] = useState('');
   const [dept, setDept] = useState('');
+  const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
   const [selected, setSelected] = useState<CapacityRow | null>(null);
   const [assignTo, setAssignTo] = useState<{ row: CapacityRow; start?: string; due?: string } | null>(null);
 
@@ -54,10 +55,11 @@ export default function CapacityPage() {
   const days = range === 'next-7' ? 7 : range === 'next-30' ? 30 : 14; // forward horizon
   const histDays = 30;
 
-  // Forward projected-capacity board (default). Disabled while viewing the past.
+  // Forward projected-capacity board (default). Disabled while viewing the past. When a project
+  // is selected, scope the board to that project's members (auto-synced from ProjectMember).
   const { data, isLoading: fwdLoading } = useQuery<TeamCapacity>({
-    queryKey: ['capacity', org?.id, days],
-    queryFn: () => api.capacity.team(days),
+    queryKey: ['capacity', org?.id, days, projectId],
+    queryFn: () => projectId ? api.capacity.forProject(projectId, days) : api.capacity.team(days),
     enabled: allowed && !!org?.id && !isPast,
     staleTime: 60_000,
   });
@@ -192,6 +194,13 @@ export default function CapacityPage() {
                 className="pl-8 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400 w-40"
               />
             </div>
+            {/* Project filter — scope the board to one project's team (forward view only). */}
+            <select value={projectId} onChange={e => setProjectId(e.target.value)} disabled={isPast}
+              title={isPast ? 'Project filter applies to the forward view' : 'Filter by project team'}
+              className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white disabled:opacity-50 max-w-[180px]">
+              <option value="">All projects</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${p.code} — ` : ''}{p.title}</option>)}
+            </select>
             {departments.length > 0 && (
               <select value={dept} onChange={e => setDept(e.target.value)}
                 className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white">

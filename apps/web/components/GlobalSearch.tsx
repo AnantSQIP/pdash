@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { Search, X, FolderKanban, ListTodo, MessagesSquare, User, Loader } from 'lucide-react';
+import { Search, X, FolderKanban, ListTodo, User, Loader } from 'lucide-react';
 import { api, type SearchResults } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
@@ -44,7 +44,7 @@ export function GlobalSearch() {
   });
 
   const total = useMemo(
-    () => data ? data.people.length + data.projects.length + data.tasks.length + data.channels.length + data.messages.length : 0,
+    () => data ? data.people.length + data.projects.length + data.tasks.length : 0,
     [data],
   );
 
@@ -104,29 +104,7 @@ export function GlobalSearch() {
                   ))}
                 </Group>
               )}
-              {data && data.channels.length > 0 && (
-                <Group label="Discussions">
-                  {data.channels.map(c => (
-                    <Row key={c.id} onClick={() => go(`/discuss?channel=${c.id}`)}>
-                      <MessagesSquare size={16} className="text-gray-400 shrink-0" />
-                      <span className="text-sm text-gray-800 truncate">{c.name}</span>
-                    </Row>
-                  ))}
-                </Group>
-              )}
-              {data && data.messages.length > 0 && (
-                <Group label="Messages">
-                  {data.messages.map(m => (
-                    <Row key={m.id} onClick={() => go(`/discuss?channel=${m.channelId}&message=${m.id}`)}>
-                      <MessagesSquare size={16} className="text-gray-300 shrink-0 mt-0.5 self-start" />
-                      <span className="min-w-0">
-                        <span className="text-sm text-gray-700 line-clamp-1">{m.content}</span>
-                        <span className="text-[11px] text-gray-400">{m.author} · {m.channelName}</span>
-                      </span>
-                    </Row>
-                  ))}
-                </Group>
-              )}
+              {/* Discuss module removed — channels/messages are no longer surfaced in search. */}
             </>
           )}
         </div>
