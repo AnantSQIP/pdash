@@ -116,9 +116,12 @@ export class AttendanceService {
    *   3. already clocked out    → REJECT — the day is locked so a stray third
    *      punch can never overwrite/erase the real check-out time.
    */
-  async punch(userId: string) {
+  async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number }) {
     const today = utcDay(new Date());
     const now = new Date();
+    // Location is mandatory on every punch (client captures it; the server enforces it too).
+    const inLoc = { checkInLat: coords.lat, checkInLng: coords.lng, checkInAcc: coords.accuracy ?? null };
+    const outLoc = { checkOutLat: coords.lat, checkOutLng: coords.lng, checkOutAcc: coords.accuracy ?? null };
     const existing = await this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
 
     if (!existing || !existing.checkIn) {
@@ -138,7 +141,7 @@ export class AttendanceService {
         });
         if (openPrior?.checkIn && now.getTime() - openPrior.checkIn.getTime() < 24 * 3_600_000) {
           const totalHours = round((now.getTime() - openPrior.checkIn.getTime()) / 3_600_000, 2);
-          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours) } });
+          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours), ...outLoc } });
         }
       }
       const approvedWfh = await this.prisma.wfhRequest.findFirst({
@@ -148,8 +151,8 @@ export class AttendanceService {
       const organizationId = await this.orgOf(userId);
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
-        create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode },
-        update: { checkIn: now, status: 'PRESENT', workMode },
+        create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode, ...inLoc },
+        update: { checkIn: now, status: 'PRESENT', workMode, ...inLoc },
       });
     }
     if (existing.checkOut) {
@@ -158,7 +161,7 @@ export class AttendanceService {
     const totalHours = round((now.getTime() - existing.checkIn.getTime()) / 3_600_000, 2);
     // Validate the day by hours: below a half day, mark HALF_DAY (a punch-in then an
     // immediate punch-out must not count as a full present day).
-    return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours) } });
+    return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours), ...outLoc } });
   }
 
   /** Admin/manual mark for a specific user+date. */
@@ -1065,12 +1068,17 @@ class AttendanceController {
     return this.svc.getMonth(actorId, y, m);
   }
 
-  // `mode` in the body is ACCEPTED but IGNORED (older web bundles still send it):
-  // workMode is derived server-side from an approved WFH request, never client-chosen.
+  // Location is MANDATORY on every punch (in and out). `mode` is still accepted but ignored
+  // (workMode is derived server-side from an approved WFH request, never client-chosen).
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() _body: { mode?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; mode?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.punch(actorId);
+    const lat = Number(body?.lat), lng = Number(body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      throw new BadRequestException('Location is required to punch. Please allow location access and try again.');
+    }
+    const accuracy = Number.isFinite(Number(body?.accuracy)) ? Number(body.accuracy) : undefined;
+    return this.svc.punch(actorId, { lat, lng, accuracy });
   }
 
   // ── work-from-home requests ────────────────────────────────────────────────────

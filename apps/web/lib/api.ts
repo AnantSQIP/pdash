@@ -640,6 +640,8 @@ export type Attendance = {
   id: string; userId: string; organizationId?: string; date: string;
   checkIn?: string | null; checkOut?: string | null; totalHours?: number | null;
   status: string; workMode?: string; note?: string | null; isRegularized: boolean;
+  checkInLat?: number | null; checkInLng?: number | null; checkInAcc?: number | null;
+  checkOutLat?: number | null; checkOutLng?: number | null; checkOutAcc?: number | null;
 };
 export type AttendanceDay = {
   date: string; status: string; workMode?: string; checkIn?: string | null; checkOut?: string | null;
@@ -1226,7 +1228,8 @@ export const api = {
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
     // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
-    punch: () => req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify({}) }),
+    punch: (coords: { lat: number; lng: number; accuracy?: number }) =>
+      req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
     // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
     requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
       req<WfhRequestItem>('/attendance/wfh', { method: 'POST', body: JSON.stringify(data) }),

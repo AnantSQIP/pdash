@@ -968,6 +968,13 @@ model Attendance {
   checkIn          DateTime?
   checkOut         DateTime?
   totalHours       Float?
+  // Location captured at each punch (mandatory client-side). Lat/lng + GPS accuracy in metres.
+  checkInLat       Float?
+  checkInLng       Float?
+  checkInAcc       Float?
+  checkOutLat      Float?
+  checkOutLng      Float?
+  checkOutAcc      Float?
   // PRESENT | ABSENT | HALF_DAY | ON_LEAVE | HOLIDAY | WEEKEND | LATE
   status           String    @default("PRESENT")
   // Where the work happened — a WORK MODE, not a leave type. OFFICE | WFH.
