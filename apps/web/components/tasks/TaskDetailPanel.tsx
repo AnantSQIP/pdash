@@ -429,12 +429,10 @@ function TaskDetailPanelInner({
   const toggleAssignee = (userId: string) =>
     commitAssignees(assigneeIds.includes(userId) ? assigneeIds.filter(x => x !== userId) : [...assigneeIds, userId]);
 
-  // New task flow: Details + Staffing only. Subtasks / Comments / Activity are intentionally
-  // hidden (their code is preserved below but unreachable).
-  const TABS: { key: PanelTab; label: string }[] = [
-    { key: 'details', label: 'Details' },
-    { key: 'staffing', label: 'Staffing' },
-  ];
+  // Progress is set from a dropdown (no slider). Always include the current value so an
+  // off-step percentage (e.g. 35%) still renders as the selected option.
+  const pctOptions = Array.from(new Set([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, progress]))
+    .filter(n => n >= 0 && n <= 100).sort((a, b) => a - b);
 
   return (
     <div
@@ -528,15 +526,12 @@ function TaskDetailPanelInner({
             <Flag size={13} />
             {priorityLabel}
           </div>
-          <button
-            onClick={() => setPanelTab('assignees')}
-            className="flex items-center gap-1.5 rounded-md hover:bg-gray-50 px-1 -mx-1 py-0.5 transition-colors"
-            title="Manage assignees"
-          >
+          {/* Assignees are shown here and edited in the Staffing section on this same page. */}
+          <div className="flex items-center gap-1.5 px-1 py-0.5" title="Staffing">
             {stackUsers.length > 0
               ? <AvatarStack users={stackUsers} size={24} />
               : <span className="text-sm text-gray-400 italic">Unassigned</span>}
-          </button>
+          </div>
           <div className="flex items-center gap-1 text-sm text-gray-500" title="Deadline">
             <Calendar size={13} />
             {formattedDue}
@@ -553,173 +548,116 @@ function TaskDetailPanelInner({
       {/* ── BODY ─────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
 
-        {/* Tab bar */}
-        <div className="sticky top-0 bg-white border-b flex px-4 sm:px-6 z-10 overflow-x-auto" role="tablist">
-          {TABS.map(({ key, label }) => (
-            <button
-              key={key}
-              role="tab"
-              aria-selected={panelTab === key}
-              onClick={() => setPanelTab(key)}
-              className={clsx(
-                'px-3 py-2.5 text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors',
-                panelTab === key
-                  ? 'border-brand-600 text-brand-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700',
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* Single page — Details + Staffing together, no tabs. Centered, two columns so the
+            inputs don't stretch across the whole screen and the space isn't left half-empty. */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-        {/* ── DETAILS ─────────────────────────────────────────────── */}
-        {panelTab === 'details' && (
-          <div className="px-4 sm:px-6 py-5 space-y-5">
-
-            {readOnly && (
-              <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <Lock size={12} className="shrink-0" />
-                This project is completed or closed. Its tasks are read-only — reopen the project to make changes.
-              </div>
-            )}
-
-            {/* Description */}
-            <div>
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Description</p>
-              {editDesc ? (
-                <textarea
-                  autoFocus rows={4}
-                  className="w-full text-sm border border-brand-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-brand-500/20 resize-none"
-                  value={desc}
-                  onChange={e => setDesc(e.target.value)}
-                  onBlur={saveDesc}
-                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveDesc(); } if (e.key === 'Escape') { setDesc(task.description ?? ''); setEditDesc(false); } }}
-                />
-              ) : (
-                <div
-                  className={clsx(
-                    'min-h-[60px] text-sm rounded-lg p-3 border border-dashed border-transparent transition-colors',
-                    readOnly ? 'cursor-default' : 'cursor-pointer hover:bg-gray-50 hover:border-gray-200',
-                  )}
-                  onClick={() => { if (!readOnly) setEditDesc(true); }}
-                >
-                  {desc
-                    ? <span className="text-gray-700 whitespace-pre-wrap">{desc}</span>
-                    : <span className="italic text-gray-400">{readOnly ? 'No description.' : 'Click to add description...'}</span>}
-                </div>
-              )}
+          {readOnly && (
+            <div className="mb-6 flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <Lock size={12} className="shrink-0" />
+              This project is completed or closed. Its tasks are read-only — reopen the project to make changes.
             </div>
+          )}
 
-            {/* Progress control */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Progress</p>
-                <span className="text-sm font-medium text-gray-700">{progress}%</span>
-              </div>
-              <input
-                type="range" min={0} max={100} step={5}
-                value={progress}
-                disabled={closed || readOnly}
-                onChange={e => setProgress(Number(e.target.value))}
-                onPointerUp={() => saveProgress(progress)}
-                onKeyUp={e => { if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') saveProgress(progress); }}
-                aria-label="Task progress"
-                className="w-full accent-brand-600 disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              {closed && <p className="text-xs text-gray-400 mt-1">Task is complete (100%). Reopen it to change progress.</p>}
-            </div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8 items-start">
 
-            {/* ── Plan: editable. Rescheduling a slipped task and correcting its estimate
-                   are the two things a manager most needs to do from here. ───────────── */}
-            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Plan</p>
-                {savingPlan && (
-                  <span className="text-xs text-gray-400 flex items-center gap-1">
-                    <Loader size={11} className="animate-spin" /> saving
-                  </span>
+            {/* ── Left / main: Description + Staffing ───────────────── */}
+            <div className="lg:col-span-2 space-y-6">
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Description</p>
+                {editDesc ? (
+                  <textarea
+                    autoFocus rows={4}
+                    className="w-full text-sm border border-brand-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-brand-500/20 resize-none"
+                    value={desc}
+                    onChange={e => setDesc(e.target.value)}
+                    onBlur={saveDesc}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveDesc(); } if (e.key === 'Escape') { setDesc(task.description ?? ''); setEditDesc(false); } }}
+                  />
+                ) : (
+                  <div
+                    className={clsx(
+                      'min-h-[60px] text-sm rounded-lg p-3 border border-dashed border-transparent transition-colors',
+                      readOnly ? 'cursor-default' : 'cursor-pointer hover:bg-gray-50 hover:border-gray-200',
+                    )}
+                    onClick={() => { if (!readOnly) setEditDesc(true); }}
+                  >
+                    {desc
+                      ? <span className="text-gray-700 whitespace-pre-wrap">{desc}</span>
+                      : <span className="italic text-gray-400">{readOnly ? 'No description.' : 'Click to add description...'}</span>}
+                  </div>
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <Field label="Priority">
-                  <select
-                    value={plan.priority}
-                    disabled={readOnly}
-                    onChange={e => { const priority = e.target.value; setPlan(p => ({ ...p, priority })); savePlan({ priority }); }}
-                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
-                  >
-                    {PRIORITIES.map(p => (
-                      <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>
-                    ))}
-                  </select>
-                </Field>
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Staffing</p>
+                <TaskStaffing task={task} readOnly={readOnly} canAssign={canAssign} onSaved={u => emitUpdated(task.id, u)} />
+              </div>
+            </div>
 
-                <Field label="Est. Hours" hint="drives the capacity board">
-                  <input
-                    type="number" min={0} max={1000} step={0.5}
-                    value={plan.estimatedHours}
-                    placeholder="Not set"
-                    disabled={readOnly}
-                    onChange={e => setPlan(p => ({ ...p, estimatedHours: e.target.value }))}
-                    onBlur={e => {
-                      const raw = e.target.value.trim();
-                      const next = raw === '' ? null : Number(raw);
-                      if (next !== null && !Number.isFinite(next)) return;
-                      if ((task.estimatedHours ?? null) === next) return;
-                      savePlan({ estimatedHours: next });
-                    }}
-                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
-                  />
-                </Field>
+            {/* ── Right / sidebar: the task's details ───────────────── */}
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-100 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Details</p>
+                {savingPlan && <span className="text-xs text-gray-400 flex items-center gap-1"><Loader size={11} className="animate-spin" /> saving</span>}
+              </div>
 
-                <Field label="Start Date">
-                  <input
-                    type="date"
-                    value={plan.startDate}
-                    max={plan.dueDate || undefined}
-                    disabled={readOnly}
-                    onChange={e => {
-                      const startDate = e.target.value;
-                      setPlan(p => ({ ...p, startDate }));
-                      savePlan({ startDate: startDate || null });
-                    }}
-                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
-                  />
-                </Field>
+              <Field label="Priority">
+                <select
+                  value={plan.priority} disabled={readOnly}
+                  onChange={e => { const priority = e.target.value; setPlan(p => ({ ...p, priority })); savePlan({ priority }); }}
+                  className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
+                >
+                  {PRIORITIES.map(p => <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>)}
+                </select>
+              </Field>
 
-                <Field label="Deadline" hint="what the team works to">
-                  <input
-                    type="date"
-                    value={plan.dueDate}
-                    min={plan.startDate || undefined}
-                    disabled={readOnly}
-                    onChange={e => {
-                      const dueDate = e.target.value;
-                      setPlan(p => ({ ...p, dueDate }));
-                      savePlan({ dueDate: dueDate || null });
-                    }}
-                    className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
-                  />
-                </Field>
+              {/* Progress — a dropdown (the manual slider is removed). */}
+              <Field label="Progress">
+                <select
+                  value={progress} disabled={closed || readOnly}
+                  onChange={e => { const pct = Number(e.target.value); setProgress(pct); saveProgress(pct); }}
+                  className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
+                >
+                  {pctOptions.map(p => <option key={p} value={p}>{p}%</option>)}
+                </select>
+              </Field>
+              {closed && <p className="text-[11px] text-gray-400 -mt-2">Complete (100%) — reopen to change.</p>}
+
+              <Field label="Start Date">
+                <input
+                  type="date" value={plan.startDate} max={plan.dueDate || undefined} disabled={readOnly}
+                  onChange={e => { const startDate = e.target.value; setPlan(p => ({ ...p, startDate })); savePlan({ startDate: startDate || null }); }}
+                  className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
+                />
+              </Field>
+
+              <Field label="Deadline" hint="what the team works to">
+                <input
+                  type="date" value={plan.dueDate} min={plan.startDate || undefined} disabled={readOnly}
+                  onChange={e => { const dueDate = e.target.value; setPlan(p => ({ ...p, dueDate })); savePlan({ dueDate: dueDate || null }); }}
+                  className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
+                />
+              </Field>
+
+              {/* Estimated hours — auto-summed from the staffing hours (read-only). */}
+              <div>
+                <div className="mb-1 text-gray-400">
+                  <span className="text-xs uppercase tracking-wide">Estimated Hours</span>
+                  <p className="text-[10px] leading-tight text-gray-300">auto-summed from staffing</p>
+                </div>
+                <div className="px-2.5 py-1.5 text-sm rounded-lg border border-gray-200 bg-gray-100 text-gray-700 font-medium">
+                  {task.estimatedHours != null ? `${task.estimatedHours}h` : '0h'}
+                </div>
               </div>
 
               {isPastDue(task.dueDate) && !closed && (
-                <p className="mt-3 text-xs text-red-600">
-                  This task is past its deadline. Moving the date forward re-arms the overdue alert.
-                </p>
+                <p className="text-xs text-red-600">Past its deadline — move the date forward to re-arm the overdue alert.</p>
               )}
             </div>
-          </div>
-        )}
 
-        {/* ── STAFFING (PM / Reviewers / Analysts + per-person hours) ── */}
-        {panelTab === 'staffing' && (
-          <div className="px-4 sm:px-6 py-5">
-            <TaskStaffing task={task} readOnly={readOnly} canAssign={canAssign} onSaved={u => emitUpdated(task.id, u)} />
           </div>
-        )}
+        </div>
 
         {/* ── ASSIGNEES (legacy — hidden; preserved) ─────────────────── */}
         {panelTab === 'assignees' && (
