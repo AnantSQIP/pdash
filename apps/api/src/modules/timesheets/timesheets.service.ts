@@ -173,11 +173,13 @@ export class TimesheetsService {
     // dto.userId (which is ignored). Prevents logging/inflating others' hours.
     const actorId = await this.actor();
     // Time is logged for work already done — a future date is never valid (it also feeds
-    // capacity/performance, which a future entry would distort). Compare on the calendar
-    // day so an entry dated "today" is always allowed regardless of the time of day.
+    // capacity/performance, which a future entry would distort). Compare on the IST calendar
+    // day (same basis as the fill calendar) so an entry dated "today" in IST is always allowed —
+    // a plain UTC "today" lagged IST by up to 5.5h, wrongly rejecting the current IST day as
+    // "future" between 00:00 and 05:30 IST.
     const entryDay = new Date(String(dto.date).slice(0, 10));
-    const today = new Date(new Date().toISOString().slice(0, 10));
     if (isNaN(entryDay.getTime())) throw new BadRequestException('A valid date is required.');
+    const today = startOfIstDay(new Date());
     if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
     // Backdating windows: free within ~1 month, Super-Admin-approved 1–3 months, blocked beyond.
     await this.assertBackfillAllowed(actorId, entryDay);
@@ -276,6 +278,9 @@ export class TimesheetsService {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
+    // Same backdating rule as create/update: attaching a PID to an old buffer entry shifts its
+    // hours into a task/project total, so a month-old entry needs approval (Super Admin bypasses).
+    await this.assertBackfillAllowed(entry.userId, entry.date);
     // Only a buffer entry (no task AND no issue) can be assigned — an issue-logged entry must
     // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
@@ -353,10 +358,19 @@ export class TimesheetsService {
 
   // ── Fill calendar + reminders ────────────────────────────────────────────────
   // A working day (Mon–Fri) targets 8h; an approved HALF_DAY targets 4h; leave/holiday/weekend
-  // are not required (target 0). A day is COMPLETE when logged ≥ target.
+  // are not required (target 0). Fill is GRADED against the target:
+  //   COMPLETE (≥ target) · PARTIAL (≥ 4h on a full day / ≥ half the target) · LOW (< 4h).
 
   private static readonly FULL_DAY = 8;
   private static readonly HALF_DAY_HOURS = 4;
+
+  /** Grade a day's logged hours against its target: COMPLETE / PARTIAL / LOW. */
+  private static gradeFill(logged: number, target: number): 'COMPLETE' | 'PARTIAL' | 'LOW' {
+    if (logged >= target) return 'COMPLETE';
+    // On a full 8h day the amber band is 4–8h; below 4h is red. A 4h half-day splits at 2h.
+    const partialFloor = target >= TimesheetsService.FULL_DAY ? TimesheetsService.HALF_DAY_HOURS : target / 2;
+    return logged >= partialFloor ? 'PARTIAL' : 'LOW';
+  }
 
   /** The signed-in user's own fill calendar for a month. */
   async myCalendar(year: number, month: number) {
@@ -400,9 +414,11 @@ export class TimesheetsService {
       if (wd === 0 || wd === 6) { target = 0; status = 'WEEKEND'; }
       else if (holidaySet.has(k)) { target = 0; status = 'HOLIDAY'; }
       else if (attStatus === 'ON_LEAVE' || onLeave(k)) { target = 0; status = 'LEAVE'; }
-      else if (attStatus === 'HALF_DAY') { target = TimesheetsService.HALF_DAY_HOURS; status = logged >= target ? 'COMPLETE' : 'INCOMPLETE'; }
-      else if (k > todayKey) { status = 'FUTURE'; }
-      else { status = logged >= target ? 'COMPLETE' : 'INCOMPLETE'; }
+      else if (k > todayKey) { target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY; status = 'FUTURE'; }
+      else {
+        target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+        status = TimesheetsService.gradeFill(logged, target);
+      }
       days.push({ date: k, target, logged, status });
     }
     return { year, month, days };
@@ -465,6 +481,14 @@ export class TimesheetsService {
     return actorId;
   }
 
+  /** A reviewer may only act on requests from their OWN org (multi-tenant safety). Requests with
+   *  no org (legacy) are treated as visible to any reviewer. Reports 404 to avoid leaking existence. */
+  private async assertSameOrg(actorId: string, orgId: string | null): Promise<void> {
+    if (!orgId) return;
+    const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
+    if (me?.organizationId !== orgId) throw new NotFoundException('Backdate request not found.');
+  }
+
   /** An employee asks to fill time for a past range (1–3 months old) that needs approval. */
   async requestBackdate(dto: { fromDate: string; toDate: string; reason: string }) {
     const actorId = await this.actor();
@@ -475,12 +499,15 @@ export class TimesheetsService {
     if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new BadRequestException('A valid date range is required.');
     if (from > to) throw new BadRequestException('The start date must be on or before the end date.');
 
+    // `from` is the oldest day (largest age), `to` the newest (smallest age). Reject only when
+    // the WHOLE range falls outside the approval band, so a range that straddles a boundary
+    // (e.g. 40d→25d, or 100d→60d) is still accepted for its approvable portion.
     const toAge = this.ageInDays(to), fromAge = this.ageInDays(from);
     if (toAge < 0) throw new BadRequestException('You cannot request approval for a future date.');
-    if (fromAge > APPROVAL_MAX_DAYS) {
+    if (toAge > APPROVAL_MAX_DAYS) {
       throw new BadRequestException('You can only backfill up to 3 months — those dates are too old, even with approval.');
     }
-    if (toAge <= SELF_FILL_DAYS) {
+    if (fromAge <= SELF_FILL_DAYS) {
       throw new BadRequestException('Those dates are within the last month — you can fill them directly, no approval needed.');
     }
 
@@ -521,6 +548,7 @@ export class TimesheetsService {
     const actorId = await this.assertSuperAdmin();
     const req = await this.prisma.timesheetBackdateRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('Backdate request not found.');
+    await this.assertSameOrg(actorId, req.organizationId); // a Super Admin only reviews their own org
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be approved.');
     const updated = await this.prisma.timesheetBackdateRequest.update({
       where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note?.trim() || null },
@@ -537,6 +565,7 @@ export class TimesheetsService {
     const actorId = await this.assertSuperAdmin();
     const req = await this.prisma.timesheetBackdateRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException('Backdate request not found.');
+    await this.assertSameOrg(actorId, req.organizationId); // a Super Admin only reviews their own org
     if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be rejected.');
     const updated = await this.prisma.timesheetBackdateRequest.update({
       where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note?.trim() || null },

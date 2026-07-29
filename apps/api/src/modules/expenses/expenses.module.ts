@@ -44,6 +44,25 @@ export class ExpensesService {
     return users.map(u => u.id);
   }
 
+  /** Who is NOTIFIED when a new expense is raised: approvers (expense.approve) PLUS all HR and
+   *  admins (Super Admin / user.manage_access), so HR sees every request even if they don't
+   *  personally hold the approve permission. */
+  private async requestNotifyIds(organizationId: string | null): Promise<string[]> {
+    if (!organizationId) return [];
+    const users = await this.prisma.user.findMany({
+      where: {
+        organizationId, deletedAt: null, status: 'ACTIVE',
+        OR: [
+          { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'expense.approve' } } } } } } },
+          { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
+          { userRoles: { some: { role: { name: { in: ['HR', 'Admin', 'Super Admin'] } } } } },
+        ],
+      },
+      select: { id: true },
+    });
+    return users.map(u => u.id);
+  }
+
   async submit(userId: string, data: { category?: string; amount: number; currency?: string; spentOn: string; description: string; receiptDocumentId?: string }) {
     const amount = Number(data?.amount);
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Enter a valid expense amount.');
@@ -95,7 +114,7 @@ export class ExpensesService {
     });
     const u = (expense as { user?: { firstName?: string; lastName?: string } }).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
-    await this.notifications.notify(await this.approverIds(organizationId), {
+    await this.notifications.notify(await this.requestNotifyIds(organizationId), {
       type: 'expense.submitted',
       title: 'Expense to review',
       message: `${name} submitted a ${category.toLowerCase()} expense of ${expense.currency} ${amount} for reimbursement.`,

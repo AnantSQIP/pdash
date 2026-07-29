@@ -8,7 +8,6 @@ import clsx from 'clsx';
 import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
-import { PidLedgerModal } from '@/components/projects/PidLedgerModal';
 import { PHASE_META, PRIORITY_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -88,9 +87,9 @@ export function ProjectsClient() {
   const [phase, setPhase] = useState<Phase | 'ALL'>('ALL');
   const [showModal, setShowModal] = useState(false);
   const [showPidRequests, setShowPidRequests] = useState(false);
-  const [showLedger, setShowLedger] = useState(false);
   const [pidCopied, setPidCopied] = useState('');
   const [generating, setGenerating] = useState(false);
+  const router = useRouter();
   const [search, setSearch] = useState('');
 
   const canGeneratePid = can('project.generate_pid');
@@ -204,8 +203,8 @@ export function ProjectsClient() {
           )}
           {can('user.manage_access') && (
             <button
-              onClick={() => setShowLedger(true)}
-              title="Project ID ledger — working, discontinued & history"
+              onClick={() => router.push('/pid-ledger')}
+              title="Open the PID Ledger — working, discontinued & history"
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
             >
               <ScrollText size={15} />
@@ -321,7 +320,6 @@ export function ProjectsClient() {
         />
       )}
 
-      {showLedger && <PidLedgerModal onClose={() => setShowLedger(false)} />}
     </div>
   );
 }

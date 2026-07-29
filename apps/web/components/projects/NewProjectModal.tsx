@@ -82,12 +82,13 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     [authorities, currentUser],
   );
 
-  // The people a requester may nominate as Project Manager — equal-or-higher seniority than
-  // them, alphabetical, self excluded (all enforced server-side). Separate from PID authority.
+  // The people who can be nominated/delegated as Project Manager — alphabetical, self excluded.
+  // A requester sees only equal-or-higher seniority; a PID authority (admin) sees EVERYONE (they
+  // can delegate to anyone). All enforced server-side. Separate from PID authority.
   const { data: managers = [] } = useQuery({
     queryKey: ['eligible-managers', org?.id],
     queryFn: () => api.projects.eligibleManagers(),
-    enabled: !!org?.id && !canGeneratePid,
+    enabled: !!org?.id,
     staleTime: 5 * 60_000,
   });
 
@@ -160,7 +161,8 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         dueDate: dueDate || undefined,
         clientDueDate: (canSetClientDue && clientDueDate) ? clientDueDate : undefined,
         pid: canGeneratePid && pid ? pid : undefined,
-        managerId: !canGeneratePid ? managerId : undefined,
+        // Requester → required manager; authority → optional delegation (blank = self).
+        managerId: managerId || undefined,
         pidAssigneeId: !canGeneratePid ? pidAssigneeId : undefined,
         createdBy,
       });
@@ -372,28 +374,30 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             />
           </div>
 
-          {/* Project Manager — required for a requester; equal-or-higher seniority only. */}
-          {!canGeneratePid && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Project Manager <span className="text-red-500">*</span>
-              </label>
-              <select
-                required
-                value={managerId}
-                onChange={e => setManagerId(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
-              >
-                <option value="">Select a project manager…</option>
-                {managers.map(u => (
-                  <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
-                ))}
-              </select>
-              <p className="text-[11px] text-gray-400 mt-1">
-                The senior owner of this project. Only people at your level or above are listed.
-              </p>
-            </div>
-          )}
+          {/* Project Manager — required for a requester (equal-or-higher seniority only); OPTIONAL
+              delegation for a PID authority (assign anyone, or leave blank to manage it yourself). */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Project Manager {!canGeneratePid && <span className="text-red-500">*</span>}
+              {canGeneratePid && <span className="text-gray-400 font-normal"> (optional)</span>}
+            </label>
+            <select
+              required={!canGeneratePid}
+              value={managerId}
+              onChange={e => setManagerId(e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+            >
+              <option value="">{canGeneratePid ? 'Me — I’ll manage it' : 'Select a project manager…'}</option>
+              {managers.map(u => (
+                <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
+              ))}
+            </select>
+            <p className="text-[11px] text-gray-400 mt-1">
+              {canGeneratePid
+                ? 'Delegate this project to anyone in the organization, or leave blank to manage it yourself.'
+                : 'The senior owner of this project. Only people at your level or above are listed.'}
+            </p>
+          </div>
 
           {/* Request PID from — required for a requester without PID authority. */}
           {!canGeneratePid && (

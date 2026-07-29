@@ -582,6 +582,76 @@ function TaskDetailPanelInner({
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Staffing</p>
                 <TaskStaffing task={task} readOnly={readOnly} canAssign={canAssign} defaultManagerId={defaultManagerId} onSaved={u => emitUpdated(task.id, u)} />
               </div>
+
+              {/* ── Subtasks: break the task into steps (Project → Task → Subtask) ─────── */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Subtasks</p>
+                  {subtasks.length > 0 && (
+                    <div className="flex items-center gap-2 w-40">
+                      <span className="text-[11px] text-gray-500 shrink-0">{subDone}/{subtasks.length}</span>
+                      <div className="flex-1 h-1 bg-gray-200 rounded overflow-hidden">
+                        <div className="h-full bg-brand-600 rounded transition-all" style={{ width: `${subPercent}%` }} />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {subtasksError ? (
+                  <div className="text-sm text-gray-500 py-3">
+                    <span className="text-red-500">Couldn’t load subtasks.</span>
+                    <button onClick={() => refetchSubtasks()} className="ml-2 text-brand-600 hover:underline">Retry</button>
+                  </div>
+                ) : subtasksLoading ? (
+                  <p className="text-sm text-gray-400 py-3 flex items-center gap-2"><Loader size={14} className="animate-spin" /> Loading subtasks…</p>
+                ) : subtasks.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-2">No subtasks yet. Break this task into steps below.</p>
+                ) : (
+                  <div className="border border-gray-100 rounded-lg divide-y divide-gray-100">
+                    {subtasks.map(s => {
+                      const done = s.status === CLOSED_TYPE;
+                      return (
+                        <div key={s.id} className="flex items-center gap-3 px-3 py-2.5 group">
+                          <button
+                            onClick={() => toggleSubtask(s.id, s.status)}
+                            disabled={readOnly}
+                            role="checkbox" aria-checked={done}
+                            aria-label={done ? `Reopen ${s.title}` : `Mark ${s.title} done`}
+                            title={done ? 'Completed — click to reopen' : 'Mark done'}
+                            className={clsx(
+                              'w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors',
+                              readOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+                              done ? 'bg-green-500 border-green-500 hover:bg-green-600' : 'border-gray-300 hover:border-green-400',
+                            )}
+                          >
+                            {done && (
+                              <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 8" fill="none">
+                                <path d="M1 4l3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            )}
+                          </button>
+                          <span className={clsx('text-sm flex-1', done ? 'line-through text-gray-400' : 'text-gray-700')}>{s.title}</span>
+                          {s.assignees?.[0] && (
+                            <span className="ml-auto text-xs bg-gray-100 text-gray-600 px-2 rounded-full py-0.5">
+                              {userInitials(s.assignees[0].user)}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!closed && !readOnly && (
+                  <input
+                    className="mt-2.5 w-full text-sm border border-dashed border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-gray-400 placeholder:text-gray-300"
+                    placeholder="Add a subtask... (Enter to save)"
+                    value={newSub}
+                    onChange={e => setNewSub(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addSubtask(); }}
+                  />
+                )}
+              </div>
             </div>
 
             {/* ── Right / sidebar: the task's details ───────────────── */}
