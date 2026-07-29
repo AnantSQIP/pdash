@@ -8,7 +8,7 @@ export type NotifyInput = { type: string; title: string; message: string; link?:
 // Preference categories a user can mute. Every notification type maps to exactly one.
 export const NOTIF_CATEGORIES = ['mentions', 'discussions', 'tasks', 'projects', 'attendance', 'expenses', 'other'] as const;
 export function categoryOf(type: string): string {
-  if (type === 'discussion.mention') return 'mentions';
+  if (type.endsWith('.mention')) return 'mentions'; // discussion.mention, comment.mention, …
   if (type.startsWith('discussion.')) return 'discussions';
   if (type.startsWith('task.')) return 'tasks';
   if (type.startsWith('project.')) return 'projects';

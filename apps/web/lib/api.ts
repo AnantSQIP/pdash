@@ -945,7 +945,7 @@ export const api = {
   comments: {
     list: (entityType: string, entityId: string) =>
       req<ApiComment[]>(`/comments?entityType=${entityType}&entityId=${entityId}`),
-    create: (data: { entityType: string; entityId: string; userId: string; content: string; documentIds?: string[] }) =>
+    create: (data: { entityType: string; entityId: string; userId: string; content: string; documentIds?: string[]; mentionedUserIds?: string[] }) =>
       req<ApiComment>('/comments', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/comments/${id}`, { method: 'DELETE' }),
   },
