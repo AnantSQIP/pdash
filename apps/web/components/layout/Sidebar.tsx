@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -51,6 +51,7 @@ const ADMIN_NAV = [
   // "Admin" = RBAC/system administration (roles, groups, permission matrix) — gated on
   // RBAC perms, NOT user.create (HR has user.create for people-ops but isn't an RBAC admin).
   { href: '/admin',       icon: ShieldCheck, label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
+  { href: '/pid-ledger',  icon: KeyRound,    label: 'PID Ledger', perm: 'user.manage_access' },
   { href: '/admin/audit', icon: History,     label: 'Audit Log', perm: ['audit.view'] },
 ];
 

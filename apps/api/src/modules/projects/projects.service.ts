@@ -43,6 +43,9 @@ export class ProjectsService {
       ? await this.prisma.user.findFirst({ where: { id: actorId }, select: { designation: true } })
       : null;
     const myRank = designationRank(me?.designation);
+    // A PID authority (admin) can delegate the project to ANYONE in the org — no seniority
+    // restriction. A regular requester may only nominate someone of equal-or-higher seniority.
+    const canGeneratePid = actorId ? await this.permissions.check(actorId, 'project.generate_pid') : false;
     const users = await this.prisma.user.findMany({
       where: {
         organizationId, deletedAt: null, status: 'ACTIVE',
@@ -51,7 +54,7 @@ export class ProjectsService {
       select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true },
     });
     return users
-      .filter(u => designationRank(u.designation) >= myRank)
+      .filter(u => canGeneratePid || designationRank(u.designation) >= myRank)
       .sort((a, b) =>
         `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase()));
   }
@@ -84,6 +87,19 @@ export class ProjectsService {
     const canGeneratePid = await this.permissions.check(creator.id, 'project.generate_pid');
     let pidAssigneeId = '';
     let managerId = '';
+    if (canGeneratePid) {
+      // An authority attaches the PID themselves and, by default, owns the project. But they may
+      // DELEGATE it — assign ANY active member as the Project Manager (no seniority restriction).
+      const delegateId = dto.managerId?.trim() || '';
+      if (delegateId && delegateId !== creator.id) {
+        const delegate = await this.prisma.user.findFirst({
+          where: { id: delegateId, organizationId, deletedAt: null, status: 'ACTIVE' },
+          select: { id: true },
+        });
+        if (!delegate) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
+        managerId = delegateId;
+      }
+    }
     if (!canGeneratePid) {
       // (a) PID authority — the person who receives the request, reviews/edits the project and
       //     attaches the PID. Must actually hold project.generate_pid.
@@ -133,9 +149,14 @@ export class ProjectsService {
     // equal-or-higher seniority) who becomes the senior owner, and joins as a MEMBER themselves.
     // The PID authority is NOT a member — they only receive the request (and get review/edit
     // access to the pending project via that request, see fulfillPidRequest).
+    // Requester → nominated manager leads, requester is a member. Authority → the authority leads
+    // unless they DELEGATED to someone else, in which case that person leads and the authority
+    // joins as a member (so they keep access to the project they set up).
     const members = !canGeneratePid
       ? [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }]
-      : [{ userId: creator.id, projectRole: 'MANAGER' }];
+      : managerId
+        ? [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }]
+        : [{ userId: creator.id, projectRole: 'MANAGER' }];
 
     // A "coming soon" type (MONETIZATION) is shown-but-disabled in the UI; reject it server-side
     // too so a direct API call can't create a live project of an unbuilt type.
