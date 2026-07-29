@@ -446,7 +446,8 @@ export default function CalendarPage() {
   const [hiddenTypes, setHiddenTypes] = useState<Set<EventType>>(new Set());
 
   // Fetch a generous window so month, week and agenda all have data without re-fetching constantly.
-  const weekBased = view === 'week' || view === 'team';
+  // The Team Calendar manages its own multi-month range, so it isn't part of the week/month nav.
+  const weekBased = view === 'week';
   const rangeFrom = useMemo(() => {
     if (weekBased) return addDays(weekStart, -7);
     return new Date(year, month - 1, 1);
@@ -646,6 +647,7 @@ export default function CalendarPage() {
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-bold text-gray-900">Calendar</h1>
+          {view !== 'team' && <>
           <div className="flex items-center gap-1">
             <button onClick={goPrev} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors" aria-label="Previous">
               <RiArrowLeftSLine size={18} />
@@ -659,6 +661,7 @@ export default function CalendarPage() {
             className="px-2.5 py-1 text-xs font-medium text-brand-600 border border-brand-200 rounded-lg hover:bg-brand-50 transition-colors">
             Today
           </button>
+          </>}
         </div>
 
         <div className="flex items-center gap-3">
@@ -919,7 +922,7 @@ export default function CalendarPage() {
           )}
 
           {view === 'team' && (
-            <TeamCalendarView weekStart={weekStart} users={users} />
+            <TeamCalendarView users={users} />
           )}
         </div>
 
