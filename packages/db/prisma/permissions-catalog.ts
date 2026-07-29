@@ -131,15 +131,16 @@ const MANAGER_CODES = [
   code('channel', 'create'),
   code('report', 'export'),
   code('analytics', 'view.organization'),
-  code('performance', 'view.own'), code('performance', 'view.organization'),
+  // Matrix 2026-07-28: Manager keeps own-performance but no longer sees org-wide performance.
+  code('performance', 'view.own'),
   // Delivery oversight: see who is free/overloaded, and the client-facing dates.
   code('capacity', 'view'), code('deadline', 'view.client'),
   // Managers see team attendance but do NOT review regularisations — those route to
   // HR + Yash only (see AttendanceService.regularizationApproverIds).
   code('attendance', 'view.organization'),
   code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
-  code('expense', 'view.organization'), code('expense', 'approve'),
-  code('holiday', 'manage'),
+  // Matrix 2026-07-28: expense approval + holiday management move to HR/Admin (removed from Manager).
+  code('expense', 'view.organization'),
   code('reward', 'give'),
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
@@ -153,7 +154,8 @@ const MANAGER_CODES = [
 const EMPLOYEE_CODES = [
   ...VIEW_BASICS,
   code('project', 'create'),
-  code('task', 'create'), code('task', 'update'),
+  // Matrix 2026-07-28: an Employee no longer creates or edits tasks (task.create/update removed).
+  // They contribute via timesheets, issues, comments and their own calendar.
   code('timesheet', 'create'), code('timesheet', 'update'),
   code('timesheet', 'delete'), // matrix: everyone may delete their own time entry
   code('issue', 'create'), code('issue', 'update'), code('issue', 'delete'),
@@ -175,13 +177,15 @@ const EMPLOYEE_CODES = [
 // deadlines, no capacity board, no people-ops. Sits between Employee and Consultant.
 const SENIOR_RESEARCH_ASSOCIATE_CODES = [
   ...EMPLOYEE_CODES,
-  code('task', 'assign'),
+  // A senior IC still CREATES and EDITS tasks — Employees lost these in the 2026-07-28 matrix,
+  // but an SRA leads a search/analysis workstream so keeps them.
+  code('task', 'create'), code('task', 'update'),
   code('issue', 'update'),
   code('report', 'export'),
-  // Senior enough to mint a Project ID directly (no request needed).
-  code('project', 'generate_pid'),
   // matrix: SRA may set up task lists.
   code('tasklist', 'create'), code('tasklist', 'update'),
+  // Matrix 2026-07-28: SRA no longer assigns tasks (task.assign removed) and no longer mints a
+  // Project ID directly (project.generate_pid removed) — those move up to Consultant+/Manager.
 ];
 
 // Senior Consultant: strong delivery lead — full operational control over
@@ -190,7 +194,8 @@ const SENIOR_RESEARCH_ASSOCIATE_CODES = [
 // Manager/HR/Admin).
 const SENIOR_CONSULTANT_CODES = [
   ...VIEW_BASICS,
-  code('project', 'create'), code('project', 'update'), code('project', 'approve'), code('project', 'generate_pid'),
+  // Matrix 2026-07-28: Senior Consultant no longer mints a Project ID directly (project.generate_pid removed).
+  code('project', 'create'), code('project', 'update'), code('project', 'approve'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
@@ -201,11 +206,12 @@ const SENIOR_CONSULTANT_CODES = [
   code('channel', 'create'),
   code('report', 'export'),
   code('analytics', 'view.organization'),
-  code('performance', 'view.own'), code('performance', 'view.organization'),
+  // Matrix 2026-07-28: keeps own-performance but no longer sees org-wide performance.
+  code('performance', 'view.own'),
   // Delivery oversight: see who is free/overloaded, and the client-facing dates.
   code('capacity', 'view'), code('deadline', 'view.client'),
   code('leave', 'request'),
-  code('reward', 'give'),
+  // Matrix 2026-07-28: recognition-giving (reward.give) stays with Manager/HR/Admin — removed here.
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
   code('profile', 'view'),
@@ -216,7 +222,8 @@ const SENIOR_CONSULTANT_CODES = [
 const CONSULTANT_CODES = [
   ...VIEW_BASICS,
   code('project', 'create'),
-  code('task', 'create'), code('task', 'update'), code('task', 'assign'),
+  // Matrix 2026-07-28: Consultant no longer assigns tasks (task.assign removed).
+  code('task', 'create'), code('task', 'update'),
   code('tasklist', 'create'), code('tasklist', 'update'),
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
   code('issue', 'create'), code('issue', 'update'), code('issue', 'delete'),
