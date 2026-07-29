@@ -24,6 +24,42 @@ export class TimesheetsController {
     return this.timesheets.myCalendar(parseInt(year, 10), parseInt(month, 10));
   }
 
+  // ── Backdate (backfill) approval ──────────────────────────────────────────
+  // Static 'backdate*' paths are declared before the ':id' routes so they never collide.
+
+  /** My own backfill requests (any status). */
+  @Get('backdate') @RequirePermission('timesheet.view')
+  myBackdates() {
+    return this.timesheets.myBackdateRequests();
+  }
+
+  /** Pending backfill queue — Super Admin only (enforced in the service). */
+  @Get('backdate/pending') @RequirePermission('timesheet.view')
+  pendingBackdates() {
+    return this.timesheets.pendingBackdateRequests();
+  }
+
+  /** Raise a backfill request for a past date range that needs approval (1–3 months old). */
+  @Post('backdate') @RequirePermission('timesheet.create')
+  requestBackdate(@Body() dto: { fromDate: string; toDate: string; reason: string }) {
+    return this.timesheets.requestBackdate(dto);
+  }
+
+  @Post('backdate/:id/approve') @RequirePermission('timesheet.view')
+  approveBackdate(@Param('id') id: string, @Body() body: { note?: string }) {
+    return this.timesheets.approveBackdate(id, body?.note);
+  }
+
+  @Post('backdate/:id/reject') @RequirePermission('timesheet.view')
+  rejectBackdate(@Param('id') id: string, @Body() body: { note?: string }) {
+    return this.timesheets.rejectBackdate(id, body?.note);
+  }
+
+  @Post('backdate/:id/cancel') @RequirePermission('timesheet.view')
+  cancelBackdate(@Param('id') id: string) {
+    return this.timesheets.cancelBackdate(id);
+  }
+
   @Post() @RequirePermission('timesheet.create')
   create(@Body() dto: CreateTimesheetDto) {
     return this.timesheets.create(dto);
