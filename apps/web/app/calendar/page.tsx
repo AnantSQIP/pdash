@@ -29,6 +29,7 @@ import { useToast } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
+import { TeamCalendarView } from '@/components/calendar/TeamCalendarView';
 
 type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY' | 'LEAVE' | 'COMPOFF' | 'WFH';
 const TYPE_COLORS: Record<EventType, string> = {
@@ -100,7 +101,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const DAY_NAMES_FULL = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-type ViewMode = 'month' | 'week' | 'agenda';
+type ViewMode = 'month' | 'week' | 'agenda' | 'team';
 
 interface AddEventModalProps {
   onClose: () => void;
@@ -429,7 +430,7 @@ function MeetingChat({ eventId, currentUser }: { eventId: string; currentUser: U
 }
 
 export default function CalendarPage() {
-  const { org, currentUser } = useOrg();
+  const { org, currentUser, users } = useOrg();
   const qc = useQueryClient();
   const { toast } = useToast();
   const today = new Date();
@@ -445,14 +446,15 @@ export default function CalendarPage() {
   const [hiddenTypes, setHiddenTypes] = useState<Set<EventType>>(new Set());
 
   // Fetch a generous window so month, week and agenda all have data without re-fetching constantly.
+  const weekBased = view === 'week' || view === 'team';
   const rangeFrom = useMemo(() => {
-    if (view === 'week') return addDays(weekStart, -7);
+    if (weekBased) return addDays(weekStart, -7);
     return new Date(year, month - 1, 1);
-  }, [view, weekStart, year, month]);
+  }, [weekBased, weekStart, year, month]);
   const rangeTo = useMemo(() => {
-    if (view === 'week') return addDays(weekStart, 21);
+    if (weekBased) return addDays(weekStart, 21);
     return new Date(year, month + 2, 0, 23, 59, 59);
-  }, [view, weekStart, year, month]);
+  }, [weekBased, weekStart, year, month]);
 
   const fromISO = rangeFrom.toISOString();
   const toISO = rangeTo.toISOString();
@@ -542,11 +544,11 @@ export default function CalendarPage() {
   }
 
   function goPrev() {
-    if (view === 'week') { setWeekStart(w => addDays(w, -7)); return; }
+    if (weekBased) { setWeekStart(w => addDays(w, -7)); return; }
     if (month === 0) { setYear(y => y - 1); setMonth(11); } else setMonth(m => m - 1);
   }
   function goNext() {
-    if (view === 'week') { setWeekStart(w => addDays(w, 7)); return; }
+    if (weekBased) { setWeekStart(w => addDays(w, 7)); return; }
     if (month === 11) { setYear(y => y + 1); setMonth(0); } else setMonth(m => m + 1);
   }
 
@@ -621,7 +623,7 @@ export default function CalendarPage() {
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
 
-  const periodLabel = view === 'week'
+  const periodLabel = weekBased
     ? (() => {
         const end = addDays(weekStart, 6);
         const sameMonth = weekStart.getMonth() === end.getMonth();
@@ -635,6 +637,7 @@ export default function CalendarPage() {
     { id: 'month', label: 'Month', Icon: RiLayoutGridLine },
     { id: 'week', label: 'Week', Icon: RiCalendarTodoLine },
     { id: 'agenda', label: 'Agenda', Icon: RiListCheck2 },
+    { id: 'team', label: 'Team Calendar', Icon: RiTeamLine },
   ];
 
   return (
@@ -913,6 +916,10 @@ export default function CalendarPage() {
                 </div>
               )}
             </div>
+          )}
+
+          {view === 'team' && (
+            <TeamCalendarView weekStart={weekStart} users={users} />
           )}
         </div>
 
