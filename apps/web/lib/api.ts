@@ -308,6 +308,11 @@ export type Timesheet = {
   issue?: { id: string; title: string } | null;
   project?: { id: string; code: string | null; projectType: string | null } | null;
 };
+export type TimesheetCalendarDay = {
+  date: string; target: number; logged: number;
+  status: 'COMPLETE' | 'INCOMPLETE' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
+};
+export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 
 export type CalendarEvent = {
   id: string; organizationId: string; title: string; description?: string;
@@ -951,6 +956,9 @@ export const api = {
   timesheets: {
     forProject: (projectId: string) => req<Timesheet[]>(`/timesheets?projectId=${projectId}`),
     forUser: (userId: string) => req<Timesheet[]>(`/timesheets?userId=${userId}`),
+    /** Per-day fill calendar for a month (color-coded: complete/incomplete/leave/holiday/weekend/future). */
+    calendar: (year: number, month: number) =>
+      req<TimesheetCalendar>(`/timesheets/calendar?year=${year}&month=${month}`),
     // taskId is optional: omit it to log a "buffer" entry whose PID (task) is assigned later.
     create: (data: { userId?: string; taskId?: string; category?: 'OTHER'; title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),

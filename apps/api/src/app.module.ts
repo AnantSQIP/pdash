@@ -36,6 +36,7 @@ import { PerformanceModule } from './modules/performance/performance.module';
 import { ProfileModule } from './modules/profile/profile.module';
 import { CapacityModule } from './modules/capacity/capacity.module';
 import { OverdueModule } from './modules/overdue/overdue.module';
+import { DailyDigestModule } from './modules/daily-digest/daily-digest.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { ExpensesModule } from './modules/expenses/expenses.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -91,6 +92,7 @@ import { PatentsModule } from './modules/patents/patents.module';
     // Team availability board + the deadline watchdog that feeds its alerts.
     CapacityModule,
     OverdueModule,
+    DailyDigestModule,
     NotificationsModule,
     PresenceModule,
     SearchModule,

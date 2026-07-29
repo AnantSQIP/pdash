@@ -18,6 +18,12 @@ export class TimesheetsController {
     return this.timesheets.listForUser(userId); // scoped to self unless privileged
   }
 
+  /** The signed-in user's month fill-calendar (color-coded: complete / incomplete / leave / …). */
+  @Get('calendar') @RequirePermission('timesheet.view')
+  calendar(@Query('year') year: string, @Query('month') month: string) {
+    return this.timesheets.myCalendar(parseInt(year, 10), parseInt(month, 10));
+  }
+
   @Post() @RequirePermission('timesheet.create')
   create(@Body() dto: CreateTimesheetDto) {
     return this.timesheets.create(dto);

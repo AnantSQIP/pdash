@@ -5,6 +5,7 @@ import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
+import { startOfIstDay } from '../../common/dates';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 
 // A person cannot log more than a full day against any single calendar day.
@@ -293,5 +294,93 @@ export class TimesheetsService {
     const deleted = await this.prisma.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
     if (entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
     return deleted;
+  }
+
+  // ── Fill calendar + reminders ────────────────────────────────────────────────
+  // A working day (Mon–Fri) targets 8h; an approved HALF_DAY targets 4h; leave/holiday/weekend
+  // are not required (target 0). A day is COMPLETE when logged ≥ target.
+
+  private static readonly FULL_DAY = 8;
+  private static readonly HALF_DAY_HOURS = 4;
+
+  /** The signed-in user's own fill calendar for a month. */
+  async myCalendar(year: number, month: number) {
+    return this.calendar(await this.actor(), year, month);
+  }
+
+  /** Per-day fill status for a user's month — powers the color-coded timesheet calendar. */
+  async calendar(userId: string, year: number, month: number) {
+    if (!Number.isInteger(year) || year < 1970 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12) {
+      throw new BadRequestException('A valid year and month are required.');
+    }
+    const first = new Date(Date.UTC(year, month - 1, 1));
+    const last = new Date(Date.UTC(year, month, 0));
+    const daysInMonth = last.getUTCDate();
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
+    const orgId = user?.organizationId;
+
+    const [att, leaves, holidays, sheets] = await Promise.all([
+      this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } }, select: { date: true, status: true } }),
+      this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true } }),
+      orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: first, lte: last } }, select: { date: true } }) : Promise.resolve([]),
+      this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: first, lte: last } }, select: { date: true, hoursLogged: true } }),
+    ]);
+    const dk = (d: Date) => d.toISOString().slice(0, 10);
+    const attByDay = new Map(att.map(a => [dk(a.date), a.status]));
+    const holidaySet = new Set(holidays.map(h => dk(h.date)));
+    const onLeave = (k: string) => leaves.some(l => dk(l.startDate) <= k && k <= dk(l.endDate));
+    const loggedByDay = new Map<string, number>();
+    for (const s of sheets) { const k = dk(s.date); loggedByDay.set(k, (loggedByDay.get(k) ?? 0) + s.hoursLogged); }
+    const todayKey = startOfIstDay(new Date()).toISOString().slice(0, 10);
+
+    const days = [];
+    for (let i = 1; i <= daysInMonth; i++) {
+      const d = new Date(Date.UTC(year, month - 1, i));
+      const k = dk(d);
+      const wd = d.getUTCDay();
+      const logged = Math.round((loggedByDay.get(k) ?? 0) * 10) / 10;
+      const attStatus = attByDay.get(k);
+      let target = TimesheetsService.FULL_DAY;
+      let status: string;
+      if (wd === 0 || wd === 6) { target = 0; status = 'WEEKEND'; }
+      else if (holidaySet.has(k)) { target = 0; status = 'HOLIDAY'; }
+      else if (attStatus === 'ON_LEAVE' || onLeave(k)) { target = 0; status = 'LEAVE'; }
+      else if (attStatus === 'HALF_DAY') { target = TimesheetsService.HALF_DAY_HOURS; status = logged >= target ? 'COMPLETE' : 'INCOMPLETE'; }
+      else if (k > todayKey) { status = 'FUTURE'; }
+      else { status = logged >= target ? 'COMPLETE' : 'INCOMPLETE'; }
+      days.push({ date: k, target, logged, status });
+    }
+    return { year, month, days };
+  }
+
+  /** Required days left incomplete within the last `windowDays` (default 14) for a user. */
+  async incompleteRecentDays(userId: string, windowDays = 14): Promise<string[]> {
+    const todayStart = startOfIstDay(new Date());
+    const from = new Date(todayStart.getTime() - windowDays * 86_400_000);
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
+    const orgId = user?.organizationId;
+    const [att, leaves, holidays, sheets] = await Promise.all([
+      this.prisma.attendance.findMany({ where: { userId, date: { gte: from, lt: todayStart } }, select: { date: true, status: true } }),
+      this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lt: todayStart }, endDate: { gte: from } }, select: { startDate: true, endDate: true } }),
+      orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: from, lt: todayStart } }, select: { date: true } }) : Promise.resolve([]),
+      this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: from, lt: todayStart } }, select: { date: true, hoursLogged: true } }),
+    ]);
+    const dk = (d: Date) => d.toISOString().slice(0, 10);
+    const attByDay = new Map(att.map(a => [dk(a.date), a.status]));
+    const holidaySet = new Set(holidays.map(h => dk(h.date)));
+    const onLeave = (k: string) => leaves.some(l => dk(l.startDate) <= k && k <= dk(l.endDate));
+    const loggedByDay = new Map<string, number>();
+    for (const s of sheets) { const k = dk(s.date); loggedByDay.set(k, (loggedByDay.get(k) ?? 0) + s.hoursLogged); }
+
+    const missing: string[] = [];
+    for (let d = new Date(from); d < todayStart; d = new Date(d.getTime() + 86_400_000)) {
+      const k = dk(d); const wd = d.getUTCDay();
+      if (wd === 0 || wd === 6 || holidaySet.has(k)) continue;
+      const attStatus = attByDay.get(k);
+      if (attStatus === 'ON_LEAVE' || onLeave(k)) continue;
+      const target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+      if ((loggedByDay.get(k) ?? 0) < target) missing.push(k);
+    }
+    return missing;
   }
 }

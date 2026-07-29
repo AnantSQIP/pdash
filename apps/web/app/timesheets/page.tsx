@@ -7,6 +7,7 @@ import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, KeyRound,
 import { api, type Timesheet } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
+import { TimesheetCalendar } from '@/components/timesheets/TimesheetCalendar';
 import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
@@ -104,6 +105,9 @@ export default function TimesheetsPage() {
           <Tile label="Billable (all)" value={fmtHours(billableHours)} tint="bg-green-50 text-green-600"   Icon={DollarSign} />
           <Tile label="Total logged"   value={fmtHours(totalHours)}    tint="bg-amber-50 text-amber-600"   Icon={Timer} />
         </div>
+
+        {/* Color-coded fill calendar — which days are filled / incomplete / on leave. */}
+        <TimesheetCalendar />
 
         {/* Filter */}
         <div className="flex items-center gap-1.5">
