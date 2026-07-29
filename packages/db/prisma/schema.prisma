@@ -121,6 +121,7 @@ model User {
   regularizationRequests RegularizationRequest[]
   compOffRequests        CompOffRequest[]
   wfhRequests            WfhRequest[]
+  timesheetBackdateRequests TimesheetBackdateRequest[]
   expenses               Expense[]
   calendarEventAttendees CalendarEventAttendee[]
   channelMemberships     ChannelMember[]
@@ -1103,6 +1104,33 @@ model CompOffRequest {
   @@index([userId])
   @@index([organizationId, status])
   @@map("comp_off_request")
+}
+
+// Backdated timesheet approval: entries for the last ~1 month can be filled freely, but
+// filling time for a day between 1 and 3 months old needs Super-Admin approval (older than
+// 3 months is blocked outright). An employee raises a request for a date range + reason;
+// a Super Admin approves/rejects. An APPROVED request covering a date lets that user log
+// (or edit) time for any day in [fromDate, toDate].
+model TimesheetBackdateRequest {
+  id             String    @id @default(cuid())
+  userId         String    // the requester
+  organizationId String?
+  fromDate       DateTime  // inclusive day
+  toDate         DateTime  // inclusive day
+  reason         String
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status         String    @default("PENDING")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId, status])
+  @@map("timesheet_backdate_request")
 }
 
 // Work-from-home request: WFH is a WORK MODE (the person still works, it is not

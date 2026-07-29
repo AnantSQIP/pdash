@@ -6,10 +6,25 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 import { startOfIstDay } from '../../common/dates';
+import { NotificationsService } from '../notifications/notifications.module';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 
 // A person cannot log more than a full day against any single calendar day.
 const MAX_HOURS_PER_DAY = 24;
+
+// Backdating windows (whole days, measured in IST calendar days).
+//  • within the last ~1 month  → anyone may fill freely
+//  • 1–3 months old            → needs an APPROVED TimesheetBackdateRequest covering the date
+//  • older than 3 months       → blocked (Super Admin bypasses everything)
+const SELF_FILL_DAYS = 31;
+const APPROVAL_MAX_DAYS = 92;
+const SUPER_ADMIN_ROLE = 'Super Admin';
+const MAX_REASON = 500;
+
+/** UTC-midnight ISO day key (YYYY-MM-DD). Timesheet dates are stored at UTC midnight. */
+const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+/** Parse a YYYY-MM-DD (or ISO) string to a UTC-midnight Date. */
+function parseDay(s: string): Date { return new Date(`${String(s).slice(0, 10)}T00:00:00.000Z`); }
 
 const USER_SELECT = { id: true, firstName: true, lastName: true };
 const TASK_SELECT = { id: true, title: true };
@@ -32,6 +47,7 @@ export class TimesheetsService {
     private readonly events: EventService,
     private readonly permissions: PermissionService,
     private readonly access: ProjectAccessService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async actor() {
@@ -46,6 +62,40 @@ export class TimesheetsService {
     if (actorId === ownerId) return;
     const perms = await this.permissions.getEffectivePermissions(actorId);
     if (!perms.isSuperAdmin) throw new ForbiddenException('You can only manage your own timesheets.');
+  }
+
+  /** How many whole IST days old the given entry date is (0 = today, negative = future). */
+  private ageInDays(entryDay: Date): number {
+    const todayStart = startOfIstDay(new Date());
+    return Math.floor((todayStart.getTime() - parseDay(dayKey(entryDay)).getTime()) / 86_400_000);
+  }
+
+  /** Enforce the backdating windows when logging/editing time for `entryDay` on `ownerId`'s sheet.
+   *  Within ~1 month: free. 1–3 months: needs an APPROVED backdate request covering the day.
+   *  Older than 3 months: blocked. A Super Admin bypasses all of it. */
+  private async assertBackfillAllowed(ownerId: string, entryDay: Date): Promise<void> {
+    const age = this.ageInDays(entryDay);
+    if (age <= SELF_FILL_DAYS) return; // within the self-serve window (or today/future — handled elsewhere)
+
+    const actorId = await this.actor();
+    const perms = await this.permissions.getEffectivePermissions(actorId);
+    if (perms.isSuperAdmin) return;
+
+    if (age > APPROVAL_MAX_DAYS) {
+      throw new BadRequestException(
+        `${dayKey(entryDay)} is more than 3 months old — timesheets can no longer be filled for it. Please contact a Super Admin.`,
+      );
+    }
+    const day = parseDay(dayKey(entryDay));
+    const covering = await this.prisma.timesheetBackdateRequest.findFirst({
+      where: { userId: ownerId, status: 'APPROVED', fromDate: { lte: day }, toDate: { gte: day } },
+      select: { id: true },
+    });
+    if (!covering) {
+      throw new ForbiddenException(
+        `Filling time for ${dayKey(entryDay)} needs Super Admin approval — it is over a month old. Request approval from the Timesheets page first.`,
+      );
+    }
   }
 
   /** Keep Task.actualHours in sync = SUM of its non-deleted timesheet hours. */
@@ -129,6 +179,8 @@ export class TimesheetsService {
     const today = new Date(new Date().toISOString().slice(0, 10));
     if (isNaN(entryDay.getTime())) throw new BadRequestException('A valid date is required.');
     if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
+    // Backdating windows: free within ~1 month, Super-Admin-approved 1–3 months, blocked beyond.
+    await this.assertBackfillAllowed(actorId, entryDay);
     // Each person decides whether their own logged time is billable — there is no
     // project-level override or admin authority. Defaults to billable when not specified.
     const billable = dto.billable ?? true;
@@ -252,6 +304,9 @@ export class TimesheetsService {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
+    // Same backdating rule as create(): editing an entry more than a month old needs approval
+    // (or Super Admin) — otherwise old, locked periods stay quietly mutable.
+    await this.assertBackfillAllowed(entry.userId, entry.date);
     // No editing logged time against a completed/closed client matter (create() already
     // enforces this on new entries; edits/deletes must match, or hours stay mutable after close).
     if (entry.projectId) await this.access.assertProjectWritable(entry.projectId);
@@ -382,5 +437,125 @@ export class TimesheetsService {
       if ((loggedByDay.get(k) ?? 0) < target) missing.push(k);
     }
     return missing;
+  }
+
+  // ── Backdate (backfill) approval ─────────────────────────────────────────────
+  // Filling a day 1–3 months old needs Super-Admin sign-off. An employee requests a date range
+  // + reason; a Super Admin approves/rejects; an APPROVED request unlocks logging for those days.
+
+  private readonly userSelect = { id: true, firstName: true, lastName: true } as const;
+
+  /** Active Super Admins (optionally scoped to an org) — the approvers for backdate requests. */
+  private async superAdminIds(organizationId?: string | null): Promise<string[]> {
+    const admins = await this.prisma.user.findMany({
+      where: {
+        deletedAt: null, status: 'ACTIVE',
+        ...(organizationId ? { organizationId } : {}),
+        userRoles: { some: { role: { name: SUPER_ADMIN_ROLE } } },
+      },
+      select: { id: true },
+    });
+    return admins.map(a => a.id);
+  }
+
+  private async assertSuperAdmin(): Promise<string> {
+    const actorId = await this.actor();
+    const perms = await this.permissions.getEffectivePermissions(actorId);
+    if (!perms.isSuperAdmin) throw new ForbiddenException('Only a Super Admin can review backdate requests.');
+    return actorId;
+  }
+
+  /** An employee asks to fill time for a past range (1–3 months old) that needs approval. */
+  async requestBackdate(dto: { fromDate: string; toDate: string; reason: string }) {
+    const actorId = await this.actor();
+    const reason = dto?.reason?.trim();
+    if (!reason) throw new BadRequestException('Please say why you need to backfill these days.');
+    if (reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
+    const from = parseDay(dto.fromDate), to = parseDay(dto.toDate);
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new BadRequestException('A valid date range is required.');
+    if (from > to) throw new BadRequestException('The start date must be on or before the end date.');
+
+    const toAge = this.ageInDays(to), fromAge = this.ageInDays(from);
+    if (toAge < 0) throw new BadRequestException('You cannot request approval for a future date.');
+    if (fromAge > APPROVAL_MAX_DAYS) {
+      throw new BadRequestException('You can only backfill up to 3 months — those dates are too old, even with approval.');
+    }
+    if (toAge <= SELF_FILL_DAYS) {
+      throw new BadRequestException('Those dates are within the last month — you can fill them directly, no approval needed.');
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true, firstName: true, lastName: true } });
+    const organizationId = user?.organizationId ?? null;
+    const req = await this.prisma.timesheetBackdateRequest.create({
+      data: { userId: actorId, organizationId, fromDate: from, toDate: to, reason, status: 'PENDING' },
+      include: { user: { select: this.userSelect } },
+    });
+    const name = `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim() || 'An employee';
+    await this.notifications.notify(await this.superAdminIds(organizationId), {
+      type: 'timesheet.backdate_requested', title: 'Timesheet backfill to review',
+      message: `${name} asks to fill time for ${dayKey(from)} – ${dayKey(to)}: ${reason}`,
+      link: '/timesheets',
+    });
+    return req;
+  }
+
+  /** The signed-in user's own backdate requests (newest first). */
+  async myBackdateRequests() {
+    const actorId = await this.actor();
+    return this.prisma.timesheetBackdateRequest.findMany({
+      where: { userId: actorId }, orderBy: { createdAt: 'desc' }, take: 60,
+    });
+  }
+
+  /** Pending backdate queue for a Super Admin's org. */
+  async pendingBackdateRequests() {
+    const actorId = await this.assertSuperAdmin();
+    const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
+    return this.prisma.timesheetBackdateRequest.findMany({
+      where: { status: 'PENDING', ...(me?.organizationId ? { organizationId: me.organizationId } : {}) },
+      orderBy: { createdAt: 'asc' }, include: { user: { select: this.userSelect } },
+    });
+  }
+
+  async approveBackdate(id: string, note?: string) {
+    const actorId = await this.assertSuperAdmin();
+    const req = await this.prisma.timesheetBackdateRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Backdate request not found.');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be approved.');
+    const updated = await this.prisma.timesheetBackdateRequest.update({
+      where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note?.trim() || null },
+    });
+    await this.notifications.notify(req.userId, {
+      type: 'timesheet.backdate_approved', title: 'Backfill approved',
+      message: `You can now fill time for ${dayKey(req.fromDate)} – ${dayKey(req.toDate)}.`,
+      link: '/timesheets',
+    });
+    return updated;
+  }
+
+  async rejectBackdate(id: string, note?: string) {
+    const actorId = await this.assertSuperAdmin();
+    const req = await this.prisma.timesheetBackdateRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Backdate request not found.');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be rejected.');
+    const updated = await this.prisma.timesheetBackdateRequest.update({
+      where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note?.trim() || null },
+    });
+    await this.notifications.notify(req.userId, {
+      type: 'timesheet.backdate_rejected', title: 'Backfill not approved',
+      message: `Your request to fill ${dayKey(req.fromDate)} – ${dayKey(req.toDate)} was declined${note?.trim() ? `: ${note.trim()}` : '.'}`,
+      link: '/timesheets',
+    });
+    return updated;
+  }
+
+  /** The requester withdraws their own still-pending request. */
+  async cancelBackdate(id: string) {
+    const actorId = await this.actor();
+    const req = await this.prisma.timesheetBackdateRequest.findUnique({ where: { id } });
+    if (!req) throw new NotFoundException('Backdate request not found.');
+    if (req.userId !== actorId) throw new ForbiddenException('You can only cancel your own requests.');
+    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be cancelled.');
+    return this.prisma.timesheetBackdateRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
   }
 }
