@@ -609,6 +609,29 @@ export class AttendanceService {
     });
     return { from, to, rows };
   }
+
+  /** Every member's punch-in/out LOCATION for a given day (default today) — HR/Admin only. */
+  async orgPunchLocations(organizationId: string, dateStr?: string) {
+    const day = dateStr ? parseDay(dateStr) : utcDay(new Date());
+    const users = await this.prisma.user.findMany({
+      where: { organizationId, deletedAt: null, status: 'ACTIVE' },
+      select: { id: true, firstName: true, lastName: true, designation: true },
+    });
+    const att = await this.prisma.attendance.findMany({ where: { userId: { in: users.map(u => u.id) }, date: day } });
+    const byUser = new Map(att.map(a => [a.userId, a]));
+    return {
+      date: dayKey(day),
+      rows: users.map(u => {
+        const a = byUser.get(u.id);
+        return {
+          userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
+          checkIn: a?.checkIn ?? null, checkOut: a?.checkOut ?? null, status: a?.status ?? null,
+          checkInLat: a?.checkInLat ?? null, checkInLng: a?.checkInLng ?? null,
+          checkOutLat: a?.checkOutLat ?? null, checkOutLng: a?.checkOutLng ?? null,
+        };
+      }),
+    };
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -1193,6 +1216,13 @@ class AttendanceController {
     if (!from || !to) throw new BadRequestException('from and to are required');
     // Org from the session actor — never a client-supplied query param.
     return this.svc.orgSummary(await this.actor.requireOrgId(), from, to);
+  }
+
+  /** Every member's punch-in/out LOCATION for a day (default today). HR/Admin only. */
+  @Get('org/punch-locations')
+  @RequirePermission('attendance.view.organization')
+  async orgPunchLocations(@Query('date') date?: string) {
+    return this.svc.orgPunchLocations(await this.actor.requireOrgId(), date);
   }
 
   @Post('mark')

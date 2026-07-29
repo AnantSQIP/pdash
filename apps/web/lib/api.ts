@@ -660,6 +660,15 @@ export type OrgAttendanceSummary = {
   from: string; to: string;
   rows: { userId: string; name: string; designation?: string; present: number; absent: number; onLeave: number; holiday: number; hoursLogged: number; attendanceRate: number }[];
 };
+export type OrgPunchLocations = {
+  date: string;
+  rows: {
+    userId: string; name: string; designation?: string;
+    checkIn: string | null; checkOut: string | null; status: string | null;
+    checkInLat: number | null; checkInLng: number | null;
+    checkOutLat: number | null; checkOutLng: number | null;
+  }[];
+};
 export type LeaveRequestItem = {
   id: string; userId: string; organizationId?: string; leaveType: string;
   startDate: string; endDate: string; numDays: number; reason?: string | null;
@@ -1252,6 +1261,9 @@ export const api = {
       req<Attendance>('/attendance/mark', { method: 'POST', body: JSON.stringify(data) }),
     orgSummary: (orgId: string, from: string, to: string) =>
       req<OrgAttendanceSummary>(`/attendance/org/summary?organizationId=${encodeURIComponent(orgId)}&from=${from}&to=${to}`),
+    /** Every member's punch-in/out location for a day (default today). HR/Admin only. */
+    orgPunchLocations: (date?: string) =>
+      req<OrgPunchLocations>(`/attendance/org/punch-locations${date ? `?date=${date}` : ''}`),
 
     // ── Regularisation: employee requests, HR approves/rejects ──
     /** Raise a regularisation request for a day (missed/late/forgot punch). Goes to HR. */
