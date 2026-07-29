@@ -502,19 +502,21 @@ export class ProjectsService {
       orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
       take: 1000,
     });
-    const userIds = [...new Set(rows.map(r => r.generatedById))];
     const projectIds = [...new Set(rows.map(r => r.projectId).filter(Boolean) as string[])];
-    const [users, projects] = await Promise.all([
-      userIds.length ? this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [],
-      // Full context for the Super-Admin detail view: type, deadline, and active members + roles.
-      projectIds.length ? this.prisma.project.findMany({
-        where: { id: { in: projectIds } },
-        select: {
-          id: true, title: true, projectPhase: true, projectType: true, dueDate: true,
-          members: { where: { isActive: true }, select: { projectRole: true, user: { select: { firstName: true, lastName: true } } } },
-        },
-      }) : [],
-    ]);
+    // EVERY detail about the project the PID is attached to (for the detail view + export).
+    const projects = projectIds.length ? await this.prisma.project.findMany({
+      where: { id: { in: projectIds } },
+      select: {
+        id: true, title: true, description: true, projectPhase: true, projectType: true,
+        priority: true, startDate: true, dueDate: true, clientDueDate: true,
+        completionPercentage: true, createdBy: true, createdAt: true,
+        client: { select: { name: true, code: true } },
+        members: { where: { isActive: true }, select: { projectRole: true, user: { select: { firstName: true, lastName: true } } } },
+        patents: { select: { patent: { select: { handle: true } } } },
+      },
+    }) : [];
+    const userIds = [...new Set([...rows.map(r => r.generatedById), ...projects.map(p => p.createdBy)])];
+    const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [];
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
     const projById = new Map(projects.map(p => [p.id, p]));
     return rows.map(r => {
@@ -525,9 +527,18 @@ export class ProjectsService {
         project: r.projectId ? {
           id: r.projectId,
           title: p?.title ?? '(deleted)',
+          description: p?.description ?? null,
           phase: p?.projectPhase ?? null,
           type: p?.projectType ?? null,
+          priority: p?.priority ?? null,
+          startDate: p?.startDate ?? null,
           dueDate: p?.dueDate ?? null,
+          clientDueDate: p?.clientDueDate ?? null,
+          progress: p?.completionPercentage ?? null,
+          client: p?.client?.name ?? p?.client?.code ?? null,
+          createdBy: p?.createdBy ? (userById.get(p.createdBy) ?? null) : null,
+          createdAt: p?.createdAt ?? null,
+          patents: (p?.patents ?? []).map(pp => pp.patent.handle),
           members: (p?.members ?? []).map(m => ({
             name: `${m.user.firstName} ${m.user.lastName}`.trim(),
             role: m.projectRole ?? 'MEMBER',
@@ -1116,12 +1127,16 @@ export class ProjectsService {
       throw new BadRequestException('Only a completed or closed project can be reopened.');
     }
     const actorId = getActorId();
-    // The old PID stayed DISCONTINUED on close and can't be revived — a reopened project needs a
-    // FRESH PID, so its code is cleared back to pending. An authority (or the manager, via a new
-    // request) attaches a new one.
+    // Reopening REUSES the same PID: keep the project's code and flip its DISCONTINUED reservation
+    // back to ATTACHED (it shows "Working" in the ledger again). The serial was never freed while
+    // discontinued, so restoring it is integrity-safe.
     const updated = await this.prisma.project.update({
       where: { id },
-      data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null, code: null },
+      data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
+    });
+    await this.prisma.pidReservation.updateMany({
+      where: { projectId: id, status: 'DISCONTINUED' },
+      data: { status: 'ATTACHED', resolvedAt: new Date() },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
@@ -1129,7 +1144,7 @@ export class ProjectsService {
     });
     await this.notifyMembers(project, actorId, {
       type: 'project.reopened', title: 'Project reopened',
-      message: `"${project.title}" was reopened and is active again.`,
+      message: `"${project.title}" was reopened — same Project ID, back to Working.`,
     });
     return this.deadlines.redactProject(updated, await this.deadlines.scope());
   }

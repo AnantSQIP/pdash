@@ -221,7 +221,11 @@ export type PidLedgerEntry = {
   generatedBy: string;
   project: {
     id: string; title: string; phase: string | null;
-    type?: string | null; dueDate?: string | null;
+    description?: string | null; type?: string | null; priority?: string | null;
+    startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+    progress?: number | null; client?: string | null;
+    createdBy?: string | null; createdAt?: string | null;
+    patents?: string[];
     members?: { name: string; role: string }[];
   } | null;
   createdAt: string; expiresAt: string; resolvedAt: string | null;
@@ -304,6 +308,11 @@ export type Timesheet = {
   issue?: { id: string; title: string } | null;
   project?: { id: string; code: string | null; projectType: string | null } | null;
 };
+export type TimesheetCalendarDay = {
+  date: string; target: number; logged: number;
+  status: 'COMPLETE' | 'INCOMPLETE' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
+};
+export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 
 export type CalendarEvent = {
   id: string; organizationId: string; title: string; description?: string;
@@ -656,6 +665,15 @@ export type OrgAttendanceSummary = {
   from: string; to: string;
   rows: { userId: string; name: string; designation?: string; present: number; absent: number; onLeave: number; holiday: number; hoursLogged: number; attendanceRate: number }[];
 };
+export type OrgPunchLocations = {
+  date: string;
+  rows: {
+    userId: string; name: string; designation?: string;
+    checkIn: string | null; checkOut: string | null; status: string | null;
+    checkInLat: number | null; checkInLng: number | null;
+    checkOutLat: number | null; checkOutLng: number | null;
+  }[];
+};
 export type LeaveRequestItem = {
   id: string; userId: string; organizationId?: string; leaveType: string;
   startDate: string; endDate: string; numDays: number; reason?: string | null;
@@ -938,6 +956,9 @@ export const api = {
   timesheets: {
     forProject: (projectId: string) => req<Timesheet[]>(`/timesheets?projectId=${projectId}`),
     forUser: (userId: string) => req<Timesheet[]>(`/timesheets?userId=${userId}`),
+    /** Per-day fill calendar for a month (color-coded: complete/incomplete/leave/holiday/weekend/future). */
+    calendar: (year: number, month: number) =>
+      req<TimesheetCalendar>(`/timesheets/calendar?year=${year}&month=${month}`),
     // taskId is optional: omit it to log a "buffer" entry whose PID (task) is assigned later.
     create: (data: { userId?: string; taskId?: string; category?: 'OTHER'; title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),
@@ -1248,6 +1269,9 @@ export const api = {
       req<Attendance>('/attendance/mark', { method: 'POST', body: JSON.stringify(data) }),
     orgSummary: (orgId: string, from: string, to: string) =>
       req<OrgAttendanceSummary>(`/attendance/org/summary?organizationId=${encodeURIComponent(orgId)}&from=${from}&to=${to}`),
+    /** Every member's punch-in/out location for a day (default today). HR/Admin only. */
+    orgPunchLocations: (date?: string) =>
+      req<OrgPunchLocations>(`/attendance/org/punch-locations${date ? `?date=${date}` : ''}`),
 
     // ── Regularisation: employee requests, HR approves/rejects ──
     /** Raise a regularisation request for a day (missed/late/forgot punch). Goes to HR. */

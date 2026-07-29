@@ -783,6 +783,8 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   const [busyId, setBusyId] = useState('');
   const qc = useQueryClient();
   const { can } = usePermissions();
+  // Today's punch-in/out locations for every member (HR/Admin only).
+  const { data: punchLoc } = useQuery({ queryKey: ['attn-punch-locations'], queryFn: () => api.attendance.orgPunchLocations(), staleTime: 30_000 });
   const { data: pendingCompoff = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(), staleTime: 15_000 });
   // WFH review is HR/Admin only (attendance.manage) — don't even query without it.
   const canReviewWfh = can('attendance.manage');
@@ -842,6 +844,35 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
 
   return (
     <div className="space-y-6">
+      {/* Today's punch locations — HR/Admin see where each member clocked in/out. */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+          <MapPin size={15} className="text-brand-600" />
+          <h3 className="text-sm font-semibold text-gray-700">Punch locations — today</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm min-w-[520px]">
+            <thead><tr className="bg-gray-50 border-b border-gray-100">
+              {['Member', 'In', 'In location', 'Out', 'Out location'].map(h => <th key={h} className="px-4 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{h}</th>)}
+            </tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {(punchLoc?.rows ?? []).filter(r => r.checkIn || r.checkOut).length === 0 && (
+                <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-gray-400">No punches recorded today yet.</td></tr>
+              )}
+              {(punchLoc?.rows ?? []).filter(r => r.checkIn || r.checkOut).map(r => (
+                <tr key={r.userId} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 text-gray-800">{r.name}</td>
+                  <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">{r.checkIn ? new Date(r.checkIn).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}</td>
+                  <td className="px-4 py-2 text-xs">{r.checkInLat != null && r.checkInLng != null ? <a href={mapLink(r.checkInLat, r.checkInLng)} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">View on map</a> : <span className="text-gray-300">—</span>}</td>
+                  <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">{r.checkOut ? new Date(r.checkOut).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}</td>
+                  <td className="px-4 py-2 text-xs">{r.checkOutLat != null && r.checkOutLng != null ? <a href={mapLink(r.checkOutLat, r.checkOutLng)} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">View on map</a> : <span className="text-gray-300">—</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Pending approvals */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">

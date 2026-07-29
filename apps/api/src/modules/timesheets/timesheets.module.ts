@@ -5,5 +5,6 @@ import { TimesheetsService } from './timesheets.service';
 @Module({
   controllers: [TimesheetsController],
   providers: [TimesheetsService],
+  exports: [TimesheetsService],
 })
 export class TimesheetsModule {}

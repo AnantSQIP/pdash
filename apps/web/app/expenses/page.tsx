@@ -99,14 +99,8 @@ function MyExpenses() {
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Amount</label>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Amount (INR)</label>
               <input type="number" min="0" step="0.01" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="e.g. 1000" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Currency</label>
-              <select value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-                {['INR', 'USD', 'EUR', 'GBP'].map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
             </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">Date</label>
