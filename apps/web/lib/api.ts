@@ -221,7 +221,11 @@ export type PidLedgerEntry = {
   generatedBy: string;
   project: {
     id: string; title: string; phase: string | null;
-    type?: string | null; dueDate?: string | null;
+    description?: string | null; type?: string | null; priority?: string | null;
+    startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+    progress?: number | null; client?: string | null;
+    createdBy?: string | null; createdAt?: string | null;
+    patents?: string[];
     members?: { name: string; role: string }[];
   } | null;
   createdAt: string; expiresAt: string; resolvedAt: string | null;

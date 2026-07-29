@@ -60,7 +60,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     if (lifecycleBusy) return;
     const confirms: Record<typeof action, string | null> = {
       complete: 'Mark this project complete? Its work is treated as finished.',
-      close: 'Close this project? It moves to the Closed section (its Project ID is retired).',
+      close: 'Close this project? It moves to the Closed section (its Project ID shows as discontinued until you reopen it).',
       reopen: null,
       reinitialize: 'Re-initialize this project for a returning client? It reopens with the SAME Project ID and reuses all the existing data.',
     };
@@ -350,7 +350,7 @@ export function ProjectDetailClient({ projectId }: Props) {
                 <button
                   onClick={() => runLifecycle('reopen')}
                   disabled={lifecycleBusy}
-                  title="Reopen this project (it will need a fresh Project ID)"
+                  title="Reopen this project — same Project ID, back to Working"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
                   <RotateCcw size={14} /> Reopen
