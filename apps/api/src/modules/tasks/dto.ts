@@ -177,3 +177,25 @@ export class CreateSubtaskDto {
   @IsString({ each: true })
   assigneeIds?: string[];
 }
+
+export class UpdateSubtaskDto {
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
+  @MaxLength(200)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  description?: string;
+
+  @IsOptional()
+  @IsIn(TASK_PRIORITIES)
+  priority?: string;
+
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
+}

@@ -11,6 +11,7 @@ export const EVENTS = {
   TASK_DELETED: 'task.deleted',
   TASK_ASSIGNED: 'task.assigned',
   SUBTASK_CREATED: 'subtask.created',
+  SUBTASK_UPDATED: 'subtask.updated',
   SUBTASK_CLOSED: 'subtask.closed',
   SUBTASK_REOPENED: 'subtask.reopened',
   SUBTASK_DELETED: 'subtask.deleted',
