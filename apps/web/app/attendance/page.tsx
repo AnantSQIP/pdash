@@ -188,17 +188,52 @@ export default function AttendancePage() {
                   <button onClick={() => setCursor(c => c.month === 12 ? { year: c.year + 1, month: 1 } : { year: c.year, month: c.month + 1 })} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={16} /></button>
                 </div>
               </div>
-              <MonthGrid month={month} year={cursor.year} monthNum={cursor.month} onPick={setRegDate} />
-              <p className="text-[11px] text-gray-400 mt-2">Tip: click a past day to regularise it (missed punch, WFH, client visit…).</p>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-4">
-                {['PRESENT', 'ABSENT', 'ON_LEAVE', 'HOLIDAY', 'WEEKEND'].map(s => (
-                  <span key={s} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
-                    <span className={clsx('w-2.5 h-2.5 rounded-sm', STATUS_STYLE[s].dot)} />{STATUS_STYLE[s].label}
-                  </span>
-                ))}
-                <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
-                  <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />WFH
-                </span>
+              <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_240px] gap-5">
+                {/* Calendar grid fills the left column. */}
+                <MonthGrid month={month} year={cursor.year} monthNum={cursor.month} onPick={setRegDate} />
+
+                {/* Side panel — this month's breakdown + legend + tip (uses the width). */}
+                <div className="xl:border-l xl:border-gray-100 xl:pl-5 flex flex-col gap-4">
+                  <div>
+                    <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">This month</p>
+                    <div className="space-y-1.5">
+                      {([
+                        ['PRESENT', month?.summary.present ?? 0],
+                        ['ON_LEAVE', month?.summary.onLeave ?? 0],
+                        ['ABSENT', month?.summary.absent ?? 0],
+                        ['HOLIDAY', month?.summary.holiday ?? 0],
+                      ] as const).map(([s, n]) => (
+                        <div key={s} className="flex items-center justify-between text-xs">
+                          <span className="inline-flex items-center gap-2 text-gray-600">
+                            <span className={clsx('w-2.5 h-2.5 rounded-sm', STATUS_STYLE[s].dot)} />{STATUS_STYLE[s].label}
+                          </span>
+                          <span className="font-semibold text-gray-800 tabular-nums">{n}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-1">
+                    <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Legend</p>
+                    <div className="flex flex-col gap-1.5">
+                      {['WEEKEND'].map(s => (
+                        <span key={s} className="inline-flex items-center gap-2 text-[11px] text-gray-500">
+                          <span className={clsx('w-2.5 h-2.5 rounded-sm', STATUS_STYLE[s].dot)} />{STATUS_STYLE[s].label}
+                        </span>
+                      ))}
+                      <span className="inline-flex items-center gap-2 text-[11px] text-gray-500">
+                        <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />Worked from home
+                      </span>
+                      <span className="inline-flex items-center gap-2 text-[11px] text-gray-500">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />Regularised
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-gray-400 leading-relaxed mt-auto">
+                    Tip: click a past day to regularise it (missed punch, WFH, client visit…).
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -354,21 +389,21 @@ function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth;
   for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, key: `${year}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}` });
 
   return (
-    <div className="grid grid-cols-7 gap-1 max-w-md">
-      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} className="text-center text-[9px] font-semibold text-gray-400 py-0.5">{d}</div>)}
+    <div className="grid grid-cols-7 gap-1.5">
+      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} className="text-center text-[10px] font-semibold text-gray-400 uppercase pb-0.5">{d}</div>)}
       {cells.map((c, i) => {
         if (!c) return <div key={i} />;
         const rec = byDate.get(c.key);
         const st = STATUS_STYLE[rec?.status ?? 'FUTURE'] ?? STATUS_STYLE.FUTURE;
         const title = rec ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}` : c.key;
         const canReg = !!onPick && REGULARIZABLE.includes(rec?.status ?? '');
-        const cls = clsx('h-10 rounded-md border flex flex-col items-center justify-center relative leading-none', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
+        const cls = clsx('min-h-[52px] rounded-lg border flex flex-col items-center justify-center relative p-1 leading-none', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
         const inner = (
           <>
-            <span className="text-[11px] font-semibold">{c.day}</span>
-            {rec?.totalHours != null && <span className="text-[8px] opacity-70 mt-0.5">{rec.totalHours}h</span>}
-            {rec?.isRegularized && <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
-            {rec?.workMode === 'WFH' && <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
+            <span className="text-[13px] font-semibold">{c.day}</span>
+            {rec?.totalHours != null && <span className="text-[10px] opacity-70 mt-1 tabular-nums">{rec.totalHours}h</span>}
+            {rec?.isRegularized && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
+            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
           </>
         );
         return canReg
