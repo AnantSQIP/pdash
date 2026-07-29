@@ -416,7 +416,8 @@ export class TasksService {
 
   /**
    * Role-based staffing: replace a task's people with { userId, role (PM|REVIEWER|ANALYST),
-   * estimatedHours } entries. At most one PM; hours are mandatory per person; the task's total
+   * estimatedHours } entries. At most one PM; per-person hours are OPTIONAL (default 0 — a
+   * reviewer may be added with no estimate, or add a small estimate later); the task's total
    * estimatedHours becomes the SUM. Auto-adds not-yet-members (like setAssignees).
    */
   async setStaffing(id: string, dto: SetStaffingDto) {
@@ -430,7 +431,8 @@ export class TasksService {
     for (const e of entries) {
       if (seen.has(e.userId)) throw new BadRequestException('The same person can only be added once.');
       seen.add(e.userId);
-      if (!(e.estimatedHours > 0)) throw new BadRequestException('Estimated hours are required for every person on the task.');
+      // Hours are optional (0 allowed). Only a NEGATIVE value is invalid (DTO also guards @Min(0)).
+      if (e.estimatedHours != null && e.estimatedHours < 0) throw new BadRequestException('Estimated hours cannot be negative.');
     }
     if (entries.filter(e => e.role === 'PM').length > 1) {
       throw new BadRequestException('A task can have only one Project Manager.');
@@ -438,13 +440,13 @@ export class TasksService {
 
     await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), entries.map(e => e.userId));
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
-    const totalHours = entries.reduce((s, e) => s + e.estimatedHours, 0);
+    const totalHours = entries.reduce((s, e) => s + (e.estimatedHours ?? 0), 0);
     const assignedById = entries.length ? (getActorId() ?? null) : null;
 
     await this.prisma.$transaction([
       this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
       this.prisma.taskAssignee.createMany({
-        data: entries.map(e => ({ taskId: id, userId: e.userId, role: e.role, estimatedHours: e.estimatedHours })),
+        data: entries.map(e => ({ taskId: id, userId: e.userId, role: e.role, estimatedHours: e.estimatedHours ?? 0 })),
         skipDuplicates: true,
       }),
       // The task's estimate is the sum of the per-person hours (drives the capacity board).

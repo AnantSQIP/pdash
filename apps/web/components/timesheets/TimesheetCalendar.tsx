@@ -6,16 +6,17 @@ import clsx from 'clsx';
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { api, type TimesheetCalendarDay } from '@/lib/api';
 
-// Color key for each day's fill status.
+// Color key for each day's fill status. Graded: full 8h = green, 4–8h = amber, under 4h = red.
 const STATUS_META: Record<TimesheetCalendarDay['status'], { label: string; cell: string; dot: string }> = {
-  COMPLETE:   { label: 'Filled',       cell: 'bg-green-50 border-green-200 text-green-800',   dot: 'bg-green-500' },
-  INCOMPLETE: { label: 'Not filled',   cell: 'bg-red-50 border-red-200 text-red-700',         dot: 'bg-red-500' },
-  LEAVE:      { label: 'On leave',     cell: 'bg-blue-50 border-blue-100 text-blue-600',       dot: 'bg-blue-400' },
-  HOLIDAY:    { label: 'Holiday',      cell: 'bg-purple-50 border-purple-100 text-purple-600', dot: 'bg-purple-400' },
-  WEEKEND:    { label: 'Weekend',      cell: 'bg-gray-50 border-gray-100 text-gray-400',       dot: 'bg-gray-300' },
-  FUTURE:     { label: 'Upcoming',     cell: 'bg-white border-gray-100 text-gray-300',         dot: 'bg-gray-200' },
+  COMPLETE:   { label: 'Full (8h)',      cell: 'bg-green-100 border-green-300 text-green-800',   dot: 'bg-green-500' },
+  PARTIAL:    { label: '4–8h',           cell: 'bg-amber-100 border-amber-300 text-amber-800',   dot: 'bg-amber-500' },
+  LOW:        { label: 'Under 4h',       cell: 'bg-red-100 border-red-300 text-red-700',         dot: 'bg-red-500' },
+  LEAVE:      { label: 'On leave',       cell: 'bg-blue-50 border-blue-100 text-blue-600',       dot: 'bg-blue-400' },
+  HOLIDAY:    { label: 'Holiday',        cell: 'bg-purple-50 border-purple-100 text-purple-600', dot: 'bg-purple-400' },
+  WEEKEND:    { label: 'Weekend',        cell: 'bg-gray-50 border-gray-100 text-gray-400',       dot: 'bg-gray-300' },
+  FUTURE:     { label: 'Upcoming',       cell: 'bg-white border-gray-100 text-gray-300',         dot: 'bg-gray-200' },
 };
-const ORDER: TimesheetCalendarDay['status'][] = ['COMPLETE', 'INCOMPLETE', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'FUTURE'];
+const ORDER: TimesheetCalendarDay['status'][] = ['COMPLETE', 'PARTIAL', 'LOW', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'FUTURE'];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /** A month calendar showing whether each day's 8h (or half-day 4h) timesheet is filled. */
@@ -47,46 +48,46 @@ export function TimesheetCalendar() {
   });
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><CalendarDays size={16} className="text-brand-600" /> Timesheet calendar</h3>
-        <div className="flex items-center gap-1">
-          <button onClick={() => move(-1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={16} /></button>
-          <span className="text-sm font-medium text-gray-700 w-32 text-center">{monthName}</span>
-          <button onClick={() => move(1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={16} /></button>
+    <div className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
+      <div className="flex items-center justify-between mb-2.5">
+        <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><CalendarDays size={15} className="text-brand-600" /> Timesheet calendar</h3>
+        <div className="flex items-center gap-0.5">
+          <button onClick={() => move(-1)} className="p-1 rounded-md hover:bg-gray-100 text-gray-500"><ChevronLeft size={15} /></button>
+          <span className="text-xs font-medium text-gray-700 w-28 text-center">{monthName}</span>
+          <button onClick={() => move(1)} className="p-1 rounded-md hover:bg-gray-100 text-gray-500"><ChevronRight size={15} /></button>
         </div>
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3 text-[11px] text-gray-500">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mb-2.5 text-[10px] text-gray-500">
         {ORDER.map(s => (
-          <span key={s} className="inline-flex items-center gap-1.5">
-            <span className={clsx('w-2.5 h-2.5 rounded-sm', STATUS_META[s].dot)} /> {STATUS_META[s].label}
+          <span key={s} className="inline-flex items-center gap-1">
+            <span className={clsx('w-2 h-2 rounded-sm', STATUS_META[s].dot)} /> {STATUS_META[s].label}
           </span>
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
-        {WEEKDAYS.map(w => <div key={w} className="text-center text-[10px] font-semibold text-gray-400 uppercase pb-1">{w}</div>)}
+      {/* Compact grid — capped width so the tiles stay small on wide screens. */}
+      <div className="grid grid-cols-7 gap-1 max-w-md">
+        {WEEKDAYS.map(w => <div key={w} className="text-center text-[9px] font-semibold text-gray-400 uppercase pb-0.5">{w}</div>)}
         {cells.map((date, i) => {
           if (!date) return <div key={i} />;
           const cell = byDate.get(date);
           const meta = cell ? STATUS_META[cell.status] : STATUS_META.FUTURE;
           const day = parseInt(date.slice(8, 10), 10);
+          const showHours = cell && cell.target > 0 && cell.status !== 'FUTURE';
           return (
             <div key={i}
               title={cell ? `${date} · ${meta.label}${cell.target > 0 ? ` · ${cell.logged}/${cell.target}h` : ''}` : date}
-              className={clsx('aspect-square rounded-lg border flex flex-col items-center justify-center text-xs', meta.cell)}>
-              <span className="font-medium">{day}</span>
-              {cell && cell.target > 0 && (
-                <span className="text-[9px] opacity-80">{cell.logged}/{cell.target}h</span>
-              )}
+              className={clsx('h-9 rounded-md border flex flex-col items-center justify-center leading-none', meta.cell)}>
+              <span className="text-[11px] font-semibold">{day}</span>
+              {showHours && <span className="text-[8px] opacity-80 mt-0.5">{cell!.logged}/{cell!.target}h</span>}
             </div>
           );
         })}
       </div>
       {isLoading && <p className="text-[11px] text-gray-400 mt-2">Loading…</p>}
-      <p className="text-[11px] text-gray-400 mt-3">Target is 8h per working day (Mon–Fri), 4h on an approved half-day. Weekends, holidays and approved leave aren’t required.</p>
+      <p className="text-[10px] text-gray-400 mt-2.5">Target 8h per working day (Mon–Fri), 4h on an approved half-day. Green = full, amber = 4–8h, red = under 4h. Weekends, holidays and leave aren’t required.</p>
     </div>
   );
 }

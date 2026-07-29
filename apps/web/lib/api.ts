@@ -310,7 +310,7 @@ export type Timesheet = {
 };
 export type TimesheetCalendarDay = {
   date: string; target: number; logged: number;
-  status: 'COMPLETE' | 'INCOMPLETE' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
+  status: 'COMPLETE' | 'PARTIAL' | 'LOW' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
 };
 export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 

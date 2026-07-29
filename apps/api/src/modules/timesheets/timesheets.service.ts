@@ -353,10 +353,19 @@ export class TimesheetsService {
 
   // ── Fill calendar + reminders ────────────────────────────────────────────────
   // A working day (Mon–Fri) targets 8h; an approved HALF_DAY targets 4h; leave/holiday/weekend
-  // are not required (target 0). A day is COMPLETE when logged ≥ target.
+  // are not required (target 0). Fill is GRADED against the target:
+  //   COMPLETE (≥ target) · PARTIAL (≥ 4h on a full day / ≥ half the target) · LOW (< 4h).
 
   private static readonly FULL_DAY = 8;
   private static readonly HALF_DAY_HOURS = 4;
+
+  /** Grade a day's logged hours against its target: COMPLETE / PARTIAL / LOW. */
+  private static gradeFill(logged: number, target: number): 'COMPLETE' | 'PARTIAL' | 'LOW' {
+    if (logged >= target) return 'COMPLETE';
+    // On a full 8h day the amber band is 4–8h; below 4h is red. A 4h half-day splits at 2h.
+    const partialFloor = target >= TimesheetsService.FULL_DAY ? TimesheetsService.HALF_DAY_HOURS : target / 2;
+    return logged >= partialFloor ? 'PARTIAL' : 'LOW';
+  }
 
   /** The signed-in user's own fill calendar for a month. */
   async myCalendar(year: number, month: number) {
@@ -400,9 +409,11 @@ export class TimesheetsService {
       if (wd === 0 || wd === 6) { target = 0; status = 'WEEKEND'; }
       else if (holidaySet.has(k)) { target = 0; status = 'HOLIDAY'; }
       else if (attStatus === 'ON_LEAVE' || onLeave(k)) { target = 0; status = 'LEAVE'; }
-      else if (attStatus === 'HALF_DAY') { target = TimesheetsService.HALF_DAY_HOURS; status = logged >= target ? 'COMPLETE' : 'INCOMPLETE'; }
-      else if (k > todayKey) { status = 'FUTURE'; }
-      else { status = logged >= target ? 'COMPLETE' : 'INCOMPLETE'; }
+      else if (k > todayKey) { target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY; status = 'FUTURE'; }
+      else {
+        target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+        status = TimesheetsService.gradeFill(logged, target);
+      }
       days.push({ date: k, target, logged, status });
     }
     return { year, month, days };

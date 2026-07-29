@@ -20,8 +20,9 @@ const pmOf = (task: ApiTask, defaultManagerId?: string | null): Row => {
 };
 
 /**
- * Role-based task staffing: one Project Manager, many Reviewers, many Analysts — each with a
- * mandatory estimated-hours value. The task's total estimate is the sum, saved server-side.
+ * Role-based task staffing: one Project Manager, many Reviewers, many Analysts. Per-person
+ * estimated hours are OPTIONAL (blank = 0) — e.g. a reviewer can be added with no estimate, or
+ * a small one added later. The task's total estimate is the sum, saved server-side.
  */
 export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSaved }: {
   task: ApiTask; readOnly?: boolean; canAssign: boolean; defaultManagerId?: string | null; onSaved?: (t: ApiTask) => void;
@@ -48,8 +49,10 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
     const out: StaffingEntry[] = [];
     const add = (userId: string, role: TaskRole, hoursStr: string): string | null => {
       if (!userId) return null; // an empty picker row is simply ignored
-      const h = parseFloat(hoursStr);
-      if (!Number.isFinite(h) || h < 0.25) return 'Enter estimated hours (≥ 0.25) for every person added.';
+      // Hours are optional — a blank field means 0 (e.g. a reviewer with no estimate yet).
+      const trimmed = hoursStr.trim();
+      const h = trimmed === '' ? 0 : parseFloat(trimmed);
+      if (!Number.isFinite(h) || h < 0) return 'Estimated hours cannot be negative.';
       out.push({ userId, role, estimatedHours: h });
       return null;
     };
@@ -94,9 +97,9 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
         </select>
         <div className="relative w-24 shrink-0">
           <input
-            type="number" min="0.25" step="0.25" value={row.hours} disabled={!editable}
+            type="number" min="0" step="0.25" value={row.hours} disabled={!editable}
             onChange={e => onChange({ ...row, hours: e.target.value })}
-            placeholder="hrs"
+            placeholder="0"
             className="w-full pr-7 pl-2 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 disabled:bg-gray-50 disabled:text-gray-400"
           />
           <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-gray-400">h</span>

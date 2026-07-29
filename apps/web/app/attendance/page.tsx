@@ -354,21 +354,21 @@ function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth;
   for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, key: `${year}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}` });
 
   return (
-    <div className="grid grid-cols-7 gap-1.5">
-      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} className="text-center text-[11px] font-semibold text-gray-400 py-1">{d}</div>)}
+    <div className="grid grid-cols-7 gap-1 max-w-md">
+      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} className="text-center text-[9px] font-semibold text-gray-400 py-0.5">{d}</div>)}
       {cells.map((c, i) => {
         if (!c) return <div key={i} />;
         const rec = byDate.get(c.key);
         const st = STATUS_STYLE[rec?.status ?? 'FUTURE'] ?? STATUS_STYLE.FUTURE;
         const title = rec ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}` : c.key;
         const canReg = !!onPick && REGULARIZABLE.includes(rec?.status ?? '');
-        const cls = clsx('aspect-square rounded-lg border flex flex-col items-center justify-center relative', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
+        const cls = clsx('h-10 rounded-md border flex flex-col items-center justify-center relative leading-none', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
         const inner = (
           <>
-            <span className="text-sm font-medium">{c.day}</span>
-            {rec?.totalHours != null && <span className="text-[9px] opacity-70">{rec.totalHours}h</span>}
-            {rec?.isRegularized && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
-            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
+            <span className="text-[11px] font-semibold">{c.day}</span>
+            {rec?.totalHours != null && <span className="text-[8px] opacity-70 mt-0.5">{rec.totalHours}h</span>}
+            {rec?.isRegularized && <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
+            {rec?.workMode === 'WFH' && <span className="absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
           </>
         );
         return canReg
