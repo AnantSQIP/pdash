@@ -36,6 +36,14 @@ class CreateCommentDto {
   @ArrayMaxSize(10)
   @IsString({ each: true })
   documentIds?: string[];
+
+  // User ids this message @mentions. Server-validated: only actual members of the comment's
+  // project are notified; anything else is ignored.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  mentionedUserIds?: string[];
 }
 
 // Attachment projection on comments — deleted documents drop out automatically.
@@ -53,6 +61,33 @@ export class CommentsService {
     private readonly documents: DocumentsService,
     private readonly access: ProjectAccessService,
   ) {}
+
+  /** The project a comment's entity belongs to — mentions are scoped to that project's members. */
+  private async projectIdOfEntity(entityType: string, entityId: string): Promise<string | null> {
+    if (entityType === 'PROJECT') return entityId;
+    if (entityType === 'TASK') {
+      const pt = await this.prisma.projectTask.findFirst({ where: { taskId: entityId }, select: { projectId: true } });
+      return pt?.projectId ?? null;
+    }
+    if (entityType === 'ISSUE') {
+      const issue = await this.prisma.issue.findUnique({ where: { id: entityId }, select: { projectId: true } });
+      return issue?.projectId ?? null;
+    }
+    return null;
+  }
+
+  /** Resolve requested @mentions to REAL, active members of the comment's project (drops anyone
+   *  else). This is what scopes "tag project members" — you can't mention a non-member. */
+  private async resolveMentions(entityType: string, entityId: string, requested: string[]): Promise<string[]> {
+    if (!requested.length) return [];
+    const projectId = await this.projectIdOfEntity(entityType, entityId);
+    if (!projectId) return [];
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId, isActive: true, userId: { in: [...new Set(requested)] } },
+      select: { userId: true },
+    });
+    return members.map(m => m.userId);
+  }
 
   /** Who to notify about a new comment: task assignees, or an issue's assignee + reporter. */
   private async commentRecipients(entityType: string, entityId: string): Promise<string[]> {
@@ -141,10 +176,25 @@ export class CommentsService {
         attachmentCount: documentIds.length || undefined,
       },
     });
-    // M13: notify the entity's participants (previously posting a comment notified no one).
-    const recipients = (await this.commentRecipients(dto.entityType, dto.entityId)).filter(uid => uid !== userId);
+    const who = `${comment.user.firstName} ${comment.user.lastName ?? ''}`.trim();
+    // @mentions: only real project members can be tagged; each gets a high-signal "mentioned you"
+    // notification linking straight to the project discussion.
+    const mentioned = (await this.resolveMentions(dto.entityType, dto.entityId, dto.mentionedUserIds ?? []))
+      .filter(uid => uid !== userId);
+    const mentionedSet = new Set(mentioned);
+    if (mentioned.length) {
+      await this.notifications.notify(mentioned, {
+        type: 'comment.mention',
+        title: `${who} mentioned you`,
+        message: content ? `"${content.slice(0, 120)}"` : `${who} tagged you on a file.`,
+        link: dto.entityType === 'PROJECT' ? `/projects/${dto.entityId}` : undefined,
+      });
+    }
+    // M13: notify the entity's other participants (task assignees / issue participants). Anyone
+    // already @mentioned is skipped so they don't get two notifications for one message.
+    const recipients = (await this.commentRecipients(dto.entityType, dto.entityId))
+      .filter(uid => uid !== userId && !mentionedSet.has(uid));
     if (recipients.length) {
-      const who = `${comment.user.firstName} ${comment.user.lastName ?? ''}`.trim();
       await this.notifications.notify(recipients, {
         type: 'comment.created',
         title: 'New comment',
