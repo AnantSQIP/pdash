@@ -8,6 +8,7 @@ import { api, type Timesheet } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
 import { TimesheetCalendar } from '@/components/timesheets/TimesheetCalendar';
+import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
 import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
@@ -108,6 +109,9 @@ export default function TimesheetsPage() {
 
         {/* Color-coded fill calendar — which days are filled / incomplete / on leave. */}
         <TimesheetCalendar />
+
+        {/* Backfill approvals — request/approve filling days older than a month. */}
+        <TimesheetBackfill />
 
         {/* Filter */}
         <div className="flex items-center gap-1.5">

@@ -314,6 +314,15 @@ export type TimesheetCalendarDay = {
 };
 export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 
+export type TimesheetBackdateRequest = {
+  id: string; userId: string; organizationId?: string | null;
+  fromDate: string; toDate: string; reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+  reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
+  createdAt: string; updatedAt: string;
+  user?: { id: string; firstName: string; lastName: string };
+};
+
 export type CalendarEvent = {
   id: string; organizationId: string; title: string; description?: string;
   type: string; startDate: string; endDate?: string; allDay: boolean;
@@ -968,6 +977,17 @@ export const api = {
     assign: (id: string, taskId: string) =>
       req<Timesheet>(`/timesheets/${id}/assign`, { method: 'POST', body: JSON.stringify({ taskId }) }),
     delete: (id: string) => req<void>(`/timesheets/${id}`, { method: 'DELETE' }),
+    // ── Backdate (backfill) approval: 1–3-month-old days need Super-Admin sign-off ──
+    backdates: () => req<TimesheetBackdateRequest[]>('/timesheets/backdate'),
+    pendingBackdates: () => req<TimesheetBackdateRequest[]>('/timesheets/backdate/pending'),
+    requestBackdate: (data: { fromDate: string; toDate: string; reason: string }) =>
+      req<TimesheetBackdateRequest>('/timesheets/backdate', { method: 'POST', body: JSON.stringify(data) }),
+    approveBackdate: (id: string, note?: string) =>
+      req<TimesheetBackdateRequest>(`/timesheets/backdate/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    rejectBackdate: (id: string, note?: string) =>
+      req<TimesheetBackdateRequest>(`/timesheets/backdate/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    cancelBackdate: (id: string) =>
+      req<TimesheetBackdateRequest>(`/timesheets/backdate/${id}/cancel`, { method: 'POST' }),
   },
 
   events: {
