@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { TasksService } from './tasks.service';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 @Controller('tasks')
@@ -74,6 +74,11 @@ export class TasksController {
   @Post(':id/subtasks/:subtaskId/reopen') @RequirePermission('task.update')
   reopenSubtask(@Param('id') taskId: string, @Param('subtaskId') subtaskId: string) {
     return this.tasks.reopenSubtask(taskId, subtaskId);
+  }
+
+  @Patch(':id/subtasks/:subtaskId') @RequirePermission('task.update')
+  updateSubtask(@Param('id') taskId: string, @Param('subtaskId') subtaskId: string, @Body() dto: UpdateSubtaskDto) {
+    return this.tasks.updateSubtask(taskId, subtaskId, dto);
   }
 
   @Delete(':id/subtasks/:subtaskId') @RequirePermission('task.update')

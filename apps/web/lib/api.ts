@@ -931,6 +931,8 @@ export const api = {
       req<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}/close`, { method: 'POST' }),
     reopenSubtask: (taskId: string, subtaskId: string) =>
       req<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}/reopen`, { method: 'POST' }),
+    updateSubtask: (taskId: string, subtaskId: string, data: { title?: string; description?: string; priority?: string; dueDate?: string | null }) =>
+      req<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     deleteSubtask: (taskId: string, subtaskId: string) =>
       req<void>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' }),
   },

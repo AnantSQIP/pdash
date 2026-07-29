@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
@@ -583,6 +583,27 @@ export class TasksService {
     await this.events.emit({
       action: EVENTS.SUBTASK_REOPENED, entityType: 'SUBTASK', entityId: subtaskId,
       metadata: { taskId: parentTaskId, title: subtask.title },
+    });
+    return updated;
+  }
+
+  /** Edit a subtask's title (and optional description / priority / due date). */
+  async updateSubtask(parentTaskId: string, subtaskId: string, dto: UpdateSubtaskDto) {
+    const subtask = await this.getSubtaskOfParent(parentTaskId, subtaskId);
+    await this.access.assertTaskWritable(parentTaskId); // no edits on a completed/closed matter
+    const updated = await this.prisma.subtask.update({
+      where: { id: subtaskId },
+      data: {
+        ...(dto.title !== undefined ? { title: dto.title } : {}),
+        ...(dto.description !== undefined ? { description: dto.description } : {}),
+        ...(dto.priority !== undefined ? { priority: dto.priority } : {}),
+        ...(dto.dueDate !== undefined ? { dueDate: dto.dueDate ? new Date(dto.dueDate) : null } : {}),
+      },
+      include: { assignees: { include: { user: { select: { id: true, firstName: true, lastName: true } } } } },
+    });
+    await this.events.emit({
+      action: EVENTS.SUBTASK_UPDATED, entityType: 'SUBTASK', entityId: subtaskId,
+      metadata: { taskId: parentTaskId, title: updated.title },
     });
     return updated;
   }

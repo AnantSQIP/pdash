@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   X, Flag, Calendar, MessageCircle, Lock,
-  Clock, Plus, RefreshCw, ChevronDown, Loader, Check, Search, UserPlus, Trash2,
+  Clock, Plus, RefreshCw, ChevronDown, Loader, Check, Search, UserPlus, Trash2, Pencil,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type ApiTask, type ApiComment, type WorkflowStatus, type ActivityItem } from '@/lib/api';
@@ -137,6 +137,7 @@ function TaskDetailPanelInner({
   const [assigneeSearch, setAssigneeSearch] = useState('');
   const [progress, setProgress] = useState(task.completionPercentage);
   const [newSub, setNewSub] = useState('');
+  const [editingSub, setEditingSub] = useState<{ id: string; title: string } | null>(null);
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
   // The task's PLAN. These were display-only, which froze a task's schedule at creation:
@@ -352,6 +353,24 @@ function TaskDetailPanelInner({
       setNewSub(t); // restore the text so the edit isn't lost on failure
       toast(e instanceof Error ? e.message : 'Action failed', 'error');
     } finally { addingSubRef.current = false; }
+  }
+
+  async function deleteSubtask(subtaskId: string) {
+    if (!window.confirm('Delete this subtask?')) return;
+    try {
+      await api.tasks.deleteSubtask(task.id, subtaskId);
+      refetchSubtasks();
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not delete the subtask', 'error'); }
+  }
+
+  async function renameSubtask(subtaskId: string, title: string) {
+    const t = title.trim();
+    setEditingSub(null);
+    if (!t) return;
+    try {
+      await api.tasks.updateSubtask(task.id, subtaskId, { title: t });
+      refetchSubtasks();
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not rename the subtask', 'error'); }
   }
 
   async function postComment() {
@@ -610,8 +629,9 @@ function TaskDetailPanelInner({
                   <div className="border border-gray-100 rounded-lg divide-y divide-gray-100">
                     {subtasks.map(s => {
                       const done = s.status === CLOSED_TYPE;
+                      const isEditing = editingSub?.id === s.id;
                       return (
-                        <div key={s.id} className="flex items-center gap-3 px-3 py-2.5 group">
+                        <div key={s.id} className="flex items-center gap-2.5 px-3 py-2.5">
                           <button
                             onClick={() => toggleSubtask(s.id, s.status)}
                             disabled={readOnly}
@@ -630,11 +650,30 @@ function TaskDetailPanelInner({
                               </svg>
                             )}
                           </button>
-                          <span className={clsx('text-sm flex-1', done ? 'line-through text-gray-400' : 'text-gray-700')}>{s.title}</span>
-                          {s.assignees?.[0] && (
-                            <span className="ml-auto text-xs bg-gray-100 text-gray-600 px-2 rounded-full py-0.5">
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="flex-1 text-sm border border-brand-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400"
+                              value={editingSub!.title}
+                              onChange={e => setEditingSub({ id: s.id, title: e.target.value })}
+                              onKeyDown={e => { if (e.key === 'Enter') renameSubtask(s.id, editingSub!.title); if (e.key === 'Escape') setEditingSub(null); }}
+                              onBlur={() => renameSubtask(s.id, editingSub!.title)}
+                            />
+                          ) : (
+                            <span className={clsx('text-sm flex-1', done ? 'line-through text-gray-400' : 'text-gray-700')}>{s.title}</span>
+                          )}
+                          {s.assignees?.[0] && !isEditing && (
+                            <span className="text-xs bg-gray-100 text-gray-600 px-2 rounded-full py-0.5 shrink-0">
                               {userInitials(s.assignees[0].user)}
                             </span>
+                          )}
+                          {!closed && !readOnly && !isEditing && (
+                            <div className="flex items-center gap-0.5 shrink-0">
+                              <button onClick={() => setEditingSub({ id: s.id, title: s.title })} title="Rename subtask"
+                                className="p-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"><Pencil size={13} /></button>
+                              <button onClick={() => deleteSubtask(s.id)} title="Delete subtask"
+                                className="p-1 rounded text-gray-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>
+                            </div>
                           )}
                         </div>
                       );
@@ -643,13 +682,19 @@ function TaskDetailPanelInner({
                 )}
 
                 {!closed && !readOnly && (
-                  <input
-                    className="mt-2.5 w-full text-sm border border-dashed border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-gray-400 placeholder:text-gray-300"
-                    placeholder="Add a subtask... (Enter to save)"
-                    value={newSub}
-                    onChange={e => setNewSub(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') addSubtask(); }}
-                  />
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <input
+                      className="flex-1 text-sm border border-dashed border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-gray-400 placeholder:text-gray-300"
+                      placeholder="Add a subtask..."
+                      value={newSub}
+                      onChange={e => setNewSub(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') addSubtask(); }}
+                    />
+                    <button onClick={addSubtask} disabled={!newSub.trim()}
+                      className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 shrink-0">
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
