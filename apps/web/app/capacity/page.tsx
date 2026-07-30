@@ -575,6 +575,8 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
   onClose: () => void; onDone: () => void;
 }) {
   const [projectId, setProjectId] = useState('');
+  const [role, setRole] = useState<'PM' | 'REVIEWER' | 'ANALYST'>('ANALYST');
+  const [hours, setHours] = useState('');
   const { data: project } = useQuery<ApiProject>({
     queryKey: ['project', projectId],
     queryFn: () => api.projects.get(projectId),
@@ -592,6 +594,9 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
         initialAssigneeIds={[row.userId]}
         initialStartDate={startDate}
         initialDueDate={dueDate}
+        assignRole={role}
+        assignHours={hours}
+        assignDue={dueDate}
         onClose={onClose}
         onSuccess={onDone}
       />
@@ -625,8 +630,24 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
             <option value="">Select a project…</option>
             {assignable.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
           </select>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+              <select value={role} onChange={e => setRole(e.target.value as 'PM' | 'REVIEWER' | 'ANALYST')}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                <option value="PM">Project Manager</option>
+                <option value="REVIEWER">Reviewer</option>
+                <option value="ANALYST">Analyst</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Hours <span className="text-gray-400 font-normal">(optional)</span></label>
+              <input type="number" min="0" step="0.25" value={hours} onChange={e => setHours(e.target.value)} placeholder="0"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+            </div>
+          </div>
           <p className="text-[11px] text-gray-400">
-            The task form opens next with {row.name.split(' ')[0]} and the dates already filled in.
+            {row.name.split(' ')[0]} will be assigned as <span className="font-medium">{role === 'PM' ? 'Project Manager' : role === 'REVIEWER' ? 'Reviewer' : 'Analyst'}</span>{dueDate ? ` with a deadline of ${formatDate(dueDate)}` : ''}. The task form opens next.
           </p>
           {projectId && !taskList && (
             <p className="text-xs text-gray-400 flex items-center gap-1.5"><Loader size={12} className="animate-spin" /> Loading project…</p>

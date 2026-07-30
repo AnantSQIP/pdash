@@ -178,9 +178,10 @@ export type AssigneeRef = {
   userId: string;
   role?: TaskRole | null;
   estimatedHours?: number | null;
+  dueDate?: string | null;
   user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'>;
 };
-export type StaffingEntry = { userId: string; role: TaskRole; estimatedHours: number };
+export type StaffingEntry = { userId: string; role: TaskRole; estimatedHours?: number; dueDate?: string | null };
 
 export type Subtask = {
   id: string; taskId: string; title: string; status: string; priority: string;
