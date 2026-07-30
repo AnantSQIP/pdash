@@ -818,8 +818,33 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   const [busyId, setBusyId] = useState('');
   const qc = useQueryClient();
   const { can } = usePermissions();
-  // Today's punch-in/out locations for every member (HR/Admin only).
-  const { data: punchLoc } = useQuery({ queryKey: ['attn-punch-locations'], queryFn: () => api.attendance.orgPunchLocations(), staleTime: 30_000 });
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const yearAgoKey = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+  // Punch-in/out locations for every member on a chosen day (HR/Admin only) — pick any day in the
+  // last year. Full data is exportable to CSV over a range.
+  const [locDate, setLocDate] = useState(todayKey);
+  const [exporting, setExporting] = useState(false);
+  const { data: punchLoc } = useQuery({ queryKey: ['attn-punch-locations', locDate], queryFn: () => api.attendance.orgPunchLocations(locDate), staleTime: 30_000 });
+
+  async function exportAttendanceCsv() {
+    setExporting(true);
+    try {
+      const rep = await api.attendance.orgReport(yearAgoKey, todayKey);
+      const fmtT = (s: string | null) => s ? new Date(s).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '';
+      const cell = (v: unknown) => `"${(v == null ? '' : String(v)).replace(/"/g, '""')}"`;
+      const header = ['Date', 'Member', 'Office', 'Area', 'Status', 'Work mode', 'Punch In', 'Punch Out', 'Hours', 'Punch In (map)', 'Punch Out (map)'];
+      const body = rep.rows.map(r => [
+        r.date, r.name, r.office ?? '', r.area, r.status ?? '', r.workMode ?? '', fmtT(r.checkIn), fmtT(r.checkOut), r.totalHours ?? '',
+        r.checkInLat != null && r.checkInLng != null ? mapLink(r.checkInLat, r.checkInLng) : '',
+        r.checkOutLat != null && r.checkOutLng != null ? mapLink(r.checkOutLat, r.checkOutLng) : '',
+      ]);
+      const csv = [header, ...body].map(row => row.map(cell).join(',')).join('\r\n');
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      a.href = url; a.download = `attendance-${yearAgoKey}_to_${todayKey}.csv`; a.click(); URL.revokeObjectURL(url);
+    } catch (e) { alert(e instanceof Error ? e.message : 'Could not export attendance.'); }
+    finally { setExporting(false); }
+  }
   const { data: pendingCompoff = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(), staleTime: 15_000 });
   // WFH review is HR/Admin only (attendance.manage) — don't even query without it.
   const canReviewWfh = can('attendance.manage');
@@ -879,24 +904,32 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
 
   return (
     <div className="space-y-6">
-      {/* Today's punch locations — HR/Admin see where each member clocked in/out. */}
+      {/* Punch locations — HR/Admin see where each member clocked in/out, on any day in the last
+          year, with the office area; full data exports to CSV. */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2 flex-wrap">
           <MapPin size={15} className="text-brand-600" />
-          <h3 className="text-sm font-semibold text-gray-700">Punch locations — today</h3>
+          <h3 className="text-sm font-semibold text-gray-700">Punch locations</h3>
+          <input type="date" value={locDate} min={yearAgoKey} max={todayKey} onChange={e => setLocDate(e.target.value)}
+            className="ml-1 text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-400" />
+          <button onClick={exportAttendanceCsv} disabled={exporting}
+            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+            {exporting ? <Loader size={13} className="animate-spin" /> : <CalendarDays size={13} />} Export 1-year CSV
+          </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm min-w-[520px]">
+          <table className="w-full text-left text-sm min-w-[640px]">
             <thead><tr className="bg-gray-50 border-b border-gray-100">
-              {['Member', 'In', 'In location', 'Out', 'Out location'].map(h => <th key={h} className="px-4 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{h}</th>)}
+              {['Member', 'Area', 'Punch In', 'Punch In Location', 'Punch Out', 'Punch Out Location'].map(h => <th key={h} className="px-4 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">{h}</th>)}
             </tr></thead>
             <tbody className="divide-y divide-gray-50">
               {(punchLoc?.rows ?? []).filter(r => r.checkIn || r.checkOut).length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-gray-400">No punches recorded today yet.</td></tr>
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-xs text-gray-400">No punches recorded on this day.</td></tr>
               )}
               {(punchLoc?.rows ?? []).filter(r => r.checkIn || r.checkOut).map(r => (
                 <tr key={r.userId} className="hover:bg-gray-50">
                   <td className="px-4 py-2 text-gray-800">{r.name}</td>
+                  <td className="px-4 py-2 text-xs text-gray-600 whitespace-nowrap">{r.area}</td>
                   <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">{r.checkIn ? new Date(r.checkIn).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}</td>
                   <td className="px-4 py-2 text-xs">{r.checkInLat != null && r.checkInLng != null ? <a href={mapLink(r.checkInLat, r.checkInLng)} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:underline">View on map</a> : <span className="text-gray-300">—</span>}</td>
                   <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">{r.checkOut ? new Date(r.checkOut).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : '—'}</td>
