@@ -53,6 +53,7 @@ function toDisplay(p: ApiProject): MockProject {
     code: p.code,
     title: p.title,
     description: p.description ?? '',
+    projectType: p.projectType ?? null,
     projectPhase: p.projectPhase as Phase,
     priority: p.priority as any,
     completionPercentage: p.completionPercentage,

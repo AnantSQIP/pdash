@@ -42,11 +42,16 @@ export function ProjectCard({ project }: ProjectCardProps) {
               </span>
             </div>
             {project.code
-              ? <span className="block text-[11px] font-mono text-gray-400 mb-0.5">{project.code}</span>
-              : <span className="block text-[11px] font-mono text-amber-500 mb-0.5">PID pending</span>}
+              ? <span className="block text-sm font-mono font-bold text-brand-700 tracking-tight mb-1">{project.code}</span>
+              : <span className="block text-sm font-mono font-bold text-amber-500 mb-1">PID pending</span>}
             <h3 title={project.title} className="font-semibold text-gray-900 text-base leading-tight group-hover:text-brand-600 transition-colors line-clamp-1">
               {project.title}
             </h3>
+            {project.projectType && (
+              <span className="inline-flex items-center mt-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide bg-indigo-50 text-indigo-600 border border-indigo-100">
+                {project.projectType.replace(/^CUSTOM_/, '').replace(/_/g, ' ')}
+              </span>
+            )}
           </div>
           <ArrowUpRight size={16} className="text-gray-300 group-hover:text-brand-500 shrink-0 mt-1 transition-colors" />
         </div>

@@ -8,6 +8,7 @@ export interface MockProject {
   code?: string | null; // the PID, e.g. SQ_26_27_001
   title: string;
   description: string;
+  projectType?: string | null; // e.g. HML, Novelty, FTO — shown as a tag on the card
   projectPhase: Phase;
   priority: Priority;
   completionPercentage: number;

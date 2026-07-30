@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -49,6 +49,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const queryClient = useQueryClient();
 
   // Restore an outstanding (un-attached) reservation when the modal opens, so its countdown
   // continues and the authority isn't blocked from creating without a clue why.
@@ -166,6 +167,9 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         pidAssigneeId: !canGeneratePid ? pidAssigneeId : undefined,
         createdBy,
       });
+      // If we saved a new custom type as a template, refresh the types list so it shows up the
+      // NEXT time anyone opens this modal (the query is staleTime:Infinity, so force it).
+      if (isCustom && saveTemplate) await queryClient.invalidateQueries({ queryKey: ['project-types'] });
       onSuccess?.();
       onClose();
     } catch (err) {
