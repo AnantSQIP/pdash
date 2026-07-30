@@ -75,6 +75,14 @@ const ESCALATION_EMAIL = 'yash@squarkip.com';
 // A day is a full "present" only if at least this many hours were worked; below it,
 // the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
 const HALF_DAY_HOURS = 4;
+
+// Office → the human "area / address" shown in the team-location table. Jaipur's exact area can be
+// updated here when confirmed.
+const OFFICE_AREA: Record<string, string> = {
+  GURGAON: 'Sector 48, Gurgaon',
+  JAIPUR: 'Jaipur',
+};
+const areaOf = (office?: string | null) => (office ? (OFFICE_AREA[office] ?? office) : '—');
 function statusForHours(totalHours: number): string {
   return totalHours >= HALF_DAY_HOURS ? 'PRESENT' : 'HALF_DAY';
 }
@@ -634,7 +642,7 @@ export class AttendanceService {
     const day = dateStr ? parseDay(dateStr) : utcDay(new Date());
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
-      select: { id: true, firstName: true, lastName: true, designation: true },
+      select: { id: true, firstName: true, lastName: true, designation: true, office: true },
     });
     const att = await this.prisma.attendance.findMany({ where: { userId: { in: users.map(u => u.id) }, date: day } });
     const byUser = new Map(att.map(a => [a.userId, a]));
@@ -644,9 +652,43 @@ export class AttendanceService {
         const a = byUser.get(u.id);
         return {
           userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
+          office: u.office ?? undefined, area: areaOf(u.office),
           checkIn: a?.checkIn ?? null, checkOut: a?.checkOut ?? null, status: a?.status ?? null,
           checkInLat: a?.checkInLat ?? null, checkInLng: a?.checkInLng ?? null,
           checkOutLat: a?.checkOutLat ?? null, checkOutLng: a?.checkOutLng ?? null,
+        };
+      }),
+    };
+  }
+
+  /** Full attendance data for a date range (admins/HR), capped at ~1 year — one row per user per
+   *  day that has any record. Powers the CSV export. */
+  async orgAttendanceReport(organizationId: string, fromStr: string, toStr: string) {
+    const from = parseDayStrict(fromStr, 'from'), to = parseDayStrict(toStr, 'to');
+    if (to < from) throw new BadRequestException('The end date must be on or after the start date.');
+    if ((to.getTime() - from.getTime()) / 86_400_000 > 366) throw new BadRequestException('The range cannot exceed one year.');
+    const users = await this.prisma.user.findMany({
+      where: { organizationId, deletedAt: null },
+      select: { id: true, firstName: true, lastName: true, designation: true, office: true },
+    });
+    const userById = new Map(users.map(u => [u.id, u]));
+    const rows = await this.prisma.attendance.findMany({
+      where: { userId: { in: users.map(u => u.id) }, date: { gte: from, lte: to } },
+      orderBy: [{ date: 'desc' }],
+      take: 20000,
+    });
+    return {
+      from: dayKey(from), to: dayKey(to),
+      rows: rows.map(a => {
+        const u = userById.get(a.userId);
+        return {
+          date: dayKey(a.date), userId: a.userId,
+          name: u ? `${u.firstName} ${u.lastName}`.trim() : a.userId,
+          office: u?.office ?? undefined, area: areaOf(u?.office),
+          status: a.status, workMode: a.workMode ?? undefined,
+          checkIn: a.checkIn ?? null, checkOut: a.checkOut ?? null, totalHours: a.totalHours ?? null,
+          checkInLat: a.checkInLat ?? null, checkInLng: a.checkInLng ?? null,
+          checkOutLat: a.checkOutLat ?? null, checkOutLng: a.checkOutLng ?? null,
         };
       }),
     };
@@ -1242,6 +1284,13 @@ class AttendanceController {
   @RequirePermission('attendance.view.organization')
   async orgPunchLocations(@Query('date') date?: string) {
     return this.svc.orgPunchLocations(await this.actor.requireOrgId(), date);
+  }
+
+  /** Full attendance data for a date range (up to 1 year) — admins/HR, for the CSV export. */
+  @Get('org/report')
+  @RequirePermission('attendance.view.organization')
+  async orgReport(@Query('from') from: string, @Query('to') to: string) {
+    return this.svc.orgAttendanceReport(await this.actor.requireOrgId(), from, to);
   }
 
   @Post('mark')
