@@ -23,7 +23,7 @@ const DIRECTORY_SELECT = {
  * until it is named here.
  */
 const PERSONAL_FIELDS = [
-  'dateOfBirth', 'gender', 'bloodGroup', 'maritalStatus', 'nationality',
+  'dateOfBirth', 'gender', 'bloodGroup', 'maritalStatus', 'weddingAnniversary', 'nationality',
   'personalEmail', 'alternatePhone',
   'currentLine1', 'currentLine2', 'currentCity', 'currentState', 'currentPostalCode', 'currentCountry',
   'permanentSameAsCurrent', 'permanentLine1', 'permanentLine2', 'permanentCity',
@@ -135,6 +135,9 @@ export class ProfileService {
     }
     if (dto.dateOfBirth !== undefined) {
       data.dateOfBirth = dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
+    }
+    if (dto.weddingAnniversary !== undefined) {
+      data.weddingAnniversary = dto.weddingAnniversary ? new Date(dto.weddingAnniversary) : null;
     }
 
     // ── Gate enforcement (root fix) ──────────────────────────────────────────
