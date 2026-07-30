@@ -7,14 +7,17 @@ import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { api, type TimesheetCalendarDay } from '@/lib/api';
 
 // Color key for each day's fill status. Graded: full 8h = green, 4–8h = amber, under 4h = red.
+// Aligned with the attendance calendar's palette so the SAME meaning is the SAME colour everywhere:
+// green = full/present, amber = partial/half, red = under-target/absent, blue = leave, purple =
+// holiday, gray = weekend.
 const STATUS_META: Record<TimesheetCalendarDay['status'], { label: string; cell: string; dot: string }> = {
-  COMPLETE:   { label: 'Full (8h)',  cell: 'bg-emerald-50 border-emerald-200 text-emerald-800', dot: 'bg-emerald-500' },
-  PARTIAL:    { label: '4–8h',       cell: 'bg-amber-50 border-amber-200 text-amber-800',       dot: 'bg-amber-500' },
-  LOW:        { label: 'Under 4h',   cell: 'bg-rose-50 border-rose-200 text-rose-700',          dot: 'bg-rose-500' },
-  LEAVE:      { label: 'On leave',   cell: 'bg-sky-50 border-sky-100 text-sky-600',             dot: 'bg-sky-400' },
-  HOLIDAY:    { label: 'Holiday',    cell: 'bg-violet-50 border-violet-100 text-violet-600',    dot: 'bg-violet-400' },
-  WEEKEND:    { label: 'Weekend',    cell: 'bg-gray-50 border-gray-100 text-gray-300',          dot: 'bg-gray-300' },
-  FUTURE:     { label: 'Upcoming',   cell: 'bg-white border-gray-100 text-gray-300',            dot: 'bg-gray-200' },
+  COMPLETE:   { label: 'Full (8h)',  cell: 'bg-green-50 border-green-200 text-green-700',    dot: 'bg-green-500' },
+  PARTIAL:    { label: '4–8h',       cell: 'bg-amber-50 border-amber-200 text-amber-700',    dot: 'bg-amber-500' },
+  LOW:        { label: 'Under 4h',   cell: 'bg-red-50 border-red-200 text-red-700',          dot: 'bg-red-500' },
+  LEAVE:      { label: 'On leave',   cell: 'bg-blue-50 border-blue-200 text-blue-700',       dot: 'bg-blue-500' },
+  HOLIDAY:    { label: 'Holiday',    cell: 'bg-purple-50 border-purple-200 text-purple-700', dot: 'bg-purple-500' },
+  WEEKEND:    { label: 'Weekend',    cell: 'bg-gray-50 border-gray-200 text-gray-400',       dot: 'bg-gray-300' },
+  FUTURE:     { label: 'Upcoming',   cell: 'bg-white border-gray-100 text-gray-300',         dot: 'bg-gray-200' },
 };
 const LEGEND: TimesheetCalendarDay['status'][] = ['COMPLETE', 'PARTIAL', 'LOW', 'LEAVE', 'HOLIDAY'];
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
