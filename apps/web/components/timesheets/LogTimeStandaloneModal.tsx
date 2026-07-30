@@ -24,13 +24,13 @@ const MODES: { key: LogMode; label: string }[] = [
   { key: 'other', label: 'Other' },
 ];
 
-export function LogTimeStandaloneModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { onClose: () => void; onSuccess: () => void; defaultDate?: string }) {
   const { org, currentUser } = useOrg();
   const [mode, setMode] = useState<LogMode>('task');
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
   const [title, setTitle] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(defaultDate ?? new Date().toISOString().slice(0, 10));
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');

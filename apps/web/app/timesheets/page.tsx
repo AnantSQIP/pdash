@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, KeyRound, type LucideIcon } from 'lucide-react';
+import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, KeyRound, CalendarClock, ChevronDown, type LucideIcon } from 'lucide-react';
 import { api, type Timesheet } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
@@ -13,8 +13,7 @@ import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
-/** A buffer entry (logged without a PID) shows how many of the 7 days remain to assign one.
- *  "Other" entries have no task/issue/project either, so exclude them explicitly. */
+/** A buffer entry (logged without a PID) — no task/issue/project, and not "Other". */
 const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e);
 const bufferDaysLeft = (e: Timesheet): number | null =>
   e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
@@ -24,6 +23,8 @@ function fmtHours(h: number): string {
   const mins = Math.round((h - whole) * 60);
   return mins > 0 ? `${whole}h ${mins}m` : `${whole}h`;
 }
+const dayOf = (e: Timesheet) => String(e.date).slice(0, 10);
+const prettyDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
 function Tile({ label, value, tint, Icon }: { label: string; value: string; tint: string; Icon: LucideIcon }) {
   return (
@@ -44,8 +45,9 @@ export default function TimesheetsPage() {
   const qc = useQueryClient();
   const [showLog, setShowLog] = useState(false);
   const [assigning, setAssigning] = useState<Timesheet | null>(null);
-  const [billableFilter, setBillableFilter] = useState<'All' | 'Billable' | 'Non-billable'>('All');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [showBackfill, setShowBackfill] = useState(false);
 
   // MY own entries across every project (the API scopes ?userId to self).
   const { data: entries = [], isLoading, isError } = useQuery<Timesheet[]>({
@@ -56,8 +58,9 @@ export default function TimesheetsPage() {
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ['timesheets-mine', currentUser?.id] });
-    // Logging/deleting recomputes Task.actualHours + project rollups server-side, so refresh
-    // any task/project views too (react-query matches by key prefix).
+    // The fill calendar has its OWN query — refresh it too so a just-logged day updates live
+    // (this was the "have to refresh to see it" bug).
+    qc.invalidateQueries({ queryKey: ['ts-calendar'] });
     qc.invalidateQueries({ queryKey: ['tasks'] });
     qc.invalidateQueries({ queryKey: ['timesheets'] });
   }
@@ -73,16 +76,18 @@ export default function TimesheetsPage() {
   const todayKey = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
   const monthStart = `${todayKey.slice(0, 7)}-01`;
-  const day = (e: Timesheet) => String(e.date).slice(0, 10);
 
   const totalHours = entries.reduce((s, e) => s + e.hoursLogged, 0);
   const billableHours = entries.filter(e => e.billable).reduce((s, e) => s + e.hoursLogged, 0);
-  const weekHours = entries.filter(e => day(e) >= weekAgo).reduce((s, e) => s + e.hoursLogged, 0);
-  const monthHours = entries.filter(e => day(e) >= monthStart).reduce((s, e) => s + e.hoursLogged, 0);
+  const weekHours = entries.filter(e => dayOf(e) >= weekAgo).reduce((s, e) => s + e.hoursLogged, 0);
+  const monthHours = entries.filter(e => dayOf(e) >= monthStart).reduce((s, e) => s + e.hoursLogged, 0);
 
-  const filtered = entries
-    .filter(e => (billableFilter === 'Billable' ? e.billable : billableFilter === 'Non-billable' ? !e.billable : true))
-    .sort((a, b) => day(b).localeCompare(day(a)));
+  // Entries logged on the selected calendar day (the integrated "logs", replacing the old table).
+  const dayEntries = useMemo(
+    () => entries.filter(e => dayOf(e) === selectedDate).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+    [entries, selectedDate],
+  );
+  const dayTotal = dayEntries.reduce((s, e) => s + e.hoursLogged, 0);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -90,9 +95,9 @@ export default function TimesheetsPage() {
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 shrink-0 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2"><Timer size={20} className="text-brand-600" /> Timesheets</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Log and review the hours you spend across your projects</p>
+          <p className="text-sm text-gray-500 mt-0.5">Log your hours and click any day to see what you filled</p>
         </div>
-        <button onClick={() => setShowLog(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-semibold rounded-lg hover:bg-brand-700 transition-colors">
+        <button onClick={() => { setShowLog(true); }} className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-semibold rounded-lg hover:bg-brand-700 transition-colors">
           <Plus size={15} /> Log Time
         </button>
       </div>
@@ -107,104 +112,94 @@ export default function TimesheetsPage() {
           <Tile label="Total logged"   value={fmtHours(totalHours)}    tint="bg-amber-50 text-amber-600"   Icon={Timer} />
         </div>
 
-        {/* Color-coded fill calendar — which days are filled / incomplete / on leave. */}
-        <TimesheetCalendar />
+        {/* Color-coded fill calendar — click a day to see/manage that day's entries below. */}
+        <TimesheetCalendar selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
-        {/* Backfill approvals — request/approve filling days older than a month. */}
-        <TimesheetBackfill />
-
-        {/* Filter */}
-        <div className="flex items-center gap-1.5">
-          {(['All', 'Billable', 'Non-billable'] as const).map(f => (
-            <button key={f} onClick={() => setBillableFilter(f)}
-              className={clsx('px-3 py-1 text-xs font-medium rounded-full transition-colors',
-                billableFilter === f ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')}>
-              {f}
-            </button>
-          ))}
-        </div>
-
-        {/* Entries */}
+        {/* Selected-day detail — the integrated "logs" (no separate table). */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          {isLoading && (
-            <div className="flex items-center justify-center py-12 text-gray-400"><Loader size={20} className="animate-spin mr-2" /><span className="text-sm">Loading your timesheets…</span></div>
-          )}
-          {isError && <div className="py-12 text-center text-sm text-gray-400">Could not load your time entries.</div>}
-          {!isLoading && !isError && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left min-w-[560px]">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">PID</th>
-                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Task</th>
-                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
-                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Duration</th>
-                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Billable</th>
-                    <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Notes</th>
-                    <th className="px-4 py-2.5" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filtered.length === 0 && (
-                    <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-gray-400">No time entries yet. Click “Log Time” to add one.</td></tr>
-                  )}
-                  {filtered.map(entry => (
-                    <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3">
-                        {entry.project?.code ? (
-                          <div>
-                            <span className="text-xs font-mono font-medium text-gray-700">{entry.project.code}</span>
-                            {entry.projectType && <span className="block text-[10px] text-gray-400">{entry.projectType}</span>}
-                          </div>
-                        ) : isOther(entry) ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">Other</span>
-                        ) : isUnassigned(entry) ? (
-                          <div className="flex items-center gap-2 whitespace-nowrap">
-                            <button onClick={() => setAssigning(entry)}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-md hover:bg-brand-100">
-                              <KeyRound size={11} /> Assign PID
-                            </button>
-                            {(() => {
-                              const d = bufferDaysLeft(entry);
-                              return d === null ? null : (
-                                <span className={clsx('text-[10px] font-medium', d < 0 ? 'text-red-500' : d <= 2 ? 'text-amber-600' : 'text-gray-400')}>
-                                  {d < 0 ? 'overdue' : `${d}d left`}
-                                </span>
-                              );
-                            })()}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-gray-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-sm font-medium text-gray-900">{entry.task?.title ?? entry.issue?.title ?? (isOther(entry) ? (entry.title ?? 'Non-project time') : '—')}</span>
-                        {entry.issue && <span className="ml-2 text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
-                      <td className="px-4 py-3"><span className="text-sm font-medium text-gray-700">{fmtHours(entry.hoursLogged)}</span></td>
-                      <td className="px-4 py-3">
-                        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', entry.billable ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')}>
-                          {entry.billable ? 'Yes' : 'No'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 max-w-xs"><span className="text-xs text-gray-500 truncate block" title={entry.notes ?? undefined}>{entry.notes ?? '—'}</span></td>
-                      <td className="px-4 py-3">
-                        <button onClick={() => deleteEntry(entry.id)} disabled={deletingId === entry.id}
-                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50" title="Delete">
-                          {deletingId === entry.id ? <Loader size={13} className="animate-spin" /> : <Trash2 size={13} />}
+          <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3.5 border-b border-gray-100 flex-wrap">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">{prettyDate(selectedDate)}{selectedDate === todayKey && <span className="ml-2 text-[11px] font-medium text-brand-600">Today</span>}</h3>
+              <p className="text-xs text-gray-500 mt-0.5">{dayEntries.length} {dayEntries.length === 1 ? 'entry' : 'entries'} · {fmtHours(dayTotal)} logged</p>
+            </div>
+            {selectedDate <= todayKey && (
+              <button onClick={() => setShowLog(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-brand-200 text-brand-700 bg-brand-50 hover:bg-brand-100">
+                <Plus size={13} /> Log for this day
+              </button>
+            )}
+          </div>
+
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12 text-gray-400"><Loader size={20} className="animate-spin mr-2" /><span className="text-sm">Loading…</span></div>
+          ) : isError ? (
+            <div className="py-12 text-center text-sm text-gray-400">Could not load your time entries.</div>
+          ) : dayEntries.length === 0 ? (
+            <div className="py-10 text-center text-sm text-gray-400">
+              Nothing logged for this day.{selectedDate <= todayKey && ' Use “Log for this day” to add an entry.'}
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {dayEntries.map(entry => (
+                <div key={entry.id} className="flex items-start gap-3 px-4 sm:px-5 py-3 hover:bg-gray-50">
+                  {/* PID / kind */}
+                  <div className="w-28 shrink-0">
+                    {entry.project?.code ? (
+                      <>
+                        <span className="text-xs font-mono font-semibold text-gray-800">{entry.project.code}</span>
+                        {entry.projectType && <span className="block text-[10px] text-gray-400">{entry.projectType}</span>}
+                      </>
+                    ) : isOther(entry) ? (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">Other</span>
+                    ) : isUnassigned(entry) ? (
+                      <div className="flex flex-col gap-1">
+                        <button onClick={() => setAssigning(entry)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-md hover:bg-brand-100 w-max">
+                          <KeyRound size={11} /> Assign PID
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        {(() => { const d = bufferDaysLeft(entry); return d === null ? null : (
+                          <span className={clsx('text-[10px] font-medium', d < 0 ? 'text-red-500' : d <= 2 ? 'text-amber-600' : 'text-gray-400')}>{d < 0 ? 'overdue' : `${d}d left`}</span>
+                        ); })()}
+                      </div>
+                    ) : <span className="text-xs text-gray-400">—</span>}
+                  </div>
+                  {/* Task + notes */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
+                      {entry.task?.title ?? entry.issue?.title ?? (isOther(entry) ? (entry.title ?? 'Non-project time') : 'Unassigned time')}
+                      {entry.issue && <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
+                    </p>
+                    {entry.notes && <p className="text-xs text-gray-500 mt-0.5 break-words">{entry.notes}</p>}
+                  </div>
+                  {/* Hours + billable + delete */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-sm font-semibold text-gray-800 tabular-nums">{fmtHours(entry.hoursLogged)}</span>
+                    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium', entry.billable ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')}>
+                      {entry.billable ? 'Billable' : 'Non-bill'}
+                    </span>
+                    <button onClick={() => deleteEntry(entry.id)} disabled={deletingId === entry.id}
+                      className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50" title="Delete">
+                      {deletingId === entry.id ? <Loader size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
+
+        {/* Backfill — low-prominence (rare): collapsed by default. */}
+        <div>
+          <button onClick={() => setShowBackfill(s => !s)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-700">
+            <CalendarClock size={13} /> Backfill an older month
+            <ChevronDown size={13} className={clsx('transition-transform', showBackfill && 'rotate-180')} />
+          </button>
+          {showBackfill && <div className="mt-3"><TimesheetBackfill /></div>}
+        </div>
       </div>
 
-      {showLog && <LogTimeStandaloneModal onClose={() => setShowLog(false)} onSuccess={invalidate} />}
+      {showLog && <LogTimeStandaloneModal defaultDate={selectedDate <= todayKey ? selectedDate : todayKey} onClose={() => setShowLog(false)} onSuccess={invalidate} />}
       {assigning && <AssignPidModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
     </div>
   );
