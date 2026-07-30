@@ -3,20 +3,27 @@
 import { Fragment, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Loader, Download, ChevronRight, ChevronDown } from 'lucide-react';
-import { api, type PidLedgerEntry } from '@/lib/api';
+import { Loader, Download, ChevronRight, ChevronDown, Search } from 'lucide-react';
+import { api, type PidLedgerEntry, type PidLedgerState } from '@/lib/api';
 import { formatDate, formatDateTimeIST } from '@/lib/date';
 
-export const STATUS_META: Record<PidLedgerEntry['status'], { label: string; cls: string }> = {
-  ATTACHED:     { label: 'Working',      cls: 'bg-green-100 text-green-700' },
+// The badge reflects the PID's REAL lifecycle (derived server-side from the project's phase).
+export const STATE_META: Record<PidLedgerState, { label: string; cls: string }> = {
+  WORKING:      { label: 'Working',      cls: 'bg-green-100 text-green-700' },
+  COMPLETED:    { label: 'Completed',    cls: 'bg-blue-100 text-blue-700' },
+  CLOSED:       { label: 'Closed',       cls: 'bg-slate-200 text-slate-700' },
   RESERVED:     { label: 'Reserved',     cls: 'bg-amber-100 text-amber-700' },
   DISCONTINUED: { label: 'Discontinued', cls: 'bg-red-100 text-red-700' },
 };
 
-type FilterKey = 'All' | 'Working' | 'Discontinued' | 'Reserved';
-const FILTERS: FilterKey[] = ['All', 'Working', 'Discontinued', 'Reserved'];
+type FilterKey = 'All' | 'Working' | 'Completed' | 'Closed' | 'Reserved' | 'Discontinued';
+const FILTERS: FilterKey[] = ['All', 'Working', 'Completed', 'Closed', 'Reserved', 'Discontinued'];
+// Which derived state each non-"All" filter keeps.
+const FILTER_STATE: Record<Exclude<FilterKey, 'All'>, PidLedgerState> = {
+  Working: 'WORKING', Completed: 'COMPLETED', Closed: 'CLOSED', Reserved: 'RESERVED', Discontinued: 'DISCONTINUED',
+};
 
-const statusLabel = (s: string) => STATUS_META[s as PidLedgerEntry['status']]?.label ?? s;
+const stateLabel = (s: PidLedgerState) => STATE_META[s]?.label ?? s;
 
 /** Quote a CSV cell (wrap in quotes, escape embedded quotes) so commas/newlines are safe. */
 function csvCell(v: unknown): string {
@@ -33,7 +40,7 @@ function exportCsv(rows: PidLedgerEntry[]) {
   ];
   const p = (r: PidLedgerEntry) => r.project;
   const body = rows.map(r => [
-    r.pid, statusLabel(r.status), p(r)?.title ?? '', p(r)?.description ?? '', p(r)?.type ?? '',
+    r.pid, stateLabel(r.state), p(r)?.title ?? '', p(r)?.description ?? '', p(r)?.type ?? '',
     p(r)?.priority ?? '', p(r)?.client ?? '', p(r)?.progress != null ? `${p(r)!.progress}` : '',
     p(r)?.startDate ? formatDate(p(r)!.startDate!) : '',
     p(r)?.dueDate ? formatDate(p(r)!.dueDate!) : '',
@@ -60,6 +67,7 @@ function exportCsv(rows: PidLedgerEntry[]) {
  */
 export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode }) {
   const [filter, setFilter] = useState<FilterKey>('All');
+  const [search, setSearch] = useState('');
   const [openId, setOpenId] = useState<string | null>(null); // expanded detail row
   const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['pid-ledger'],
@@ -67,26 +75,42 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
     staleTime: 15_000,
   });
 
-  const filtered = useMemo(() => rows.filter(r => {
-    if (filter === 'Working') return r.status === 'ATTACHED';
-    if (filter === 'Discontinued') return r.status === 'DISCONTINUED';
-    if (filter === 'Reserved') return r.status === 'RESERVED';
-    return true;
-  }), [rows, filter]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter(r => {
+      // State filter (derived lifecycle, not the raw reservation).
+      if (filter !== 'All' && r.state !== FILTER_STATE[filter]) return false;
+      // Free-text search: PID, project title, or client name.
+      if (q) {
+        const hay = `${r.pid} ${r.project?.title ?? ''} ${r.project?.client ?? ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [rows, filter, search]);
 
-  const counts = useMemo(() => ({
-    working: rows.filter(r => r.status === 'ATTACHED').length,
-    discontinued: rows.filter(r => r.status === 'DISCONTINUED').length,
-    total: rows.length,
-  }), [rows]);
+  const counts = useMemo(() => {
+    const c: Record<PidLedgerState, number> = { WORKING: 0, COMPLETED: 0, CLOSED: 0, RESERVED: 0, DISCONTINUED: 0 };
+    for (const r of rows) c[r.state] = (c[r.state] ?? 0) + 1;
+    return { ...c, total: rows.length };
+  }, [rows]);
 
   return (
     <div className="flex flex-col min-h-0">
       <div className="flex items-center justify-between gap-3 flex-wrap shrink-0">
         <p className="text-sm text-gray-500">
-          {counts.working} working · {counts.discontinued} discontinued · {counts.total} total
+          {counts.WORKING} working · {counts.COMPLETED} completed · {counts.CLOSED} closed · {counts.DISCONTINUED} discontinued · {counts.total} total
         </p>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search PID or client…"
+              className="w-52 pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400"
+            />
+          </div>
           <button
             onClick={() => exportCsv(filtered)}
             disabled={filtered.length === 0}
@@ -104,7 +128,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
           <button key={f} onClick={() => setFilter(f)}
             className={clsx('px-3 py-1 text-xs font-medium rounded-full transition-colors',
               filter === f ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')}>
-            {f}
+            {f}{f !== 'All' && counts[FILTER_STATE[f]] > 0 ? ` (${counts[FILTER_STATE[f]]})` : ''}
           </button>
         ))}
         <span className="ml-auto text-[11px] text-gray-400">Click a row for full details</span>
@@ -130,11 +154,12 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {filtered.length === 0 && (
-                  <tr><td colSpan={7} className="px-3 py-10 text-center text-sm text-gray-400">No Project IDs in this view yet.</td></tr>
+                  <tr><td colSpan={7} className="px-3 py-10 text-center text-sm text-gray-400">
+                    {search.trim() ? `No Project IDs match “${search.trim()}”.` : 'No Project IDs in this view yet.'}
+                  </td></tr>
                 )}
                 {filtered.map(r => {
-                  const meta = STATUS_META[r.status]
-                    ?? { label: r.status ? r.status.charAt(0) + r.status.slice(1).toLowerCase() : 'Unknown', cls: 'bg-gray-100 text-gray-500' };
+                  const meta = STATE_META[r.state] ?? { label: r.state, cls: 'bg-gray-100 text-gray-500' };
                   const open = openId === r.id;
                   return (
                     <Fragment key={r.id}>

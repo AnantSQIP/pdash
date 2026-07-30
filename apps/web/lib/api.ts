@@ -215,9 +215,12 @@ export type ProjectTypeDef = {
   comingSoon?: boolean; taskListName?: string; tasks?: string[]; custom?: boolean;
 };
 
+export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
 export type PidLedgerEntry = {
   id: string; pid: string; fyLabel: string; serial: number;
   status: 'RESERVED' | 'ATTACHED' | 'DISCONTINUED';
+  /** The PID's real lifecycle, derived from the attached project's phase (drives the badge/filter). */
+  state: PidLedgerState;
   generatedBy: string;
   project: {
     id: string; title: string; phase: string | null;
