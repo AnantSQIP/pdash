@@ -388,16 +388,20 @@ export class TimesheetsService {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     const orgId = user?.organizationId;
 
-    const [att, leaves, holidays, sheets] = await Promise.all([
+    const [att, leaves, holidays, sheets, compOffs] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } }, select: { date: true, status: true } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true } }),
       orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: first, lte: last } }, select: { date: true } }) : Promise.resolve([]),
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: first, lte: last } }, select: { date: true, hoursLogged: true } }),
+      // Comp-off: a non-working day the user WORKED. Approved → a required working day here; pending
+      // → shown with an asterisk (not yet required).
+      this.prisma.compOffRequest.findMany({ where: { userId, status: { in: ['APPROVED', 'PENDING'] }, workDate: { gte: first, lte: last } }, select: { workDate: true, status: true, dayType: true } }),
     ]);
     const dk = (d: Date) => d.toISOString().slice(0, 10);
     const attByDay = new Map(att.map(a => [dk(a.date), a.status]));
     const holidaySet = new Set(holidays.map(h => dk(h.date)));
     const onLeave = (k: string) => leaves.some(l => dk(l.startDate) <= k && k <= dk(l.endDate));
+    const compOffByDay = new Map(compOffs.map(c => [dk(c.workDate), c]));
     const loggedByDay = new Map<string, number>();
     for (const s of sheets) { const k = dk(s.date); loggedByDay.set(k, (loggedByDay.get(k) ?? 0) + s.hoursLogged); }
     const todayKey = startOfIstDay(new Date()).toISOString().slice(0, 10);
@@ -409,9 +413,15 @@ export class TimesheetsService {
       const wd = d.getUTCDay();
       const logged = Math.round((loggedByDay.get(k) ?? 0) * 10) / 10;
       const attStatus = attByDay.get(k);
+      const comp = compOffByDay.get(k);
       let target = TimesheetsService.FULL_DAY;
       let status: string;
-      if (wd === 0 || wd === 6) { target = 0; status = 'WEEKEND'; }
+      // An APPROVED comp-off turns a non-working day into a REQUIRED working day (8h full / 4h half).
+      if (comp?.status === 'APPROVED') {
+        target = comp.dayType === 'HALF' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+        status = k > todayKey ? 'FUTURE' : TimesheetsService.gradeFill(logged, target);
+      }
+      else if (wd === 0 || wd === 6) { target = 0; status = 'WEEKEND'; }
       else if (holidaySet.has(k)) { target = 0; status = 'HOLIDAY'; }
       else if (attStatus === 'ON_LEAVE' || onLeave(k)) { target = 0; status = 'LEAVE'; }
       else if (k > todayKey) { target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY; status = 'FUTURE'; }
@@ -419,7 +429,9 @@ export class TimesheetsService {
         target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
         status = TimesheetsService.gradeFill(logged, target);
       }
-      days.push({ date: k, target, logged, status });
+      // Marker for the UI: an unapproved comp-off gets an asterisk on the tile.
+      const compOff = comp ? (comp.status === 'APPROVED' ? 'APPROVED' : 'PENDING') : undefined;
+      days.push({ date: k, target, logged, status, compOff });
     }
     return { year, month, days };
   }

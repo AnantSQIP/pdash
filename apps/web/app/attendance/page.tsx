@@ -739,7 +739,7 @@ function CompOffCard() {
   const qc = useQueryClient();
   const { data: claims = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-mine'], queryFn: () => api.leave.myCompOffs(), staleTime: 30_000 });
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ workDate: '', reason: '', projectRef: '' });
+  const [form, setForm] = useState<{ workDate: string; reason: string; projectRef: string; dayType: 'FULL' | 'HALF' }>({ workDate: '', reason: '', projectRef: '', dayType: 'FULL' });
   const [busy, setBusy] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -748,7 +748,7 @@ function CompOffCard() {
     setBusy(true);
     try {
       await api.leave.requestCompOff(form);
-      setShowForm(false); setForm({ workDate: '', reason: '', projectRef: '' });
+      setShowForm(false); setForm({ workDate: '', reason: '', projectRef: '', dayType: 'FULL' });
       qc.invalidateQueries({ queryKey: ['compoff-mine'] });
     } catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the comp-off claim.'); }
     finally { setBusy(false); }
@@ -784,6 +784,18 @@ function CompOffCard() {
               <label className="block text-[11px] font-medium text-gray-500 mb-1">What did you work on?</label>
               <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Production hotfix" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
+          </div>
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1">How much did you work?</label>
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+              {(['FULL', 'HALF'] as const).map(t => (
+                <button key={t} type="button" onClick={() => setForm(f => ({ ...f, dayType: t }))}
+                  className={clsx('px-3 py-1.5 text-xs font-medium', form.dayType === t ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}>
+                  {t === 'FULL' ? 'Full day (8h)' : 'Half day (4h)'}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1">Once approved, this day becomes a working day in your timesheet — fill {form.dayType === 'HALF' ? '4h' : '8h'} for it.</p>
           </div>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowForm(false)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>

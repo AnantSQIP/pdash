@@ -1095,6 +1095,9 @@ model CompOffRequest {
   // nullable so any pre-existing rows stay valid).
   projectRef     String?
   hoursWorked    Float?
+  // FULL (worked a whole day → target 8h) | HALF (half day → 4h). Drives the timesheet/attendance
+  // reflection when approved. Defaults to FULL for pre-existing rows.
+  dayType        String   @default("FULL")
   // PENDING | APPROVED | REJECTED | CANCELLED
   status         String   @default("PENDING")
   reviewedBy     String?
