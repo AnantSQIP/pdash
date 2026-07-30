@@ -22,8 +22,8 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /** A month calendar showing whether each day's 8h (or half-day 4h) timesheet is filled, with an
- *  insights panel alongside so the width is used well. */
-export function TimesheetCalendar() {
+ *  insights panel alongside. Days are clickable — the parent shows that day's logged detail. */
+export function TimesheetCalendar({ selectedDate, onSelectDate }: { selectedDate?: string; onSelectDate?: (date: string) => void }) {
   const now = new Date();
   const [cursor, setCursor] = useState({ year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 });
 
@@ -99,14 +99,16 @@ export function TimesheetCalendar() {
               const day = parseInt(date.slice(8, 10), 10);
               const showHours = cell && cell.target > 0 && cell.status !== 'FUTURE';
               const isToday = date === todayKey;
+              const isSelected = date === selectedDate;
               return (
-                <div key={i}
+                <button key={i} type="button" onClick={() => onSelectDate?.(date)}
                   title={cell ? `${date} · ${meta.label}${cell.target > 0 ? ` · ${round1(cell.logged)}/${cell.target}h` : ''}` : date}
-                  className={clsx('min-h-[52px] rounded-lg border flex flex-col items-center justify-center p-1 transition-colors', meta.cell,
-                    isToday && 'ring-2 ring-brand-400 ring-offset-1')}>
-                  <span className="text-[13px] font-semibold leading-none">{day}</span>
-                  {showHours && <span className="text-[10px] opacity-80 mt-1 tabular-nums">{round1(cell!.logged)}/{cell!.target}h</span>}
-                </div>
+                  className={clsx('min-h-[72px] rounded-lg border flex flex-col items-center justify-center px-1 py-1.5 transition-all hover:brightness-95 focus:outline-none', meta.cell,
+                    isToday && !isSelected && 'ring-2 ring-brand-300 ring-offset-1',
+                    isSelected && 'ring-2 ring-brand-600 ring-offset-1 shadow-sm')}>
+                  <span className="text-[15px] font-bold leading-none">{day}</span>
+                  {showHours && <span className="text-[13px] font-semibold opacity-90 mt-1.5 tabular-nums">{round1(cell!.logged)}/{cell!.target}h</span>}
+                </button>
               );
             })}
           </div>

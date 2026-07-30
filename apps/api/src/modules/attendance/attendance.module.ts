@@ -1,6 +1,6 @@
 import {
-  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Module,
-  NotFoundException, Param, Post, Query,
+  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Logger, Module,
+  NotFoundException, OnModuleDestroy, OnModuleInit, Param, Post, Query,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Actor } from '../../common/decorators/actor.decorator';
@@ -14,6 +14,21 @@ function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
 function utcDay(d: Date): Date { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
 function parseDay(s: string): Date { return new Date(`${s}T00:00:00.000Z`); }
 function round(n: number, p = 1): number { const f = 10 ** p; return Math.round((n ?? 0) * f) / f; }
+
+// A single punch-in/out pair can never legitimately span more than one working day. Cap the
+// computed duration so a FORGOTTEN punch-out can never record a ~24h day (the reported glitch);
+// the auto-punch-out job closes stale shifts at end of day so this cap is only a safety net.
+const MAX_SHIFT_HOURS = 16;
+const IST_OFFSET_MS = 5.5 * 3_600_000;
+/** Hours between two punches, rounded (2dp) and hard-capped at MAX_SHIFT_HOURS (never negative). */
+function shiftHours(inD: Date, outD: Date): number {
+  return round(Math.min(MAX_SHIFT_HOURS, Math.max(0, (outD.getTime() - inD.getTime()) / 3_600_000)), 2);
+}
+/** 23:59:00 of the IST calendar day that `d` falls on, as a UTC Date — the auto punch-out instant. */
+function endOfIstDay(d: Date): Date {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), 23, 59, 0) - IST_OFFSET_MS);
+}
 /**
  * Parse a manual check-in/out timestamp unambiguously. An offset-less string
  * (e.g. a datetime-local input "2026-07-09T09:00") is interpreted as UTC rather
@@ -139,9 +154,13 @@ export class AttendanceService {
           where: { userId, checkIn: { not: null }, checkOut: null, date: { lt: today } },
           orderBy: { date: 'desc' },
         });
-        if (openPrior?.checkIn && now.getTime() - openPrior.checkIn.getTime() < 24 * 3_600_000) {
-          const totalHours = round((now.getTime() - openPrior.checkIn.getTime()) / 3_600_000, 2);
-          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours), ...outLoc } });
+        // Close the orphaned prior-day shift at the END OF ITS OWN DAY (23:59), not "now" — a
+        // punch-in the next morning must never book a ~24h shift. (Usually the auto-punch-out
+        // job has already closed it; this is the fallback.) No checkout location — it's automatic.
+        if (openPrior?.checkIn) {
+          const closeAt = endOfIstDay(openPrior.checkIn);
+          const totalHours = shiftHours(openPrior.checkIn, closeAt);
+          return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: closeAt, totalHours, status: statusForHours(totalHours) } });
         }
       }
       const approvedWfh = await this.prisma.wfhRequest.findFirst({
@@ -158,7 +177,7 @@ export class AttendanceService {
     if (existing.checkOut) {
       throw new BadRequestException('You have already clocked out for today. The day is complete.');
     }
-    const totalHours = round((now.getTime() - existing.checkIn.getTime()) / 3_600_000, 2);
+    const totalHours = shiftHours(existing.checkIn, now);
     // Validate the day by hours: below a half day, mark HALF_DAY (a punch-in then an
     // immediate punch-out must not count as a full present day).
     return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours), ...outLoc } });
@@ -278,7 +297,7 @@ export class AttendanceService {
 
     const checkIn = req.requestedCheckIn;
     const checkOut = req.requestedCheckOut;
-    const totalHours = checkIn && checkOut ? round((checkOut.getTime() - checkIn.getTime()) / 3_600_000, 2) : undefined;
+    const totalHours = checkIn && checkOut ? shiftHours(checkIn, checkOut) : undefined;
     const audit = {
       status: req.requestedStatus,
       isRegularized: true,
@@ -1348,10 +1367,56 @@ class LeaveController {
   }
 }
 
+/**
+ * Auto punch-out: closes any shift left open past 23:59 of its own IST day, booking it out at 23:59
+ * with capped hours. This is what stops a forgotten punch-out from ever recording a ~24h day, and
+ * gives everyone a clean, closed day by midnight. Single in-process interval (one API container);
+ * set RUN_BACKGROUND_JOBS=false on all but one replica.
+ */
+@Injectable()
+export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger('AttendanceAutoPunchOut');
+  private timer: NodeJS.Timeout | null = null;
+  private running = false;
+  constructor(private readonly prisma: PrismaService) {}
+
+  onModuleInit() {
+    if (process.env.RUN_BACKGROUND_JOBS === 'false') return;
+    this.timer = setInterval(() => void this.sweep(), 10 * 60 * 1000); // every 10 min
+    setTimeout(() => void this.sweep(), 60_000).unref?.();
+    this.timer.unref?.();
+  }
+  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+
+  async sweep(now = new Date()): Promise<number> {
+    if (this.running) return 0;
+    this.running = true;
+    try {
+      const open = await this.prisma.attendance.findMany({
+        where: { checkIn: { not: null }, checkOut: null }, select: { id: true, checkIn: true }, take: 2000,
+      });
+      let closed = 0;
+      for (const a of open) {
+        if (!a.checkIn) continue;
+        const closeAt = endOfIstDay(a.checkIn);
+        if (now.getTime() < closeAt.getTime()) continue; // this shift's day hasn't ended yet
+        const totalHours = shiftHours(a.checkIn, closeAt);
+        await this.prisma.attendance.update({
+          where: { id: a.id }, data: { checkOut: closeAt, totalHours, status: statusForHours(totalHours) },
+        });
+        closed++;
+      }
+      if (closed) this.logger.log(`auto punched-out ${closed} stale shift(s) at 23:59`);
+      return closed;
+    } catch (e) { this.logger.warn(`auto punch-out failed: ${String(e)}`); return 0; }
+    finally { this.running = false; }
+  }
+}
+
 @Module({
   imports: [CapacityModule],
   controllers: [AttendanceController, LeaveController],
-  providers: [AttendanceService, LeaveService],
+  providers: [AttendanceService, LeaveService, AttendanceAutoPunchOutService],
   exports: [AttendanceService, LeaveService],
 })
 export class AttendanceModule {}
