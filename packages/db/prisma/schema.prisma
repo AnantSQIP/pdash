@@ -29,6 +29,8 @@ model Organization {
   status     String   @default("ACTIVE")
   timezone   String   @default("UTC")     // M25: persisted Settings → General
   brandColor String   @default("#3d8de2")
+  // Hour (IST, 0–23) at which the daily admin digest is sent. Admin-editable. Default 10pm.
+  digestHourIst Int   @default(22)
   // Step-up "big change" passcode — argon2id hash of the org-wide passcode required
   // (on top of RBAC) for sensitive org/people/RBAC mutations. Null = feature not yet
   // configured (guard is a no-op). Updatable via POST /auth/passcode.
