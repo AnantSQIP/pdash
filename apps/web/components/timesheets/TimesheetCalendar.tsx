@@ -100,14 +100,17 @@ export function TimesheetCalendar({ selectedDate, onSelectDate }: { selectedDate
               const showHours = cell && cell.target > 0 && cell.status !== 'FUTURE';
               const isToday = date === todayKey;
               const isSelected = date === selectedDate;
+              const compPending = cell?.compOff === 'PENDING';
+              const compApproved = cell?.compOff === 'APPROVED';
               return (
                 <button key={i} type="button" onClick={() => onSelectDate?.(date)}
-                  title={cell ? `${date} · ${meta.label}${cell.target > 0 ? ` · ${round1(cell.logged)}/${cell.target}h` : ''}` : date}
-                  className={clsx('min-h-[72px] rounded-lg border flex flex-col items-center justify-center px-1 py-1.5 transition-all hover:brightness-95 focus:outline-none', meta.cell,
+                  title={cell ? `${date} · ${meta.label}${cell.target > 0 ? ` · ${round1(cell.logged)}/${cell.target}h` : ''}${compApproved ? ' · comp-off (worked)' : ''}${compPending ? ' · comp-off pending approval' : ''}` : date}
+                  className={clsx('relative min-h-[72px] rounded-lg border flex flex-col items-center justify-center px-1 py-1.5 transition-all hover:brightness-95 focus:outline-none', meta.cell,
                     isToday && !isSelected && 'ring-2 ring-brand-300 ring-offset-1',
                     isSelected && 'ring-2 ring-brand-600 ring-offset-1 shadow-sm')}>
-                  <span className="text-[15px] font-bold leading-none">{day}</span>
+                  <span className="text-[15px] font-bold leading-none">{day}{compPending && <span className="text-amber-600" title="Comp-off pending approval">*</span>}</span>
                   {showHours && <span className="text-[13px] font-semibold opacity-90 mt-1.5 tabular-nums">{round1(cell!.logged)}/{cell!.target}h</span>}
+                  {compApproved && <span className="absolute bottom-1 right-1 text-[8px] font-bold text-indigo-500" title="Comp-off (worked)">CO</span>}
                 </button>
               );
             })}

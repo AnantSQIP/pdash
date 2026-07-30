@@ -315,6 +315,8 @@ export type Timesheet = {
 export type TimesheetCalendarDay = {
   date: string; target: number; logged: number;
   status: 'COMPLETE' | 'PARTIAL' | 'LOW' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
+  /** Set when the day has a comp-off claim — APPROVED makes it a required working day; PENDING shows an asterisk. */
+  compOff?: 'APPROVED' | 'PENDING';
 };
 export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 
@@ -1340,7 +1342,7 @@ export const api = {
     cancel: (id: string) => req<LeaveRequestItem>(`/leave/requests/${id}/cancel`, { method: 'POST' }),
     balances: () => req<LeaveBalance[]>('/leave/balance/me'),
     // Comp-off: worked a non-working day → claim → HR approves → CO leave credit.
-    requestCompOff: (data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) =>
+    requestCompOff: (data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: 'FULL' | 'HALF' }) =>
       req<CompOffRequest>('/leave/compoff', { method: 'POST', body: JSON.stringify(data) }),
     myCompOffs: () => req<CompOffRequest[]>('/leave/compoff/me'),
     pendingCompOffs: () => req<CompOffRequest[]>('/leave/compoff/pending'),

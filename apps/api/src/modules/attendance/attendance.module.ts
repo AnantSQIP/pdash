@@ -990,11 +990,12 @@ export class LeaveService {
     return { earned, used: usedDays, available: Math.max(0, earned - usedDays) };
   }
 
-  async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) {
+  async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: string }) {
     if (!data?.reason?.trim()) throw new BadRequestException('Tell us what you worked on.');
     if (!data?.projectRef?.trim()) throw new BadRequestException('A Project ID (PID) is required.');
     if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
     if (data.projectRef.length > MAX_PID) throw new BadRequestException('Project ID is too long.');
+    const dayType = data.dayType === 'HALF' ? 'HALF' : 'FULL';
     if (data.hoursWorked != null && (!(data.hoursWorked > 0) || data.hoursWorked > 24)) {
       throw new BadRequestException('Hours worked must be between 0 and 24.');
     }
@@ -1010,7 +1011,7 @@ export class LeaveService {
     const existing = await this.prisma.compOffRequest.findFirst({ where: { userId, workDate, status: { in: ['PENDING', 'APPROVED'] } } });
     if (existing) throw new BadRequestException('You already have a comp-off claim for this day.');
     const req = await this.prisma.compOffRequest.create({
-      data: { userId, organizationId, workDate, reason: data.reason.trim(), projectRef: data.projectRef.trim(), hoursWorked: data.hoursWorked ?? null, status: 'PENDING' },
+      data: { userId, organizationId, workDate, reason: data.reason.trim(), projectRef: data.projectRef.trim(), hoursWorked: data.hoursWorked ?? null, dayType, status: 'PENDING' },
       include: { user: this.userSelect },
     });
     const u = (req as { user?: { firstName?: string; lastName?: string } }).user;
@@ -1079,6 +1080,15 @@ export class LeaveService {
         },
       });
     }
+    // Reflect the worked day in ATTENDANCE — they were present (full day) or half-day on that
+    // otherwise-non-working day. The timesheet calendar then also requires that day to be filled.
+    const worked = (req as { dayType?: string }).dayType === 'HALF' ? 'HALF_DAY' : 'PRESENT';
+    const wHours = worked === 'HALF_DAY' ? HALF_DAY_HOURS : 8;
+    await this.prisma.attendance.upsert({
+      where: { userId_date: { userId: req.userId, date: utcDay(req.workDate) } },
+      create: { userId: req.userId, organizationId: req.organizationId, date: utcDay(req.workDate), status: worked, totalHours: wHours, workMode: 'OFFICE', note: 'Comp-off (worked a non-working day)' },
+      update: { status: worked, totalHours: wHours, note: 'Comp-off (worked a non-working day)' },
+    });
     await this.notifications.notify(req.userId, {
       type: 'compoff.approved', title: 'Comp-off approved',
       message: `Your comp-off for working ${dayKey(req.workDate)} was approved — you have a day off to use.`,
@@ -1353,7 +1363,7 @@ class LeaveController {
 
   // ── comp-off ──────────────────────────────────────────────────────────────────
   @Post('compoff')
-  requestCompOff(@Actor() actorId: string | null, @Body() body: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string }) {
+  requestCompOff(@Actor() actorId: string | null, @Body() body: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.requestCompOff(actorId, body);
   }
