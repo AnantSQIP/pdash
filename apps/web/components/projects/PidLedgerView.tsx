@@ -8,10 +8,12 @@ import { api, type PidLedgerEntry, type PidLedgerState } from '@/lib/api';
 import { formatDate, formatDateTimeIST } from '@/lib/date';
 
 // The badge reflects the PID's REAL lifecycle (derived server-side from the project's phase).
+// Aligned with the project-phase palette: Active/Working = brand blue, Completed = green,
+// Closed = slate, Cancelled/Discontinued = red (Reserved = amber for "pending").
 export const STATE_META: Record<PidLedgerState, { label: string; cls: string }> = {
-  WORKING:      { label: 'Working',      cls: 'bg-green-100 text-green-700' },
-  COMPLETED:    { label: 'Completed',    cls: 'bg-blue-100 text-blue-700' },
-  CLOSED:       { label: 'Closed',       cls: 'bg-slate-200 text-slate-700' },
+  WORKING:      { label: 'Working',      cls: 'bg-brand-100 text-brand-700' },
+  COMPLETED:    { label: 'Completed',    cls: 'bg-green-100 text-green-700' },
+  CLOSED:       { label: 'Closed',       cls: 'bg-slate-200 text-slate-600' },
   RESERVED:     { label: 'Reserved',     cls: 'bg-amber-100 text-amber-700' },
   DISCONTINUED: { label: 'Discontinued', cls: 'bg-red-100 text-red-700' },
 };
