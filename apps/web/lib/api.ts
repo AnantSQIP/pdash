@@ -216,6 +216,17 @@ export type ProjectTypeDef = {
   comingSoon?: boolean; taskListName?: string; tasks?: string[]; custom?: boolean;
 };
 
+export type DigestReport = {
+  date: string;
+  projectsCreated: { title: string; code: string | null }[];
+  projectsCompleted: { title: string; code: string | null }[];
+  tasksCompleted: number;
+  deadlinesMetToday: number;
+  overdueCount: number;
+  overdueSample: { title: string; dueDate: string | null }[];
+  activeProjects: number;
+};
+
 export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
 export type PidLedgerEntry = {
   id: string; pid: string; fyLabel: string; serial: number;
@@ -1090,6 +1101,13 @@ export const api = {
     setMembers: (id: string, userIds: string[]) =>
       req<{ ok: boolean; count: number }>(`/tags/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
   },
+  dailyDigest: {
+    report: (date?: string) => req<DigestReport>(`/daily-digest/report${date ? `?date=${date}` : ''}`),
+    getSchedule: () => req<{ hourIst: number }>('/daily-digest/schedule'),
+    setSchedule: (hourIst: number) => req<{ hourIst: number }>('/daily-digest/schedule', { method: 'PATCH', body: JSON.stringify({ hourIst }) }),
+    send: () => req<{ sent: number }>('/daily-digest/send', { method: 'POST' }),
+  },
+
   company: {
     announcements: () => req<Announcement[]>('/company/announcements'),
     createAnnouncement: (data: { title: string; body: string; pinned?: boolean }) =>

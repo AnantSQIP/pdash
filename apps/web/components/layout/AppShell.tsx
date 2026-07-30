@@ -10,6 +10,7 @@ import { ForcePasswordReset } from './ForcePasswordReset';
 import { CompleteProfile } from './CompleteProfile';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { NotificationToaster } from '@/components/layout/NotificationToaster';
+import { PunchInPrompt } from '@/components/home/PunchInPrompt';
 
 const PUBLIC_ROUTES = ['/login', '/signup'];
 
@@ -94,6 +95,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       <GlobalSearch />
       <NotificationToaster />
+      <PunchInPrompt />
     </>
   );
 }

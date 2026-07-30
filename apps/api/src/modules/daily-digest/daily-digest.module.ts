@@ -1,5 +1,5 @@
 import {
-  Controller, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit, Post,
+  BadRequestException, Body, Controller, Get, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit, Patch, Post, Query,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -44,10 +44,28 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
   }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
 
-  /** Fire the digest only in the 10pm IST hour (and only once per day, via DB dedup). */
+  /** The admin-configured send hour (IST) for the org; falls back to the 10pm default. */
+  async configuredHour(): Promise<number> {
+    const org = await this.prisma.organization.findFirst({ select: { digestHourIst: true } });
+    const h = org?.digestHourIst;
+    return Number.isInteger(h) && h! >= 0 && h! <= 23 ? h! : SEND_HOUR_IST;
+  }
+
+  async getSchedule(): Promise<{ hourIst: number }> { return { hourIst: await this.configuredHour() }; }
+
+  async setSchedule(hourIst: number): Promise<{ hourIst: number }> {
+    if (!Number.isInteger(hourIst) || hourIst < 0 || hourIst > 23) {
+      throw new BadRequestException('The digest hour must be a whole number between 0 and 23 (IST).');
+    }
+    const org = await this.prisma.organization.findFirst({ select: { id: true } });
+    if (org) await this.prisma.organization.update({ where: { id: org.id }, data: { digestHourIst: hourIst } });
+    return { hourIst };
+  }
+
+  /** Fire the digest only in the admin-configured IST hour (and only once per day, via DB dedup). */
   private async tick(): Promise<void> {
     if (this.running) return;
-    if (istHour() !== SEND_HOUR_IST) return;
+    if (istHour() !== (await this.configuredHour())) return;
     this.running = true;
     try {
       await this.sendDigests();
@@ -123,7 +141,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       date: dayStart.toISOString().slice(0, 10),
       projectsCreated: createdToday, projectsCompleted: completedToday,
       tasksCompleted: tasksClosedToday, deadlinesMetToday: dueTodayOpen,
-      overdueCount: overdueTasks.length, overdueSample: overdueTasks.slice(0, 8),
+      overdueCount: overdueTasks.length, overdueSample: overdueTasks.slice(0, 50),
       activeProjects,
     };
   }
@@ -156,7 +174,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     if (!recipients.length) return 0;
     const { title, message } = this.format(await this.buildReport(now));
     await this.prisma.notification.createMany({
-      data: recipients.map(userId => ({ userId, type: 'admin.daily_digest', title, message, link: '/reports' })),
+      data: recipients.map(userId => ({ userId, type: 'admin.daily_digest', title, message, link: '/digest' })),
     });
     this.logger.log(`daily digest sent to ${recipients.length} admin(s)`);
     return recipients.length;
@@ -170,6 +188,20 @@ class DailyDigestController {
   /** Manual trigger (for testing / on-demand). Admin only. */
   @Post('send') @RequirePermission('user.manage_access')
   async send() { return { sent: await this.svc.sendDigests() }; }
+
+  /** The detailed report for a day (defaults to today) — powers the digest detail screen. */
+  @Get('report') @RequirePermission('user.manage_access')
+  async report(@Query('date') date?: string) {
+    const now = date ? new Date(`${date.slice(0, 10)}T12:00:00.000Z`) : new Date();
+    return this.svc.buildReport(isNaN(now.getTime()) ? new Date() : now);
+  }
+
+  /** Read / set the admin-configured send hour (IST). */
+  @Get('schedule') @RequirePermission('user.manage_access')
+  async getSchedule() { return this.svc.getSchedule(); }
+
+  @Patch('schedule') @RequirePermission('user.manage_access')
+  async setSchedule(@Body() body: { hourIst: number }) { return this.svc.setSchedule(Number(body?.hourIst)); }
 }
 
 @Module({ imports: [TimesheetsModule], providers: [DailyDigestService], controllers: [DailyDigestController], exports: [DailyDigestService] })
