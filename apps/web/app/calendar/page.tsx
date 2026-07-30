@@ -576,10 +576,13 @@ export default function CalendarPage() {
 
   const upcoming = useMemo(() => {
     const now = Date.now();
+    // Only THIS month + NEXT month — the panel used to list events far into the year.
+    const horizon = new Date();
+    const horizonEnd = +new Date(horizon.getFullYear(), horizon.getMonth() + 2, 0, 23, 59, 59);
     return [...events]
-      .filter(e => +new Date(e.endDate ?? e.startDate) >= now)
+      .filter(e => { const end = +new Date(e.endDate ?? e.startDate); return end >= now && +new Date(e.startDate) <= horizonEnd; })
       .sort((a, b) => +new Date(a.startDate) - +new Date(b.startDate))
-      .slice(0, 5);
+      .slice(0, 8);
   }, [events]);
 
   // Stats for the events currently on screen (the active month, after filtering).
