@@ -426,19 +426,20 @@ export class TasksService {
     const before = await this.getRaw(id);
 
     const entries = dto.assignees ?? [];
-    // One person per row (dedupe by userId — the unique(taskId,userId) would otherwise reject it).
+    // A person may hold MULTIPLE roles on one task, but only once PER ROLE (the unique key is
+    // taskId+userId+role). Dedupe by that pair; hours are optional (0 allowed).
     const seen = new Set<string>();
     for (const e of entries) {
-      if (seen.has(e.userId)) throw new BadRequestException('The same person can only be added once.');
-      seen.add(e.userId);
-      // Hours are optional (0 allowed). Only a NEGATIVE value is invalid (DTO also guards @Min(0)).
+      const key = `${e.userId}|${e.role}`;
+      if (seen.has(key)) throw new BadRequestException('The same person is added twice in the same role.');
+      seen.add(key);
       if (e.estimatedHours != null && e.estimatedHours < 0) throw new BadRequestException('Estimated hours cannot be negative.');
     }
     if (entries.filter(e => e.role === 'PM').length > 1) {
       throw new BadRequestException('A task can have only one Project Manager.');
     }
 
-    await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), entries.map(e => e.userId));
+    await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), [...new Set(entries.map(e => e.userId))]);
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     const totalHours = entries.reduce((s, e) => s + (e.estimatedHours ?? 0), 0);
     const assignedById = entries.length ? (getActorId() ?? null) : null;
@@ -446,14 +447,14 @@ export class TasksService {
     await this.prisma.$transaction([
       this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
       this.prisma.taskAssignee.createMany({
-        data: entries.map(e => ({ taskId: id, userId: e.userId, role: e.role, estimatedHours: e.estimatedHours ?? 0 })),
+        data: entries.map(e => ({ taskId: id, userId: e.userId, role: e.role, estimatedHours: e.estimatedHours ?? 0, dueDate: e.dueDate ? new Date(e.dueDate) : null })),
         skipDuplicates: true,
       }),
       // The task's estimate is the sum of the per-person hours (drives the capacity board).
       this.prisma.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } }),
     ]);
 
-    const added = entries.map(e => e.userId).filter(uid => !prev.has(uid));
+    const added = [...new Set(entries.map(e => e.userId))].filter(uid => !prev.has(uid));
     await this.notifications.notify(added, {
       type: 'task.assigned', title: 'New task assigned',
       message: `You were assigned to "${before.title}".`,
@@ -624,7 +625,7 @@ export class TasksService {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
-        select: { userId: true, role: true, estimatedHours: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
+        select: { userId: true, role: true, estimatedHours: true, dueDate: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
@@ -644,7 +645,7 @@ export class TasksService {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
-        select: { userId: true, role: true, estimatedHours: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
+        select: { userId: true, role: true, estimatedHours: true, dueDate: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },

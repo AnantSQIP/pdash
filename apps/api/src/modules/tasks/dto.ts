@@ -138,11 +138,18 @@ export class StaffingEntryDto {
   @IsIn(TASK_ASSIGNEE_ROLES)
   role!: string;
 
-  // Per-person estimated hours — mandatory (the task total is their sum).
+  // Per-person estimated hours — OPTIONAL (0/absent allowed; a reviewer may carry no estimate).
+  // The task total is the sum of whatever is provided.
+  @IsOptional()
   @IsNumber()
-  @Min(0.25)
+  @Min(0)
   @Max(1000)
-  estimatedHours!: number;
+  estimatedHours?: number;
+
+  // Per-assignment deadline (optional).
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string | null;
 }
 
 export class SetStaffingDto {

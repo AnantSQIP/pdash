@@ -772,14 +772,17 @@ model TaskAssignee {
   userId String
   // Role on this task: PM (one) | REVIEWER (many) | ANALYST (many). Null = a legacy plain assignee.
   role   String?
-  // Per-person estimated hours. Mandatory for the new role-based staffing; the task's total
-  // estimated hours is the SUM of these across everyone assigned.
+  // Per-person estimated hours (OPTIONAL — a reviewer may carry 0). The task's total estimated
+  // hours is the SUM of these across everyone assigned.
   estimatedHours Float?
+  // Per-assignment deadline for THIS person in THIS role on the task (optional).
+  dueDate DateTime?
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([taskId, userId])
+  // A person may hold MULTIPLE roles on one task (PM + Reviewer + Analyst), but only once per role.
+  @@unique([taskId, userId, role])
   @@index([userId])
   @@map("task_assignee")
 }
