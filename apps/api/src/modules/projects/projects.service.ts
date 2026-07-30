@@ -540,10 +540,25 @@ export class ProjectsService {
     const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [];
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
     const projById = new Map(projects.map(p => [p.id, p]));
+    // The ledger badge reflects the PID's REAL lifecycle, derived from the attached project's phase
+    // (not just the reservation row) — so a Completed project reads "Completed", a Closed one
+    // "Closed", regardless of how it was closed. Only a PID with no live project falls back to the
+    // reservation status (Reserved = awaiting attachment, Discontinued = retired/given back/deleted).
+    const deriveState = (resStatus: string, phase: string | null | undefined, hasProject: boolean): string => {
+      if (!hasProject) return resStatus === 'RESERVED' ? 'RESERVED' : 'DISCONTINUED';
+      switch (phase) {
+        case 'COMPLETED': return 'COMPLETED';
+        case 'CLOSED': return 'CLOSED';
+        case 'ARCHIVED':
+        case 'CANCELLED': return 'DISCONTINUED';
+        default: return 'WORKING'; // ACTIVE / PLANNING / IDEA / ON_HOLD …
+      }
+    };
     return rows.map(r => {
       const p = r.projectId ? projById.get(r.projectId) : undefined;
       return {
         id: r.id, pid: r.pid, fyLabel: r.fyLabel, serial: r.serial, status: r.status,
+        state: deriveState(r.status, p?.projectPhase, !!p),
         generatedBy: userById.get(r.generatedById) ?? '—',
         project: r.projectId ? {
           id: r.projectId,
