@@ -21,11 +21,15 @@ interface AddTaskModalProps {
   initialAssigneeIds?: string[];
   initialStartDate?: string;
   initialDueDate?: string;
+  /** Capacity assign: put the single assignee into a ROLE with hours + a deadline on the new task. */
+  assignRole?: 'PM' | 'REVIEWER' | 'ANALYST';
+  assignHours?: string;
+  assignDue?: string;
 }
 
 export function AddTaskModal({
   projectId, taskListId, initialStatusId, workflowId, onClose, onSuccess,
-  initialAssigneeIds, initialStartDate, initialDueDate,
+  initialAssigneeIds, initialStartDate, initialDueDate, assignRole, assignHours, assignDue,
 }: AddTaskModalProps) {
   const { currentUser, users } = useOrg();
   const [title, setTitle] = useState('');
@@ -76,7 +80,7 @@ export function AddTaskModal({
         } catch { /* proceed without status */ }
       }
 
-      await api.tasks.create({
+      const created = await api.tasks.create({
         title,
         description: description || undefined,
         priority,
@@ -89,6 +93,14 @@ export function AddTaskModal({
         currentWorkflowStatusId,
         assigneeIds: assigneeIds.length ? assigneeIds : undefined,
       });
+      // Capacity assign: place the person in a specific ROLE with their hours + deadline.
+      if (assignRole && initialAssigneeIds?.length === 1) {
+        await api.tasks.setStaffing(created.id, [{
+          userId: initialAssigneeIds[0], role: assignRole,
+          estimatedHours: assignHours ? parseFloat(assignHours) : 0,
+          dueDate: assignDue || dueDate || null,
+        }]);
+      }
       onSuccess?.();
       onClose();
     } catch (err) {
