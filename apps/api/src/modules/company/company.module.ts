@@ -124,7 +124,7 @@ export class CompanyService {
     const organizationId = await this.actor.requireOrgId();
     const users = await this.prisma.user.findMany({
       where: { organizationId, status: 'ACTIVE', deletedAt: null },
-      select: { ...USER_SELECT, joiningDate: true, profile: { select: { dateOfBirth: true } } },
+      select: { ...USER_SELECT, joiningDate: true, profile: { select: { dateOfBirth: true, weddingAnniversary: true } } },
     });
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -154,7 +154,16 @@ export class CompanyService {
       })
       .filter(x => x.inDays <= days)
       .sort((a, b) => a.inDays - b.inDays);
-    return { anniversaries, birthdays };
+    // Wedding anniversaries — month/day only (never the year), same PII posture as birthdays.
+    const weddingAnniversaries = users
+      .filter(u => u.profile?.weddingAnniversary)
+      .map(u => {
+        const w = new Date(u.profile!.weddingAnniversary!);
+        return { user: this.pick(u), inDays: daysUntil(w.getMonth(), w.getDate()), month: w.getMonth() + 1, day: w.getDate() };
+      })
+      .filter(x => x.inDays <= days)
+      .sort((a, b) => a.inDays - b.inDays);
+    return { anniversaries, birthdays, weddingAnniversaries };
   }
   private pick(u: { id: string; firstName: string; lastName: string; email: string; profilePhoto: string | null; designation: string | null }) {
     return { id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, profilePhoto: u.profilePhoto, designation: u.designation };
@@ -309,7 +318,10 @@ export class CompanyController {
 
   // ── reads: open to any authenticated user ──────────────────────────────────────
   @Get('announcements') listAnnouncements() { return this.svc.listAnnouncements(); }
-  @Get('celebrations') celebrations() { return this.svc.celebrations(); }
+  @Get('celebrations') celebrations(@Query('days') days?: string) {
+    const n = days ? parseInt(days, 10) : 30;
+    return this.svc.celebrations(Number.isFinite(n) && n > 0 && n <= 400 ? n : 30);
+  }
   @Get('directory') directory() { return this.svc.directory(); }
   @Get('rewards') listRewards(@Query('period') period?: string) { return this.svc.listRewards(period); }
   @Get('policies') listPolicies() { return this.svc.listPolicies(); }

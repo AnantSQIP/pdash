@@ -483,6 +483,13 @@ export default function CalendarPage() {
     staleTime: 5 * 60_000,
   });
 
+  // Birthdays + wedding anniversaries for the Upcoming rail (this + next ~2 months). Month/day only.
+  const { data: celebrations } = useQuery({
+    queryKey: ['celebrations-cal'],
+    queryFn: () => api.company.celebrations(70),
+    staleTime: 5 * 60_000,
+  });
+
   const holidayEvents = useMemo<CalendarEvent[]>(() =>
     holidays.map(h => ({
       id: `holiday-${h.id}`,
@@ -1096,6 +1103,29 @@ export default function CalendarPage() {
                 })}
               </div>
             )}
+
+            {/* Celebrations — birthdays + wedding anniversaries (this & next month, day/month only). */}
+            {(() => {
+              const cel = [
+                ...(celebrations?.birthdays ?? []).map(c => ({ ...c, kind: 'bday' as const })),
+                ...(celebrations?.weddingAnniversaries ?? []).map(c => ({ ...c, kind: 'anniv' as const })),
+              ].sort((a, b) => a.inDays - b.inDays).slice(0, 10);
+              if (!cel.length) return null;
+              return (
+                <div className="mt-5 pt-4 border-t border-gray-100">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Celebrations</p>
+                  <div className="space-y-0.5">
+                    {cel.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2 px-1.5 py-1 text-sm rounded-lg hover:bg-gray-50">
+                        <span className="text-base leading-none">{c.kind === 'bday' ? '🎂' : '💍'}</span>
+                        <span className="flex-1 min-w-0 truncate text-gray-800">{c.user.firstName} {c.user.lastName}<span className="text-[11px] text-gray-400"> · {c.kind === 'bday' ? 'Birthday' : 'Anniversary'}</span></span>
+                        <span className="text-[11px] text-gray-400 shrink-0">{c.inDays === 0 ? 'Today' : c.inDays === 1 ? 'Tomorrow' : `${MONTH_NAMES[c.month - 1].slice(0, 3)} ${c.day}`}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>

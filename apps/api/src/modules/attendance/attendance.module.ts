@@ -80,7 +80,7 @@ const HALF_DAY_HOURS = 4;
 // updated here when confirmed.
 const OFFICE_AREA: Record<string, string> = {
   GURGAON: 'Sector 48, Gurgaon',
-  JAIPUR: 'Jaipur',
+  JAIPUR: 'Near Sawai Mansingh Stadium, Jaipur',
 };
 const areaOf = (office?: string | null) => (office ? (OFFICE_AREA[office] ?? office) : '—');
 function statusForHours(totalHours: number): string {

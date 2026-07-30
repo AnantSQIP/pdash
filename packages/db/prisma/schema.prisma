@@ -941,7 +941,8 @@ model UserProfile {
   dateOfBirth   DateTime?
   gender        String?
   bloodGroup    String?
-  maritalStatus String?
+  maritalStatus String?   // SINGLE | MARRIED
+  weddingAnniversary DateTime? // set when MARRIED — powers the celebrations feed (month/day only)
   nationality   String?
 
   // ── Private contact (the work email/phone stay on User — those are directory data) ──

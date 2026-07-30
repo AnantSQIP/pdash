@@ -171,6 +171,11 @@ export function CompleteProfile() {
                 {MARITAL_STATUSES.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </Field>
+            {f.maritalStatus === 'Married' && (
+              <Field label="Wedding anniversary">
+                <input type="date" value={f.weddingAnniversary ?? ''} onChange={set('weddingAnniversary')} max={new Date().toISOString().slice(0, 10)} className={input} />
+              </Field>
+            )}
             <Field label="Nationality">
               <input value={f.nationality ?? ''} onChange={set('nationality')} placeholder="Indian" className={input} />
             </Field>

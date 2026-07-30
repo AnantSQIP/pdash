@@ -359,7 +359,7 @@ export type Announcement = {
   pinnedAt?: string | null; createdAt: string; updatedAt: string; author?: PersonLite | null;
 };
 export type Celebration = { user: PersonLite; inDays: number; month: number; day: number; years?: number };
-export type Celebrations = { anniversaries: (Celebration & { years: number })[]; birthdays: Celebration[] };
+export type Celebrations = { anniversaries: (Celebration & { years: number })[]; birthdays: Celebration[]; weddingAnniversaries?: Celebration[] };
 export type DirectoryEntry = PersonLite & { phone?: string | null };
 // Recognition / rewards given to employees.
 export type Reward = {
@@ -630,6 +630,7 @@ export type UserProfile = {
   gender?: string | null;
   bloodGroup?: string | null;
   maritalStatus?: string | null;
+  weddingAnniversary?: string | null;
   nationality?: string | null;
   personalEmail?: string | null;
   alternatePhone?: string | null;
@@ -1094,7 +1095,7 @@ export const api = {
       req<Announcement>(`/company/announcements/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     pinAnnouncement: (id: string) => req<Announcement>(`/company/announcements/${id}/pin`, { method: 'POST' }),
     deleteAnnouncement: (id: string) => req<void>(`/company/announcements/${id}`, { method: 'DELETE' }),
-    celebrations: () => req<Celebrations>('/company/celebrations'),
+    celebrations: (days?: number) => req<Celebrations>(`/company/celebrations${days ? `?days=${days}` : ''}`),
     directory: () => req<DirectoryEntry[]>('/company/directory'),
     rewards: (period?: 'current' | 'last') => req<RewardsView>(`/company/rewards${period === 'last' ? '?period=last' : ''}`),
     giveReward: (data: { recipientId: string; category: string; message?: string }) =>

@@ -48,6 +48,9 @@ export class UpdateProfileDto {
   @IsOptional() @IsIn(MARITAL) @emptyToNull()
   maritalStatus?: string | null;
 
+  @IsOptional() @IsDateString() @emptyToNull()
+  weddingAnniversary?: string | null;
+
   @IsOptional() @IsString() @MaxLength(60) @emptyToNull()
   nationality?: string | null;
 
