@@ -716,9 +716,11 @@ function TaskDetailPanelInner({
                 </select>
               </Field>
 
+              {/* No cross-field min/max — coupling them silently blocks valid picks. Ordering is
+                  validated server-side on save. */}
               <Field label="Start Date">
                 <input
-                  type="date" value={plan.startDate} max={plan.dueDate || undefined} disabled={readOnly}
+                  type="date" value={plan.startDate} disabled={readOnly}
                   onChange={e => { const startDate = e.target.value; setPlan(p => ({ ...p, startDate })); savePlan({ startDate: startDate || null }); }}
                   className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
                 />
@@ -726,7 +728,7 @@ function TaskDetailPanelInner({
 
               <Field label="Deadline" hint="what the team works to">
                 <input
-                  type="date" value={plan.dueDate} min={plan.startDate || undefined} disabled={readOnly}
+                  type="date" value={plan.dueDate} disabled={readOnly}
                   onChange={e => { const dueDate = e.target.value; setPlan(p => ({ ...p, dueDate })); savePlan({ dueDate: dueDate || null }); }}
                   className={clsx(planInput, 'disabled:opacity-60 disabled:cursor-not-allowed')}
                 />

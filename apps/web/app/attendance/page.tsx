@@ -421,12 +421,13 @@ const REG_STATUSES: { value: string; label: string }[] = [
   { value: 'HALF_DAY', label: 'Half day' },
 ];
 
+// Values MUST match the server's accepted set (REG_TYPES in attendance.module):
+// MISSED_PUNCH | LATE | ON_DUTY | WFH | OTHER.
 const REG_TYPES = [
-  { value: 'FORGOT_IN', label: 'Forgot to punch in' },
-  { value: 'LATE_IN', label: 'Late punch-in' },
-  { value: 'FORGOT_OUT', label: 'Forgot to punch out' },
-  { value: 'WRONG_TIME', label: 'Wrong time recorded' },
-  { value: 'WFH', label: 'Worked from home / on-site' },
+  { value: 'MISSED_PUNCH', label: 'Forgot / missed a punch' },
+  { value: 'LATE', label: 'Late punch-in' },
+  { value: 'ON_DUTY', label: 'On duty / client visit / field work' },
+  { value: 'WFH', label: 'Worked from home' },
   { value: 'OTHER', label: 'Other' },
 ];
 
@@ -439,7 +440,7 @@ const REG_STATUS_STYLE: Record<string, string> = {
 
 function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: string; nonWorking?: string | null; onClose: () => void; onSuccess: () => void }) {
   const [reason, setReason] = useState('');
-  const [requestType, setRequestType] = useState('FORGOT_IN');
+  const [requestType, setRequestType] = useState('MISSED_PUNCH');
   const [status, setStatus] = useState('PRESENT');
   const [checkIn, setCheckIn] = useState('');
   const [checkOut, setCheckOut] = useState('');

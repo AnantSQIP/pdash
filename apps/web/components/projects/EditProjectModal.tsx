@@ -117,11 +117,14 @@ export function EditProjectModal({ project, onClose, onSaved }: {
             </div>
           </div>
 
+          {/* No cross-field min/max on the pickers — coupling them silently traps selection
+              ("can only pick an earlier date"). Ordering (start ≤ deadline ≤ client) is validated
+              on save with a clear message instead. */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Start date</label>
               <input
-                type="date" value={startDate} max={dueDate || undefined}
+                type="date" value={startDate}
                 onChange={e => setStartDate(e.target.value)} className={input}
               />
             </div>
@@ -132,7 +135,6 @@ export function EditProjectModal({ project, onClose, onSaved }: {
               </label>
               <input
                 type="date" value={dueDate}
-                min={startDate || undefined} max={clientDueDate || undefined}
                 onChange={e => setDueDate(e.target.value)} className={input}
               />
             </div>
@@ -144,7 +146,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
                 <Lock size={12} /> Client deadline
               </label>
               <input
-                type="date" value={clientDueDate} min={dueDate || undefined}
+                type="date" value={clientDueDate}
                 onChange={e => setClientDueDate(e.target.value)}
                 className={clsx(input, 'border-amber-200 bg-amber-50/60 text-amber-900')}
               />
