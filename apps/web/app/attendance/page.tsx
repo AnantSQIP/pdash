@@ -12,7 +12,7 @@ import {
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { getCurrentLocation, mapLink } from '@/lib/geolocation';
+import { getCurrentLocation, reverseGeocode, mapLink } from '@/lib/geolocation';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 
@@ -90,7 +90,7 @@ export default function AttendancePage() {
   async function punch() {
     if (busy) return; setBusy(true);
     // Location is mandatory — capture it first; a denial blocks the punch with a clear message.
-    try { await api.attendance.punch(await getCurrentLocation()); invalidate('attn-today', 'attn-month', 'attn-org'); }
+    try { const loc = await getCurrentLocation(); const area = await reverseGeocode(loc.lat, loc.lng); await api.attendance.punch({ ...loc, area }); invalidate('attn-today', 'attn-month', 'attn-org'); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
     finally { setBusy(false); }
   }
@@ -837,12 +837,17 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   // last year. Full data is exportable to CSV over a range.
   const [locDate, setLocDate] = useState(todayKey);
   const [exporting, setExporting] = useState(false);
+  // Custom export range — admins pick the from/to dates (defaults to the last month).
+  const monthAgoKey = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const [expFrom, setExpFrom] = useState(monthAgoKey);
+  const [expTo, setExpTo] = useState(todayKey);
   const { data: punchLoc } = useQuery({ queryKey: ['attn-punch-locations', locDate], queryFn: () => api.attendance.orgPunchLocations(locDate), staleTime: 30_000 });
 
   async function exportAttendanceCsv() {
+    if (expFrom > expTo) { alert('The start date must be on or before the end date.'); return; }
     setExporting(true);
     try {
-      const rep = await api.attendance.orgReport(yearAgoKey, todayKey);
+      const rep = await api.attendance.orgReport(expFrom, expTo);
       const fmtT = (s: string | null) => s ? new Date(s).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '';
       const cell = (v: unknown) => `"${(v == null ? '' : String(v)).replace(/"/g, '""')}"`;
       const header = ['Date', 'Member', 'Office', 'Area', 'Status', 'Work mode', 'Punch In', 'Punch Out', 'Hours', 'Punch In (map)', 'Punch Out (map)'];
@@ -854,7 +859,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
       const csv = [header, ...body].map(row => row.map(cell).join(',')).join('\r\n');
       const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob); const a = document.createElement('a');
-      a.href = url; a.download = `attendance-${yearAgoKey}_to_${todayKey}.csv`; a.click(); URL.revokeObjectURL(url);
+      a.href = url; a.download = `attendance-${expFrom}_to_${expTo}.csv`; a.click(); URL.revokeObjectURL(url);
     } catch (e) { alert(e instanceof Error ? e.message : 'Could not export attendance.'); }
     finally { setExporting(false); }
   }
@@ -925,10 +930,19 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
           <h3 className="text-sm font-semibold text-gray-700">Punch locations</h3>
           <input type="date" value={locDate} min={yearAgoKey} max={todayKey} onChange={e => setLocDate(e.target.value)}
             className="ml-1 text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-400" />
-          <button onClick={exportAttendanceCsv} disabled={exporting}
-            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">
-            {exporting ? <Loader size={13} className="animate-spin" /> : <CalendarDays size={13} />} Export 1-year CSV
-          </button>
+          {/* Custom-range CSV export — admins choose the from/to dates (up to 1 year). */}
+          <div className="ml-auto flex items-center gap-1.5">
+            <span className="text-[11px] text-gray-400">Export</span>
+            <input type="date" value={expFrom} max={expTo || todayKey} onChange={e => setExpFrom(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-400" />
+            <span className="text-[11px] text-gray-400">to</span>
+            <input type="date" value={expTo} min={expFrom} max={todayKey} onChange={e => setExpTo(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1 focus:outline-none focus:border-brand-400" />
+            <button onClick={exportAttendanceCsv} disabled={exporting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+              {exporting ? <Loader size={13} className="animate-spin" /> : <CalendarDays size={13} />} CSV
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm min-w-[640px]">
