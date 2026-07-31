@@ -116,6 +116,8 @@ export class AttendanceService {
         organizationId, deletedAt: null, status: 'ACTIVE',
         OR: [
           { userRoles: { some: { role: { name: 'HR' } } } },
+          // Admins / Super Admins (user.manage_access) are always notified too.
+          { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
           { email: ESCALATION_EMAIL },
         ],
       },
@@ -945,7 +947,9 @@ export class LeaveService {
     return users.map(u => u.id);
   }
 
-  // Comp-off claims route to HR + Managers + Yash (escalation owner) specifically.
+  // Comp-off claims route to HR + Managers + Yash (escalation owner), AND to Admins / Super Admins
+  // (holders of user.manage_access) so administrators are always notified and can review — the
+  // previous list left Super Admin out, so an SA never saw comp-off requests.
   private async compOffApproverIds(organizationId: string | null): Promise<string[]> {
     if (!organizationId) return [];
     const users = await this.prisma.user.findMany({
@@ -953,6 +957,7 @@ export class LeaveService {
         organizationId, deletedAt: null, status: 'ACTIVE',
         OR: [
           { userRoles: { some: { role: { name: { in: ['HR', 'Manager'] } } } } },
+          { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
           { email: ESCALATION_EMAIL },
         ],
       },

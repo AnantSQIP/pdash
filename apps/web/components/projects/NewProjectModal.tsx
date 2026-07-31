@@ -461,7 +461,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               <DateField
                 type="date"
                 value={dueDate}
-                max={clientDueDate || undefined}
                 onChange={e => setDueDate(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
               />
@@ -474,7 +473,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                 <DateField
                   type="date"
                   value={clientDueDate}
-                  min={dueDate || undefined}
                   onChange={e => setClientDueDate(e.target.value)}
                   className="w-full px-3.5 py-2.5 text-sm border border-amber-300 bg-amber-50/40 rounded-lg focus:outline-none focus:border-amber-500 transition"
                 />
