@@ -20,7 +20,7 @@ import {
 /** Human label for an office/branch grouping key. */
 const officeLabel = (o: string) =>
   o === 'GURGAON' ? 'Gurgaon' : o === 'JAIPUR' ? 'Jaipur' : o;
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
 
 type RangeKey = 'next-7' | 'next-14' | 'next-30' | 'past-30';
 const RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
@@ -34,7 +34,6 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { PersonPanel, ExtendMenu } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
-import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
 
@@ -570,37 +569,59 @@ function HistoryRowView({ row }: { row: HistoryRow }) {
  * Assigning from the board: pick which project the work belongs to, then reuse the
  * normal AddTaskModal with the person and their free window pre-filled.
  */
+/**
+ * Single-person task allocation from the capacity board. You clicked ONE person, so this window
+ * allocates a role on a task to THAT person only — there is no org-wide assignee picker. Flow:
+ * pick a project → pick an existing task under it (or "＋ New task") → role + hours + deadline.
+ * Existing task: the person is added to their role via setStaffing, preserving everyone else.
+ * New task: a task is created and the person is placed in the role.
+ */
 function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: {
   row: CapacityRow; projects: ApiProject[]; startDate?: string; dueDate?: string;
   onClose: () => void; onDone: () => void;
 }) {
+  const NEW = '__new__';
+  const { toast } = useToast();
   const [projectId, setProjectId] = useState('');
+  const [taskId, setTaskId] = useState('');      // '' | existing id | NEW
+  const [newTitle, setNewTitle] = useState('');
   const [role, setRole] = useState<'PM' | 'REVIEWER' | 'ANALYST'>('ANALYST');
   const [hours, setHours] = useState('');
-  const { data: project } = useQuery<ApiProject>({
-    queryKey: ['project', projectId],
-    queryFn: () => api.projects.get(projectId),
-    enabled: !!projectId,
-  });
+  const [due, setDue] = useState(dueDate ?? '');
+  const [saving, setSaving] = useState(false);
+
   const assignable = projects.filter(p => !['ARCHIVED', 'CANCELLED'].includes(p.projectPhase));
+  const { data: project } = useQuery<ApiProject>({ queryKey: ['project', projectId], queryFn: () => api.projects.get(projectId), enabled: !!projectId });
+  const { data: tasks = [], isLoading: tasksLoading } = useQuery<ApiTask[]>({ queryKey: ['project-tasks', projectId], queryFn: () => api.tasks.list(projectId), enabled: !!projectId });
   const taskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
 
-  if (projectId && project && taskList) {
-    return (
-      <AddTaskModal
-        projectId={project.id}
-        taskListId={taskList.id}
-        workflowId={project.workflowId}
-        initialAssigneeIds={[row.userId]}
-        initialStartDate={startDate}
-        initialDueDate={dueDate}
-        assignRole={role}
-        assignHours={hours}
-        assignDue={dueDate}
-        onClose={onClose}
-        onSuccess={onDone}
-      />
-    );
+  const roleLabel = role === 'PM' ? 'Project Manager' : role === 'REVIEWER' ? 'Reviewer' : 'Analyst';
+  const canSubmit = !!projectId && (taskId === NEW ? !!newTitle.trim() && !!taskList : !!taskId) && !saving;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setSaving(true);
+    try {
+      const entry = { userId: row.userId, role, estimatedHours: hours ? parseFloat(hours) : 0, dueDate: due || null };
+      if (taskId === NEW) {
+        const created = await api.tasks.create({
+          title: newTitle.trim(), projectId, taskListId: taskList!.id,
+          createdBy: row.userId, startDate: startDate || undefined, dueDate: due || undefined,
+        });
+        await api.tasks.setStaffing(created.id, [entry]);
+      } else {
+        // Add this person to an EXISTING task without disturbing the current staffing.
+        const t = await api.tasks.get(taskId);
+        const existing = (t.assignees ?? [])
+          .filter(a => a.role && !(a.userId === row.userId && a.role === role))
+          .map(a => ({ userId: a.userId, role: a.role as 'PM' | 'REVIEWER' | 'ANALYST', estimatedHours: a.estimatedHours ?? 0, dueDate: a.dueDate ?? null }));
+        await api.tasks.setStaffing(taskId, [...existing, entry]);
+      }
+      toast(`Assigned ${row.name.split(' ')[0]} as ${roleLabel}`, 'success');
+      onDone();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not assign the task', 'error');
+    } finally { setSaving(false); }
   }
 
   return (
@@ -611,47 +632,76 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
           <div className="flex items-center gap-3">
             <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={36} />
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Assign work to {row.name.split(' ')[0]}</h2>
-              <p className="text-xs text-gray-500">
-                {startDate ? `Into their free window from ${formatDate(startDate)}` : 'Choose a project to add the task to'}
-              </p>
+              <h2 className="text-base font-semibold text-gray-900">Assign a task to {row.name.split(' ')[0]}</h2>
+              <p className="text-xs text-gray-500">{startDate ? `From ${formatDate(startDate)}` : 'Pick a project and task'}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
         </div>
-        <div className="px-6 py-5 space-y-3">
-          <label className="block text-sm font-medium text-gray-700">Project</label>
-          <select
-            autoFocus
-            value={projectId}
-            onChange={e => setProjectId(e.target.value)}
-            className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500"
-          >
-            <option value="">Select a project…</option>
-            {assignable.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-          </select>
-          <div className="grid grid-cols-2 gap-3">
+        <div className="px-6 py-5 space-y-3.5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
+            <select autoFocus value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); }}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+              <option value="">Select a project…</option>
+              {assignable.map(p => <option key={p.id} value={p.id}>{p.code ? `${p.code} · ` : ''}{p.title}</option>)}
+            </select>
+          </div>
+
+          {projectId && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-              <select value={role} onChange={e => setRole(e.target.value as 'PM' | 'REVIEWER' | 'ANALYST')}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
-                <option value="PM">Project Manager</option>
-                <option value="REVIEWER">Reviewer</option>
-                <option value="ANALYST">Analyst</option>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Task</label>
+              <select value={taskId} onChange={e => setTaskId(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                <option value="">{tasksLoading ? 'Loading tasks…' : 'Select a task…'}</option>
+                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                <option value={NEW}>＋ New task…</option>
               </select>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Hours <span className="text-gray-400 font-normal">(optional)</span></label>
-              <input type="number" min="0" step="0.25" value={hours} onChange={e => setHours(e.target.value)} placeholder="0"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
-            </div>
-          </div>
-          <p className="text-[11px] text-gray-400">
-            {row.name.split(' ')[0]} will be assigned as <span className="font-medium">{role === 'PM' ? 'Project Manager' : role === 'REVIEWER' ? 'Reviewer' : 'Analyst'}</span>{dueDate ? ` with a deadline of ${formatDate(dueDate)}` : ''}. The task form opens next.
-          </p>
-          {projectId && !taskList && (
-            <p className="text-xs text-gray-400 flex items-center gap-1.5"><Loader size={12} className="animate-spin" /> Loading project…</p>
           )}
+
+          {taskId === NEW && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">New task title</label>
+              <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="e.g. Prior-art search"
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+            </div>
+          )}
+
+          {projectId && (taskId && (taskId !== NEW || newTitle.trim())) && (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <select value={role} onChange={e => setRole(e.target.value as 'PM' | 'REVIEWER' | 'ANALYST')}
+                    className="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                    <option value="PM">PM</option>
+                    <option value="REVIEWER">Reviewer</option>
+                    <option value="ANALYST">Analyst</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Hours</label>
+                  <input type="number" min="0" step="0.25" value={hours} onChange={e => setHours(e.target.value)} placeholder="0"
+                    className="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+                  <input type="date" value={due} onChange={e => setDue(e.target.value)}
+                    className="w-full px-2 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400">{row.name.split(' ')[0]} will be added as <span className="font-medium">{roleLabel}</span>{due ? ` · due ${formatDate(due)}` : ''}.</p>
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-700">Cancel</button>
+            <button onClick={submit} disabled={!canSubmit}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              {saving ? <Loader size={14} className="animate-spin" /> : null} Assign
+            </button>
+          </div>
         </div>
       </div>
     </div>
