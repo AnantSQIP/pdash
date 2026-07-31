@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, Edit3, Check, X } from 'lucide-react';
+import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, ChevronRight, Edit3, Check, X } from 'lucide-react';
 import clsx from 'clsx';
-import { api, type ApiProject, type DashboardStats } from '@/lib/api';
+import { api, type ApiProject, type ApiTask, type DashboardStats } from '@/lib/api';
+import { formatDate } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
 
@@ -91,11 +92,169 @@ function ProgressEditor({ project, onUpdated }: { project: ApiProject; onUpdated
   );
 }
 
+const ROLE_LABEL: Record<string, string> = { PM: 'Project Manager', REVIEWER: 'Reviewer', ANALYST: 'Analyst' };
+
+type DigestRange = 'day' | 'week' | 'month' | 'quarter' | 'year';
+const DIGEST_RANGES: { id: DigestRange; label: string }[] = [
+  { id: 'day', label: 'Day' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' },
+  { id: 'quarter', label: 'Quarter' }, { id: 'year', label: 'Year' },
+];
+function rangeDates(r: DigestRange): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date(to);
+  if (r === 'day') { /* same day */ }
+  else if (r === 'week') from.setDate(from.getDate() - 6);
+  else if (r === 'month') from.setMonth(from.getMonth() - 1);
+  else if (r === 'quarter') from.setMonth(from.getMonth() - 3);
+  else from.setFullYear(from.getFullYear() - 1);
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
+/** Activity digest for the reports page — the daily-digest numbers over a chosen range, exportable. */
+function ActivityDigest() {
+  const [range, setRange] = useState<DigestRange>('week');
+  const { from, to } = rangeDates(range);
+  const { data, isLoading } = useQuery({
+    queryKey: ['digest-range', from, to], queryFn: () => api.dailyDigest.reportRange(from, to), staleTime: 60_000,
+  });
+
+  const tiles = data ? [
+    { label: 'Projects created', value: data.projectsCreated.length },
+    { label: 'Projects completed', value: data.projectsCompleted.length },
+    { label: 'Tasks completed', value: data.tasksCompleted },
+    { label: 'Deadlines met', value: data.deadlinesMet },
+    { label: 'Overdue tasks', value: data.overdueCount },
+    { label: 'Active projects', value: data.activeProjects },
+  ] : [];
+
+  const exportData: ExportData = {
+    filename: `activity-digest-${from}_to_${to}`,
+    title: 'Activity digest', subtitle: `${from} – ${to}`,
+    columns: ['Metric', 'Value'],
+    rows: tiles.map(t => [t.label, String(t.value)]),
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Activity digest</h3>
+          <p className="text-xs text-gray-400 mt-0.5">{from} – {to}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+            {DIGEST_RANGES.map(r => (
+              <button key={r.id} onClick={() => setRange(r.id)}
+                className={clsx('px-2.5 py-1 text-xs font-medium rounded-md transition-colors', range === r.id ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <ExportMenu getData={() => exportData} disabled={isLoading || !data} />
+        </div>
+      </div>
+      {isLoading || !data ? (
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">{[...Array(6)].map((_, i) => <div key={i} className="h-16 bg-gray-100 animate-pulse rounded-lg" />)}</div>
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          {tiles.map(t => (
+            <div key={t.label} className="rounded-lg border border-gray-100 px-3 py-2.5">
+              <p className="text-2xl font-bold text-gray-900 tabular-nums leading-none">{t.value}</p>
+              <p className="text-[11px] text-gray-500 mt-1">{t.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A project row in the reports table that expands to the full detail an admin asked for: PID, the
+ *  project's dates, and every task with its assignees + roles + hours + per-person deadlines. */
+function ProjectReportRow({ project, onUpdated, expanded, onToggle }: {
+  project: ApiProject; onUpdated: () => void; expanded: boolean; onToggle: () => void;
+}) {
+  const phase = PHASE_COLORS[project.projectPhase];
+  const priorityColor = PRIORITY_COLORS[project.priority] ?? '#9aa0a6';
+  const { data: tasks = [], isLoading } = useQuery<ApiTask[]>({
+    queryKey: ['report-project-tasks', project.id], queryFn: () => api.tasks.list(project.id), enabled: expanded, staleTime: 30_000,
+  });
+
+  return (
+    <>
+      <tr className="hover:bg-gray-50 transition-colors cursor-pointer" onClick={onToggle}>
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2">
+            {expanded ? <ChevronDown size={14} className="text-gray-400 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
+            <div className="min-w-0">
+              {project.code && <span className="block text-[11px] font-mono font-bold text-brand-700">{project.code}</span>}
+              <span className="text-sm font-medium text-gray-900">{project.title}</span>
+            </div>
+          </div>
+        </td>
+        <td className="px-4 py-3">
+          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: (phase?.color ?? '#9aa0a6') + '22', color: phase?.color ?? '#9aa0a6' }}>
+            {phase?.label ?? project.projectPhase}
+          </span>
+        </td>
+        <td className="px-4 py-3"><span className="text-xs font-semibold" style={{ color: priorityColor }}>{project.priority}</span></td>
+        <td className="px-4 py-3 min-w-[160px]" onClick={e => e.stopPropagation()}><ProgressEditor project={project} onUpdated={onUpdated} /></td>
+        <td className="px-4 py-3 text-sm text-gray-500">{project._count?.projectTasks ?? 0}</td>
+        <td className="px-4 py-3 text-xs text-gray-400">{project.dueDate ? formatDate(project.dueDate) : '—'}</td>
+      </tr>
+      {expanded && (
+        <tr className="bg-gray-50/60">
+          <td colSpan={6} className="px-4 py-4">
+            {/* Project meta */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-2 text-xs mb-4">
+              <div><span className="text-gray-400">PID</span><p className="font-mono font-semibold text-gray-800">{project.code ?? 'pending'}</p></div>
+              <div><span className="text-gray-400">Start</span><p className="text-gray-800">{project.startDate ? formatDate(project.startDate) : '—'}</p></div>
+              <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{project.dueDate ? formatDate(project.dueDate) : '—'}</p></div>
+              <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{project.clientDueDate ? formatDate(project.clientDueDate) : '—'}</p></div>
+            </div>
+            {/* Tasks with staffing */}
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Tasks &amp; staffing</p>
+            {isLoading ? (
+              <p className="text-xs text-gray-400 flex items-center gap-1.5"><Loader size={12} className="animate-spin" /> Loading tasks…</p>
+            ) : tasks.length === 0 ? (
+              <p className="text-xs text-gray-400">No tasks on this project.</p>
+            ) : (
+              <div className="space-y-2">
+                {tasks.map(t => (
+                  <div key={t.id} className="bg-white rounded-lg border border-gray-100 p-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-sm font-medium text-gray-800">{t.title}</span>
+                      <span className="text-[11px] text-gray-400">{t.dueDate ? `due ${formatDate(t.dueDate)}` : 'no deadline'}{t.estimatedHours ? ` · ${t.estimatedHours}h est.` : ''}</span>
+                    </div>
+                    {(t.assignees ?? []).length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {(t.assignees ?? []).map((a, i) => (
+                          <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200 text-[11px] text-gray-700">
+                            <span className="font-medium">{a.user.firstName} {a.user.lastName ?? ''}</span>
+                            <span className="text-gray-400">· {ROLE_LABEL[a.role ?? ''] ?? a.role ?? 'Member'}</span>
+                            {a.estimatedHours ? <span className="text-gray-400">· {a.estimatedHours}h</span> : null}
+                            {a.dueDate ? <span className="text-gray-400">· {formatDate(a.dueDate)}</span> : null}
+                          </span>
+                        ))}
+                      </div>
+                    ) : <p className="mt-1.5 text-[11px] text-gray-400">No one staffed yet.</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 export default function ReportsPage() {
   const { org } = useOrg();
   const qc = useQueryClient();
   const [sortField, setSortField] = useState<'title' | 'completionPercentage' | 'projectPhase' | 'priority'>('completionPercentage');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [openId, setOpenId] = useState<string | null>(null); // expanded project detail
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['analytics-dashboard', org?.id],
@@ -174,6 +333,9 @@ export default function ReportsPage() {
             </div>
           ))}
         </div>
+
+        {/* Activity digest — range-selectable + exportable (day/week/month/quarter/year). */}
+        <ActivityDigest />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Status distribution chart */}
@@ -304,34 +466,9 @@ export default function ReportsPage() {
                 {sorted.length === 0 && (
                   <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">No projects found.</td></tr>
                 )}
-                {sorted.map(project => {
-                  const phase = PHASE_COLORS[project.projectPhase];
-                  const priorityColor = PRIORITY_COLORS[project.priority] ?? '#9aa0a6';
-                  return (
-                    <tr key={project.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3">
-                        <a href={`/projects/${project.id}`} className="text-sm font-medium text-gray-900 hover:text-brand-600">
-                          {project.title}
-                        </a>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: (phase?.color ?? '#9aa0a6') + '22', color: phase?.color ?? '#9aa0a6' }}>
-                          {phase?.label ?? project.projectPhase}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs font-semibold" style={{ color: priorityColor }}>{project.priority}</span>
-                      </td>
-                      <td className="px-4 py-3 min-w-[160px]">
-                        <ProgressEditor project={project} onUpdated={invalidate} />
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-500">{project._count?.projectTasks ?? 0}</td>
-                      <td className="px-4 py-3 text-xs text-gray-400">
-                        {project.dueDate ? new Date(project.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {sorted.map(project => (
+                  <ProjectReportRow key={project.id} project={project} onUpdated={invalidate} expanded={openId === project.id} onToggle={() => setOpenId(openId === project.id ? null : project.id)} />
+                ))}
               </tbody>
             </table>
             </div>
