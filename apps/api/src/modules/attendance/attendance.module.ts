@@ -141,12 +141,14 @@ export class AttendanceService {
    *   3. already clocked out    → REJECT — the day is locked so a stray third
    *      punch can never overwrite/erase the real check-out time.
    */
-  async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number }) {
+  async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number; area?: string }) {
     const today = utcDay(new Date());
     const now = new Date();
-    // Location is mandatory on every punch (client captures it; the server enforces it too).
-    const inLoc = { checkInLat: coords.lat, checkInLng: coords.lng, checkInAcc: coords.accuracy ?? null };
-    const outLoc = { checkOutLat: coords.lat, checkOutLng: coords.lng, checkOutAcc: coords.accuracy ?? null };
+    // Location is mandatory on every punch (client captures it; the server enforces it too). The
+    // area/landmark is reverse-geocoded on the client and stored so the team table is dynamic.
+    const area = coords.area?.trim()?.slice(0, 200) || null;
+    const inLoc = { checkInLat: coords.lat, checkInLng: coords.lng, checkInAcc: coords.accuracy ?? null, checkInArea: area };
+    const outLoc = { checkOutLat: coords.lat, checkOutLng: coords.lng, checkOutAcc: coords.accuracy ?? null, checkOutArea: area };
     const existing = await this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
 
     if (!existing || !existing.checkIn) {
@@ -654,10 +656,12 @@ export class AttendanceService {
         const a = byUser.get(u.id);
         return {
           userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
-          office: u.office ?? undefined, area: areaOf(u.office),
+          office: u.office ?? undefined,
+          // Dynamic area from where they actually punched (falls back to the office label).
+          area: a?.checkInArea ?? a?.checkOutArea ?? areaOf(u.office),
           checkIn: a?.checkIn ?? null, checkOut: a?.checkOut ?? null, status: a?.status ?? null,
-          checkInLat: a?.checkInLat ?? null, checkInLng: a?.checkInLng ?? null,
-          checkOutLat: a?.checkOutLat ?? null, checkOutLng: a?.checkOutLng ?? null,
+          checkInLat: a?.checkInLat ?? null, checkInLng: a?.checkInLng ?? null, checkInArea: a?.checkInArea ?? null,
+          checkOutLat: a?.checkOutLat ?? null, checkOutLng: a?.checkOutLng ?? null, checkOutArea: a?.checkOutArea ?? null,
         };
       }),
     };
@@ -686,7 +690,8 @@ export class AttendanceService {
         return {
           date: dayKey(a.date), userId: a.userId,
           name: u ? `${u.firstName} ${u.lastName}`.trim() : a.userId,
-          office: u?.office ?? undefined, area: areaOf(u?.office),
+          office: u?.office ?? undefined,
+          area: a.checkInArea ?? a.checkOutArea ?? areaOf(u?.office),
           status: a.status, workMode: a.workMode ?? undefined,
           checkIn: a.checkIn ?? null, checkOut: a.checkOut ?? null, totalHours: a.totalHours ?? null,
           checkInLat: a.checkInLat ?? null, checkInLng: a.checkInLng ?? null,
@@ -1170,14 +1175,15 @@ class AttendanceController {
   // Location is MANDATORY on every punch (in and out). `mode` is still accepted but ignored
   // (workMode is derived server-side from an approved WFH request, never client-chosen).
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; mode?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string; mode?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     const lat = Number(body?.lat), lng = Number(body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
       throw new BadRequestException('Location is required to punch. Please allow location access and try again.');
     }
     const accuracy = Number.isFinite(Number(body?.accuracy)) ? Number(body.accuracy) : undefined;
-    return this.svc.punch(actorId, { lat, lng, accuracy });
+    const area = typeof body?.area === 'string' ? body.area : undefined;
+    return this.svc.punch(actorId, { lat, lng, accuracy, area });
   }
 
   // ── work-from-home requests ────────────────────────────────────────────────────

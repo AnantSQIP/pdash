@@ -697,8 +697,8 @@ export type OrgPunchLocations = {
   rows: {
     userId: string; name: string; designation?: string; office?: string; area: string;
     checkIn: string | null; checkOut: string | null; status: string | null;
-    checkInLat: number | null; checkInLng: number | null;
-    checkOutLat: number | null; checkOutLng: number | null;
+    checkInLat: number | null; checkInLng: number | null; checkInArea?: string | null;
+    checkOutLat: number | null; checkOutLng: number | null; checkOutArea?: string | null;
   }[];
 };
 export type OrgAttendanceReport = {
@@ -1307,7 +1307,7 @@ export const api = {
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
     // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
-    punch: (coords: { lat: number; lng: number; accuracy?: number }) =>
+    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
     // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
     requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>

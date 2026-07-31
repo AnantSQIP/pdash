@@ -1003,6 +1003,9 @@ model Attendance {
   checkOutLat      Float?
   checkOutLng      Float?
   checkOutAcc      Float?
+  // Human area/landmark reverse-geocoded from the punch coordinates (client-side, at punch time).
+  checkInArea      String?
+  checkOutArea     String?
   // PRESENT | ABSENT | HALF_DAY | ON_LEAVE | HOLIDAY | WEEKEND | LATE
   status           String    @default("PRESENT")
   // Where the work happened — a WORK MODE, not a leave type. OFFICE | WFH.

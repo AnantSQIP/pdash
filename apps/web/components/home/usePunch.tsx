@@ -9,7 +9,7 @@ import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { formatTimeIST, fmtHours, plural, todayUtc, toUtcDay } from '@/lib/date';
-import { getCurrentLocation } from '@/lib/geolocation';
+import { getCurrentLocation, reverseGeocode } from '@/lib/geolocation';
 import { homeKeys } from './keys';
 
 /**
@@ -45,7 +45,12 @@ export function usePunch() {
 
   const punch = useMutation({
     // Location is mandatory — capture it first and block the punch if the browser denies it.
-    mutationFn: async () => api.attendance.punch(await getCurrentLocation()),
+    // Reverse-geocode to a human area/landmark (best-effort; never blocks the punch).
+    mutationFn: async () => {
+      const loc = await getCurrentLocation();
+      const area = await reverseGeocode(loc.lat, loc.lng);
+      return api.attendance.punch({ ...loc, area });
+    },
     onSuccess: (row) => {
       // The overnight-close path returns YESTERDAY's row (it closed the forgotten shift
       // without opening today's). Only write it into today's cache when it really is today;
