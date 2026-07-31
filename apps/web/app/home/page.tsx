@@ -13,6 +13,7 @@ import {
   MyTasksCard, MyProjectsCard, ProjectStatusCard, QuickStatsCard,
   OrgPerformanceCard, TeamAttendanceCard, LeaveApprovalsCard, PeopleOpsCard,
   AdminShortcutsCard, QuickAccessCard, PidRequestsCard, TeamAvailabilityCard,
+  PendingRequestsCard,
 } from '@/components/home/sections';
 
 export default function HomeDashboardPage() {
@@ -30,6 +31,7 @@ export default function HomeDashboardPage() {
           <PidRequestsCard />
           <TeamAvailabilityCard />
           <LeaveApprovalsCard />
+          <PendingRequestsCard />
           <MyTasksCard />
           <TeamAttendanceCard />
           <OrgPerformanceCard />

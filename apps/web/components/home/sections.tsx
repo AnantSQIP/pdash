@@ -13,6 +13,7 @@ import {
   api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance,
   type OrgPerformance, type OrgAttendanceSummary, type LeaveRequestItem,
   type Holiday, type RoleSummary, type UserSummary, type TeamCapacity, type PidRequestItem,
+  type RegularizationRequest, type CompOffRequest,
 } from '@/lib/api';
 import { formatDate, fmtHours, fmtNum, fmtPct, plural, longDateIST, hourIST, todayUtc, isPastDue, relativePast } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
@@ -495,6 +496,90 @@ export function LeaveApprovalsCard() {
             </div>
           );
         })
+      )}
+    </Card>
+  );
+}
+
+// ── Requests hub: attendance regularizations + comp-off claims, one place for reviewers ──
+// (HR / Admin / Super Admin). Leave has its own card above; this covers the two that were only
+// reachable via the Attendance → Team tab, so admins see them on the homepage too.
+export function PendingRequestsCard() {
+  const { currentUser } = useOrg();
+  const { can } = usePermissions();
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  // A reviewer is anyone who can act on these — SA/Admin via user.manage_access, HR via
+  // attendance.regularize / leave.approve. Super Admin passes all via the wildcard.
+  const allowed = can(['attendance.regularize', 'leave.approve', 'user.manage_access', 'attendance.manage']);
+
+  const { data: regs = [], isLoading: rLoading } = useQuery<RegularizationRequest[]>({
+    queryKey: ['reg-pending-home'], queryFn: () => api.attendance.pendingRegularizations(),
+    enabled: allowed, staleTime: 30_000,
+  });
+  const { data: compoffs = [], isLoading: cLoading } = useQuery<CompOffRequest[]>({
+    queryKey: ['compoff-pending-home'], queryFn: () => api.leave.pendingCompOffs(),
+    enabled: allowed, staleTime: 30_000,
+  });
+
+  const invalidate = () => { qc.invalidateQueries({ queryKey: ['reg-pending-home'] }); qc.invalidateQueries({ queryKey: ['compoff-pending-home'] }); };
+  const [busyId, setBusyId] = useState<string | null>(null);
+  async function act(kind: 'reg' | 'co', id: string, approve: boolean) {
+    setBusyId(id);
+    try {
+      if (kind === 'reg') await (approve ? api.attendance.approveRegularization(id) : api.attendance.rejectRegularization(id));
+      else await (approve ? api.leave.approveCompOff(id) : api.leave.rejectCompOff(id));
+      invalidate();
+      toast(approve ? 'Approved.' : 'Rejected.', approve ? 'success' : 'info');
+    } catch (e) { toast(errMsg(e), 'error'); }
+    finally { setBusyId(null); }
+  }
+
+  if (!allowed) return null;
+  // Hide the reviewer's OWN requests (self-review is blocked server-side).
+  const regRows = regs.filter(r => r.userId !== currentUser?.id);
+  const coRows = compoffs.filter(c => c.userId !== currentUser?.id);
+  const total = regRows.length + coRows.length;
+
+  const Row = ({ id, kind, name, user, primary, secondary }: { id: string; kind: 'reg' | 'co'; name: string; user?: { firstName: string; lastName?: string; profilePhoto?: string | null }; primary: string; secondary: string }) => (
+    <div className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
+      <Avatar user={user ?? { firstName: name }} size={30} />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-800 truncate">
+          {name}
+          <span className={clsx('ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full', kind === 'reg' ? 'bg-blue-100 text-blue-700' : 'bg-indigo-100 text-indigo-700')}>
+            {kind === 'reg' ? 'Regularise' : 'Comp-off'}
+          </span>
+          <span className="ml-2 text-xs text-gray-500">{primary}</span>
+        </p>
+        <p className="text-xs text-gray-500 truncate">{secondary}</p>
+      </div>
+      <button disabled={busyId === id} onClick={() => act(kind, id, true)} title="Approve"
+        className="p-2 rounded-md bg-green-50 text-green-600 hover:bg-green-100 disabled:opacity-40"><Check size={15} /></button>
+      <ConfirmButton disabled={busyId === id} onConfirm={() => act(kind, id, false)} title="Reject"
+        className="p-2 rounded-md bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-40"
+        armedClassName="p-2 rounded-md bg-red-600 text-white" armedChildren={<Check size={15} />}><X size={15} /></ConfirmButton>
+    </div>
+  );
+
+  return (
+    <Card>
+      <CardHeader title="Attendance & comp-off requests" icon={Clock} badge={<CountBadge n={total} />} href="/attendance?tab=team" linkLabel="All requests" />
+      {rLoading || cLoading ? (
+        <SkeletonRows n={3} />
+      ) : total === 0 ? (
+        <EmptyHint>No pending attendance or comp-off requests.</EmptyHint>
+      ) : (
+        <>
+          {regRows.slice(0, 4).map(r => {
+            const nm = r.user ? `${r.user.firstName} ${r.user.lastName ?? ''}`.trim() : 'A team member';
+            return <Row key={r.id} id={r.id} kind="reg" name={nm} user={r.user} primary={formatDate(r.date)} secondary={r.reason ?? ''} />;
+          })}
+          {coRows.slice(0, 4).map(c => {
+            const nm = c.user ? `${c.user.firstName} ${c.user.lastName ?? ''}`.trim() : 'A team member';
+            return <Row key={c.id} id={c.id} kind="co" name={nm} user={c.user} primary={`worked ${formatDate(c.workDate)}`} secondary={`${c.projectRef ? `PID ${c.projectRef} · ` : ''}${c.reason}`} />;
+          })}
+        </>
       )}
     </Card>
   );
