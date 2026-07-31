@@ -227,6 +227,17 @@ export type DigestReport = {
   activeProjects: number;
 };
 
+export type DigestRangeReport = {
+  from: string; to: string;
+  projectsCreated: { title: string; code: string | null }[];
+  projectsCompleted: { title: string; code: string | null }[];
+  tasksCompleted: number;
+  deadlinesMet: number;
+  overdueCount: number;
+  overdueSample: { title: string; dueDate: string | null }[];
+  activeProjects: number;
+};
+
 export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
 export type PidLedgerEntry = {
   id: string; pid: string; fyLabel: string; serial: number;
@@ -1103,6 +1114,7 @@ export const api = {
   },
   dailyDigest: {
     report: (date?: string) => req<DigestReport>(`/daily-digest/report${date ? `?date=${date}` : ''}`),
+    reportRange: (from: string, to: string) => req<DigestRangeReport>(`/daily-digest/report-range?from=${from}&to=${to}`),
     getSchedule: () => req<{ hourIst: number }>('/daily-digest/schedule'),
     setSchedule: (hourIst: number) => req<{ hourIst: number }>('/daily-digest/schedule', { method: 'PATCH', body: JSON.stringify({ hourIst }) }),
     send: () => req<{ sent: number }>('/daily-digest/send', { method: 'POST' }),

@@ -146,6 +146,35 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /** Aggregate the same numbers over an arbitrary [from, to] IST date range (inclusive), for the
+   *  reports digest — day / week / month / quarter / year. */
+  async buildRangeReport(fromStr: string, toStr: string) {
+    const from = startOfIstDay(new Date(`${fromStr.slice(0, 10)}T12:00:00.000Z`));
+    const to = startOfIstDay(new Date(`${toStr.slice(0, 10)}T12:00:00.000Z`));
+    if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new BadRequestException('A valid date range is required.');
+    if (to < from) throw new BadRequestException('The end date must be on or after the start date.');
+    const rangeStart = from;
+    const rangeEnd = new Date(to.getTime() + 86_400_000); // inclusive of the last day
+    const [created, completed, tasksClosed, overdueTasks, deadlinesMet, activeProjects] = await Promise.all([
+      this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: rangeStart, lt: rangeEnd } }, select: { title: true, code: true } }),
+      this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: rangeStart, lt: rangeEnd } }, select: { title: true, code: true } }),
+      this.prisma.task.count({ where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: rangeStart, lt: rangeEnd } } }),
+      this.prisma.task.findMany({
+        where: { deletedAt: null, dueDate: { lt: startOfIstDay(new Date()) }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+        select: { title: true, dueDate: true }, orderBy: { dueDate: 'asc' }, take: 500,
+      }),
+      this.prisma.task.count({ where: { deletedAt: null, dueDate: { gte: rangeStart, lt: rangeEnd }, currentStatus: { type: 'CLOSED' } } }),
+      this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE' } }),
+    ]);
+    return {
+      from: rangeStart.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
+      projectsCreated: created, projectsCompleted: completed,
+      tasksCompleted: tasksClosed, deadlinesMet,
+      overdueCount: overdueTasks.length, overdueSample: overdueTasks.slice(0, 100),
+      activeProjects,
+    };
+  }
+
   private format(r: Awaited<ReturnType<DailyDigestService['buildReport']>>): { title: string; message: string } {
     const lines = [
       `Daily report — ${r.date}`,
@@ -194,6 +223,12 @@ class DailyDigestController {
   async report(@Query('date') date?: string) {
     const now = date ? new Date(`${date.slice(0, 10)}T12:00:00.000Z`) : new Date();
     return this.svc.buildReport(isNaN(now.getTime()) ? new Date() : now);
+  }
+
+  /** The report aggregated over a date range (day / week / month / quarter / year) — reports page. */
+  @Get('report-range') @RequirePermission('report.view')
+  async reportRange(@Query('from') from: string, @Query('to') to: string) {
+    return this.svc.buildRangeReport(from, to);
   }
 
   /** Read / set the admin-configured send hour (IST). */
