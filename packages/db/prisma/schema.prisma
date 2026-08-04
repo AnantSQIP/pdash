@@ -1181,6 +1181,10 @@ model LeaveRequest {
   leaveType      String // LeaveType.code
   startDate      DateTime
   endDate        DateTime
+  // FULL or HALF. A HALF-day leave covers a single date and consumes 0.5 of the balance.
+  dayType        String    @default("FULL")
+  // Which half of the day a HALF leave covers — FIRST (morning) or SECOND (afternoon).
+  halfPeriod     String?
   numDays        Float     @default(1)
   reason         String?
   // DRAFT | PENDING | APPROVED | REJECTED | CANCELLED

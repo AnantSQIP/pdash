@@ -740,6 +740,8 @@ export type OrgAttendanceReport = {
 export type LeaveRequestItem = {
   id: string; userId: string; organizationId?: string; leaveType: string;
   startDate: string; endDate: string; numDays: number; reason?: string | null;
+  /** FULL or HALF; halfPeriod is FIRST (morning) / SECOND (afternoon) on a HALF request. */
+  dayType?: string; halfPeriod?: string | null;
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
   createdAt: string; user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
 };
@@ -768,13 +770,33 @@ export type WfhRequestItem = {
 export type CompOffRequest = {
   id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
   projectRef?: string | null; hoursWorked?: number | null; status: string;
+  /** FULL or HALF — a HALF claim earns half a day of comp-off credit. */
+  dayType?: string;
   reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null; createdAt: string;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
   evidence?: CompOffEvidence | null;
 };
 export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
-export type LeaveBalance = { code: string; name: string; quota: number; used: number; remaining: number; colorHex: string };
+export type LeaveBalance = {
+  code: string; name: string; quota: number; used: number; remaining: number; colorHex: string;
+  /** Comp-off is not an annual quota: `quota` is what has been EARNED, and `credits` is how many
+   *  approved claims that came from (a half-day claim earns 0.5). */
+  isCompOff?: boolean; credits?: number;
+};
 export type Holiday = { id: string; organizationId: string; name: string; date: string; type: string; recurring: boolean };
+
+/** WFH-vs-office across a window. `mode` is only WFH/OFFICE on a day actually worked — leave,
+ *  holidays, weekends and no-shows report as themselves rather than counting as "office". */
+export type WorkModeCell = {
+  date: string; mode: 'WFH' | 'OFFICE' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'ABSENT' | 'NOT_MARKED';
+  wfhStatus?: string | null; checkIn?: string | null; area?: string | null;
+};
+export type OrgWorkModes = {
+  from: string; to: string; dates: string[];
+  rows: { userId: string; name: string; designation?: string; office?: string; profilePhoto?: string;
+          days: WorkModeCell[]; wfhDays: number; officeDays: number }[];
+  today: { wfh: number; office: number; leave: number; notMarked: number; absent: number };
+};
 
 export type Expense = {
   id: string; userId: string; organizationId?: string | null;
@@ -1334,12 +1356,15 @@ export const api = {
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
     // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
-    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string }) =>
+    // mode: 'WFH' punches in AND raises today's work-from-home request in the same call.
+    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string; mode?: 'WFH' }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
     // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
     requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
       req<WfhRequestItem>('/attendance/wfh', { method: 'POST', body: JSON.stringify(data) }),
     myWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/me'),
+    /** Who is working from home vs the office — today plus the preceding days. HR/Admin only. */
+    orgWorkModes: (days = 7) => req<OrgWorkModes>(`/attendance/org/work-modes?days=${days}`),
     pendingWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/pending'),
     approveWfh: (id: string, note?: string) =>
       req<WfhRequestItem>(`/attendance/wfh/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
@@ -1380,7 +1405,7 @@ export const api = {
       if (status) p.set('status', status);
       return req<LeaveRequestItem[]>(`/leave/requests/org?${p}`);
     },
-    create: (data: { leaveType: string; startDate: string; endDate: string; reason?: string }) =>
+    create: (data: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: 'FULL' | 'HALF'; halfPeriod?: 'FIRST' | 'SECOND' }) =>
       req<LeaveRequestItem>('/leave/requests', { method: 'POST', body: JSON.stringify(data) }),
     approve: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
     reject: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),

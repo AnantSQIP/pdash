@@ -393,7 +393,7 @@ export class TimesheetsService {
 
     const [att, leaves, holidays, sheets, compOffs, pendLeave, pendWfh] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } }, select: { date: true, status: true } }),
-      this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true } }),
+      this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true, dayType: true } }),
       orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: first, lte: last } }, select: { date: true } }) : Promise.resolve([]),
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: first, lte: last } }, select: { date: true, hoursLogged: true } }),
       // Comp-off: a non-working day the user WORKED. Approved → a required working day here; pending
@@ -408,7 +408,10 @@ export class TimesheetsService {
     const dk = (d: Date) => d.toISOString().slice(0, 10);
     const attByDay = new Map(att.map(a => [dk(a.date), a.status]));
     const holidaySet = new Set(holidays.map(h => dk(h.date)));
-    const onLeave = (k: string) => leaves.some(l => dk(l.startDate) <= k && k <= dk(l.endDate));
+    // A HALF-day leave is NOT a day off: the other half is still owed. Only a FULL leave zeroes
+    // the day's target — treating a half day as full leave excused hours people still had to log.
+    const onLeave = (k: string) => leaves.some(l => l.dayType !== 'HALF' && dk(l.startDate) <= k && k <= dk(l.endDate));
+    const onHalfLeave = (k: string) => leaves.some(l => l.dayType === 'HALF' && dk(l.startDate) <= k && k <= dk(l.endDate));
     const compOffByDay = new Map(compOffs.map(c => [dk(c.workDate), c]));
     const loggedByDay = new Map<string, number>();
     for (const s of sheets) { const k = dk(s.date); loggedByDay.set(k, (loggedByDay.get(k) ?? 0) + s.hoursLogged); }
@@ -441,9 +444,12 @@ export class TimesheetsService {
       else if (wd === 0 || wd === 6) { target = 0; status = 'WEEKEND'; }
       else if (holidaySet.has(k)) { target = 0; status = 'HOLIDAY'; }
       else if (attStatus === 'ON_LEAVE' || onLeave(k)) { target = 0; status = 'LEAVE'; }
-      else if (k > todayKey) { target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY; status = 'FUTURE'; }
+      else if (k > todayKey) {
+        target = attStatus === 'HALF_DAY' || onHalfLeave(k) ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+        status = 'FUTURE';
+      }
       else {
-        target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+        target = attStatus === 'HALF_DAY' || onHalfLeave(k) ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
         status = TimesheetsService.gradeFill(logged, target);
       }
       // Marker for the UI: an unapproved comp-off gets an asterisk on the tile.
@@ -461,14 +467,17 @@ export class TimesheetsService {
     const orgId = user?.organizationId;
     const [att, leaves, holidays, sheets] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: from, lt: todayStart } }, select: { date: true, status: true } }),
-      this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lt: todayStart }, endDate: { gte: from } }, select: { startDate: true, endDate: true } }),
+      this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lt: todayStart }, endDate: { gte: from } }, select: { startDate: true, endDate: true, dayType: true } }),
       orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: from, lt: todayStart } }, select: { date: true } }) : Promise.resolve([]),
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: from, lt: todayStart } }, select: { date: true, hoursLogged: true } }),
     ]);
     const dk = (d: Date) => d.toISOString().slice(0, 10);
     const attByDay = new Map(att.map(a => [dk(a.date), a.status]));
     const holidaySet = new Set(holidays.map(h => dk(h.date)));
-    const onLeave = (k: string) => leaves.some(l => dk(l.startDate) <= k && k <= dk(l.endDate));
+    // A HALF-day leave is NOT a day off: the other half is still owed. Only a FULL leave zeroes
+    // the day's target — treating a half day as full leave excused hours people still had to log.
+    const onLeave = (k: string) => leaves.some(l => l.dayType !== 'HALF' && dk(l.startDate) <= k && k <= dk(l.endDate));
+    const onHalfLeave = (k: string) => leaves.some(l => l.dayType === 'HALF' && dk(l.startDate) <= k && k <= dk(l.endDate));
     const loggedByDay = new Map<string, number>();
     for (const s of sheets) { const k = dk(s.date); loggedByDay.set(k, (loggedByDay.get(k) ?? 0) + s.hoursLogged); }
 
@@ -478,7 +487,7 @@ export class TimesheetsService {
       if (wd === 0 || wd === 6 || holidaySet.has(k)) continue;
       const attStatus = attByDay.get(k);
       if (attStatus === 'ON_LEAVE' || onLeave(k)) continue;
-      const target = attStatus === 'HALF_DAY' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+      const target = attStatus === 'HALF_DAY' || onHalfLeave(k) ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
       if ((loggedByDay.get(k) ?? 0) < target) missing.push(k);
     }
     return missing;

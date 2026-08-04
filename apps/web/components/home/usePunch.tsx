@@ -46,10 +46,12 @@ export function usePunch() {
   const punch = useMutation({
     // Location is mandatory — capture it first and block the punch if the browser denies it.
     // Reverse-geocode to a human area/landmark (best-effort; never blocks the punch).
-    mutationFn: async () => {
+    // `wfh` is the "Punch in (Work from home)" path: the server punches in AND raises today's
+    // WFH request in one call, so nobody ends up clocked in from home with no request behind it.
+    mutationFn: async (vars?: { wfh?: boolean }) => {
       const loc = await getCurrentLocation();
       const area = await reverseGeocode(loc.lat, loc.lng);
-      return api.attendance.punch({ ...loc, area });
+      return api.attendance.punch({ ...loc, area, ...(vars?.wfh ? { mode: 'WFH' as const } : {}) });
     },
     onSuccess: (row) => {
       // The overnight-close path returns YESTERDAY's row (it closed the forgotten shift
@@ -62,9 +64,13 @@ export function usePunch() {
       qc.invalidateQueries({ queryKey: ['attn-org'] });
       qc.invalidateQueries({ queryKey: ['attn-punch-locations'] }); // the team location table
       qc.invalidateQueries({ queryKey: homeKeys.leaveBalances(uid) });
+      qc.invalidateQueries({ queryKey: ['wfh-mine'] });   // the WFH card's request list
+      qc.invalidateQueries({ queryKey: ['wfh-pending'] });
+      qc.invalidateQueries({ queryKey: ['events'] });     // pending WFH shows on the calendars
       toast(
         !isToday ? 'Closed your open shift from earlier — punch again to clock in for today.'
           : row.checkOut ? 'Punched out. See you tomorrow!'
+          : row.workMode === 'WFH' ? 'Punched in from home. Your WFH request has gone to HR for approval.'
           : 'Punched in. Have a great day!',
         isToday ? 'success' : 'info',
       );
@@ -98,7 +104,7 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
     // Punching out ends and locks the day — require a confirm so a misclick can't do it.
     if (clockedIn && !confirmingOut) { setConfirmingOut(true); setTimeout(() => setConfirmingOut(false), 3000); return; }
     setConfirmingOut(false);
-    punch.mutate();
+    punch.mutate({});
   };
   const label = busy ? 'Saving…'
     : dayComplete ? 'Completed for today'
