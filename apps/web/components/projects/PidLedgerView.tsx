@@ -1,11 +1,15 @@
 'use client';
 
 import { Fragment, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Link from 'next/link';
 import clsx from 'clsx';
-import { Loader, Download, ChevronRight, ChevronDown, Search } from 'lucide-react';
+import { Loader, Download, ChevronRight, ChevronDown, Search, RotateCcw, ExternalLink } from 'lucide-react';
 import { api, type PidLedgerEntry, type PidLedgerState } from '@/lib/api';
 import { formatDate, formatDateTimeIST } from '@/lib/date';
+import { usePermissions } from '@/lib/permissions-context';
+import { useToast } from '@/components/ui/Toast';
+import { projectTypeLabel } from '@/lib/mock-data';
 
 // The badge reflects the PID's REAL lifecycle (derived server-side from the project's phase).
 // Aligned with the project-phase palette: Active/Working = brand blue, Completed = green,
@@ -71,6 +75,29 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
   const [filter, setFilter] = useState<FilterKey>('All');
   const [search, setSearch] = useState('');
   const [openId, setOpenId] = useState<string | null>(null); // expanded detail row
+  const [reinitId, setReinitId] = useState('');              // project currently being revived
+  const qc = useQueryClient();
+  const { can } = usePermissions();
+  const { toast } = useToast();
+  const canReinit = can('project.update');
+
+  /**
+   * Bring a finished matter back to work UNDER THE SAME PID. This is the ledger's whole reason for
+   * offering it: a returning client quotes the number they already have, and the admin finds it
+   * here rather than hunting the project down and recreating it.
+   */
+  async function reinitialize(projectId: string, title: string) {
+    if (!confirm(`Re-initialize "${title}"?\n\nIt goes back to Active with the SAME Project ID and all its existing data.`)) return;
+    setReinitId(projectId);
+    try {
+      await api.projects.reinitialize(projectId);
+      qc.invalidateQueries({ queryKey: ['pid-ledger'] });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast(`"${title}" is active again — same Project ID.`, 'success');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not re-initialize the project.', 'error');
+    } finally { setReinitId(''); }
+  }
   const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['pid-ledger'],
     queryFn: () => api.projects.pidLedger(),
@@ -185,7 +212,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                             {r.project ? (
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-8 gap-y-2 text-xs">
                                 <div><span className="text-gray-400">Project</span><p className="text-gray-800 font-medium">{r.project.title}</p></div>
-                                <div><span className="text-gray-400">Type</span><p className="text-gray-800">{r.project.type ?? '—'}</p></div>
+                                <div><span className="text-gray-400">Type</span><p className="text-gray-800">{r.project.type ? projectTypeLabel(r.project.type) : '—'}</p></div>
                                 <div><span className="text-gray-400">Phase</span><p className="text-gray-800">{r.project.phase ?? '—'}</p></div>
                                 <div><span className="text-gray-400">Priority</span><p className="text-gray-800">{r.project.priority ?? '—'}</p></div>
                                 <div><span className="text-gray-400">Progress</span><p className="text-gray-800">{r.project.progress != null ? `${r.project.progress}%` : '—'}</p></div>
@@ -216,6 +243,27 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                       ))}
                                     </div>
                                   ) : <p className="text-gray-400">No active members.</p>}
+                                </div>
+                                {/* Actions — open the project, and for a finished one, revive it in
+                                    place under this same PID. */}
+                                <div className="sm:col-span-3 flex items-center gap-2 flex-wrap pt-2 mt-1 border-t border-gray-200">
+                                  <Link href={`/projects/${r.project.id}`} onClick={e => e.stopPropagation()}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 font-medium">
+                                    <ExternalLink size={13} /> Open project
+                                  </Link>
+                                  {canReinit && (r.state === 'CLOSED' || r.state === 'COMPLETED') && (
+                                    <button
+                                      onClick={e => { e.stopPropagation(); reinitialize(r.project!.id, r.project!.title); }}
+                                      disabled={reinitId === r.project.id}
+                                      title={`Reopen this matter under ${r.pid} — nothing is re-entered`}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 font-medium disabled:opacity-50">
+                                      {reinitId === r.project.id ? <Loader size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                                      Re-initialize
+                                    </button>
+                                  )}
+                                  {(r.state === 'CLOSED' || r.state === 'COMPLETED') && (
+                                    <span className="text-[11px] text-gray-400">Reuses {r.pid} — the client keeps the number they already have.</span>
+                                  )}
                                 </div>
                               </div>
                             ) : (

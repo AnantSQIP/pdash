@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { CheckSquare, Users, Calendar, ArrowUpRight } from 'lucide-react';
 import clsx from 'clsx';
-import { MockProject, PHASE_META, PRIORITY_META } from '@/lib/mock-data';
+import { MockProject, PHASE_META, PRIORITY_META, projectTypeLabel } from '@/lib/mock-data';
 import { progressColor, progressTrack } from '@/lib/progress';
 import { formatDate } from '@/lib/date';
 
@@ -30,28 +30,32 @@ export function ProjectCard({ project }: ProjectCardProps) {
       </div>
 
       <div className="flex flex-col flex-1 p-5">
-        {/* Header row */}
+        {/* Header — deliberately ordered NAME → PID → PHASE → TYPE. The name is what people
+            scan for, the PID is what they quote, and the phase/type are the qualifiers. The old
+            card led with a phase chip and buried the title under the PID, so a wall of cards read
+            as a wall of statuses rather than a list of projects. */}
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', phase.bg, phase.text)}>
+            <h3 title={project.title} className="font-semibold text-gray-900 text-[17px] leading-snug group-hover:text-brand-600 transition-colors line-clamp-2">
+              {project.title}
+            </h3>
+            {project.code
+              ? <span className="block mt-1.5 text-sm font-mono font-bold text-brand-700 tracking-tight">{project.code}</span>
+              : <span className="block mt-1.5 text-sm font-mono font-bold text-amber-500">PID pending</span>}
+            <div className="flex items-center gap-1.5 flex-wrap mt-2">
+              <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold', phase.bg, phase.text)}>
                 {phase.label}
               </span>
-              <span className={clsx('text-xs font-semibold', priority.color)}>
+              {project.projectType && (
+                <span title={`Project type: ${projectTypeLabel(project.projectType)}`}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
+                  {projectTypeLabel(project.projectType)}
+                </span>
+              )}
+              <span className={clsx('text-[11px] font-semibold ml-0.5', priority.color)}>
                 {priority.label}
               </span>
             </div>
-            {project.code
-              ? <span className="block text-sm font-mono font-bold text-brand-700 tracking-tight mb-1">{project.code}</span>
-              : <span className="block text-sm font-mono font-bold text-amber-500 mb-1">PID pending</span>}
-            <h3 title={project.title} className="font-semibold text-gray-900 text-base leading-tight group-hover:text-brand-600 transition-colors line-clamp-1">
-              {project.title}
-            </h3>
-            {project.projectType && (
-              <span className="inline-flex items-center mt-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide bg-indigo-50 text-indigo-600 border border-indigo-100">
-                {project.projectType.replace(/^CUSTOM_/, '').replace(/_/g, ' ')}
-              </span>
-            )}
           </div>
           <ArrowUpRight size={16} className="text-gray-300 group-hover:text-brand-500 shrink-0 mt-1 transition-colors" />
         </div>

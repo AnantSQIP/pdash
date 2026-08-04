@@ -38,3 +38,27 @@ export const PRIORITY_META: Record<Priority, { label: string; color: string }> =
   HIGH:     { label: 'High',     color: 'text-brand-500'  },
   CRITICAL: { label: 'Critical', color: 'text-red-500' },
 };
+
+/**
+ * Display labels for project types. Mirrors PROJECT_TYPES in the API's project-templates.ts —
+ * the server is the source of truth for which types EXIST (and what tasks they create); this is
+ * only how the short code is written on a card, where fetching the full list per card would be
+ * wasteful. Anything not listed falls back to a prettified form of the code itself.
+ */
+export const PROJECT_TYPE_LABEL: Record<string, string> = {
+  INFRINGEMENT: 'Infringement Search',
+  NOVELTY: 'Novelty Search',
+  INVALIDITY: 'Invalidity Search',
+  FTO: 'FTO Search',
+  LANDSCAPE: 'Landscape Search',
+  MONETIZATION: 'Patent Monetization',
+  REVERSE_ENGINEERING: 'Reverse Engineering',
+  RISK_STRATEGY: 'Risk & Strategy',
+  GENERAL: 'General / Other',
+};
+export function projectTypeLabel(value?: string | null): string {
+  if (!value) return '';
+  const bare = value.replace(/^CUSTOM_/, '');
+  return PROJECT_TYPE_LABEL[bare]
+    ?? bare.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}

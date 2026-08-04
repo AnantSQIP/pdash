@@ -1206,30 +1206,36 @@ export class ProjectsService {
   }
 
   /**
-   * Re-initialize a COMPLETED project (a returning client) — reopen it in place KEEPING the SAME
-   * PID and all its existing data/context, so nothing is re-entered. This differs from reopen():
-   *   • complete() does NOT discontinue the PID, so a completed project still holds its ATTACHED
-   *     reservation + code — we keep both.
-   *   • reopen() (used for CLOSED projects) clears the code because a closed project's PID was
-   *     discontinued and can't be revived; re-initialize must not do that.
-   * Only a COMPLETED project can be re-initialized; a CLOSED one stays archived.
+   * Re-initialize a finished project for a returning client — put it back to work in place,
+   * KEEPING THE SAME PID and every bit of its existing data, so nothing is re-entered.
+   *
+   * Works from COMPLETED or CLOSED. The two differ only in what close() did to the reservation:
+   * completing leaves it ATTACHED, closing marks it DISCONTINUED. Either way the serial was never
+   * freed for anyone else, so restoring it is integrity-safe — this is what lets an admin bring a
+   * matter back from the PID ledger under the number the client already knows.
    */
   async reinitialize(id: string) {
     await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
-    if (phase !== 'COMPLETED') {
-      throw new BadRequestException('Only a completed project can be re-initialized. A closed project must be reopened (and gets a fresh PID).');
+    if (phase !== 'COMPLETED' && phase !== 'CLOSED') {
+      throw new BadRequestException('Only a completed or closed project can be re-initialized.');
     }
     const actorId = getActorId();
-    // Back to ACTIVE, clear completedAt, KEEP code (PID) + its ATTACHED reservation untouched.
+    // Back to ACTIVE, clearing both end-state timestamps. The code (PID) is never touched.
     const updated = await this.prisma.project.update({
       where: { id },
-      data: { projectPhase: 'ACTIVE', completedAt: null },
+      data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
+    });
+    // Closing discontinued the reservation; bring it back so the ledger reads "Working" again.
+    // A completed project's reservation is still ATTACHED, so this simply matches nothing.
+    await this.prisma.pidReservation.updateMany({
+      where: { projectId: id, status: 'DISCONTINUED' },
+      data: { status: 'ATTACHED', resolvedAt: new Date() },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
-      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title, reinitialized: true },
+      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title, reinitialized: true, fromPhase: phase },
     });
     await this.notifyMembers(project, actorId, {
       type: 'project.reopened', title: 'Project re-initialized',
