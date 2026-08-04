@@ -444,6 +444,20 @@ export default function CalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [hiddenTypes, setHiddenTypes] = useState<Set<EventType>>(new Set());
+  // Collapse the right rail (Upcoming) to give the calendar — especially the Team view — the width.
+  // Remembered per browser, like the main sidebar.
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setRailCollapsed(localStorage.getItem('cal-rail-collapsed') === '1');
+  }, []);
+  function toggleRail() {
+    setRailCollapsed(v => {
+      const next = !v;
+      try { localStorage.setItem('cal-rail-collapsed', next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }
 
   // Fetch a generous window so month, week and agenda all have data without re-fetching constantly.
   // The Team Calendar manages its own multi-month range, so it isn't part of the week/month nav.
@@ -1068,10 +1082,28 @@ export default function CalendarPage() {
             )}
           </div>
         ) : (
+          railCollapsed ? (
+          // Collapsed: a thin strip that gives the whole width back to the calendar.
+          <div className="hidden lg:flex w-10 shrink-0 border-l border-gray-200 bg-white flex-col items-center pt-4 gap-3">
+            <button onClick={toggleRail} title="Show upcoming events"
+              className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+              <ChevronLeft size={16} />
+            </button>
+            <RiCalendarScheduleLine size={16} className="text-brand-500" />
+            {upcoming.length > 0 && (
+              <span className="text-[10px] font-bold text-white bg-brand-500 rounded-full w-5 h-5 flex items-center justify-center">{upcoming.length}</span>
+            )}
+            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mt-1" style={{ writingMode: 'vertical-rl' }}>Upcoming</span>
+          </div>
+          ) : (
           <div className="w-full lg:w-72 border-t lg:border-t-0 lg:border-l border-gray-200 bg-white p-5 overflow-y-auto">
             <div className="flex items-center gap-2 mb-4">
               <RiCalendarScheduleLine size={16} className="text-brand-600" />
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Upcoming</span>
+              <button onClick={toggleRail} title="Hide (give the calendar more space)"
+                className="ml-auto p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                <ChevronRight size={15} />
+              </button>
             </div>
             {upcoming.length === 0 ? (
               <div className="text-center py-10">
@@ -1127,6 +1159,7 @@ export default function CalendarPage() {
               );
             })()}
           </div>
+          )
         )}
       </div>
 
