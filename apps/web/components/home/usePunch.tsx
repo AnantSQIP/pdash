@@ -60,6 +60,7 @@ export function usePunch() {
       else qc.invalidateQueries({ queryKey: homeKeys.attnToday(uid) });
       qc.invalidateQueries({ queryKey: ['attn-month'] });
       qc.invalidateQueries({ queryKey: ['attn-org'] });
+      qc.invalidateQueries({ queryKey: ['attn-punch-locations'] }); // the team location table
       qc.invalidateQueries({ queryKey: homeKeys.leaveBalances(uid) });
       toast(
         !isToday ? 'Closed your open shift from earlier — punch again to clock in for today.'

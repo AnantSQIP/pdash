@@ -89,7 +89,7 @@ export function ProjectDetailClient({ projectId }: Props) {
 
   // Project-type catalog (cached) → the readable label for this project's type badge.
   const { data: projectTypes = [] } = useQuery({
-    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: Infinity,
+    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: 5 * 60_000,
   });
   const typeLabel = projectTypes.find(t => t.value === project?.projectType)?.label;
 

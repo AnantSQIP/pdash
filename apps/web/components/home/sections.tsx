@@ -514,15 +514,21 @@ export function PendingRequestsCard() {
   const allowed = can(['attendance.regularize', 'leave.approve', 'user.manage_access', 'attendance.manage']);
 
   const { data: regs = [], isLoading: rLoading } = useQuery<RegularizationRequest[]>({
-    queryKey: ['reg-pending-home'], queryFn: () => api.attendance.pendingRegularizations(),
+    // SAME key prefix as the Attendance → Team tab so approving in either place updates both.
+    queryKey: ['reg-pending'], queryFn: () => api.attendance.pendingRegularizations(),
     enabled: allowed, staleTime: 30_000,
   });
   const { data: compoffs = [], isLoading: cLoading } = useQuery<CompOffRequest[]>({
-    queryKey: ['compoff-pending-home'], queryFn: () => api.leave.pendingCompOffs(),
+    queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(),
     enabled: allowed, staleTime: 30_000,
   });
 
-  const invalidate = () => { qc.invalidateQueries({ queryKey: ['reg-pending-home'] }); qc.invalidateQueries({ queryKey: ['compoff-pending-home'] }); };
+  // Approving here changes attendance AND (for comp-off) the person's timesheet requirement, so
+  // refresh every surface that shows those — not just this card.
+  const invalidate = () => {
+    ['reg-pending', 'compoff-pending', 'reg-mine', 'compoff-mine', 'attn-org', 'attn-month', 'attn-today', 'ts-calendar']
+      .forEach(k => qc.invalidateQueries({ queryKey: [k] }));
+  };
   const [busyId, setBusyId] = useState<string | null>(null);
   async function act(kind: 'reg' | 'co', id: string, approve: boolean) {
     setBusyId(id);

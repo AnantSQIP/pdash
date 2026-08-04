@@ -90,7 +90,7 @@ export default function AttendancePage() {
   async function punch() {
     if (busy) return; setBusy(true);
     // Location is mandatory — capture it first; a denial blocks the punch with a clear message.
-    try { const loc = await getCurrentLocation(); const area = await reverseGeocode(loc.lat, loc.lng); await api.attendance.punch({ ...loc, area }); invalidate('attn-today', 'attn-month', 'attn-org'); }
+    try { const loc = await getCurrentLocation(); const area = await reverseGeocode(loc.lat, loc.lng); await api.attendance.punch({ ...loc, area }); invalidate('attn-today', 'attn-month', 'attn-org', 'attn-punch-locations'); }
     catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
     finally { setBusy(false); }
   }
@@ -286,8 +286,8 @@ export default function AttendancePage() {
             orgSummary={orgSummary}
             pending={pending}
             pendingReg={canReviewReg ? pendingReg : []}
-            onReviewed={() => invalidate('leave-pending', 'attn-org')}
-            onRegReviewed={() => invalidate('reg-pending', 'attn-org', 'reg-mine')}
+            onReviewed={() => invalidate('leave-pending', 'leave-mine', 'leave-balances', 'attn-org', 'attn-month', 'attn-today', 'events')}
+            onRegReviewed={() => invalidate('reg-pending', 'reg-mine', 'attn-org', 'attn-month', 'attn-today', 'attn-punch-locations')}
           />
         )}
       </div>
@@ -890,8 +890,10 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
       } else {
         await api.leave.approveCompOff(id);
       }
-      qc.invalidateQueries({ queryKey: ['compoff-pending'] });
-      qc.invalidateQueries({ queryKey: ['compoff-mine'] });
+      // Approving a comp-off writes ATTENDANCE for that day and makes it a required timesheet day —
+      // refresh those surfaces too, not just the claim list.
+      ['compoff-pending', 'compoff-mine', 'attn-month', 'attn-org', 'attn-today', 'ts-calendar', 'leave-balances']
+        .forEach(k => qc.invalidateQueries({ queryKey: [k] }));
     } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the claim.`); }
     finally { setBusyId(''); }
   }

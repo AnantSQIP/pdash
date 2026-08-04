@@ -108,11 +108,12 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     }
   }
 
-  // Project types + their auto-created task templates (static catalog from the API).
+  // Project types + their auto-created task templates. NOT cached forever — someone else may have
+  // saved a new custom type as a template since this tab loaded.
   const { data: projectTypes = [] } = useQuery<ProjectTypeDef[]>({
     queryKey: ['project-types'],
     queryFn: () => api.projects.types(),
-    staleTime: Infinity,
+    staleTime: 5 * 60_000,
   });
   const selectedType = projectTypes.find(t => t.value === projectType);
 
