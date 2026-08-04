@@ -22,6 +22,8 @@ export const STATE_STYLE: Record<DayState, { cell: string; label: string; dot: s
   PRESENT:    { cell: 'bg-emerald-200 hover:bg-emerald-300 border-emerald-300',   label: 'Present',    dot: 'bg-emerald-500' },
   ABSENT:     { cell: 'bg-red-100 border-red-200',                                label: 'Absent',     dot: 'bg-red-300' },
   COMPOFF:    { cell: 'bg-indigo-500 hover:bg-indigo-600 border-indigo-600',      label: 'Worked (comp-off)', dot: 'bg-indigo-500' },
+  // Nothing recorded yet — neutral, never green (green would assert presence).
+  NOT_MARKED: { cell: 'bg-white border-gray-200 border-dashed',                    label: 'Not marked', dot: 'bg-gray-200' },
 };
 
 export const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];

@@ -33,7 +33,6 @@ const PHASE_COLORS: Record<string, { color: string; label: string }> = {
   COMPLETED: { color: '#1a73e8', label: 'Completed' },
   ON_HOLD:   { color: '#fbbc04', label: 'On Hold'   },
   PLANNING:  { color: '#fe841f', label: 'Planning'  },
-  IDEA:      { color: '#9aa0a6', label: 'Idea'      },
   ARCHIVED:  { color: '#bdc1c6', label: 'Archived'  },
 };
 

@@ -585,7 +585,7 @@ export type DepartmentSummary = {
 // ─── Team capacity / availability ────────────────────────────────────────────
 export type DayState =
   | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'LEAVE_PENDING' | 'FREE' | 'LIGHT' | 'BUSY'
-  | 'PRESENT' | 'ABSENT' | 'COMPOFF';
+  | 'PRESENT' | 'ABSENT' | 'COMPOFF' | 'NOT_MARKED';
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
   utilization: number; free: number; note?: string;

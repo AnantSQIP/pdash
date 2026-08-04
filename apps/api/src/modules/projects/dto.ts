@@ -41,7 +41,7 @@ export class CustomTypeDto {
 // Task/project priority is a fixed set — free-text used to be stored verbatim.
 export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 // The project lifecycle phases (free-text before — any string was accepted).
-export const PROJECT_PHASES = ['IDEA', 'PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
+export const PROJECT_PHASES = ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
 
 export class CreateProjectDto {
   @IsString()

@@ -215,12 +215,13 @@ export class ProjectsService {
       derivedClientId = clientIds[0] ?? null;
     }
 
-    // An authority attaches a PID now — reserving their generated (or typed, or auto-assigned)
-    // serial. It's flipped RESERVED → ATTACHED once the project row exists (markAttached below).
-    // A requester's project starts with a null (pending) code, filled in later via fulfillPidRequest.
+    // A PID is NEVER assigned automatically. Even an authority must have explicitly generated one
+    // (or typed one) — dto.pid carries that choice. Without it the project is created with a
+    // PENDING code, exactly like a requester's, and the PID is attached later from the project or
+    // the PID flow. This stops serials being burned on every project someone happens to create.
     let pidReservation: { pid: string; reservationId: string } | null = null;
-    if (canGeneratePid) {
-      pidReservation = await this.ensureReservation(organizationId, creator.id, dto.pid || undefined);
+    if (canGeneratePid && dto.pid?.trim()) {
+      pidReservation = await this.ensureReservation(organizationId, creator.id, dto.pid.trim());
     }
     const pid: string | null = pidReservation?.pid ?? null;
 
@@ -551,7 +552,7 @@ export class ProjectsService {
         case 'CLOSED': return 'CLOSED';
         case 'ARCHIVED':
         case 'CANCELLED': return 'DISCONTINUED';
-        default: return 'WORKING'; // ACTIVE / PLANNING / IDEA / ON_HOLD …
+        default: return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD …
       }
     };
     return rows.map(r => {
@@ -958,7 +959,7 @@ export class ProjectsService {
     await this.access.assertProjectAccess(getActorId(), id);
     const existing = await this.getRaw(id);
     // The generic edit may only move a project between the NON-terminal phases
-    // (IDEA/PLANNING/ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
+    // (PLANNING/ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
     // actions — Complete/Close (which stamp completedAt/closedAt + emit canonical events) and
     // Delete (ARCHIVED) — so a plain edit can no longer slip a project into
     // COMPLETED/CLOSED/ARCHIVED/CANCELLED, which used to leave it visible AND still writable
@@ -1107,6 +1108,25 @@ export class ProjectsService {
     if (phase === 'COMPLETED') return this.get(id);
     if (phase === 'CLOSED') throw new BadRequestException('This project is closed. Reopen it before marking it complete.');
     if (phase === 'PLANNING') throw new BadRequestException('A project still in planning cannot be completed — activate it first.');
+
+    // A project is only "complete" when its WORK is complete. Every task must be closed (or
+    // deleted) first — otherwise a project could be signed off with live work still on it.
+    const openTasks = await this.prisma.projectTask.findMany({
+      where: {
+        projectId: id,
+        task: { deletedAt: null, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+      },
+      select: { task: { select: { title: true } } },
+      take: 50,
+    });
+    if (openTasks.length) {
+      const names = openTasks.slice(0, 3).map(t => `“${t.task.title}”`).join(', ');
+      const more = openTasks.length > 3 ? ` and ${openTasks.length - 3} more` : '';
+      throw new BadRequestException(
+        `${openTasks.length} task${openTasks.length === 1 ? ' is' : 's are'} still open — ${names}${more}. Close or delete every task before completing the project.`,
+      );
+    }
+
     const actorId = getActorId();
     const updated = await this.prisma.project.update({
       where: { id },

@@ -39,7 +39,10 @@ export type DayState =
   // Forward (projected-load) states:
   | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'LEAVE_PENDING' | 'FREE' | 'LIGHT' | 'BUSY'
   // Past (actual-attendance) states — used by the history view:
-  | 'PRESENT' | 'ABSENT' | 'COMPOFF';
+  | 'PRESENT' | 'ABSENT' | 'COMPOFF'
+  // Nothing recorded yet (today before punching, or before the person joined). NOT a claim of
+  // presence — it used to be reported as PRESENT, which asserted attendance that never happened.
+  | 'NOT_MARKED';
 
 export interface CapacityDay {
   date: string;
@@ -453,7 +456,7 @@ export class CapacityService {
         // Today (before anyone punches in) and days BEFORE the person joined are not absences —
         // there's no attendance expectation yet, so don't flag them red or count them.
         if (k === dayKey(today) || (u.joiningDate && d < startOfUtcDay(u.joiningDate))) {
-          return { date: k, state: 'PRESENT', load: 0, capacity: 0, utilization: 0, free: 0, note: k === dayKey(today) ? 'Today — in progress' : 'Before joining' };
+          return { date: k, state: 'NOT_MARKED', load: 0, capacity: 0, utilization: 0, free: 0, note: k === dayKey(today) ? 'Today — not punched in yet' : 'Before joining' };
         }
         absent++;
         return { date: k, state: 'ABSENT', load: 0, capacity: 0, utilization: 0, free: 0 };

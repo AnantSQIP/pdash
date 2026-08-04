@@ -367,7 +367,7 @@ export default function CapacityPage() {
             {/* Legend */}
             <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
               {((isPast
-                ? ['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT']
+                ? ['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT', 'NOT_MARKED']
                 : ['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'LEAVE_PENDING', 'HOLIDAY', 'WEEKEND']) as DayState[]).map(s => (
                 <span key={s} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
                   <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[s].dot)} />{STATE_STYLE[s].label}

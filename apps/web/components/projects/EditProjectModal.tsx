@@ -102,7 +102,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
               <select value={projectPhase} onChange={e => setProjectPhase(e.target.value)} className={input}>
                 {/* Lifecycle end-states (Completed/Closed/Archived/Cancelled) are reached via the
                     Complete/Close/Reopen actions, not this dropdown — so it offers only editable phases. */}
-                {(['IDEA', 'PLANNING', 'ACTIVE', 'ON_HOLD'] as Phase[]).map(p => (
+                {(['PLANNING', 'ACTIVE', 'ON_HOLD'] as Phase[]).map(p => (
                   <option key={p} value={p}>{PHASE_META[p]?.label ?? p}</option>
                 ))}
               </select>

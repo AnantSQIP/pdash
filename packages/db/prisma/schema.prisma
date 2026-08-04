@@ -1007,7 +1007,9 @@ model Attendance {
   checkInArea      String?
   checkOutArea     String?
   // PRESENT | ABSENT | HALF_DAY | ON_LEAVE | HOLIDAY | WEEKEND | LATE
-  status           String    @default("PRESENT")
+  // Default is ABSENT, never PRESENT: an attendance row that nobody explicitly filled in must not
+  // assert that somebody showed up. Every app write sets this explicitly.
+  status           String    @default("ABSENT")
   // Where the work happened — a WORK MODE, not a leave type. OFFICE | WFH.
   workMode         String    @default("OFFICE")
   note             String?

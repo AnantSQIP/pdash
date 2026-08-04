@@ -1,6 +1,6 @@
 // Mock data used for UI preview (real data comes via Prisma server components once seeded)
 
-export type Phase = 'IDEA' | 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CLOSED' | 'ARCHIVED' | 'CANCELLED';
+export type Phase = 'PLANNING' | 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'CLOSED' | 'ARCHIVED' | 'CANCELLED';
 export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface MockProject {
@@ -23,7 +23,6 @@ export interface MockProject {
 // (Removed the fabricated MOCK_PROJECTS demo array — L26; the MockProject type above is still used by real API mappers.)
 
 export const PHASE_META: Record<Phase, { label: string; bg: string; text: string }> = {
-  IDEA:      { label: 'Idea',      bg: 'bg-gray-100',   text: 'text-gray-600' },
   PLANNING:  { label: 'Planning',  bg: 'bg-yellow-100', text: 'text-yellow-700' },
   ACTIVE:    { label: 'Active',    bg: 'bg-brand-100',  text: 'text-brand-700' },
   ON_HOLD:   { label: 'On Hold',   bg: 'bg-amber-100',  text: 'text-amber-700'  },

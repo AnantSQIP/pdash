@@ -10,7 +10,10 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 
 // A person cannot log more than a full day against any single calendar day.
-const MAX_HOURS_PER_DAY = 24;
+// Nobody can log more than this against a single calendar day. 16h is a deliberate upper cap: an
+// 8h working day with generous room for a genuinely long day, while still rejecting typos
+// (e.g. 80 instead of 8) and impossible totals.
+const MAX_HOURS_PER_DAY = 16;
 
 // Backdating windows (whole days, measured in IST calendar days).
 //  • within the last ~1 month  → anyone may fill freely

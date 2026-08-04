@@ -32,7 +32,7 @@ export class CreateTimesheetDto {
 
   @IsNumber()
   @Min(0.25)
-  @Max(24)
+  @Max(16) // hard daily cap — see MAX_HOURS_PER_DAY in timesheets.service
   hoursLogged!: number;
 
   @IsBoolean()
@@ -54,7 +54,7 @@ export class AssignTimesheetDto {
 export class UpdateTimesheetDto {
   @IsNumber()
   @Min(0.25)
-  @Max(24)
+  @Max(16) // hard daily cap — see MAX_HOURS_PER_DAY in timesheets.service
   @IsOptional()
   hoursLogged?: number;
 

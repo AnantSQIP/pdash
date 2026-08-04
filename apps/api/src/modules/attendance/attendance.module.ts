@@ -20,6 +20,12 @@ function round(n: number, p = 1): number { const f = 10 ** p; return Math.round(
 // the auto-punch-out job closes stale shifts at end of day so this cap is only a safety net.
 const MAX_SHIFT_HOURS = 16;
 const IST_OFFSET_MS = 5.5 * 3_600_000;
+/** The IST calendar day a moment falls on, encoded as UTC midnight (how date-only cols are stored).
+ *  Use this — never utcDay(new Date()) — when deciding "which day is this punch for". */
+function istDay(d: Date): Date {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()));
+}
 /** Hours between two punches, rounded (2dp) and hard-capped at MAX_SHIFT_HOURS (never negative). */
 function shiftHours(inD: Date, outD: Date): number {
   return round(Math.min(MAX_SHIFT_HOURS, Math.max(0, (outD.getTime() - inD.getTime()) / 3_600_000)), 2);
@@ -142,7 +148,10 @@ export class AttendanceService {
    *      punch can never overwrite/erase the real check-out time.
    */
   async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number; area?: string }) {
-    const today = utcDay(new Date());
+    // The day a punch belongs to is the IST CALENDAR day, not the UTC one. utcDay() put every
+    // punch made between 00:00 and 05:29 IST onto the PREVIOUS day's row — so an early-morning
+    // punch silently marked yesterday present.
+    const today = istDay(new Date());
     const now = new Date();
     // Location is mandatory on every punch (client captures it; the server enforces it too). The
     // area/landmark is reverse-geocoded on the client and stored so the team table is dynamic.
@@ -556,10 +565,15 @@ export class AttendanceService {
         days.push({ date: k, status: 'WEEKEND', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       } else if (onLeave(k)) {
         days.push({ date: k, status: 'ON_LEAVE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
-      } else if (tsDays.has(k)) {
-        days.push({ date: k, status: 'PRESENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: 'from timesheet' });
+      // A TIMESHEET IS NOT ATTENDANCE. This used to render PRESENT whenever the person had logged
+      // any time that day — with no punch and no attendance row — so back-filling a timesheet
+      // (allowed up to 30 days later) retroactively turned a day "present". The day now stays
+      // ABSENT/NOT-MARKED and carries a hint so they can regularise it properly.
       } else if (k < todayKey) {
-        days.push({ date: k, status: 'ABSENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
+        days.push({
+          date: k, status: 'ABSENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false,
+          note: tsDays.has(k) ? 'Time logged but no punch — raise a regularisation' : null,
+        });
       } else {
         days.push({ date: k, status: k === todayKey ? 'NONE' : 'FUTURE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       }
@@ -624,7 +638,8 @@ export class AttendanceService {
         if (holidaySet.has(k)) { holiday++; continue; }
         if (wd === 0 || wd === 6) continue;
         if ((leavesByUser.get(u.id) ?? []).some(l => l.start <= k && k <= l.end)) { onLeave++; continue; }
-        if (tsByUserDay.has(`${u.id}|${k}`)) { present++; continue; }
+        // A timesheet entry alone is NOT attendance (see getMonth) — it must not count as present
+        // in the team table or inflate the attendance rate.
         if (k < todayKey) absent++;
       }
       // Approved leave is not an expected working day, so it must not drag the rate

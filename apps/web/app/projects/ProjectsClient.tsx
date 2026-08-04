@@ -22,7 +22,6 @@ const PHASES: { value: Phase | 'ALL'; label: string }[] = [
   { value: 'PLANNING',  label: 'Planning' },
   { value: 'ON_HOLD',   label: 'On Hold' },
   { value: 'COMPLETED', label: 'Completed' },
-  { value: 'IDEA',      label: 'Idea' },
   { value: 'CLOSED',    label: 'Closed' },
 ];
 
@@ -31,7 +30,6 @@ const PHASE_COLOR: Record<string, string> = {
   PLANNING:  '#3b82f6',
   ON_HOLD:   '#f97316',
   COMPLETED: '#16a34a',
-  IDEA:      '#9aa0a6',
   CLOSED:    '#64748b',
   ARCHIVED:  '#6b7280',
   CANCELLED: '#ef4444',
