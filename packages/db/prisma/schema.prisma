@@ -488,6 +488,17 @@ model Project {
   // Reopening clears both and returns the project to ACTIVE.
   completedAt             DateTime?
   closedAt                DateTime?
+  // Captured when the project is marked COMPLETE (see complete()):
+  //   clientDeliveryDate — when the work was actually DELIVERED to the client. Distinct from
+  //     completedAt (when someone pressed the button) and from clientDueDate (what we promised).
+  //     Date AND time, because same-day delivery timing is what gets disputed.
+  //   workingHours — hours the project consumed on paper. Prefilled from logged timesheets
+  //     (falling back to the sum of task estimates) and editable by whoever closes it.
+  //   actualHours — what it REALLY took, typed by hand. Deliberately not derived: it exists
+  //     precisely to record the number the system cannot see.
+  clientDeliveryDate      DateTime?
+  workingHours            Float?
+  actualHours             Float?
   workflowId              String?
   currentWorkflowStatusId String?
   createdBy               String

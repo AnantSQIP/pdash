@@ -6,7 +6,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw, KeyRound,
+  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -17,6 +17,7 @@ import ActivityTab from '@/components/projects/ActivityTab';
 import TimesheetsTab from '@/components/projects/TimesheetsTab';
 import FilesTab from '@/components/projects/FilesTab';
 import { EditProjectModal } from '@/components/projects/EditProjectModal';
+import { CompleteProjectModal } from '@/components/projects/CompleteProjectModal';
 import { ProjectCapacityTab } from '@/components/projects/ProjectCapacityTab';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
@@ -28,7 +29,7 @@ import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
-import { formatDate } from '@/lib/date';
+import { formatDate, formatDateTimeIST } from '@/lib/date';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 // Timesheets is a core, frequently-used tab, so it sits up front (3rd) rather than buried.
@@ -54,12 +55,17 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [attachingPid, setAttachingPid] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [completing, setCompleting] = useState(false); // the completion form (delivery + hours)
 
-  // Lifecycle: Complete → Close → Reopen.
-  async function runLifecycle(action: 'complete' | 'close' | 'reopen' | 'reinitialize') {
+  // Lifecycle: Complete → Close → Reopen. Completing goes through its own form (it has to capture
+  // the client delivery date and the hours), so it is NOT a plain confirm like the others.
+  async function runLifecycle(
+    action: 'complete' | 'close' | 'reopen' | 'reinitialize',
+    completion?: { clientDeliveryDate: string; workingHours: number; actualHours?: number },
+  ) {
     if (lifecycleBusy) return;
     const confirms: Record<typeof action, string | null> = {
-      complete: 'Mark this project complete? Its work is treated as finished.',
+      complete: null, // asked for in the modal instead
       close: 'Close this project? It moves to the Closed section (its Project ID shows as discontinued until you reopen it).',
       reopen: null,
       reinitialize: 'Re-initialize this project for a returning client? It reopens with the SAME Project ID and reuses all the existing data.',
@@ -68,10 +74,12 @@ export function ProjectDetailClient({ projectId }: Props) {
     if (msg && !window.confirm(msg)) return;
     setLifecycleBusy(true);
     try {
-      await api.projects[action](projectId);
+      if (action === 'complete') await api.projects.complete(projectId, completion);
+      else await api.projects[action](projectId);
       qc.invalidateQueries({ queryKey: ['project', projectId] });
       qc.invalidateQueries({ queryKey: ['projects'] });
       toast(action === 'complete' ? 'Project marked complete' : action === 'close' ? 'Project closed' : action === 'reinitialize' ? 'Project re-initialized (same PID)' : 'Project reopened', 'success');
+      if (action === 'complete') setCompleting(false);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
     } finally {
@@ -316,7 +324,7 @@ export function ProjectDetailClient({ projectId }: Props) {
             <div className="flex items-center gap-2 shrink-0">
               {can('project.update') && ['ACTIVE', 'ON_HOLD'].includes(project.projectPhase) && (
                 <button
-                  onClick={() => runLifecycle('complete')}
+                  onClick={() => setCompleting(true)}
                   disabled={lifecycleBusy}
                   title="Mark this project as complete"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 border border-green-200 bg-green-50 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-50"
@@ -406,6 +414,25 @@ export function ProjectDetailClient({ projectId }: Props) {
               >
                 <LockIcon size={12} />
                 <span>Client <span className="font-semibold">{formatDate(project.clientDueDate, { month: 'long', day: 'numeric', year: 'numeric' })}</span></span>
+              </div>
+            )}
+            {/* Delivery record — only exists once the project has been completed, and it is the
+                first thing anyone asks about a finished matter. */}
+            {project.clientDeliveryDate && (
+              <div className="flex items-center gap-1.5 text-green-700 bg-green-50 border border-green-100 px-2 py-0.5 rounded-full" title="When the work reached the client">
+                <Truck size={12} />
+                <span>Delivered <span className="font-semibold">{formatDateTimeIST(project.clientDeliveryDate)}</span></span>
+              </div>
+            )}
+            {(project.workingHours != null || project.actualHours != null) && (
+              <div className="flex items-center gap-1.5 text-gray-600 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded-full"
+                title="Working hours = the time on paper (timesheets/estimates). Actual = what it really took.">
+                <Clock size={12} />
+                <span>
+                  {project.workingHours != null && <>Working <span className="font-semibold">{project.workingHours}h</span></>}
+                  {project.workingHours != null && project.actualHours != null && ' · '}
+                  {project.actualHours != null && <>Actual <span className="font-semibold">{project.actualHours}h</span></>}
+                </span>
               </div>
             )}
             <div className="flex items-center gap-2 ml-auto">
@@ -509,6 +536,18 @@ export function ProjectDetailClient({ projectId }: Props) {
             qc.invalidateQueries({ queryKey: ['projects'] });
             qc.invalidateQueries({ queryKey: ['capacity'] }); // the board reads these dates
           }}
+        />
+      )}
+
+      {/* Completing asks for the client delivery date and the hours — the only moment anyone
+          actually knows them. */}
+      {completing && (
+        <CompleteProjectModal
+          projectId={projectId}
+          projectTitle={project.title}
+          busy={lifecycleBusy}
+          onClose={() => setCompleting(false)}
+          onConfirm={v => runLifecycle('complete', v)}
         />
       )}
     </div>

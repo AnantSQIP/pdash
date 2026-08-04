@@ -1,32 +1,16 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, ChevronRight, Edit3, Check, X } from 'lucide-react';
+import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, ChevronRight, Edit3, Check, X, Search, Download, ExternalLink } from 'lucide-react';
 import clsx from 'clsx';
-import { api, type ApiProject, type ApiTask, type DashboardStats } from '@/lib/api';
-import { formatDate } from '@/lib/date';
+import { api, type DashboardStats, type ReportProject } from '@/lib/api';
+import { formatDate, formatDateTimeIST } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
-import { ExportMenu, type ExportData } from '@/components/ExportMenu';
-
-function projectsExport(projects: ApiProject[], stats?: DashboardStats): ExportData {
-  return {
-    filename: 'projects-report',
-    title: 'Projects Report',
-    subtitle: `${projects.length} projects`,
-    columns: ['Title', 'Phase', 'Priority', 'Completion %', 'Tasks', 'Members', 'Due Date'],
-    rows: projects.map(p => [
-      p.title, p.projectPhase, p.priority, `${p.completionPercentage}%`,
-      p._count?.projectTasks ?? 0, p._count?.members ?? 0,
-      p.dueDate ? new Date(p.dueDate).toLocaleDateString() : '',
-    ]),
-    meta: stats ? [
-      { label: 'Total', value: String(stats.totalProjects) },
-      { label: 'Active', value: String(stats.activeProjects) },
-      { label: 'Avg completion', value: `${stats.avgCompletion}%` },
-    ] : undefined,
-  };
-}
+import { projectTypeLabel } from '@/lib/mock-data';
+import { ExportMenu } from '@/components/ExportMenu';
+import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
 
 const PHASE_COLORS: Record<string, { color: string; label: string }> = {
   ACTIVE:    { color: '#34a853', label: 'Active'    },
@@ -40,9 +24,9 @@ const PRIORITY_COLORS: Record<string, string> = {
   CRITICAL: '#ea4335', HIGH: '#fa7b17', MEDIUM: '#fbbc04', LOW: '#34a853',
 };
 
-function ProgressEditor({ project, onUpdated }: { project: ApiProject; onUpdated: () => void }) {
+function ProgressEditor({ project, onUpdated }: { project: ReportProject; onUpdated: () => void }) {
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(project.completionPercentage);
+  const [value, setValue] = useState(project.progress);
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -77,11 +61,11 @@ function ProgressEditor({ project, onUpdated }: { project: ApiProject; onUpdated
   return (
     <div className="flex items-center gap-2 group">
       <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden w-24">
-        <div className="h-full rounded-full bg-brand-500" style={{ width: `${project.completionPercentage}%` }} />
+        <div className="h-full rounded-full bg-brand-500" style={{ width: `${project.progress}%` }} />
       </div>
-      <span className="text-xs text-gray-600 w-8 text-right">{project.completionPercentage}%</span>
+      <span className="text-xs text-gray-600 w-8 text-right">{project.progress}%</span>
       <button
-        onClick={() => { setValue(project.completionPercentage); setEditing(true); }}
+        onClick={() => { setValue(project.progress); setEditing(true); }}
         className="opacity-0 group-hover:opacity-100 p-0.5 text-gray-400 hover:text-brand-600 transition-opacity"
         title="Edit progress"
       >
@@ -93,154 +77,149 @@ function ProgressEditor({ project, onUpdated }: { project: ApiProject; onUpdated
 
 const ROLE_LABEL: Record<string, string> = { PM: 'Project Manager', REVIEWER: 'Reviewer', ANALYST: 'Analyst' };
 
-type DigestRange = 'day' | 'week' | 'month' | 'quarter' | 'year';
-const DIGEST_RANGES: { id: DigestRange; label: string }[] = [
-  { id: 'day', label: 'Day' }, { id: 'week', label: 'Week' }, { id: 'month', label: 'Month' },
-  { id: 'quarter', label: 'Quarter' }, { id: 'year', label: 'Year' },
-];
-function rangeDates(r: DigestRange): { from: string; to: string } {
-  const to = new Date();
-  const from = new Date(to);
-  if (r === 'day') { /* same day */ }
-  else if (r === 'week') from.setDate(from.getDate() - 6);
-  else if (r === 'month') from.setMonth(from.getMonth() - 1);
-  else if (r === 'quarter') from.setMonth(from.getMonth() - 3);
-  else from.setFullYear(from.getFullYear() - 1);
-  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
-}
-
-/** Activity digest for the reports page — the daily-digest numbers over a chosen range, exportable. */
-function ActivityDigest() {
-  const [range, setRange] = useState<DigestRange>('week');
-  const { from, to } = rangeDates(range);
-  const { data, isLoading } = useQuery({
-    queryKey: ['digest-range', from, to], queryFn: () => api.dailyDigest.reportRange(from, to), staleTime: 60_000,
-  });
-
-  const tiles = data ? [
-    { label: 'Projects created', value: data.projectsCreated.length },
-    { label: 'Projects completed', value: data.projectsCompleted.length },
-    { label: 'Tasks completed', value: data.tasksCompleted },
-    { label: 'Deadlines met', value: data.deadlinesMet },
-    { label: 'Overdue tasks', value: data.overdueCount },
-    { label: 'Active projects', value: data.activeProjects },
-  ] : [];
-
-  const exportData: ExportData = {
-    filename: `activity-digest-${from}_to_${to}`,
-    title: 'Activity digest', subtitle: `${from} – ${to}`,
-    columns: ['Metric', 'Value'],
-    rows: tiles.map(t => [t.label, String(t.value)]),
-  };
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
-        <div>
-          <h3 className="text-sm font-semibold text-gray-900">Activity digest</h3>
-          <p className="text-xs text-gray-400 mt-0.5">{from} – {to}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
-            {DIGEST_RANGES.map(r => (
-              <button key={r.id} onClick={() => setRange(r.id)}
-                className={clsx('px-2.5 py-1 text-xs font-medium rounded-md transition-colors', range === r.id ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-                {r.label}
-              </button>
-            ))}
-          </div>
-          <ExportMenu getData={() => exportData} disabled={isLoading || !data} />
-        </div>
-      </div>
-      {isLoading || !data ? (
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">{[...Array(6)].map((_, i) => <div key={i} className="h-16 bg-gray-100 animate-pulse rounded-lg" />)}</div>
-      ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          {tiles.map(t => (
-            <div key={t.label} className="rounded-lg border border-gray-100 px-3 py-2.5">
-              <p className="text-2xl font-bold text-gray-900 tabular-nums leading-none">{t.value}</p>
-              <p className="text-[11px] text-gray-500 mt-1">{t.label}</p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** A project row in the reports table that expands to the full detail an admin asked for: PID, the
- *  project's dates, and every task with its assignees + roles + hours + per-person deadlines. */
-function ProjectReportRow({ project, onUpdated, expanded, onToggle }: {
-  project: ApiProject; onUpdated: () => void; expanded: boolean; onToggle: () => void;
+/**
+ * A project row in the reports table. Expanding it SPOTLIGHTS the matter: the row and its detail
+ * are ringed and lifted, and everything else on the table dims — so on a long list there is never
+ * any doubt which project you have open.
+ */
+function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
+  project: ReportProject; onUpdated: () => void; expanded: boolean; dimmed: boolean; onToggle: () => void;
 }) {
-  const phase = PHASE_COLORS[project.projectPhase];
+  const phase = PHASE_COLORS[project.phase];
   const priorityColor = PRIORITY_COLORS[project.priority] ?? '#9aa0a6';
-  const { data: tasks = [], isLoading } = useQuery<ApiTask[]>({
-    queryKey: ['report-project-tasks', project.id], queryFn: () => api.tasks.list(project.id), enabled: expanded, staleTime: 30_000,
-  });
+  const hrs = (n: number | null | undefined) => (n == null ? '—' : `${n}h`);
 
   return (
     <>
-      <tr className="hover:bg-gray-50 transition-colors cursor-pointer" onClick={onToggle}>
+      <tr
+        className={clsx('transition-all cursor-pointer',
+          expanded ? 'bg-brand-50/70 shadow-[inset_3px_0_0_0_theme(colors.brand.500)]' : 'hover:bg-gray-50',
+          dimmed && 'opacity-40 hover:opacity-100')}
+        onClick={onToggle}
+      >
         <td className="px-4 py-3">
           <div className="flex items-center gap-2">
-            {expanded ? <ChevronDown size={14} className="text-gray-400 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
+            {expanded ? <ChevronDown size={14} className="text-brand-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
             <div className="min-w-0">
-              {project.code && <span className="block text-[11px] font-mono font-bold text-brand-700">{project.code}</span>}
-              <span className="text-sm font-medium text-gray-900">{project.title}</span>
+              <span className={clsx('block text-[11px] font-mono font-bold', expanded ? 'text-brand-800' : 'text-brand-700')}>
+                {project.pid ?? 'PID pending'}
+              </span>
+              <span className={clsx('text-sm', expanded ? 'font-semibold text-gray-900' : 'font-medium text-gray-900')}>{project.title}</span>
             </div>
           </div>
         </td>
         <td className="px-4 py-3">
-          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: (phase?.color ?? '#9aa0a6') + '22', color: phase?.color ?? '#9aa0a6' }}>
-            {phase?.label ?? project.projectPhase}
+          {project.type
+            ? <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-700 border border-indigo-100 whitespace-nowrap">{projectTypeLabel(project.type)}</span>
+            : <span className="text-xs text-gray-300">—</span>}
+        </td>
+        <td className="px-4 py-3">
+          <span className="text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap" style={{ backgroundColor: (phase?.color ?? '#9aa0a6') + '22', color: phase?.color ?? '#9aa0a6' }}>
+            {phase?.label ?? project.phase}
           </span>
         </td>
         <td className="px-4 py-3"><span className="text-xs font-semibold" style={{ color: priorityColor }}>{project.priority}</span></td>
         <td className="px-4 py-3 min-w-[160px]" onClick={e => e.stopPropagation()}><ProgressEditor project={project} onUpdated={onUpdated} /></td>
-        <td className="px-4 py-3 text-sm text-gray-500">{project._count?.projectTasks ?? 0}</td>
-        <td className="px-4 py-3 text-xs text-gray-400">{project.dueDate ? formatDate(project.dueDate) : '—'}</td>
+        <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{project.tasksClosed}/{project.taskCount}</td>
+        <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{project.dueDate ? formatDate(project.dueDate) : '—'}</td>
       </tr>
       {expanded && (
-        <tr className="bg-gray-50/60">
-          <td colSpan={6} className="px-4 py-4">
-            {/* Project meta */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-2 text-xs mb-4">
-              <div><span className="text-gray-400">PID</span><p className="font-mono font-semibold text-gray-800">{project.code ?? 'pending'}</p></div>
-              <div><span className="text-gray-400">Start</span><p className="text-gray-800">{project.startDate ? formatDate(project.startDate) : '—'}</p></div>
-              <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{project.dueDate ? formatDate(project.dueDate) : '—'}</p></div>
-              <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{project.clientDueDate ? formatDate(project.clientDueDate) : '—'}</p></div>
-            </div>
-            {/* Tasks with staffing */}
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Tasks &amp; staffing</p>
-            {isLoading ? (
-              <p className="text-xs text-gray-400 flex items-center gap-1.5"><Loader size={12} className="animate-spin" /> Loading tasks…</p>
-            ) : tasks.length === 0 ? (
-              <p className="text-xs text-gray-400">No tasks on this project.</p>
-            ) : (
-              <div className="space-y-2">
-                {tasks.map(t => (
-                  <div key={t.id} className="bg-white rounded-lg border border-gray-100 p-3">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <span className="text-sm font-medium text-gray-800">{t.title}</span>
-                      <span className="text-[11px] text-gray-400">{t.dueDate ? `due ${formatDate(t.dueDate)}` : 'no deadline'}{t.estimatedHours ? ` · ${t.estimatedHours}h est.` : ''}</span>
-                    </div>
-                    {(t.assignees ?? []).length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {(t.assignees ?? []).map((a, i) => (
-                          <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200 text-[11px] text-gray-700">
-                            <span className="font-medium">{a.user.firstName} {a.user.lastName ?? ''}</span>
-                            <span className="text-gray-400">· {ROLE_LABEL[a.role ?? ''] ?? a.role ?? 'Member'}</span>
-                            {a.estimatedHours ? <span className="text-gray-400">· {a.estimatedHours}h</span> : null}
-                            {a.dueDate ? <span className="text-gray-400">· {formatDate(a.dueDate)}</span> : null}
-                          </span>
-                        ))}
-                      </div>
-                    ) : <p className="mt-1.5 text-[11px] text-gray-400">No one staffed yet.</p>}
-                  </div>
-                ))}
+        <tr className="bg-brand-50/40">
+          <td colSpan={7} className="px-4 py-4 shadow-[inset_3px_0_0_0_theme(colors.brand.500)]">
+            <div className="rounded-xl border-2 border-brand-200 bg-white p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-mono font-bold text-brand-700">{project.pid ?? 'PID pending'}</span>
+                  <Link href={`/projects/${project.id}`} onClick={e => e.stopPropagation()}
+                    className="text-sm font-semibold text-gray-900 hover:text-brand-600 hover:underline inline-flex items-center gap-1">
+                    {project.title} <ExternalLink size={12} className="text-gray-300" />
+                  </Link>
+                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); singleProjectCsv(project); }}
+                  title="Download everything about this project as CSV"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 shrink-0"
+                >
+                  <Download size={13} /> Download this project
+                </button>
               </div>
-            )}
+
+              {/* Everything known about the matter. */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-5 gap-y-2 text-xs mb-4">
+                <div><span className="text-gray-400">Type</span><p className="text-gray-800">{project.type ? projectTypeLabel(project.type) : '—'}</p></div>
+                <div><span className="text-gray-400">Client</span><p className="text-gray-800">{project.client ?? '—'}</p></div>
+                <div><span className="text-gray-400">Status</span><p className="text-gray-800">{project.status ?? project.phase}</p></div>
+                <div><span className="text-gray-400">Start</span><p className="text-gray-800">{project.startDate ? formatDate(project.startDate) : '—'}</p></div>
+                <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{project.dueDate ? formatDate(project.dueDate) : '—'}</p></div>
+                <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{project.clientDueDate ? formatDate(project.clientDueDate) : '—'}</p></div>
+                <div><span className="text-gray-400">Delivered to client</span><p className="text-gray-800">{project.clientDeliveryDate ? formatDateTimeIST(project.clientDeliveryDate) : '—'}</p></div>
+                <div><span className="text-gray-400">Completed</span><p className="text-gray-800">{project.completedAt ? formatDateTimeIST(project.completedAt) : '—'}</p></div>
+                <div><span className="text-gray-400">Working hours</span><p className="text-gray-800">{hrs(project.workingHours)}</p></div>
+                <div><span className="text-gray-400">Actual hours</span><p className="text-gray-800">{hrs(project.actualHours)}</p></div>
+                <div><span className="text-gray-400">Logged (timesheets)</span><p className="text-gray-800">{project.loggedHours}h</p></div>
+                <div><span className="text-gray-400">Estimated</span><p className="text-gray-800">{project.estimatedHours}h</p></div>
+                <div><span className="text-gray-400">Tasks</span><p className="text-gray-800">{project.tasksClosed} closed · {project.tasksOpen} open</p></div>
+                <div><span className="text-gray-400">Billable</span><p className="text-gray-800">{project.billable ? 'Yes' : 'No'}</p></div>
+                <div><span className="text-gray-400">Created by</span><p className="text-gray-800">{project.createdBy ?? '—'}</p></div>
+                <div><span className="text-gray-400">Created</span><p className="text-gray-800">{project.createdAt ? formatDate(project.createdAt) : '—'}</p></div>
+              </div>
+
+              {project.patents.length > 0 && (
+                <div className="mb-3">
+                  <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Patents</span>
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {project.patents.map((h, i) => <span key={i} className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-mono text-[11px] ring-1 ring-amber-100">{h}</span>)}
+                  </div>
+                </div>
+              )}
+
+              <div className="mb-4">
+                <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Team</span>
+                {project.members.length === 0 ? <p className="text-xs text-gray-400 mt-1">Nobody staffed.</p> : (
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {project.members.map(m => (
+                      <Link key={m.id} href={`/users/${m.id}`} onClick={e => e.stopPropagation()}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200 text-[11px] text-gray-700 hover:border-brand-300 hover:text-brand-600">
+                        <span className="font-medium">{m.name}</span>
+                        <span className="text-gray-400">· {ROLE_LABEL[m.role] ?? m.role}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Tasks &amp; staffing</p>
+              {project.tasks.length === 0 ? (
+                <p className="text-xs text-gray-400">No tasks on this project.</p>
+              ) : (
+                <div className="space-y-2">
+                  {project.tasks.map(t => (
+                    <div key={t.id} className="bg-gray-50/70 rounded-lg border border-gray-100 p-3">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-gray-800">{t.title}</span>
+                        <span className="text-[11px] text-gray-400">
+                          {t.status ? `${t.status} · ` : ''}{t.dueDate ? `due ${formatDate(t.dueDate)}` : 'no deadline'}
+                          {t.estimatedHours ? ` · ${t.estimatedHours}h est.` : ''}{t.actualHours ? ` · ${t.actualHours}h actual` : ''}
+                        </span>
+                      </div>
+                      {t.assignees.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {t.assignees.map(a => (
+                            <Link key={a.id} href={`/users/${a.id}`} onClick={e => e.stopPropagation()}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-gray-200 text-[11px] text-gray-700 hover:border-brand-300 hover:text-brand-600">
+                              <span className="font-medium">{a.name}</span>
+                              <span className="text-gray-400">· {ROLE_LABEL[a.role] ?? a.role}</span>
+                              {a.estimatedHours ? <span className="text-gray-400">· {a.estimatedHours}h</span> : null}
+                              {a.dueDate ? <span className="text-gray-400">· {formatDate(a.dueDate)}</span> : null}
+                            </Link>
+                          ))}
+                        </div>
+                      ) : <p className="mt-1.5 text-[11px] text-gray-400">No one staffed yet.</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </td>
         </tr>
       )}
@@ -251,9 +230,10 @@ function ProjectReportRow({ project, onUpdated, expanded, onToggle }: {
 export default function ReportsPage() {
   const { org } = useOrg();
   const qc = useQueryClient();
-  const [sortField, setSortField] = useState<'title' | 'completionPercentage' | 'projectPhase' | 'priority'>('completionPercentage');
+  const [sortField, setSortField] = useState<'title' | 'progress' | 'phase' | 'priority'>('progress');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [openId, setOpenId] = useState<string | null>(null); // expanded project detail
+  const [openId, setOpenId] = useState<string | null>(null); // expanded project detail (spotlit)
+  const [search, setSearch] = useState('');                   // by PID or project name
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['analytics-dashboard', org?.id],
@@ -261,14 +241,16 @@ export default function ReportsPage() {
     enabled: !!org?.id,
   });
 
-  const { data: projects = [], isLoading: projectsLoading } = useQuery<ApiProject[]>({
-    queryKey: ['analytics-projects', org?.id],
-    queryFn: () => api.analytics.projects(org!.id),
+  // ONE call carrying every field the table, the detail panel and the CSV all need — the page
+  // used to load a thin list and then fetch tasks per row, which is why the export was so thin.
+  const { data: projects = [], isLoading: projectsLoading } = useQuery<ReportProject[]>({
+    queryKey: ['report-projects', org?.id],
+    queryFn: () => api.projects.fullReport(),
     enabled: !!org?.id,
   });
 
   function invalidate() {
-    qc.invalidateQueries({ queryKey: ['analytics-projects', org?.id] });
+    qc.invalidateQueries({ queryKey: ['report-projects', org?.id] });
     qc.invalidateQueries({ queryKey: ['analytics-dashboard', org?.id] });
   }
 
@@ -277,14 +259,20 @@ export default function ReportsPage() {
     else { setSortField(field); setSortDir('desc'); }
   }
 
-  const sorted = [...projects].sort((a, b) => {
+  // Search matches the PID or the name — the two things anyone actually has to hand.
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? projects.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''}`.toLowerCase().includes(q))
+    : projects;
+
+  const sorted = [...filtered].sort((a, b) => {
     const av = a[sortField]; const bv = b[sortField];
     if (typeof av === 'number' && typeof bv === 'number') return sortDir === 'asc' ? av - bv : bv - av;
     return sortDir === 'asc' ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
   });
 
   const statusDist = Object.entries(PHASE_COLORS).map(([phase, { color, label }]) => ({
-    label, count: projects.filter(p => p.projectPhase === phase).length, color,
+    label, count: projects.filter(p => p.phase === phase).length, color,
   })).filter(d => d.count > 0);
 
   const maxCount = Math.max(...statusDist.map(d => d.count), 1);
@@ -306,7 +294,7 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-center gap-2">
           {loading && <Loader size={16} className="animate-spin text-gray-400" />}
-          <ExportMenu getData={() => projectsExport(projects, stats)} disabled={loading || projects.length === 0} />
+          <ExportMenu getData={() => projectsExport(sorted, q ? `Filtered by “${search.trim()}”` : undefined)} disabled={loading || sorted.length === 0} />
         </div>
       </div>
 
@@ -334,7 +322,6 @@ export default function ReportsPage() {
         </div>
 
         {/* Activity digest — range-selectable + exportable (day/week/month/quarter/year). */}
-        <ActivityDigest />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Status distribution chart */}
@@ -373,7 +360,7 @@ export default function ReportsPage() {
               <div className="space-y-3">
                 {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(pr => {
                   const group = projects.filter(p => p.priority === pr);
-                  const avg = group.length > 0 ? Math.round(group.reduce((s, p) => s + p.completionPercentage, 0) / group.length) : 0;
+                  const avg = group.length > 0 ? Math.round(group.reduce((s, p) => s + p.progress, 0) / group.length) : 0;
                   return (
                     <div key={pr}>
                       <div className="flex items-center justify-between mb-1">
@@ -427,9 +414,37 @@ export default function ReportsPage() {
 
         {/* Projects table */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900">All Projects</h3>
-            <ExportMenu getData={() => projectsExport(projects, stats)} disabled={loading || projects.length === 0} />
+          <div className="flex items-center justify-between gap-3 flex-wrap px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center gap-3 min-w-0">
+              <h3 className="text-sm font-semibold text-gray-900 shrink-0">All Projects</h3>
+              {/* Look one up by the number the client quotes, or by name. */}
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search PID, project or client…"
+                  className="w-56 sm:w-72 pl-8 pr-7 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400"
+                />
+                {search && (
+                  <button onClick={() => setSearch('')} title="Clear" className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+              {q && <span className="text-xs text-gray-400 whitespace-nowrap">{sorted.length} match{sorted.length === 1 ? '' : 'es'}</span>}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => fullReportCsv(sorted)}
+                disabled={loading || sorted.length === 0}
+                title="Full CSV — every project plus every task and who is on it"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+              >
+                <Download size={14} /> Full CSV
+              </button>
+              <ExportMenu getData={() => projectsExport(sorted, q ? `Filtered by “${search.trim()}”` : undefined)} disabled={loading || sorted.length === 0} />
+            </div>
           </div>
 
           {projectsLoading ? (
@@ -444,9 +459,10 @@ export default function ReportsPage() {
                 <tr className="border-b border-gray-100 bg-gray-50">
                   {[
                     ['title', 'Project'],
-                    ['projectPhase', 'Phase'],
+                    ['type', 'Type'],
+                    ['phase', 'Phase'],
                     ['priority', 'Priority'],
-                    ['completionPercentage', 'Progress'],
+                    ['progress', 'Progress'],
                   ].map(([field, label]) => (
                     <th
                       key={field}
@@ -463,10 +479,20 @@ export default function ReportsPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sorted.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-gray-400">No projects found.</td></tr>
+                  <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
+                    {q ? `No project matches “${search.trim()}”.` : 'No projects found.'}
+                  </td></tr>
                 )}
                 {sorted.map(project => (
-                  <ProjectReportRow key={project.id} project={project} onUpdated={invalidate} expanded={openId === project.id} onToggle={() => setOpenId(openId === project.id ? null : project.id)} />
+                  <ProjectReportRow
+                    key={project.id}
+                    project={project}
+                    onUpdated={invalidate}
+                    expanded={openId === project.id}
+                    // Everything else dims while one project is open — that's the spotlight.
+                    dimmed={openId !== null && openId !== project.id}
+                    onToggle={() => setOpenId(openId === project.id ? null : project.id)}
+                  />
                 ))}
               </tbody>
             </table>

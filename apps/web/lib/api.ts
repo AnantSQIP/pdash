@@ -227,15 +227,75 @@ export type DigestReport = {
   activeProjects: number;
 };
 
-export type DigestRangeReport = {
-  from: string; to: string;
-  projectsCreated: { title: string; code: string | null }[];
-  projectsCompleted: { title: string; code: string | null }[];
-  tasksCompleted: number;
-  deadlinesMet: number;
-  overdueCount: number;
-  overdueSample: { title: string; dueDate: string | null }[];
-  activeProjects: number;
+// ── Daily Digest module (Super Admin) ─────────────────────────────────────────
+// Everything the digest screen shows carries the ids it needs to link straight through to the
+// project, the task and the person — the whole point of the module is that no number is a
+// dead end.
+export type DigestPerson = { id: string; name: string };
+export type DigestProject = {
+  id: string; pid: string | null; title: string; type: string | null;
+  phase: string; priority: string; client: string | null;
+  startDate: string | null; dueDate: string | null; clientDueDate: string | null;
+  clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
+  completedAt: string | null; progress: number; taskCount: number;
+  managers: DigestPerson[];
+  members: (DigestPerson & { role: string })[];
+};
+export type DigestTask = {
+  id: string; title: string; dueDate: string | null; priority: string; status: string | null;
+  estimatedHours: number | null; actualHours: number | null; daysOverdue: number;
+  project: { id: string; pid: string | null; title: string; type: string | null; progress: number } | null;
+  assignees: (DigestPerson & { role: string; estimatedHours: number | null; dueDate: string | null })[];
+};
+export type DigestHoursEntry = {
+  hours: number; billable: boolean; notes: string | null;
+  project: { id: string; pid: string | null; title: string } | null;
+  task: { id: string; title: string } | null;
+};
+export type DigestPersonHours = {
+  id: string; name: string; designation: string | null;
+  hours: number; billableHours: number; entries: DigestHoursEntry[];
+};
+export type DigestDetail = {
+  date: string;
+  /** The next 5 WORKING days (weekends + holidays skipped), from today. */
+  lookaheadDays: string[];
+  projectsCreated: DigestProject[];
+  projectsCompleted: DigestProject[];
+  tasksCompleted: DigestTask[];
+  deadlinesMet: DigestTask[];
+  overdue: DigestTask[];
+  upcoming: { date: string; tasks: DigestTask[]; projects: DigestProject[] }[];
+  upcomingTotal: number;
+  hoursByPerson: DigestPersonHours[];
+  totals: { hoursLogged: number; billableHours: number; peopleWhoLogged: number; activeProjects: number };
+};
+
+
+/** The complete per-project dataset behind the Reports module (table AND export are this shape). */
+export type ReportTaskAssignee = {
+  id: string; name: string; role: string; estimatedHours: number | null; dueDate: string | null;
+};
+export type ReportTask = {
+  id: string; title: string; status: string | null; isClosed: boolean; priority: string;
+  dueDate: string | null; estimatedHours: number | null; actualHours: number | null;
+  assignees: ReportTaskAssignee[];
+};
+export type ReportProject = {
+  id: string; pid: string | null; title: string; description: string | null;
+  type: string | null; phase: string; priority: string; status: string | null;
+  client: string | null; billable: boolean; progress: number;
+  startDate: string | null; dueDate: string | null; clientDueDate: string | null;
+  completedAt: string | null; closedAt: string | null;
+  clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
+  /** Hours actually logged on timesheets — not the same as the workingHours snapshot at completion. */
+  loggedHours: number; estimatedHours: number;
+  taskCount: number; tasksClosed: number; tasksOpen: number; memberCount: number;
+  createdBy: string | null; createdAt: string | null;
+  patents: string[];
+  managers: { id: string; name: string }[];
+  members: { id: string; name: string; role: string; designation: string | null }[];
+  tasks: ReportTask[];
 };
 
 export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
@@ -249,6 +309,9 @@ export type PidLedgerEntry = {
     id: string; title: string; phase: string | null;
     description?: string | null; type?: string | null; priority?: string | null;
     startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+    /** Completion record: when it was signed off, when it reached the client, and the hours. */
+    completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
+    workingHours?: number | null; actualHours?: number | null;
     progress?: number | null; client?: string | null;
     createdBy?: string | null; createdAt?: string | null;
     patents?: string[];
@@ -287,6 +350,9 @@ export type ApiProject = {
   billable?: boolean | null;
   /** Set when the project reaches its lifecycle end-states (COMPLETED / CLOSED). */
   completedAt?: string | null; closedAt?: string | null;
+  /** Captured at completion: when the work reached the CLIENT (distinct from completedAt, which is
+   *  when someone pressed the button), the hours on paper, and the hand-typed real cost. */
+  clientDeliveryDate?: string | null; workingHours?: number | null; actualHours?: number | null;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
@@ -884,6 +950,8 @@ export const api = {
     myPidReservation: () => req<{ reservation: { pid: string; createdAt: string; expiresAt: string } | null }>('/projects/pid-reservation'),
     /** The full PID ledger (working / discontinued / history). Admin + Super Admin only. */
     pidLedger: () => req<PidLedgerEntry[]>('/projects/pid-ledger'),
+    /** Every project with its full detail — the Reports module's table and CSV share this. */
+    fullReport: () => req<ReportProject[]>('/projects/full-report'),
     /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */
     attachPid: (id: string, pid?: string) =>
       req<{ pid: string; projectId: string }>(`/projects/${id}/attach-pid`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
@@ -917,11 +985,15 @@ export const api = {
     reject: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
     // Lifecycle: Complete → Close → Reopen (distinct from delete).
-    complete: (id: string) => req<ApiProject>(`/projects/${id}/complete`, { method: 'POST' }),
+    complete: (id: string, body?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) =>
+      req<ApiProject>(`/projects/${id}/complete`, { method: 'POST', body: JSON.stringify(body ?? {}) }),
     close: (id: string) => req<ApiProject>(`/projects/${id}/close`, { method: 'POST' }),
     reopen: (id: string) => req<ApiProject>(`/projects/${id}/reopen`, { method: 'POST' }),
     /** Re-initialize a COMPLETED project (returning client) — same PID, existing data reused. */
     reinitialize: (id: string) => req<ApiProject>(`/projects/${id}/reinitialize`, { method: 'POST' }),
+    /** What the completion form should prefill "working hours" with (logged time, else estimates). */
+    completionHours: (id: string) =>
+      req<{ loggedHours: number; estimatedHours: number; suggested: number }>(`/projects/${id}/completion-hours`),
     addMember: (id: string, userId: string, projectRole?: string) =>
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
@@ -1151,7 +1223,8 @@ export const api = {
   },
   dailyDigest: {
     report: (date?: string) => req<DigestReport>(`/daily-digest/report${date ? `?date=${date}` : ''}`),
-    reportRange: (from: string, to: string) => req<DigestRangeReport>(`/daily-digest/report-range?from=${from}&to=${to}`),
+    /** The deep, fully-linked report behind the Daily Digest module. */
+    detail: (date?: string) => req<DigestDetail>(`/daily-digest/detail${date ? `?date=${date}` : ''}`),
     getSchedule: () => req<{ hourIst: number }>('/daily-digest/schedule'),
     setSchedule: (hourIst: number) => req<{ hourIst: number }>('/daily-digest/schedule', { method: 'PATCH', body: JSON.stringify({ hourIst }) }),
     send: () => req<{ sent: number }>('/daily-digest/send', { method: 'POST' }),

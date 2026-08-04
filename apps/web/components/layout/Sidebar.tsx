@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -20,7 +20,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 
-type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | string[] };
+type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | string[]; superAdminOnly?: boolean };
 
 // Home is always shown (landing page). The rest are permission-gated so each role
 // sees only what it can use — e.g. HR (no project/task perms) won't see Projects/My Tasks.
@@ -47,12 +47,15 @@ const NAV: NavItem[] = [
 ];
 
 // Permission-gated admin entries (shown only when the actor can access them).
-const ADMIN_NAV = [
+const ADMIN_NAV: NavItem[] = [
   // "Admin" = RBAC/system administration (roles, groups, permission matrix) — gated on
   // RBAC perms, NOT user.create (HR has user.create for people-ops but isn't an RBAC admin).
-  { href: '/admin',       icon: ShieldCheck, label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
-  { href: '/pid-ledger',  icon: KeyRound,    label: 'PID Ledger', perm: 'user.manage_access' },
-  { href: '/admin/audit', icon: History,     label: 'Audit Log', perm: ['audit.view'] },
+  { href: '/admin',       icon: ShieldCheck,    label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
+  // The digest aggregates the WHOLE organisation — every project, every person's hours, every
+  // deadline — so it is Super-Admin only, matching the server-side gate in daily-digest.module.
+  { href: '/digest',      icon: ClipboardList,  label: 'Daily Digest', superAdminOnly: true },
+  { href: '/pid-ledger',  icon: KeyRound,       label: 'PID Ledger', perm: 'user.manage_access' },
+  { href: '/admin/audit', icon: History,        label: 'Audit Log', perm: ['audit.view'] },
 ];
 
 const STORAGE_KEY = 'sidebar-collapsed';
@@ -60,7 +63,9 @@ const STORAGE_KEY = 'sidebar-collapsed';
 export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void } = {}) {
   const path = usePathname();
   const { currentUser } = useOrg();
-  const { can } = usePermissions();
+  const { can, isSuperAdmin } = usePermissions();
+  // A nav entry is visible when its permission passes, or when it's Super-Admin-only and you are one.
+  const navVisible = (n: NavItem) => (n.superAdminOnly ? isSuperAdmin : !n.perm || can(n.perm));
   // Real unread-notification count. Polled at 30s, and paused while the tab is
   // hidden (refetchIntervalInBackground defaults false) to avoid idle background load.
   const { data: unread } = useQuery({
@@ -191,10 +196,10 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
         })}
 
         {/* Permission-gated admin section */}
-        {ADMIN_NAV.some(n => can(n.perm)) && (
+        {ADMIN_NAV.some(navVisible) && (
           <div className={clsx('pt-3 mt-2 border-t border-white/10', collapsed && 'mx-1')}>
             {!collapsed && <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">Administration</p>}
-            {ADMIN_NAV.filter(n => can(n.perm)).map(({ href, icon: Icon, label }) => {
+            {ADMIN_NAV.filter(navVisible).map(({ href, icon: Icon, label }) => {
               const active = path.startsWith(href);
               return (
                 <Link

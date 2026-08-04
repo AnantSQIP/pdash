@@ -19,6 +19,9 @@ import { SequenceService } from '../../common/sequence/sequence.service';
 import { financialYear, formatPid, pidScope } from '../../common/financial-year';
 import { designationRank } from './seniority';
 
+/** Hours to one decimal — the precision timesheets are logged at. */
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 @Injectable()
 export class ProjectsService {
   constructor(
@@ -532,6 +535,7 @@ export class ProjectsService {
         id: true, title: true, description: true, projectPhase: true, projectType: true,
         priority: true, startDate: true, dueDate: true, clientDueDate: true,
         completionPercentage: true, createdBy: true, createdAt: true,
+        completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
         client: { select: { name: true, code: true } },
         members: { where: { isActive: true }, select: { projectRole: true, user: { select: { firstName: true, lastName: true } } } },
         patents: { select: { patent: { select: { handle: true } } } },
@@ -571,6 +575,12 @@ export class ProjectsService {
           startDate: p?.startDate ?? null,
           dueDate: p?.dueDate ?? null,
           clientDueDate: p?.clientDueDate ?? null,
+          // Completion record — what was delivered, when, and what it cost.
+          completedAt: p?.completedAt ?? null,
+          closedAt: p?.closedAt ?? null,
+          clientDeliveryDate: p?.clientDeliveryDate ?? null,
+          workingHours: p?.workingHours ?? null,
+          actualHours: p?.actualHours ?? null,
           progress: p?.completionPercentage ?? null,
           client: p?.client?.name ?? p?.client?.code ?? null,
           createdBy: p?.createdBy ? (userById.get(p.createdBy) ?? null) : null,
@@ -851,6 +861,119 @@ export class ProjectsService {
   }
 
   /**
+   * The COMPLETE project dataset for the Reports module, in one call.
+   *
+   * The reports table used to fetch a thin project list and then lazily pull tasks per row, which
+   * meant an export could only ever contain what the table happened to have loaded — seven columns
+   * and no staffing. This returns every field a report needs, tasks and assignees included, so the
+   * screen and the CSV are the same data.
+   *
+   * Scope and client-deadline redaction are identical to list(): a report must never become a way
+   * to read a matter you aren't on, or a client date you aren't cleared for.
+   */
+  async fullReport(organizationId: string) {
+    const actorId = getActorId();
+    const scope = actorId
+      ? await this.access.projectScopeWhere(actorId, organizationId)
+      : { members: { some: { user: { organizationId } } } };
+    const projects = await this.prisma.project.findMany({
+      where: { deletedAt: null, ...scope },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, code: true, title: true, description: true, projectType: true,
+        projectPhase: true, priority: true, completionPercentage: true, billable: true,
+        startDate: true, dueDate: true, clientDueDate: true,
+        completedAt: true, closedAt: true,
+        clientDeliveryDate: true, workingHours: true, actualHours: true,
+        createdBy: true, createdAt: true,
+        client: { select: { name: true, code: true } },
+        currentStatus: { select: { name: true } },
+        members: {
+          where: { isActive: true },
+          select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true, designation: true } } },
+        },
+        patents: { select: { patent: { select: { handle: true } } } },
+        projectTasks: {
+          where: { task: { deletedAt: null } },
+          select: {
+            task: {
+              select: {
+                id: true, title: true, dueDate: true, priority: true,
+                estimatedHours: true, actualHours: true,
+                currentStatus: { select: { name: true, type: true } },
+                assignees: {
+                  select: {
+                    role: true, estimatedHours: true, dueDate: true,
+                    user: { select: { id: true, firstName: true, lastName: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
+      },
+    });
+
+    // Hours actually logged per project — the report's "what did this cost" column, which is not
+    // the same as the workingHours snapshot taken at completion.
+    const logged = await this.prisma.timesheet.groupBy({
+      by: ['projectId'],
+      where: { projectId: { in: projects.map(p => p.id) }, deletedAt: null },
+      _sum: { hoursLogged: true },
+    });
+    const loggedById = new Map(logged.map(l => [l.projectId, round1(l._sum.hoursLogged ?? 0)]));
+
+    const creatorIds = [...new Set(projects.map(p => p.createdBy).filter(Boolean))];
+    const creators = creatorIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, firstName: true, lastName: true } })
+      : [];
+    const creatorById = new Map(creators.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+
+    const name = (u: { firstName: string | null; lastName: string | null }) => `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim();
+    const shaped = projects.map(p => {
+      const tasks = p.projectTasks.map(pt => pt.task);
+      const closed = tasks.filter(t => t.currentStatus?.type === 'CLOSED').length;
+      return {
+        id: p.id, pid: p.code ?? null, title: p.title, description: p.description ?? null,
+        type: p.projectType ?? null, phase: p.projectPhase, priority: p.priority,
+        status: p.currentStatus?.name ?? null,
+        client: p.client?.name ?? p.client?.code ?? null,
+        billable: p.billable,
+        progress: p.completionPercentage,
+        startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
+        completedAt: p.completedAt, closedAt: p.closedAt,
+        clientDeliveryDate: p.clientDeliveryDate ?? null,
+        workingHours: p.workingHours ?? null, actualHours: p.actualHours ?? null,
+        loggedHours: loggedById.get(p.id) ?? 0,
+        estimatedHours: round1(tasks.reduce((n, t) => n + (t.estimatedHours ?? 0), 0)),
+        taskCount: tasks.length, tasksClosed: closed, tasksOpen: tasks.length - closed,
+        memberCount: p._count.members,
+        createdBy: creatorById.get(p.createdBy) ?? null, createdAt: p.createdAt,
+        patents: p.patents.map(pp => pp.patent.handle),
+        managers: p.members.filter(m => m.projectRole === 'PM' || m.projectRole === 'MANAGER')
+          .map(m => ({ id: m.user.id, name: name(m.user) })),
+        members: p.members.map(m => ({
+          id: m.user.id, name: name(m.user), role: m.projectRole ?? 'MEMBER',
+          designation: m.user.designation ?? null,
+        })),
+        tasks: tasks.map(t => ({
+          id: t.id, title: t.title, status: t.currentStatus?.name ?? null,
+          isClosed: t.currentStatus?.type === 'CLOSED',
+          priority: t.priority, dueDate: t.dueDate,
+          estimatedHours: t.estimatedHours ?? null, actualHours: t.actualHours ?? null,
+          assignees: t.assignees.map(a => ({
+            id: a.user.id, name: name(a.user), role: a.role ?? 'MEMBER',
+            estimatedHours: a.estimatedHours ?? null, dueDate: a.dueDate ?? null,
+          })),
+        })),
+      };
+    });
+    // Redact the client deadline exactly as the list does — same rule, same scope.
+    return this.deadlines.redactProjects(shaped as never, await this.deadlines.scope());
+  }
+
+  /**
    * Projects waiting on the CURRENT actor's approval — the manager they were routed to,
    * or (for an org admin) anything still pending. Never includes the actor's own request:
    * you cannot approve what you asked for.
@@ -1101,7 +1224,26 @@ export class ProjectsService {
   }
 
   /** ACTIVE/ON_HOLD → COMPLETED. Work is done; the project stays listed but locked. */
-  async complete(id: string) {
+  /**
+   * The hours a project has consumed ON PAPER — the sum of logged timesheets, falling back to the
+   * sum of task estimates when nobody logged time. This is what prefills the completion form; the
+   * closer can overwrite it, and `actualHours` is a separate, hand-typed number for what it really
+   * took. Exposed so the UI can show the suggestion before anyone commits to it.
+   */
+  async completionHoursSuggestion(id: string): Promise<{ loggedHours: number; estimatedHours: number; suggested: number }> {
+    const [logged, tasks] = await Promise.all([
+      this.prisma.timesheet.aggregate({ where: { projectId: id, deletedAt: null }, _sum: { hoursLogged: true } }),
+      this.prisma.projectTask.findMany({
+        where: { projectId: id, task: { deletedAt: null } },
+        select: { task: { select: { estimatedHours: true } } },
+      }),
+    ]);
+    const loggedHours = round1(logged._sum.hoursLogged ?? 0);
+    const estimatedHours = round1(tasks.reduce((sum, t) => sum + (t.task.estimatedHours ?? 0), 0));
+    return { loggedHours, estimatedHours, suggested: loggedHours > 0 ? loggedHours : estimatedHours };
+  }
+
+  async complete(id: string, dto?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) {
     await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
@@ -1128,17 +1270,38 @@ export class ProjectsService {
     }
 
     const actorId = getActorId();
+    // Delivery + cost are captured AT completion, because that is the only moment anyone actually
+    // knows them. Anything the caller omits falls back to something honest: delivery defaults to
+    // now (the work is being signed off), and working hours to what the timesheets say.
+    const suggestion = await this.completionHoursSuggestion(id);
+    const delivery = dto?.clientDeliveryDate ? new Date(dto.clientDeliveryDate) : new Date();
+    if (isNaN(delivery.getTime())) throw new BadRequestException('The client delivery date is not a valid date/time.');
+    const hours = (v: unknown, label: string): number | null => {
+      if (v == null || v === '') return null;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw new BadRequestException(`${label} must be a number of hours (0 or more).`);
+      // A project cannot plausibly have consumed more than a decade of one person's working life;
+      // this only exists to catch a fat-fingered 80000 before it poisons every report.
+      if (n > 100_000) throw new BadRequestException(`${label} looks wrong — ${n} hours.`);
+      return round1(n);
+    };
+    const workingHours = hours(dto?.workingHours, 'Working hours') ?? suggestion.suggested;
+    const actualHours = hours(dto?.actualHours, 'Actual hours');
     const updated = await this.prisma.project.update({
       where: { id },
-      data: { projectPhase: 'COMPLETED', completedAt: new Date() },
+      data: {
+        projectPhase: 'COMPLETED', completedAt: new Date(),
+        clientDeliveryDate: delivery, workingHours, actualHours,
+      },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_COMPLETED, entityType: 'PROJECT', entityId: id,
-      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
+      actorId: actorId ?? undefined,
+      metadata: { projectId: id, title: project.title, clientDeliveryDate: delivery.toISOString(), workingHours, actualHours },
     });
     await this.notifyMembers(project, actorId, {
       type: 'project.completed', title: 'Project completed',
-      message: `"${project.title}" was marked complete.`,
+      message: `"${project.title}" was marked complete — delivered ${delivery.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}${actualHours != null ? `, ${actualHours}h actual` : ''}.`,
     });
     return this.deadlines.redactProject(updated, await this.deadlines.scope());
   }
