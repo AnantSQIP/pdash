@@ -10,7 +10,6 @@ import { fullName } from '@/lib/avatar';
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-const addMonths = (d: Date, n: number) => { const x = new Date(d); x.setMonth(x.getMonth() + n); return x; };
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -28,13 +27,10 @@ const SPANS: { id: string; label: string; days: number }[] = [
   { id: '90', label: '3 months', days: 90 },
 ];
 
-// Cell sizing. "Comfortable" is wide enough to READ the event text in each cell; "Compact" keeps
-// long ranges scannable. Short ranges default to comfortable.
-const SIZES = {
-  comfortable: { cell: 132, row: 64, label: 'Comfortable' },
-  compact: { cell: 56, row: 44, label: 'Compact' },
-} as const;
-type SizeKey = keyof typeof SIZES;
+// One cell size — wide enough to READ the event text. (A "Compact" mode existed but it made events
+// unreadable, which was the original complaint; long spans are handled by paging instead.)
+const CELL_W = 132;
+const ROW_H = 64;
 
 /**
  * Team Calendar — the whole team's schedule: one row per person, one column per day.
@@ -44,29 +40,18 @@ type SizeKey = keyof typeof SIZES;
  * past. Use ‹ › to page a whole span back/forward and "Today" to return.
  *
  * The date header row and the member column are frozen (sticky) inside the calendar's own scroll
- * box. All-day blocks (leave / OOO) fill the cell; timed events show as chips (or a dot in Compact).
+ * box. All-day blocks (leave / OOO) and timed events render as readable chips in each cell.
  */
 export function TeamCalendarView({ users }: { users: UserSummary[] }) {
   const [spanId, setSpanId] = useState('14');
-  const [size, setSize] = useState<SizeKey>('comfortable');
   // `anchor` is the FIRST day shown. Starts at today; the ‹ › buttons page it, "Today" resets it.
   const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
-  const CELL = SIZES[size].cell;
-  const ROW_H = SIZES[size].row;
-  const roomy = size === 'comfortable';
+  const CELL = CELL_W;
 
   const spanDays = Number(SPANS.find(s => s.id === spanId)?.days ?? 14);
   const from = anchor;
   const to = useMemo(() => addDays(anchor, spanDays - 1), [anchor, spanDays]);
   const onToday = dayKey(anchor) === dayKey(startOfDay(new Date()));
-
-  /** Switching to a long span in Comfortable would make an absurdly wide grid (90 × 132px ≈ 12000px),
-   *  so drop to Compact automatically — the user can switch back if they really want it. */
-  function chooseSpan(id: string) {
-    setSpanId(id);
-    if (Number(id) > 14) setSize('compact');
-    else setSize('comfortable');
-  }
 
   const days = useMemo(() => {
     const out: Date[] = [];
@@ -133,21 +118,10 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
           </div>
 
           {/* How many days to show, starting from the anchor. */}
-          <select value={spanId} onChange={e => chooseSpan(e.target.value)} title="How many days to show"
+          <select value={spanId} onChange={e => setSpanId(e.target.value)} title="How many days to show"
             className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:outline-none focus:border-brand-400">
             {SPANS.map(s => <option key={s.id} value={s.id}>Show {s.label}</option>)}
           </select>
-
-          {/* Cell size — comfortable shows the event text; compact fits longer spans. */}
-          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
-            {(Object.keys(SIZES) as SizeKey[]).map(k => (
-              <button key={k} onClick={() => setSize(k)}
-                className={clsx('px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
-                  size === k ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
-                {SIZES[k].label}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -167,9 +141,9 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
                 return (
                   <th key={dayKey(d)} className={clsx(headCell, 'px-0 py-2 text-center align-bottom', wknd && 'bg-gray-100', isToday && 'bg-brand-100')}
                     style={{ width: CELL, minWidth: CELL }}>
-                    <div className={clsx('font-bold text-brand-600 leading-none', roomy ? 'h-4 text-[11px]' : 'h-3.5 text-[9px]')}>{showMonth ? `${MONTHS[d.getMonth()]}` : ''}</div>
-                    <div className={clsx('text-gray-400 leading-none', roomy ? 'text-[11px] mt-0.5' : 'text-[9px]')}>{WD[d.getDay()]}</div>
-                    <div className={clsx('font-semibold leading-tight', roomy ? 'text-[16px]' : 'text-[12px]', isToday ? 'text-brand-700' : 'text-gray-600')}>{d.getDate()}</div>
+                    <div className="h-4 text-[11px] font-bold text-brand-600 leading-none">{showMonth ? `${MONTHS[d.getMonth()]}` : ''}</div>
+                    <div className="text-[11px] text-gray-400 leading-none mt-0.5">{WD[d.getDay()]}</div>
+                    <div className={clsx('text-[16px] font-semibold leading-tight', isToday ? 'text-brand-700' : 'text-gray-600')}>{d.getDate()}</div>
                   </th>
                 );
               })}
@@ -182,8 +156,8 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
                   <div className="flex items-center gap-2 min-w-0">
                     <Avatar user={u} size={28} className="shrink-0" />
                     <div className="min-w-0">
-                      <p className={clsx('font-semibold text-gray-800 truncate', roomy ? 'text-sm' : 'text-xs')}>{fullName(u)}</p>
-                      {u.designation && <p className={clsx('text-gray-400 truncate', roomy ? 'text-[11px]' : 'text-[10px]')}>{u.designation}</p>}
+                      <p className="text-sm font-semibold text-gray-800 truncate">{fullName(u)}</p>
+                      {u.designation && <p className="text-[11px] text-gray-400 truncate">{u.designation}</p>}
                     </div>
                   </div>
                 </td>
@@ -198,34 +172,24 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
                     : undefined;
                   return (
                     <td key={dayKey(d)} title={title}
-                      className={clsx('border-b border-r border-gray-100 align-top relative', wknd && !allDay && 'bg-gray-50', isToday && 'ring-1 ring-inset ring-brand-200', roomy ? 'p-1' : 'p-0')}
+                      className={clsx('border-b border-r border-gray-100 align-top relative', wknd && !allDay && 'bg-gray-50', isToday && 'ring-1 ring-inset ring-brand-200', 'p-1')}
                       style={{ width: CELL, minWidth: CELL, height: ROW_H }}>
-                      {roomy ? (
-                        // Comfortable: show the actual entries as readable chips.
-                        <div className="flex flex-col gap-0.5 h-full overflow-hidden">
-                          {allDay && (
-                            <span className="rounded px-1.5 py-1 bg-violet-100 text-violet-800 text-[11px] font-medium leading-tight truncate">
-                              {allDay.title}
-                            </span>
-                          )}
-                          {timed.slice(0, allDay ? 1 : 2).map((b, i) => (
-                            <span key={i} className="rounded px-1.5 py-1 bg-brand-100 text-brand-800 text-[11px] leading-tight truncate">
-                              <span className="tabular-nums font-medium">{fmtTime(b.start)}</span> {b.title}
-                            </span>
-                          ))}
-                          {timed.length > (allDay ? 1 : 2) && (
-                            <span className="text-[10px] text-gray-400 px-1">+{timed.length - (allDay ? 1 : 2)} more</span>
-                          )}
-                        </div>
-                      ) : (
-                        // Compact: the original fill + dot, for long ranges.
-                        <>
-                          {allDay && <div className="absolute inset-1 rounded bg-violet-200/80" />}
-                          {timed.length > 0 && (
-                            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 rounded-full bg-brand-500" style={{ width: 7, height: 7 }} />
-                          )}
-                        </>
-                      )}
+                      {/* Entries as readable chips — the whole point of the wider cell. */}
+                      <div className="flex flex-col gap-0.5 h-full overflow-hidden">
+                        {allDay && (
+                          <span className="rounded px-1.5 py-1 bg-violet-100 text-violet-800 text-[11px] font-medium leading-tight truncate">
+                            {allDay.title}
+                          </span>
+                        )}
+                        {timed.slice(0, allDay ? 1 : 2).map((b, i) => (
+                          <span key={i} className="rounded px-1.5 py-1 bg-brand-100 text-brand-800 text-[11px] leading-tight truncate">
+                            <span className="tabular-nums font-medium">{fmtTime(b.start)}</span> {b.title}
+                          </span>
+                        ))}
+                        {timed.length > (allDay ? 1 : 2) && (
+                          <span className="text-[10px] text-gray-400 px-1">+{timed.length - (allDay ? 1 : 2)} more</span>
+                        )}
+                      </div>
                     </td>
                   );
                 })}
