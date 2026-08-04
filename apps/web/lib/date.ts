@@ -13,6 +13,38 @@
 /** The organisation's operating timezone. Working hours are 9am–6pm IST. */
 export const ORG_TZ = 'Asia/Kolkata';
 
+// ── Week convention ─────────────────────────────────────────────────────────
+// EVERY calendar in the dashboard starts its week on MONDAY and ends on Sunday — the
+// working week people here actually think in. These helpers are the single source of
+// that convention; build month grids and week strips from them rather than from a raw
+// getDay(), which is Sunday-indexed and silently reintroduces a Sunday-first grid.
+
+/** Weekday headers in display order, Monday first. */
+export const WEEKDAYS_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+export const WEEKDAYS_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
+/** Single-letter headers for dense grids (Monday first). */
+export const WEEKDAYS_LETTER = ['M', 'T', 'W', 'T', 'F', 'S', 'S'] as const;
+
+/** A date's column in a Monday-first week: Mon=0 … Sun=6. Use instead of getDay(). */
+export function weekdayIndex(d: Date): number {
+  return (d.getDay() + 6) % 7;
+}
+/** Same, for a date-only value stored at UTC midnight. */
+export function weekdayIndexUtc(d: Date): number {
+  return (d.getUTCDay() + 6) % 7;
+}
+/** How many blank cells a month grid needs before the 1st (Monday-first). */
+export function monthLeadPad(year: number, monthIndex0: number): number {
+  return (new Date(year, monthIndex0, 1).getDay() + 6) % 7;
+}
+/** The Monday on or before `d`, at local midnight. */
+export function startOfWeekMonday(d: Date): Date {
+  const r = new Date(d);
+  r.setHours(0, 0, 0, 0);
+  r.setDate(r.getDate() - weekdayIndex(r));
+  return r;
+}
+
 /**
  * Format a date-only value without timezone drift. The year is added automatically
  * when the date is not in the current year, so a due date from a different year can't

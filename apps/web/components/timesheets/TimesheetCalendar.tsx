@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { api, type TimesheetCalendarDay } from '@/lib/api';
+import { WEEKDAYS_SHORT } from '@/lib/date';
 
 // Color key for each day's fill status. Graded: full 8h = green, 4–8h = amber, under 4h = red.
 // Aligned with the attendance calendar's palette so the SAME meaning is the SAME colour everywhere:
@@ -20,7 +21,7 @@ const STATUS_META: Record<TimesheetCalendarDay['status'], { label: string; cell:
   FUTURE:     { label: 'Upcoming',   cell: 'bg-white border-gray-100 text-gray-300',         dot: 'bg-gray-200' },
 };
 const LEGEND: TimesheetCalendarDay['status'][] = ['COMPLETE', 'PARTIAL', 'LOW', 'LEAVE', 'HOLIDAY'];
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAYS = WEEKDAYS_SHORT; // Monday-first, shared with every other calendar
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -105,15 +106,20 @@ export function TimesheetCalendar({ selectedDate, onSelectDate }: { selectedDate
               const isSelected = date === selectedDate;
               const compPending = cell?.compOff === 'PENDING';
               const compApproved = cell?.compOff === 'APPROVED';
+              // Any undecided leave/WFH/comp-off on this day. The hours are still owed (nothing
+              // is approved yet) — the dashed amber outline just says "you've asked about this".
+              const pend = cell?.pending;
               return (
                 <button key={i} type="button" onClick={() => onSelectDate?.(date)}
-                  title={cell ? `${date} · ${meta.label}${cell.target > 0 ? ` · ${round1(cell.logged)}/${cell.target}h` : ''}${compApproved ? ' · comp-off (worked)' : ''}${compPending ? ' · comp-off pending approval' : ''}` : date}
+                  title={cell ? `${date} · ${meta.label}${cell.target > 0 ? ` · ${round1(cell.logged)}/${cell.target}h` : ''}${compApproved ? ' · comp-off (worked)' : ''}${compPending ? ' · comp-off pending approval' : ''}${pend ? ` · ${pend.label} (awaiting approval)` : ''}` : date}
                   className={clsx('relative min-h-[72px] rounded-lg border flex flex-col items-center justify-center px-1 py-1.5 transition-all hover:brightness-95 focus:outline-none', meta.cell,
+                    pend && 'border-dashed border-amber-400',
                     isToday && !isSelected && 'ring-2 ring-brand-300 ring-offset-1',
                     isSelected && 'ring-2 ring-brand-600 ring-offset-1 shadow-sm')}>
                   <span className="text-[15px] font-bold leading-none">{day}{compPending && <span className="text-amber-600" title="Comp-off pending approval">*</span>}</span>
                   {showHours && <span className="text-[13px] font-semibold opacity-90 mt-1.5 tabular-nums">{round1(cell!.logged)}/{cell!.target}h</span>}
                   {compApproved && <span className="absolute bottom-1 right-1 text-[8px] font-bold text-indigo-500" title="Comp-off (worked)">CO</span>}
+                  {pend && !compPending && <span className="absolute bottom-1 left-1 text-[8px] font-bold text-amber-600" title={pend.label}>REQ</span>}
                 </button>
               );
             })}

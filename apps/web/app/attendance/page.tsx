@@ -15,6 +15,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { getCurrentLocation, reverseGeocode, mapLink } from '@/lib/geolocation';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
+import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
 
 // ── status styling ──────────────────────────────────────────────────────────────
 const STATUS_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
@@ -383,27 +384,35 @@ const REGULARIZABLE = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LATE', 'NONE', 'WEEKEND
 function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth; year: number; monthNum: number; onPick?: (key: string) => void }) {
   const byDate = useMemo(() => new Map((month?.days ?? []).map(d => [d.date, d])), [month]);
   const daysInMonth = new Date(year, monthNum, 0).getDate();
-  const firstWeekday = new Date(Date.UTC(year, monthNum - 1, 1)).getUTCDay();
+  const firstWeekday = monthLeadPad(year, monthNum - 1); // Monday-first — see lib/date
   const cells: ({ day: number; key: string } | null)[] = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, key: `${year}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}` });
 
   return (
     <div className="grid grid-cols-7 gap-1.5">
-      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} className="text-center text-[10px] font-semibold text-gray-400 uppercase pb-0.5">{d}</div>)}
+      {WEEKDAYS_SHORT.map((d, i) => <div key={i} className="text-center text-[10px] font-semibold text-gray-400 uppercase pb-0.5">{d}</div>)}
       {cells.map((c, i) => {
         if (!c) return <div key={i} />;
         const rec = byDate.get(c.key);
         const st = STATUS_STYLE[rec?.status ?? 'FUTURE'] ?? STATUS_STYLE.FUTURE;
-        const title = rec ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}` : c.key;
+        const pend = rec?.pending;
+        const title = rec
+          ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}${pend ? ` · ${pend.label} (awaiting approval)` : ''}`
+          : c.key;
         const canReg = !!onPick && REGULARIZABLE.includes(rec?.status ?? '');
-        const cls = clsx('min-h-[52px] rounded-lg border flex flex-col items-center justify-center relative p-1 leading-none', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
+        // A pending request gets a dashed amber outline: the day is visibly "asked for" without
+        // pretending the request has been granted.
+        const cls = clsx('min-h-[52px] rounded-lg border flex flex-col items-center justify-center relative p-1 leading-none', st.bg,
+          pend && 'ring-1 ring-amber-400 ring-offset-0 border-dashed border-amber-400',
+          canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
         const inner = (
           <>
             <span className="text-[13px] font-semibold">{c.day}</span>
             {rec?.totalHours != null && <span className="text-[10px] opacity-70 mt-1 tabular-nums">{rec.totalHours}h</span>}
             {rec?.isRegularized && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
-            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
+            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-cyan-600" title="Worked from home" />}
+            {pend && <span className="absolute bottom-0.5 text-[8px] font-semibold text-amber-600 uppercase tracking-tight">req</span>}
           </>
         );
         return canReg

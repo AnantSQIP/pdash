@@ -339,6 +339,9 @@ export type TimesheetCalendarDay = {
   status: 'COMPLETE' | 'PARTIAL' | 'LOW' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
   /** Set when the day has a comp-off claim — APPROVED makes it a required working day; PENDING shows an asterisk. */
   compOff?: 'APPROVED' | 'PENDING';
+  /** An undecided leave/WFH/comp-off request covering this day. The target is unchanged — the
+   *  hours are still owed until the request is actually approved. */
+  pending?: { kind: string; label: string } | null;
 };
 export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 
@@ -358,8 +361,17 @@ export type CalendarEvent = {
   location?: string | null; joinUrl?: string | null; reminderMinutes?: number | null;
   recurrence?: string | null; recurrenceUntil?: string | null; recurrenceParentId?: string | null; notes?: string | null;
   attendees?: { userId: string; response?: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> }[];
+  /** True for a leave/WFH/comp-off request that has been raised but NOT yet approved. These are
+   *  derived server-side (id is `pending:<kind>:<requestId>`) and cannot be edited or deleted. */
+  pending?: boolean;
 };
-export type FreeBusy = { userId: string; busy: { start: string; end: string; title: string; allDay: boolean }[] };
+/** Availability blocks for the team calendar / scheduling assistant. The server deliberately
+ *  omits private detail (leave type, reason, meeting title) — `kind` is enough to colour and
+ *  label the block, and `pending` marks a request that hasn't been approved yet. */
+export type FreeBusy = {
+  userId: string;
+  busy: { start: string; end: string; title: string; allDay: boolean; kind?: string; pending?: boolean }[];
+};
 // A bookmarked message, carrying its channel and when it was saved.
 export type SavedMessage = Message & { channel: { id: string; name: string }; savedAt: string };
 
@@ -693,6 +705,9 @@ export type Attendance = {
 export type AttendanceDay = {
   date: string; status: string; workMode?: string; checkIn?: string | null; checkOut?: string | null;
   totalHours?: number | null; isRegularized: boolean; note?: string | null;
+  /** A leave/WFH/comp-off request covering this day that has NOT been decided yet. The day's
+   *  `status` is unaffected — nothing is agreed until it's approved. */
+  pending?: { kind: string; label: string } | null;
 };
 export type AttendanceMonth = {
   userId: string; year: number; month: number;

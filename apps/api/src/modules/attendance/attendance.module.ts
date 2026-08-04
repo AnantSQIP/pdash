@@ -471,7 +471,7 @@ export class AttendanceService {
         data: {
           organizationId: req.organizationId, title: `${name} — Working from home`,
           type: 'WFH', startDate: req.startDate, endDate: req.endDate,
-          allDay: true, color: '#8b5cf6', createdBy: req.userId,
+          allDay: true, color: '#0e7490', createdBy: req.userId, // WFH — see apps/web/lib/calendar-colors.ts
         },
       });
     }
@@ -538,19 +538,38 @@ export class AttendanceService {
     const daysInMonth = last.getUTCDate();
     const organizationId = await this.orgOf(userId);
 
-    const [rows, leaves, holidays, sheets] = await Promise.all([
+    const [rows, leaves, holidays, sheets, pendLeave, pendWfh, pendCompoff] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } } }),
       this.prisma.holiday.findMany({ where: { organizationId: organizationId ?? undefined, date: { gte: first, lte: last } } }),
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: first, lte: last } }, select: { date: true } }),
+      // Requests still awaiting a decision. They don't change the day's STATUS (nothing is
+      // agreed yet) but the day is marked so the calendar can show "requested" rather than
+      // looking as if nothing has been asked for.
+      this.prisma.leaveRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } } }),
+      this.prisma.wfhRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } } }),
+      this.prisma.compOffRequest.findMany({ where: { userId, status: 'PENDING', workDate: { gte: first, lte: last } } }),
     ]);
     const byDay = new Map(rows.map(r => [dayKey(r.date), r]));
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h]));
     const tsDays = new Set(sheets.map(s => dayKey(s.date)));
     const onLeave = (k: string) => leaves.some(l => dayKey(l.startDate) <= k && k <= dayKey(l.endDate));
-    const todayKey = dayKey(utcDay(new Date()));
+    // "Today" is the IST calendar day. utcDay() lags it by 5.5h, so between midnight and 05:30
+    // IST every cell for the real today was treated as past and rendered ABSENT.
+    const todayKey = dayKey(istDay(new Date()));
 
-    type DayCell = { date: string; status: string; workMode?: string; checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean; note: string | null };
+    // A day carries at most one pending marker; leave outranks WFH outranks comp-off.
+    const pendingFor = (k: string): { kind: string; label: string } | null => {
+      const l = pendLeave.find(r => dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
+      if (l) return { kind: 'LEAVE', label: `${l.leaveType} leave requested` };
+      const w = pendWfh.find(r => dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
+      if (w) return { kind: 'WFH', label: 'Work from home requested' };
+      const c = pendCompoff.find(r => dayKey(r.workDate) === k);
+      if (c) return { kind: 'COMPOFF', label: `Comp-off claim (${c.dayType === 'HALF' ? 'half' : 'full'} day)` };
+      return null;
+    };
+
+    type DayCell = { date: string; status: string; workMode?: string; checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean; note: string | null; pending?: { kind: string; label: string } | null };
     const days: DayCell[] = [];
     for (let i = 1; i <= daysInMonth; i++) {
       const d = new Date(Date.UTC(year, month - 1, i));
@@ -578,6 +597,7 @@ export class AttendanceService {
         days.push({ date: k, status: k === todayKey ? 'NONE' : 'FUTURE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       }
     }
+    for (const d of days) d.pending = pendingFor(d.date);
     const count = (s: string) => days.filter(d => d.status === s).length;
     const present = count('PRESENT') + count('HALF_DAY');
     // A HALF_DAY is half a day present — it must not score as a full day in the rate.
@@ -862,7 +882,7 @@ export class LeaveService {
           startDate: req.startDate,
           endDate: req.endDate,
           allDay: true,
-          color: '#fe841f',
+          color: '#db2777', // LEAVE — see apps/web/lib/calendar-colors.ts
           createdBy: req.userId,
         },
       });
@@ -1101,7 +1121,7 @@ export class LeaveService {
         data: {
           organizationId: req.organizationId, title: `${name} — Comp Off earned (worked)`,
           type: 'COMPOFF', startDate: utcDay(req.workDate), endDate: utcDay(req.workDate),
-          allDay: true, color: '#6366f1', createdBy: req.userId,
+          allDay: true, color: '#1e3a8a', createdBy: req.userId, // COMPOFF — see apps/web/lib/calendar-colors.ts
         },
       });
     }

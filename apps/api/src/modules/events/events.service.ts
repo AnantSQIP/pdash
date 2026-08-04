@@ -65,20 +65,86 @@ export class EventsService {
       throw new BadRequestException('The "from" date must be on or before the "to" date.');
     }
     const viewerId = getActorId();
+    const fromD = from ? new Date(from) : undefined;
+    const toD = to ? new Date(to) : undefined;
     const events = await this.prisma.calendarEvent.findMany({
       where: {
         organizationId,
         deletedAt: null,
-        startDate: {
-          gte: from ? new Date(from) : undefined,
-          lte: to ? new Date(to) : undefined,
-        },
+        // OVERLAP, not "starts within". Filtering on startDate alone dropped every event that
+        // began before the window — a leave running 28 Jul–4 Aug vanished from August.
+        ...(toD ? { startDate: { lte: toD } } : {}),
+        ...(fromD ? { OR: [{ endDate: { gte: fromD } }, { endDate: null, startDate: { gte: fromD } }] } : {}),
       },
       include: { attendees: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } } },
       orderBy: { startDate: 'asc' },
     });
     // Non-attendees see the meeting on the shared calendar but not its join link / private notes.
-    return events.map(e => this.redactEvent(e, viewerId));
+    const real = events.map(e => this.redactEvent(e, viewerId));
+    const pending = await this.pendingAvailability(organizationId, fromD, toD);
+    return [...real, ...pending];
+  }
+
+  /**
+   * Leave / WFH / comp-off that has been REQUESTED but not yet decided.
+   *
+   * A calendar row is only written when a request is approved, so until then the day looked
+   * completely free — people booked over each other's pending leave. These are derived at read
+   * time rather than persisted: nothing to clean up when a request is rejected or withdrawn,
+   * and no chance of a stale row outliving its request.
+   *
+   * They are marked `pending: true` and given a synthetic `pending:*` id so the client can
+   * render them as unconfirmed and never try to edit or delete them. Shown org-wide, matching
+   * the capacity board, which has surfaced pending leave to everyone since it was built.
+   */
+  private async pendingAvailability(organizationId: string, from?: Date, to?: Date) {
+    // Overlap window; unbounded on either side when the caller didn't constrain it.
+    const startsBeforeEnd = to ? { lte: to } : undefined;
+    const endsAfterStart = from ? { gte: from } : undefined;
+    const [leaves, wfh, compoffs] = await Promise.all([
+      this.prisma.leaveRequest.findMany({
+        where: { organizationId, status: 'PENDING', startDate: startsBeforeEnd, endDate: endsAfterStart },
+        include: { user: { select: { firstName: true, lastName: true } } },
+      }),
+      this.prisma.wfhRequest.findMany({
+        where: { organizationId, status: 'PENDING', startDate: startsBeforeEnd, endDate: endsAfterStart },
+        include: { user: { select: { firstName: true, lastName: true } } },
+      }),
+      this.prisma.compOffRequest.findMany({
+        where: { organizationId, status: 'PENDING', workDate: { ...(startsBeforeEnd ?? {}), ...(endsAfterStart ?? {}) } },
+        include: { user: { select: { firstName: true, lastName: true } } },
+      }),
+    ]);
+
+    const who = (u: { firstName: string | null; lastName: string | null } | null) =>
+      `${u?.firstName ?? ''} ${u?.lastName ?? ''}`.trim() || 'Employee';
+    const virtual = (
+      id: string, title: string, type: string, startDate: Date, endDate: Date, description: string,
+    ) => ({
+      id, organizationId, title, description, type,
+      startDate, endDate, allDay: true, color: null as string | null,
+      location: null, joinUrl: null, reminderMinutes: null, reminderSentAt: null,
+      recurrence: null, recurrenceUntil: null, recurrenceParentId: null, notes: null,
+      createdBy: 'system', projectId: null,
+      createdAt: startDate, updatedAt: startDate, deletedAt: null,
+      attendees: [] as { userId: string }[],
+      pending: true as const,
+    });
+
+    return [
+      ...leaves.map(l => virtual(
+        `pending:leave:${l.id}`, `${who(l.user)} — ${l.leaveType} leave (requested)`, 'LEAVE',
+        l.startDate, l.endDate, 'Awaiting approval',
+      )),
+      ...wfh.map(w => virtual(
+        `pending:wfh:${w.id}`, `${who(w.user)} — Working from home (requested)`, 'WFH',
+        w.startDate, w.endDate, 'Awaiting approval',
+      )),
+      ...compoffs.map(c => virtual(
+        `pending:compoff:${c.id}`, `${who(c.user)} — Comp-off claim (requested)`, 'COMPOFF',
+        c.workDate, c.workDate, `Worked a non-working day · ${c.dayType === 'HALF' ? 'half day' : 'full day'} · awaiting approval`,
+      )),
+    ];
   }
 
   async get(id: string) {
@@ -322,21 +388,34 @@ export class EventsService {
     if (!ids.length) return [];
     const fromD = new Date(from);
     const toD = new Date(to);
-    const [events, leaves] = await Promise.all([
+    const [events, leaves, wfh, compoffs] = await Promise.all([
       this.prisma.calendarEvent.findMany({
         where: {
           organizationId, deletedAt: null,
-          startDate: { gte: fromD, lte: toD },
+          // Overlap, not "starts within" — an event beginning before the window still occupies it.
+          startDate: { lte: toD },
+          AND: [{ OR: [{ endDate: { gte: fromD } }, { endDate: null, startDate: { gte: fromD } }] }],
           OR: [{ createdBy: { in: ids } }, { attendees: { some: { userId: { in: ids } } } }],
         },
         select: { title: true, startDate: true, endDate: true, allDay: true, createdBy: true, attendees: { select: { userId: true } } },
       }),
+      // Both decided and undecided: a pending request is exactly what a team schedule needs to
+      // show, so nobody plans work onto a day somebody has already asked to be away.
       this.prisma.leaveRequest.findMany({
-        where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
-        select: { userId: true, startDate: true, endDate: true },
+        where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
+        select: { userId: true, startDate: true, endDate: true, status: true },
+      }),
+      this.prisma.wfhRequest.findMany({
+        where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
+        select: { userId: true, startDate: true, endDate: true, status: true },
+      }),
+      this.prisma.compOffRequest.findMany({
+        where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, workDate: { gte: fromD, lte: toD }, user: { organizationId } },
+        select: { userId: true, workDate: true, status: true },
       }),
     ]);
-    const busy = new Map<string, { start: string; end: string; title: string; allDay: boolean }[]>();
+    type Block = { start: string; end: string; title: string; allDay: boolean; kind: string; pending?: boolean };
+    const busy = new Map<string, Block[]>();
     ids.forEach(id => busy.set(id, []));
     for (const e of events) {
       const end = (e.endDate ?? new Date(e.startDate.getTime() + 30 * 60_000)).toISOString();
@@ -345,11 +424,31 @@ export class EventsService {
       e.attendees.forEach(a => { if (ids.includes(a.userId)) on.add(a.userId); });
       // Free/busy exposes only the TIME blocks — never the meeting title, which can name a
       // confidential client matter. The scheduling assistant just needs to see "busy".
-      on.forEach(uid => busy.get(uid)!.push({ start: e.startDate.toISOString(), end, title: 'Busy', allDay: e.allDay }));
+      on.forEach(uid => busy.get(uid)!.push({ start: e.startDate.toISOString(), end, title: 'Busy', allDay: e.allDay, kind: 'MEETING' }));
     }
+    // Availability blocks carry a KIND (so the team calendar can colour and label them
+    // consistently with every other calendar) but still never the private detail — no leave type,
+    // no reason. `pending` distinguishes "asked for" from "agreed".
     for (const l of leaves) {
-      // Show a busy block for the leave, but never the leave TYPE (e.g. "Sick") — that's private.
-      busy.get(l.userId)?.push({ start: l.startDate.toISOString(), end: l.endDate.toISOString(), title: 'Leave', allDay: true });
+      const pending = l.status === 'PENDING';
+      busy.get(l.userId)?.push({
+        start: l.startDate.toISOString(), end: l.endDate.toISOString(),
+        title: pending ? 'Leave (requested)' : 'Leave', allDay: true, kind: 'LEAVE', pending,
+      });
+    }
+    for (const w of wfh) {
+      const pending = w.status === 'PENDING';
+      busy.get(w.userId)?.push({
+        start: w.startDate.toISOString(), end: w.endDate.toISOString(),
+        title: pending ? 'WFH (requested)' : 'WFH', allDay: true, kind: 'WFH', pending,
+      });
+    }
+    for (const c of compoffs) {
+      const pending = c.status === 'PENDING';
+      busy.get(c.userId)?.push({
+        start: c.workDate.toISOString(), end: c.workDate.toISOString(),
+        title: pending ? 'Comp-off (requested)' : 'Comp-off', allDay: true, kind: 'COMPOFF', pending,
+      });
     }
     return ids.map(userId => ({ userId, busy: busy.get(userId) ?? [] }));
   }

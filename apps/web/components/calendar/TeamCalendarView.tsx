@@ -3,17 +3,19 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Loader, Users, ChevronLeft, ChevronRight } from 'lucide-react';
-import { api, type FreeBusy, type UserSummary } from '@/lib/api';
+import { Loader, Users, ChevronLeft, ChevronRight, Building2 } from 'lucide-react';
+import { api, type FreeBusy, type UserSummary, type Holiday, type CalendarEvent } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
+import { useOrg } from '@/lib/org-context';
+import { EVENT_COLORS } from '@/lib/calendar-colors';
+import { WEEKDAYS_LETTER, weekdayIndex } from '@/lib/date';
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const WD = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 const NAME_W = 220; // px for the frozen member column
 
@@ -32,6 +34,15 @@ const SPANS: { id: string; label: string; days: number }[] = [
 const CELL_W = 132;
 const ROW_H = 64;
 
+/** Chip colour per availability kind — same palette the rest of the calendar uses. */
+const KIND_COLOR: Record<string, string> = {
+  LEAVE: EVENT_COLORS.LEAVE,
+  WFH: EVENT_COLORS.WFH,
+  COMPOFF: EVENT_COLORS.COMPOFF,
+  MEETING: EVENT_COLORS.MEETING,
+};
+const kindColor = (k?: string) => KIND_COLOR[k ?? 'MEETING'] ?? EVENT_COLORS.EVENT;
+
 /**
  * Team Calendar — the whole team's schedule: one row per person, one column per day.
  *
@@ -40,7 +51,12 @@ const ROW_H = 64;
  * past. Use ‹ › to page a whole span back/forward and "Today" to return.
  *
  * The date header row and the member column are frozen (sticky) inside the calendar's own scroll
- * box. All-day blocks (leave / OOO) and timed events render as readable chips in each cell.
+ * box. Above the roster sits a COMPANY row: holidays and org-wide events, visible to everyone —
+ * previously the team view showed only per-person blocks, so a public holiday in the middle of the
+ * window looked like an ordinary working day nobody had booked.
+ *
+ * Personal detail stays private: the server sends availability blocks WITHOUT the leave type,
+ * reason, or meeting title. Chips are coloured by kind and marked when a request is still pending.
  */
 export function TeamCalendarView({ users }: { users: UserSummary[] }) {
   const [spanId, setSpanId] = useState('14');
@@ -64,6 +80,8 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
     [users],
   );
   const userIds = useMemo(() => roster.map(u => u.id), [roster]);
+  const { org } = useOrg();
+  const orgId = org?.id;
 
   const fromISO = from.toISOString();
   const toISO = addDays(to, 1).toISOString();
@@ -73,6 +91,48 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
     enabled: userIds.length > 0,
     staleTime: 30_000,
   });
+
+  // Company holidays for every year the window touches (a 3-month span can straddle Dec/Jan).
+  const years = useMemo(
+    () => [...new Set([from.getFullYear(), to.getFullYear()])],
+    [from, to],
+  );
+  const { data: holidayGroups = [] } = useQuery<Holiday[][]>({
+    queryKey: ['team-holidays', orgId, years.join(',')],
+    queryFn: () => Promise.all(years.map(y => api.leave.holidays(orgId!, y))),
+    enabled: !!orgId,
+    staleTime: 300_000,
+  });
+  const holidayByDay = useMemo(() => {
+    const m = new Map<string, Holiday>();
+    for (const h of holidayGroups.flat()) m.set(String(h.date).slice(0, 10), h);
+    return m;
+  }, [holidayGroups]);
+
+  // Org-wide happenings: all-day calendar entries that belong to nobody in particular
+  // (company events, announcements). Personal leave/WFH rows are excluded — they belong to
+  // the member rows, not the company row.
+  const { data: orgEvents = [] } = useQuery<CalendarEvent[]>({
+    queryKey: ['team-org-events', orgId, dayKey(from), dayKey(to)],
+    queryFn: () => api.events.list(orgId!, fromISO, toISO),
+    enabled: !!orgId,
+    staleTime: 60_000,
+  });
+  const companyByDay = useMemo(() => {
+    const m = new Map<string, CalendarEvent[]>();
+    const PERSONAL = new Set(['LEAVE', 'WFH', 'COMPOFF']);
+    for (const e of orgEvents) {
+      if (PERSONAL.has(e.type) || e.pending) continue;
+      if (e.attendees && e.attendees.length > 0) continue; // targeted at specific people
+      const start = new Date(e.startDate);
+      const end = new Date(e.endDate ?? e.startDate);
+      for (let d = startOfDay(start); d <= end; d = addDays(d, 1)) {
+        const k = dayKey(d);
+        (m.get(k) ?? m.set(k, []).get(k)!).push(e);
+      }
+    }
+    return m;
+  }, [orgEvents]);
 
   const byUserDay = useMemo(() => {
     const map = new Map<string, FreeBusy['busy']>();
@@ -88,6 +148,7 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
   }, [freeBusy]);
 
   const todayKey = dayKey(new Date());
+  const hasCompanyRow = holidayByDay.size > 0 || companyByDay.size > 0;
 
   const headCell = 'sticky top-0 z-20 bg-gray-50 border-b border-r border-gray-200';
   const nameCell = 'sticky left-0 z-10 bg-white border-r border-gray-200';
@@ -135,21 +196,74 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
                 <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Member</span>
               </th>
               {days.map((d, i) => {
-                const isToday = dayKey(d) === todayKey;
+                const k = dayKey(d);
+                const isToday = k === todayKey;
                 const wknd = d.getDay() === 0 || d.getDay() === 6;
+                const hol = holidayByDay.get(k);
                 const showMonth = d.getDate() === 1 || i === 0;
                 return (
-                  <th key={dayKey(d)} className={clsx(headCell, 'px-0 py-2 text-center align-bottom', wknd && 'bg-gray-100', isToday && 'bg-brand-100')}
+                  <th key={k} title={hol ? `${hol.name} — company holiday` : undefined}
+                    className={clsx(headCell, 'px-0 py-2 text-center align-bottom',
+                      wknd && 'bg-gray-100', hol && 'bg-red-50', isToday && 'bg-brand-100')}
                     style={{ width: CELL, minWidth: CELL }}>
                     <div className="h-4 text-[11px] font-bold text-brand-600 leading-none">{showMonth ? `${MONTHS[d.getMonth()]}` : ''}</div>
-                    <div className="text-[11px] text-gray-400 leading-none mt-0.5">{WD[d.getDay()]}</div>
-                    <div className={clsx('text-[16px] font-semibold leading-tight', isToday ? 'text-brand-700' : 'text-gray-600')}>{d.getDate()}</div>
+                    <div className="text-[11px] text-gray-400 leading-none mt-0.5">{WEEKDAYS_LETTER[weekdayIndex(d)]}</div>
+                    <div className={clsx('text-[16px] font-semibold leading-tight',
+                      hol ? 'text-red-700' : isToday ? 'text-brand-700' : 'text-gray-600')}>{d.getDate()}</div>
                   </th>
                 );
               })}
             </tr>
           </thead>
           <tbody>
+            {/* Company row — holidays and org-wide events, the same for everybody. */}
+            {hasCompanyRow && (
+              <tr className="bg-gray-50/60">
+                <td className={clsx(nameCell, 'px-3 py-2 border-b-2 border-gray-200 bg-gray-50')} style={{ width: NAME_W, minWidth: NAME_W }}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-7 h-7 rounded-full bg-white border border-gray-200 flex items-center justify-center shrink-0">
+                      <Building2 size={14} className="text-gray-500" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-800 truncate">Company</p>
+                      <p className="text-[11px] text-gray-400 truncate">Holidays &amp; org-wide</p>
+                    </div>
+                  </div>
+                </td>
+                {days.map(d => {
+                  const k = dayKey(d);
+                  const hol = holidayByDay.get(k);
+                  const evs = companyByDay.get(k) ?? [];
+                  const isToday = k === todayKey;
+                  const title = [hol && `${hol.name} — company holiday`, ...evs.map(e => e.title)].filter(Boolean).join('\n') || undefined;
+                  return (
+                    <td key={k} title={title}
+                      className={clsx('border-b-2 border-r border-gray-200 align-top p-1',
+                        hol && 'bg-red-50', isToday && 'ring-1 ring-inset ring-brand-200')}
+                      style={{ width: CELL, minWidth: CELL, height: 44 }}>
+                      <div className="flex flex-col gap-0.5 h-full overflow-hidden">
+                        {hol && (
+                          <span className="rounded px-1.5 py-1 text-[11px] font-semibold leading-tight truncate text-white"
+                            style={{ backgroundColor: EVENT_COLORS.HOLIDAY }}>
+                            {hol.name}
+                          </span>
+                        )}
+                        {evs.slice(0, hol ? 1 : 2).map(e => (
+                          <span key={e.id} className="rounded px-1.5 py-1 text-[11px] leading-tight truncate text-white"
+                            style={{ backgroundColor: EVENT_COLORS[(e.type as keyof typeof EVENT_COLORS)] ?? EVENT_COLORS.EVENT }}>
+                            {e.title}
+                          </span>
+                        ))}
+                        {evs.length > (hol ? 1 : 2) && (
+                          <span className="text-[10px] text-gray-400 px-1">+{evs.length - (hol ? 1 : 2)} more</span>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            )}
+
             {roster.map(u => (
               <tr key={u.id} className="hover:bg-gray-50/40">
                 <td className={clsx(nameCell, 'px-3 py-2 border-b border-gray-100')} style={{ width: NAME_W, minWidth: NAME_W }}>
@@ -162,27 +276,39 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
                   </div>
                 </td>
                 {days.map(d => {
-                  const items = byUserDay.get(`${u.id}|${dayKey(d)}`) ?? [];
+                  const k = dayKey(d);
+                  const items = byUserDay.get(`${u.id}|${k}`) ?? [];
                   const allDay = items.find(b => b.allDay);
                   const timed = items.filter(b => !b.allDay);
                   const wknd = d.getDay() === 0 || d.getDay() === 6;
-                  const isToday = dayKey(d) === todayKey;
+                  const hol = holidayByDay.get(k);
+                  const isToday = k === todayKey;
                   const title = items.length
-                    ? `${fullName(u)} · ${dayKey(d)}\n` + items.map(b => `${b.allDay ? 'All day' : fmtTime(b.start)} — ${b.title}`).join('\n')
+                    ? `${fullName(u)} · ${k}\n` + items.map(b => `${b.allDay ? 'All day' : fmtTime(b.start)} — ${b.title}`).join('\n')
                     : undefined;
                   return (
-                    <td key={dayKey(d)} title={title}
-                      className={clsx('border-b border-r border-gray-100 align-top relative', wknd && !allDay && 'bg-gray-50', isToday && 'ring-1 ring-inset ring-brand-200', 'p-1')}
+                    <td key={k} title={title}
+                      className={clsx('border-b border-r border-gray-100 align-top relative p-1',
+                        wknd && !allDay && 'bg-gray-50',
+                        hol && !allDay && 'bg-red-50/50',
+                        isToday && 'ring-1 ring-inset ring-brand-200')}
                       style={{ width: CELL, minWidth: CELL, height: ROW_H }}>
-                      {/* Entries as readable chips — the whole point of the wider cell. */}
+                      {/* Entries as readable chips — the whole point of the wider cell. A PENDING
+                          request is hollow (dashed outline) so it never reads as agreed. */}
                       <div className="flex flex-col gap-0.5 h-full overflow-hidden">
                         {allDay && (
-                          <span className="rounded px-1.5 py-1 bg-violet-100 text-violet-800 text-[11px] font-medium leading-tight truncate">
+                          <span
+                            className={clsx('rounded px-1.5 py-1 text-[11px] font-medium leading-tight truncate',
+                              allDay.pending ? 'border border-dashed bg-white' : 'text-white')}
+                            style={allDay.pending
+                              ? { borderColor: kindColor(allDay.kind), color: kindColor(allDay.kind) }
+                              : { backgroundColor: kindColor(allDay.kind) }}>
                             {allDay.title}
                           </span>
                         )}
                         {timed.slice(0, allDay ? 1 : 2).map((b, i) => (
-                          <span key={i} className="rounded px-1.5 py-1 bg-brand-100 text-brand-800 text-[11px] leading-tight truncate">
+                          <span key={i} className="rounded px-1.5 py-1 text-[11px] leading-tight truncate text-white"
+                            style={{ backgroundColor: kindColor(b.kind) }}>
                             <span className="tabular-nums font-medium">{fmtTime(b.start)}</span> {b.title}
                           </span>
                         ))}
@@ -201,9 +327,20 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
           </tbody>
         </table>
       </div>
-      <p className="px-4 py-2.5 text-[11px] text-gray-400 border-t border-gray-100">
-        Starts on the day you&apos;re viewing — use ‹ › to look back or ahead, or <span className="font-medium">Today</span> to return. Purple = all-day block (leave / out-of-office) · blue = a timed event · shaded = weekend. Hover any cell for the full details.
-      </p>
+      <div className="px-4 py-2.5 border-t border-gray-100 flex items-center gap-x-4 gap-y-1.5 flex-wrap">
+        {([['Leave', EVENT_COLORS.LEAVE], ['WFH', EVENT_COLORS.WFH], ['Comp-off', EVENT_COLORS.COMPOFF],
+           ['Meeting', EVENT_COLORS.MEETING], ['Holiday', EVENT_COLORS.HOLIDAY]] as const).map(([label, c]) => (
+          <span key={label} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: c }} />{label}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+          <span className="w-2.5 h-2.5 rounded-sm border border-dashed border-gray-400" />Requested (awaiting approval)
+        </span>
+        <span className="text-[11px] text-gray-400">
+          Starts on the day you&apos;re viewing — use ‹ › to look back or ahead. Personal detail (leave type, reason, meeting title) stays private.
+        </span>
+      </div>
     </div>
   );
 }

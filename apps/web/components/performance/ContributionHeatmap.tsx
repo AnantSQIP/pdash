@@ -15,9 +15,11 @@ export function ContributionHeatmap({ days }: { days: HeatmapDay[] }) {
     const map = new Map(days.map(d => [d.date, d]));
     const first = parse(days[0].date);
     const last = parse(days[days.length - 1].date);
-    const startSunday = new Date(first);
-    startSunday.setUTCDate(first.getUTCDate() - first.getUTCDay());
-    const numWeeks = Math.ceil((last.getTime() - startSunday.getTime()) / 86_400_000 / 7) + 1;
+    // Columns are weeks, rows are weekdays — and like every other calendar here the week
+    // starts MONDAY, so row 0 is Monday and row 6 is Sunday.
+    const startMonday = new Date(first);
+    startMonday.setUTCDate(first.getUTCDate() - ((first.getUTCDay() + 6) % 7));
+    const numWeeks = Math.ceil((last.getTime() - startMonday.getTime()) / 86_400_000 / 7) + 1;
 
     const weeks: (HeatmapDay | null)[][] = [];
     const monthLabels: { col: number; label: string }[] = [];
@@ -25,8 +27,8 @@ export function ContributionHeatmap({ days }: { days: HeatmapDay[] }) {
     for (let w = 0; w < numWeeks; w++) {
       const col: (HeatmapDay | null)[] = [];
       for (let r = 0; r < 7; r++) {
-        const d = new Date(startSunday);
-        d.setUTCDate(startSunday.getUTCDate() + w * 7 + r);
+        const d = new Date(startMonday);
+        d.setUTCDate(startMonday.getUTCDate() + w * 7 + r);
         const key = d.toISOString().slice(0, 10);
         const inRange = d >= first && d <= last;
         col.push(inRange ? (map.get(key) ?? { date: key, value: 0, level: 0 }) : null);
