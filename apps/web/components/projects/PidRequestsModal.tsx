@@ -87,7 +87,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
   const [saved, setSaved] = useState(false);
 
   const { data: types = [] } = useQuery<ProjectTypeDef[]>({
-    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: Infinity,
+    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: 5 * 60_000,
   });
   const sortedUsers = useMemo(
     () => [...users].sort((a, b) => `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase())),
