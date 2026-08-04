@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Loader, Users } from 'lucide-react';
+import { Loader, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 import { api, type FreeBusy, type UserSummary } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
@@ -18,11 +18,14 @@ const WD = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 const NAME_W = 220; // px for the frozen member column
 
-const RANGES: { id: string; label: string; back: number; ahead: number }[] = [
-  { id: 'week', label: 'This week', back: 0, ahead: 0 },
-  { id: 'month', label: 'This month', back: 0, ahead: 0 },
-  { id: 'q', label: '1 mo back · 3 mo ahead', back: 1, ahead: 3 },
-  { id: 'half', label: '1 mo back · 6 mo ahead', back: 1, ahead: 6 },
+// How many days each span shows, ALWAYS starting from the day you're looking at (or the anchor you
+// paged to). A team schedule answers "who is around now / next" — so it never opens in the past;
+// use the ‹ › arrows to look back.
+const SPANS: { id: string; label: string; days: number }[] = [
+  { id: '7', label: '1 week', days: 7 },
+  { id: '14', label: '2 weeks', days: 14 },
+  { id: '30', label: '1 month', days: 30 },
+  { id: '90', label: '3 months', days: 90 },
 ];
 
 // Cell sizing. "Comfortable" is wide enough to READ the event text in each cell; "Compact" keeps
@@ -34,29 +37,36 @@ const SIZES = {
 type SizeKey = keyof typeof SIZES;
 
 /**
- * Team Calendar — the whole team's schedule on a scrollable, spreadsheet-style timeline: one row per
- * person, one column per day. The date header row and the member column are FROZEN (sticky) inside
- * the calendar's own scroll box, so they stay in view however you scroll — the fix for the header
- * that used to scroll away. All-day blocks (leave / OOO) fill the cell; timed events show a dot.
+ * Team Calendar — the whole team's schedule: one row per person, one column per day.
+ *
+ * It ALWAYS starts on the day you are viewing (today by default) and runs forward for the chosen
+ * span — a team schedule answers "who is around now and next", so it must never open weeks in the
+ * past. Use ‹ › to page a whole span back/forward and "Today" to return.
+ *
+ * The date header row and the member column are frozen (sticky) inside the calendar's own scroll
+ * box. All-day blocks (leave / OOO) fill the cell; timed events show as chips (or a dot in Compact).
  */
 export function TeamCalendarView({ users }: { users: UserSummary[] }) {
-  const [rangeId, setRangeId] = useState('month');
+  const [spanId, setSpanId] = useState('14');
   const [size, setSize] = useState<SizeKey>('comfortable');
+  // `anchor` is the FIRST day shown. Starts at today; the ‹ › buttons page it, "Today" resets it.
+  const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
   const CELL = SIZES[size].cell;
   const ROW_H = SIZES[size].row;
   const roomy = size === 'comfortable';
 
-  const { from, to } = useMemo(() => {
-    const today = startOfDay(new Date());
-    if (rangeId === 'week') {
-      const dow = (today.getDay() + 6) % 7;
-      const mon = addDays(today, -dow);
-      return { from: mon, to: addDays(mon, 6) };
-    }
-    if (rangeId === 'month') return { from: new Date(today.getFullYear(), today.getMonth(), 1), to: new Date(today.getFullYear(), today.getMonth() + 1, 0) };
-    const r = RANGES.find(x => x.id === rangeId)!;
-    return { from: startOfDay(addMonths(today, -r.back)), to: startOfDay(addMonths(today, r.ahead)) };
-  }, [rangeId]);
+  const spanDays = Number(SPANS.find(s => s.id === spanId)?.days ?? 14);
+  const from = anchor;
+  const to = useMemo(() => addDays(anchor, spanDays - 1), [anchor, spanDays]);
+  const onToday = dayKey(anchor) === dayKey(startOfDay(new Date()));
+
+  /** Switching to a long span in Comfortable would make an absurdly wide grid (90 × 132px ≈ 12000px),
+   *  so drop to Compact automatically — the user can switch back if they really want it. */
+  function chooseSpan(id: string) {
+    setSpanId(id);
+    if (Number(id) > 14) setSize('compact');
+    else setSize('comfortable');
+  }
 
   const days = useMemo(() => {
     const out: Date[] = [];
@@ -104,8 +114,31 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
         <h3 className="text-sm font-semibold text-gray-800">Team calendar</h3>
         <span className="text-xs text-gray-400">· {roster.length} people</span>
         {isLoading && <Loader size={14} className="animate-spin text-gray-400" />}
-        <div className="ml-auto flex items-center gap-2">
-          {/* Cell size — comfortable shows the event text; compact fits long ranges. */}
+
+        {/* Navigation: the view ALWAYS starts at the anchor day (today by default). Page back/forward
+            a span at a time; "Today" jumps back to now. */}
+        <div className="ml-auto flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1">
+            <button onClick={() => setAnchor(a => addDays(a, -spanDays))} title="Earlier"
+              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronLeft size={15} /></button>
+            <span className="text-xs font-medium text-gray-700 min-w-[150px] text-center">
+              {from.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – {to.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </span>
+            <button onClick={() => setAnchor(a => addDays(a, spanDays))} title="Later"
+              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><ChevronRight size={15} /></button>
+            <button onClick={() => setAnchor(startOfDay(new Date()))} disabled={onToday}
+              className="ml-1 px-2.5 py-1 text-xs font-medium text-brand-600 border border-brand-200 rounded-lg hover:bg-brand-50 disabled:opacity-40 disabled:cursor-default">
+              Today
+            </button>
+          </div>
+
+          {/* How many days to show, starting from the anchor. */}
+          <select value={spanId} onChange={e => chooseSpan(e.target.value)} title="How many days to show"
+            className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:outline-none focus:border-brand-400">
+            {SPANS.map(s => <option key={s.id} value={s.id}>Show {s.label}</option>)}
+          </select>
+
+          {/* Cell size — comfortable shows the event text; compact fits longer spans. */}
           <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
             {(Object.keys(SIZES) as SizeKey[]).map(k => (
               <button key={k} onClick={() => setSize(k)}
@@ -115,10 +148,6 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
               </button>
             ))}
           </div>
-          <select value={rangeId} onChange={e => setRangeId(e.target.value)}
-            className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:outline-none focus:border-brand-400">
-            {RANGES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
-          </select>
         </div>
       </div>
 
@@ -209,7 +238,7 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
         </table>
       </div>
       <p className="px-4 py-2.5 text-[11px] text-gray-400 border-t border-gray-100">
-        Purple = all-day block (leave / out-of-office) · blue = a timed event · shaded = weekend. The date row and the member column stay put while you scroll. Use <span className="font-medium">Compact</span> for long ranges; hover any cell for the full details.
+        Starts on the day you&apos;re viewing — use ‹ › to look back or ahead, or <span className="font-medium">Today</span> to return. Purple = all-day block (leave / out-of-office) · blue = a timed event · shaded = weekend. Hover any cell for the full details.
       </p>
     </div>
   );
