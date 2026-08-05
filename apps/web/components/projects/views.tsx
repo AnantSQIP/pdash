@@ -27,13 +27,12 @@ const byName = (a: { firstName?: string | null; lastName?: string | null }, b: {
 // keeping one copy is what stops the two paths drifting apart.
 
 export function TaskListView({
-  tasks, loading, statuses, canAddTask, listName, onTaskClick, onAddTask, onStatusChange,
+  tasks, loading, statuses, canAddTask, onTaskClick, onAddTask, onStatusChange,
 }: {
   tasks: ApiTask[];
   loading: boolean;
   statuses: WorkflowStatus[];
   canAddTask: boolean;
-  listName?: string;
   onTaskClick: (task: ApiTask) => void;
   onAddTask: () => void;
   onStatusChange: (taskId: string, statusId: string) => void;
@@ -59,20 +58,11 @@ export function TaskListView({
     );
   }
 
+  // NO header here. The group card above owns the single bar — its editable name, its count and
+  // its "Add task". This used to render a SECOND bar underneath saying "General", so a renamed
+  // group showed two stacked bars with two different names for the same list.
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* List header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
-        <div className="flex items-center gap-2">
-          <LayoutList size={15} className="text-gray-400" />
-          <span className="text-sm font-semibold text-gray-700">{listName ?? 'General'}</span>
-          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{tasks.length}</span>
-        </div>
-        <button onClick={onAddTask} className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium">
-          <Plus size={12} /> Add task
-        </button>
-      </div>
-
+    <div className="bg-white overflow-hidden">
       {/* Column headers */}
       <div className="flex items-center gap-4 px-5 py-2.5 border-b border-gray-100 text-xs font-medium text-gray-400 uppercase tracking-wide">
         <span className="w-4 shrink-0" />

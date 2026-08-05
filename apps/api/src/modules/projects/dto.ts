@@ -302,6 +302,11 @@ export class AddProjectRoundDto {
   @IsIn(PROJECT_PRIORITIES)
   priority?: string;
 
+  /** Lifecycle phase to start in — usually ACTIVE, but a round can be planned ahead. */
+  @IsOptional()
+  @IsIn(PROJECT_PHASES)
+  projectPhase?: string;
+
   /** When the round starts. */
   @IsOptional()
   @IsDateString()

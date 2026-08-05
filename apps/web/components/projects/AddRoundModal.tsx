@@ -13,6 +13,12 @@ import { fullName } from '@/lib/avatar';
 
 const ROLES = ['MANAGER', 'MEMBER'] as const;
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
+// A returning client's next piece of work is usually starting now, but it can be booked ahead.
+const PHASES: { value: string; label: string }[] = [
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'PLANNING', label: 'Planning' },
+  { value: 'ON_HOLD', label: 'On hold' },
+];
 
 /**
  * Start ANOTHER project under an existing PID — the returning-client flow.
@@ -36,6 +42,8 @@ export function AddRoundModal({ fromProjectId, pid, onClose, onCreated }: {
   const [projectType, setProjectType] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<string>('MEDIUM');
+  const [projectPhase, setProjectPhase] = useState<string>('ACTIVE');
+  const [clientDueDate, setClientDueDate] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [staff, setStaff] = useState<Record<string, string>>(
@@ -54,6 +62,8 @@ export function AddRoundModal({ fromProjectId, pid, onClose, onCreated }: {
       projectType: projectType || undefined,
       description: description.trim() || undefined,
       priority,
+      projectPhase,
+      clientDueDate: clientDueDate || null,
       startDate: startDate || null,
       endDate: endDate || null,
       members: Object.entries(staff).map(([userId, projectRole]) => ({ userId, projectRole })),
@@ -146,15 +156,26 @@ export function AddRoundModal({ fromProjectId, pid, onClose, onCreated }: {
           {!datesOk && <p className="text-xs text-red-600 -mt-2">The end date cannot be before the start date.</p>}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Priority</label>
-            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-              {PRIORITIES.map(p => (
-                <button key={p} type="button" onClick={() => setPriority(p)}
-                  className={clsx('flex-1 px-2 py-2 text-xs font-medium transition-colors',
-                    priority === p ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}>
-                  {p.charAt(0) + p.slice(1).toLowerCase()}
-                </button>
-              ))}
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Client deadline</label>
+            <DateField type="date" value={clientDueDate} onChange={e => setClientDueDate(e.target.value)}
+              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+            <p className="text-[11px] text-gray-400 mt-1">What was promised to the client. Visible to managers and admins only.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Priority</label>
+              <select value={priority} onChange={e => setPriority(e.target.value)}
+                className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                {PRIORITIES.map(p => <option key={p} value={p}>{p.charAt(0) + p.slice(1).toLowerCase()}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Phase</label>
+              <select value={projectPhase} onChange={e => setProjectPhase(e.target.value)}
+                className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                {PHASES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
             </div>
           </div>
 

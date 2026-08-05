@@ -1011,6 +1011,7 @@ export const api = {
     /** Start ANOTHER project under this one's PID (returning client, Jaipur only). */
     addRound: (id: string, body: {
       title: string; projectType?: string; description?: string; priority?: string;
+      projectPhase?: string;
       startDate?: string | null; endDate?: string | null; clientDueDate?: string | null;
       members?: { userId: string; projectRole?: string }[];
       customType?: { label: string; tasks: string[]; save?: boolean };

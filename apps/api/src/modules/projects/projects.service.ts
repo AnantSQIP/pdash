@@ -251,7 +251,8 @@ export class ProjectsService {
           title: dto.title,
           description: dto.description,
           projectType: effectiveType,
-          projectPhase: 'ACTIVE',
+          // Usually ACTIVE, but a returning client's next round can be booked in ahead of time.
+          projectPhase: dto.projectPhase ?? 'ACTIVE',
           priority: dto.priority ?? 'MEDIUM',
           startDate: startD,
           dueDate: endD,
