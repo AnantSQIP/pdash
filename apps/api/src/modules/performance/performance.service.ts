@@ -476,7 +476,13 @@ export class PerformanceService {
         where: { userId, deletedAt: null, date: { gte: from, lt: to } },
         select: {
           hoursLogged: true, billable: true,
-          task: { select: { projectTasks: { select: { project: { select: { id: true, title: true } } }, take: 1 } } },
+          // Attribute by the timesheet's OWN project — that is the project the person logged
+          // against. Going through the task's first project link was arbitrary: a task can belong
+          // to more than one project, and `take: 1` has no ordering, so a shared task could have
+          // credited the wrong round. The task link stays only as a fallback for entries that
+          // predate projectId being recorded.
+          project: { select: { id: true, code: true, roundSeq: true, title: true } },
+          task: { select: { projectTasks: { select: { project: { select: { id: true, code: true, roundSeq: true, title: true } } }, take: 1 } } },
         },
       }),
       this.prisma.task.findMany({
@@ -495,11 +501,12 @@ export class PerformanceService {
       prioMap.set(t.priority, (prioMap.get(t.priority) ?? 0) + 1);
     }
 
-    const projMap = new Map<string, { name: string; hours: number; billable: number }>();
+    const projMap = new Map<string, { name: string; pid: string | null; roundSeq: number | null; hours: number; billable: number }>();
     for (const s of sheets) {
-      const proj = s.task?.projectTasks?.[0]?.project;
+      const proj = s.project ?? s.task?.projectTasks?.[0]?.project;
       if (!proj) continue;
-      const cur = projMap.get(proj.id) ?? { name: proj.title, hours: 0, billable: 0 };
+      const cur = projMap.get(proj.id)
+        ?? { name: proj.title, pid: proj.code ?? null, roundSeq: proj.roundSeq ?? null, hours: 0, billable: 0 };
       cur.hours += s.hoursLogged;
       if (s.billable) cur.billable += s.hoursLogged;
       projMap.set(proj.id, cur);
@@ -514,8 +521,12 @@ export class PerformanceService {
       tasksByStatus: [...statusMap].map(([name, value]) => ({ name, value })),
       tasksByPriority: PRIO.filter(p => prioMap.has(p)).map(p => ({ name: p, value: prioMap.get(p)! })),
       issuesBySeverity: SEV.filter(s => sevMap.has(s)).map(s => ({ name: s, value: sevMap.get(s)! })),
-      hoursByProject: [...projMap].map(([projectId, v]) => ({ projectId, name: v.name, hours: r1(v.hours), billable: r1(v.billable) }))
-        .sort((a, b) => b.hours - a.hours),
+      // pid + roundSeq travel with the name: two rounds of one PID would otherwise be told apart
+      // only by their titles.
+      hoursByProject: [...projMap].map(([projectId, v]) => ({
+        projectId, name: v.name, pid: v.pid, roundSeq: v.roundSeq,
+        hours: r1(v.hours), billable: r1(v.billable),
+      })).sort((a, b) => b.hours - a.hours),
       estimatedVsActual: openTasks.map(t => ({
         taskId: t.id, name: t.title, target: r1(t.estimatedHours ?? 0),
         actual: r1(t.timesheets.reduce((s, x) => s + x.hoursLogged, 0)),

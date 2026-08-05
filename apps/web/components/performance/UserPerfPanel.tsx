@@ -11,6 +11,7 @@ import {
 } from '@remixicon/react';
 import { Loader } from 'lucide-react';
 import { format } from 'date-fns';
+import { pidLabel } from '@/lib/mock-data';
 import { api, type UserPerformance, type UserBreakdowns, type HeatmapDay, type ApiTask, type NameValue } from '@/lib/api';
 import { ContributionHeatmap } from './ContributionHeatmap';
 import {
@@ -83,7 +84,12 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
   const statusData = withColors(bd?.tasksByStatus ?? [], STATUS_COLORS);
   const priorityData = withColors(bd?.tasksByPriority ?? [], PRIORITY_COLORS);
   const severityData = withColors(bd?.issuesBySeverity ?? [], SEVERITY_COLORS);
-  const hoursByProject = (bd?.hoursByProject ?? []).map(x => ({ name: x.name, value: x.hours }));
+  // Two rounds of one PID have the same code, so the round has to be on the label or the bars
+  // are ambiguous.
+  const hoursByProject = (bd?.hoursByProject ?? []).map(x => ({
+    name: x.pid ? `${pidLabel(x.pid, x.roundSeq)} · ${x.name}` : x.name,
+    value: x.hours,
+  }));
   const bullets = (bd?.estimatedVsActual ?? []).map(x => ({ label: x.name, actual: x.actual, target: x.target }));
 
   const taskCols: GridColumn<ApiTask>[] = [

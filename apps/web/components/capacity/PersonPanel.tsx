@@ -14,6 +14,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
+import { pidLabel } from '@/lib/mock-data';
 
 // Extending a deadline spreads the same remaining work over more days, which lowers the
 // assignee's daily occupancy — the lever to relieve someone who is overloaded or on leave.
@@ -181,8 +182,15 @@ export function PersonPanel({ row, onClose, onAssign }: { row: CapacityRow; onCl
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-1.5">
                     <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap min-w-0">
+                      {/* A PID can hold several projects, so the round has to be shown or two
+                          rounds of the same client are indistinguishable here. */}
                       {t.projectId
-                        ? <Link href={`/projects/${t.projectId}`} className="hover:text-brand-600 truncate max-w-[140px]">{t.project}</Link>
+                        ? (
+                          <Link href={`/projects/${t.projectId}`} className="hover:text-brand-600 truncate max-w-[190px]">
+                            {t.projectPid && <span className="font-mono font-semibold text-brand-700">{pidLabel(t.projectPid, t.projectRound)} </span>}
+                            {t.project}
+                          </Link>
+                        )
                         : <span>—</span>}
                       <span>·</span>
                       <span>{t.completionPercentage}%</span>

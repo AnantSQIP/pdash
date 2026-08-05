@@ -768,6 +768,18 @@ export class ProjectsService {
         patents: { select: { patent: { select: { handle: true } } } },
       },
     }) : [];
+    // Hours actually LOGGED against each project. Without this the ledger shows only the
+    // completion snapshot (workingHours), which is a different number by design — leaving no way
+    // to reconcile a PID against timesheets at all.
+    const loggedRows = projects.length
+      ? await this.prisma.timesheet.groupBy({
+          by: ['projectId'],
+          where: { projectId: { in: projects.map(p => p.id) }, deletedAt: null },
+          _sum: { hoursLogged: true },
+        })
+      : [];
+    const loggedByProject = new Map(loggedRows.map(l => [l.projectId, round1(l._sum.hoursLogged ?? 0)]));
+
     const userIds = [...new Set([...rows.map(r => r.generatedById), ...projects.map(p => p.createdBy)])];
     const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [];
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
@@ -811,6 +823,8 @@ export class ProjectsService {
       clientDeliveryDate: p.clientDeliveryDate ?? null,
       workingHours: p.workingHours ?? null,
       actualHours: p.actualHours ?? null,
+      /** Hours logged on THIS round — reconciles against the timesheets. */
+      loggedHours: loggedByProject.get(p.id) ?? 0,
       progress: p.completionPercentage ?? null,
       client: p.client?.name ?? p.client?.code ?? null,
       createdBy: p.createdBy ? (userById.get(p.createdBy) ?? null) : null,
@@ -834,6 +848,8 @@ export class ProjectsService {
         /** Every project under this PID, oldest first. One entry for a normal single-round PID. */
         rounds: rounds.map(shapeRound),
         roundCount: rounds.length,
+        /** Every hour logged across every round of this PID. */
+        totalLoggedHours: round1(rounds.reduce((n, p) => n + (loggedByProject.get(p.id) ?? 0), 0)),
         multiRound: supportsRounds(latest?.office),
         /** The latest round, kept so existing single-project consumers keep working unchanged. */
         project: latest ? shapeRound(latest) : null,

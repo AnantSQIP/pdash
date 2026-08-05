@@ -69,6 +69,8 @@ export interface CapacityRow {
   /** Open tasks driving the load — what they're actually busy with. */
   openTasks: {
     id: string; title: string; projectId?: string; project?: string;
+    /** The project's PID and which round it is — two rounds of one PID share a code. */
+    projectPid?: string | null; projectRound?: number;
     dueDate?: string | null; priority: string; completionPercentage: number;
     remainingHours: number; overdue: boolean;
   }[];
@@ -186,7 +188,9 @@ export class CapacityService {
           // hours drive their capacity — NOT an even split of the task total.
           assignees: { select: { userId: true, estimatedHours: true } },
           projectTasks: {
-            select: { project: { select: { id: true, title: true, deletedAt: true } } },
+            // A PID can hold several projects, so the title alone no longer identifies the work —
+            // the code + round do.
+            select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true } } },
             take: 1,
           },
         },
@@ -247,6 +251,8 @@ export class CapacityService {
           title: task.title,
           projectId: project?.id,
           project: project?.title,
+          projectPid: project?.code ?? null,
+          projectRound: project?.roundSeq,
           dueDate: task.dueDate ? dayKey(task.dueDate) : null,
           priority: task.priority,
           completionPercentage: task.completionPercentage ?? 0,

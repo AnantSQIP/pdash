@@ -329,6 +329,8 @@ export type PidLedgerRound = {
   startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
   completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
   workingHours?: number | null; actualHours?: number | null;
+  /** Hours logged on THIS round — reconciles against timesheets. */
+  loggedHours?: number;
   progress?: number | null; client?: string | null;
   createdBy?: string | null; createdAt?: string | null;
   patents?: string[]; members?: { name: string; role: string }[];
@@ -344,6 +346,8 @@ export type PidLedgerEntry = {
   /** Every project under this PID, oldest first. One entry for a single-project PID. */
   rounds?: PidLedgerRound[];
   roundCount?: number;
+  /** Every hour logged across every round of this PID. */
+  totalLoggedHours?: number;
   multiRound?: boolean;
   /** The LATEST round — kept so single-project consumers keep working unchanged. */
   project: {
@@ -682,7 +686,8 @@ export type UserBreakdowns = {
   tasksByStatus: NameValue[];
   tasksByPriority: NameValue[];
   issuesBySeverity: NameValue[];
-  hoursByProject: { projectId: string; name: string; hours: number; billable: number }[];
+  /** pid + roundSeq travel with the name: two rounds of one PID share a code. */
+  hoursByProject: { projectId: string; name: string; pid?: string | null; roundSeq?: number | null; hours: number; billable: number }[];
   estimatedVsActual: { taskId: string; name: string; target: number; actual: number }[];
 };
 export type OrgBreakdowns = {
@@ -715,6 +720,8 @@ export type CapacityDay = {
 };
 export type CapacityOpenTask = {
   id: string; title: string; projectId?: string; project?: string;
+  /** The project's PID and which round it is — two rounds of one PID share a code. */
+  projectPid?: string | null; projectRound?: number;
   dueDate?: string | null; priority: string; completionPercentage: number;
   remainingHours: number; overdue: boolean;
 };
