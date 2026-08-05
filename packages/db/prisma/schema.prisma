@@ -57,6 +57,7 @@ model Organization {
   rewards            Reward[]
 
   @@map("organization")
+  projectClients ProjectClient[]
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -481,6 +482,9 @@ model Project {
   // The client/matter this project is for (drives the "{Type} - {Client}" title and the
   // confidential patent picker). Null for internal/General projects.
   clientId                String?
+  // The DELIVERY client this PID belongs to — see ProjectClient. Separate from clientId above,
+  // which exists for confidential patent handles. Kept in step when a patent is linked.
+  projectClientId         String?
   projectPhase            String    @default("PLANNING")
   priority                String    @default("MEDIUM")
   startDate               DateTime?
@@ -528,6 +532,7 @@ model Project {
   projectDocuments   ProjectDocument[]
   issues             Issue[]
   client             Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  projectClient      ProjectClient?      @relation(fields: [projectClientId], references: [id], onDelete: SetNull)
   patents            ProjectPatent[]
   timesheets         Timesheet[]
   pidRequest         PidRequest?
@@ -535,6 +540,7 @@ model Project {
   @@index([deletedAt])
   @@index([clientId])
   @@index([code])
+  @@index([projectClientId])
   @@map("project")
 }
 
@@ -2194,4 +2200,41 @@ model Reward {
   @@index([organizationId, awardedAt])
   @@index([recipientId])
   @@map("reward")
+}
+
+/// A CLIENT OF THE BUSINESS — the company a project is done for.
+///
+/// Deliberately separate from `Client`, which exists to mint confidential patent handles
+/// (Pat_MLK_001) and is locked behind the passcode. This one is about DELIVERY: which company a
+/// Project ID belongs to, so a PID can be traced back to a client and a client forward to every
+/// PID and status under it. One client holds many PIDs.
+///
+/// The CODE is shareable — anyone who can see a project sees it. The NAME and contact details are
+/// the client's identity and stay restricted to Super Admins.
+model ProjectClient {
+  id             String    @id @default(cuid())
+  organizationId String
+  /// Short shareable code, e.g. "MLK". Unique per organisation; safe to show anywhere.
+  code           String
+  /// The real company name — RESTRICTED. Redacted for anyone who is not a Super Admin.
+  name           String?
+  // Contact details — restricted alongside the name.
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  address        String?
+  notes          String?
+  /// Inactive clients stay for history but are not offered when attaching a new PID.
+  isActive       Boolean   @default(true)
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projects     Project[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, deletedAt])
+  @@map("project_client")
 }

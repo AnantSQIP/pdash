@@ -70,6 +70,12 @@ export class CreateProjectDto {
   @IsString()
   clientId?: string;
 
+  /** The DELIVERY client this PID belongs to (ProjectClient) — who the work is FOR. Separate from
+   *  clientId above, which exists only to mint confidential patent handles. */
+  @IsOptional()
+  @IsString()
+  projectClientId?: string;
+
   /** Patent handles (Pat_MLK_*) to link — chosen from the selected client's confidential set. */
   @IsOptional()
   @IsArray()
