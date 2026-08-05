@@ -388,15 +388,23 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <Archive size={14} /> Close
                 </button>
               )}
-              {/* A COMPLETED project re-initializes IN PLACE keeping the SAME PID (returning client). */}
+              {/* On a SINGLE-project PID this is the returning-client action: reopen in place,
+                  keeping the same Project ID.
+
+                  On a MULTI-project PID the returning client gets a NEW project instead ("New
+                  project" above), so the same button here would say two contradictory things.
+                  It stays available — you still need a way to undo a completion made by mistake —
+                  but it is worded as what it actually does: reopen THIS piece of work. */}
               {can('project.update') && project.projectPhase === 'COMPLETED' && (
                 <button
                   onClick={() => runLifecycle('reinitialize')}
                   disabled={lifecycleBusy}
-                  title="Re-initialize for a returning client — same Project ID, existing data reused"
+                  title={multiRound
+                    ? 'Reopen this project — use “New project” for a returning client with new work'
+                    : 'Re-initialize for a returning client — same Project ID, existing data reused'}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
-                  <RotateCcw size={14} /> Re-initialize
+                  <RotateCcw size={14} /> {multiRound ? 'Reopen' : 'Re-initialize'}
                 </button>
               )}
               {/* A CLOSED project reopens with a FRESH PID (the old one was discontinued on close). */}

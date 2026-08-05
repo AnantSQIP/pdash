@@ -728,7 +728,10 @@ export class ProjectsService {
     try {
       await this.prisma.project.update({ where: { id: projectId }, data: { code: pid } });
     } catch (e: any) {
-      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      // project.code is no longer UNIQUE (a PID can hold several projects), so a duplicate code
+      // cannot surface here any more — ensureReservation above is what rejects an in-use PID.
+      // The catch stays for any other constraint, reported plainly rather than as a 500.
+      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} could not be attached.`);
       throw e;
     }
     await this.markAttached(reservationId, projectId);
