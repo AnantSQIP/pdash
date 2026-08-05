@@ -796,15 +796,16 @@ export class ProjectsService {
     // (not just the reservation row) — so a Completed project reads "Completed", a Closed one
     // "Closed", regardless of how it was closed. Only a PID with no live project falls back to the
     // reservation status (Reserved = awaiting attachment, Discontinued = retired/given back/deleted).
-    const deriveState = (resStatus: string, phase: string | null | undefined, hasProject: boolean): string => {
-      if (!hasProject) return resStatus === 'RESERVED' ? 'RESERVED' : 'DISCONTINUED';
-      switch (phase) {
-        case 'COMPLETED': return 'COMPLETED';
-        case 'CLOSED': return 'CLOSED';
-        case 'ARCHIVED':
-        case 'CANCELLED': return 'DISCONTINUED';
-        default: return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD …
-      }
+    // A PID can hold several projects. Its headline state is the state of the WORK, so any live
+    // round makes the whole PID "Working" — reading only the newest round showed a PID as Closed
+    // while an earlier round was still active.
+    const deriveState = (resStatus: string, phases: string[]): string => {
+      if (!phases.length) return resStatus === 'RESERVED' ? 'RESERVED' : 'DISCONTINUED';
+      const TERMINAL = ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
+      if (phases.some(p => !TERMINAL.includes(p))) return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD
+      if (phases.includes('COMPLETED')) return 'COMPLETED';          // done, not yet archived
+      if (phases.includes('CLOSED')) return 'CLOSED';
+      return 'DISCONTINUED';
     };
     const shapeRound = (p: (typeof projects)[number]) => ({
       id: p.id,
@@ -844,7 +845,7 @@ export class ProjectsService {
       const latest = rounds[rounds.length - 1];
       return {
         id: r.id, pid: r.pid, fyLabel: r.fyLabel, serial: r.serial, status: r.status,
-        state: deriveState(r.status, latest?.projectPhase, rounds.length > 0),
+        state: deriveState(r.status, rounds.map(p => p.projectPhase)),
         generatedBy: userById.get(r.generatedById) ?? '—',
         /** Every project under this PID, oldest first. One entry for a normal single-round PID. */
         rounds: rounds.map(shapeRound),
@@ -1592,12 +1593,46 @@ export class ProjectsService {
       // Closing implies completion — backfill completedAt if it was closed directly.
       data: { projectPhase: 'CLOSED', closedAt: now, ...(project.completedAt ? {} : { completedAt: now }) },
     });
-    // Closing DISCONTINUES the project's PID — the serial is retired for good (never reused),
-    // so numbering integrity holds. The project keeps its code as a historical record.
-    await this.prisma.pidReservation.updateMany({
-      where: { projectId: id, status: 'ATTACHED' },
-      data: { status: 'DISCONTINUED', resolvedAt: now },
-    });
+    // Closing retires the PID — but ONLY when nothing else is still running under it. A PID can
+    // now hold several projects for a returning client, and closing the latest one while an
+    // earlier round is still ACTIVE used to discontinue the whole number: the ledger showed a
+    // live matter as a retired serial.
+    if (project.code) {
+      const liveSiblings = await this.prisma.project.count({
+        where: {
+          code: project.code, id: { not: id }, deletedAt: null,
+          projectPhase: { notIn: ['CLOSED', 'ARCHIVED', 'CANCELLED'] },
+        },
+      });
+      if (liveSiblings === 0) {
+        await this.prisma.pidReservation.updateMany({
+          where: { pid: project.code, status: 'ATTACHED' },
+          data: { status: 'DISCONTINUED', resolvedAt: now },
+        });
+      } else {
+        // Keep the reservation attached, but point it at a round that is actually still live so
+        // anything reading the single projectId doesn't land on the one just closed.
+        const live = await this.prisma.project.findFirst({
+          where: {
+            code: project.code, id: { not: id }, deletedAt: null,
+            projectPhase: { notIn: ['CLOSED', 'ARCHIVED', 'CANCELLED'] },
+          },
+          orderBy: { roundSeq: 'desc' },
+          select: { id: true },
+        });
+        if (live) {
+          await this.prisma.pidReservation.updateMany({
+            where: { pid: project.code, status: 'ATTACHED' },
+            data: { projectId: live.id },
+          });
+        }
+      }
+    } else {
+      await this.prisma.pidReservation.updateMany({
+        where: { projectId: id, status: 'ATTACHED' },
+        data: { status: 'DISCONTINUED', resolvedAt: now },
+      });
+    }
     await this.events.emit({
       action: EVENTS.PROJECT_CLOSED, entityType: 'PROJECT', entityId: id,
       actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
@@ -1625,9 +1660,11 @@ export class ProjectsService {
       where: { id },
       data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
     });
+    // Match on the PID, not the reservation's single projectId — that pointer may be another
+    // round entirely, which would leave a PID discontinued while this round is live again.
     await this.prisma.pidReservation.updateMany({
-      where: { projectId: id, status: 'DISCONTINUED' },
-      data: { status: 'ATTACHED', resolvedAt: new Date() },
+      where: project.code ? { pid: project.code } : { projectId: id },
+      data: { status: 'ATTACHED', projectId: id, resolvedAt: new Date() },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
@@ -1662,11 +1699,12 @@ export class ProjectsService {
       where: { id },
       data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
     });
-    // Closing discontinued the reservation; bring it back so the ledger reads "Working" again.
-    // A completed project's reservation is still ATTACHED, so this simply matches nothing.
+    // Closing may have discontinued the reservation; bring it back and point it at this round.
+    // Matched on the PID rather than projectId for the same reason as reopen(): the pointer may
+    // be a different round under the same number.
     await this.prisma.pidReservation.updateMany({
-      where: { projectId: id, status: 'DISCONTINUED' },
-      data: { status: 'ATTACHED', resolvedAt: new Date() },
+      where: project.code ? { pid: project.code } : { projectId: id },
+      data: { status: 'ATTACHED', projectId: id, resolvedAt: new Date() },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
