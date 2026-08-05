@@ -1062,7 +1062,7 @@ export const api = {
     fulfillPidRequest: (id: string, pid: string) =>
       req<{ pid: string; projectId: string }>(`/projects/pid-requests/${id}/fulfill`,
         { method: 'POST', body: JSON.stringify({ pid }) }),
-    update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>
+    update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>> & { projectClientId?: string | null }) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Project requests routed to me as their manager (or, for admins, any pending). Org is
      *  taken from the session server-side. */

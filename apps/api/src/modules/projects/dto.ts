@@ -201,6 +201,12 @@ export class UpdateProjectDto {
   @Min(0)
   @Max(100)
   completionPercentage?: number;
+  /** Re-point this project at another delivery client (ProjectClient), or null to detach.
+   *  Corrections happen: a PID gets attached to the wrong client and has to move. */
+  @IsOptional()
+  @IsString()
+  projectClientId?: string | null;
+
 }
 
 // The PID reviewer's edit — everything they may verify/correct before attaching the PID,

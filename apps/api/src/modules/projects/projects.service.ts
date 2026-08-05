@@ -1441,6 +1441,16 @@ export class ProjectsService {
     const clientDue = resolveDate(dto.clientDueDate, existing.clientDueDate);
     this.deadlines.assertOrdered(due, clientDue);
 
+    // A project can only be moved to a client of its OWN organisation.
+    if (dto.projectClientId) {
+      const orgId = await this.orgOfProject(id);
+      const pc = await this.prisma.projectClient.findFirst({
+        where: { id: dto.projectClientId, deletedAt: null, ...(orgId ? { organizationId: orgId } : {}) },
+        select: { id: true },
+      });
+      if (!pc) throw new BadRequestException('The selected client is not valid for this project.');
+    }
+
     // Keep the lifecycle timestamps consistent with the phase however it is set. Setting
     // projectPhase via this generic edit used to skip completedAt/closedAt entirely (they
     // are set only by complete()/close()), so a project edited straight to COMPLETED/CLOSED
@@ -1465,6 +1475,8 @@ export class ProjectsService {
         ...(dto.startDate === undefined ? {} : { startDate: start }),
         ...(dto.dueDate === undefined ? {} : { dueDate: due }),
         ...(dto.clientDueDate === undefined ? {} : { clientDueDate: clientDue }),
+        // Re-point the delivery client. Same undefined/null rule: omitting leaves it, null detaches.
+        ...(dto.projectClientId === undefined ? {} : { projectClientId: dto.projectClientId || null }),
         // M24: completionPercentage is DERIVED from task rollup (recomputeProjectProgress)
         // — it is the single writer. Ignore any client-supplied value to avoid the two
         // writers clobbering each other.

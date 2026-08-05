@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { X, Loader, Lock } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type ApiProject } from '@/lib/api';
@@ -31,6 +32,11 @@ export function EditProjectModal({ project, onClose, onSaved }: {
   const [startDate, setStartDate] = useState(day(project.startDate));
   const [dueDate, setDueDate] = useState(day(project.dueDate));
   const [clientDueDate, setClientDueDate] = useState(day(project.clientDueDate));
+  // A PID gets attached to the wrong client sometimes; it has to be movable.
+  const [projectClientId, setProjectClientId] = useState(project.projectClient?.id ?? '');
+  const { data: clientOptions = [] } = useQuery({
+    queryKey: ['project-clients'], queryFn: () => api.projectClients.options(), staleTime: 300_000,
+  });
   const [saving, setSaving] = useState(false);
 
   // The server OMITS clientDueDate entirely unless this actor may see it, so the key's
@@ -53,6 +59,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
         startDate: startDate || null,
         dueDate: dueDate || null,
         ...(mayEditClientDue ? { clientDueDate: clientDueDate || null } : {}),
+        projectClientId: projectClientId || null,
       });
       onSaved(updated);
       toast('Project updated', 'success');
@@ -115,6 +122,17 @@ export function EditProjectModal({ project, onClose, onSaved }: {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Client</label>
+            <select value={projectClientId} onChange={e => setProjectClientId(e.target.value)} className={input}>
+              <option value="">No client</option>
+              {clientOptions.map(c => <option key={c.id} value={c.id}>{c.code}{c.name ? ` — ${c.name}` : ''}</option>)}
+            </select>
+            <p className="mt-1 text-xs text-gray-400">
+              Which client this Project ID belongs to. Changing it moves the PID on the client ledger.
+            </p>
           </div>
 
           {/* No cross-field min/max on the pickers — coupling them silently traps selection
