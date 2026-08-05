@@ -1364,6 +1364,9 @@ export class ProjectsService {
         },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
         client: { select: { id: true, name: true, code: true } },
+        // The DELIVERY client — separate from the patent client above. Its CODE is shareable, so
+        // unlike `client` it is NOT stripped for non-admins; only its name is (below).
+        projectClient: { select: { id: true, code: true, name: true } },
         // Linked patents — HANDLES ONLY. clientId is omitted too, so a member without
         // patent.manage can't correlate the hidden client from the network payload (S2).
         patents: {
@@ -1387,6 +1390,10 @@ export class ProjectsService {
     // are stricter — patent.manage (Super Admin) only. The PID stays visible to everyone.
     const canViewPatents = actorId ? await this.permissions.check(actorId, 'patent.view') : false;
     const canViewClient = actorId ? await this.permissions.check(actorId, 'patent.manage') : false;
+    // The delivery client's CODE stays for everyone; its identity is Super-Admin only.
+    if (redacted.projectClient && !(await this.projectClients.canSeeIdentity())) {
+      redacted.projectClient = { ...redacted.projectClient, name: null };
+    }
     if (!canViewPatents) delete redacted.patents;
     if (!canViewClient) {
       delete redacted.client;

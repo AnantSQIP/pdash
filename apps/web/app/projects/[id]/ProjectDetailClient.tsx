@@ -334,7 +334,17 @@ export function ProjectDetailClient({ projectId }: Props) {
                     {typeLabel}
                   </span>
                 )}
-                {project.client && (
+                {/* The DELIVERY client. The code is shareable; the name only arrives from the
+                    server when the viewer is allowed it, so nothing is hidden in the markup. */}
+                {project.projectClient && (
+                  <Link href="/clients"
+                    title={project.projectClient.name ? `Client: ${project.projectClient.name}` : 'Client code — open the client ledger'}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 ring-1 ring-purple-100 hover:bg-purple-100">
+                    <span className="font-mono font-bold">{project.projectClient.code}</span>
+                    {project.projectClient.name && <span>{project.projectClient.name}</span>}
+                  </Link>
+                )}
+                {!project.projectClient && project.client && (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 ring-1 ring-purple-100">
                     {project.client.name}
                   </span>

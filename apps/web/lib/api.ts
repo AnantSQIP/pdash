@@ -288,7 +288,10 @@ export type ReportProject = {
   id: string; pid: string | null; roundSeq: number; office: string | null;
   title: string; description: string | null;
   type: string | null; phase: string; priority: string; status: string | null;
-  client: string | null; billable: boolean; progress: number;
+  client: string | null;
+  /** Delivery client — code shareable, name Super-Admin only. */
+  clientCode: string | null; clientName: string | null;
+  billable: boolean; progress: number;
   startDate: string | null; dueDate: string | null; clientDueDate: string | null;
   completedAt: string | null; closedAt: string | null;
   clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
@@ -332,8 +335,31 @@ export type PidLedgerRound = {
   /** Hours logged on THIS round — reconciles against timesheets. */
   loggedHours?: number;
   progress?: number | null; client?: string | null;
+  /** The delivery client: code is shareable, name is null unless you're a Super Admin. */
+  clientCode?: string | null; clientName?: string | null; clientId?: string | null;
   createdBy?: string | null; createdAt?: string | null;
   patents?: string[]; members?: { name: string; role: string }[];
+};
+
+/**
+ * A DELIVERY CLIENT — who a Project ID's work is for.
+ * `code` is shareable; `name` and contacts are null unless the viewer is a Super Admin.
+ */
+export type ProjectClient = {
+  id: string; code: string; name: string | null; isActive: boolean;
+  contactName?: string | null; contactEmail?: string | null; contactPhone?: string | null;
+  address?: string | null; notes?: string | null; createdAt?: string;
+};
+export type ClientPidRow = {
+  pid: string | null; projectId: string; rounds: number; title: string;
+  type: string | null; office: string | null;
+  status: 'WORKING' | 'COMPLETED' | 'CLOSED' | 'DISCONTINUED';
+  progress: number; tasks: number; loggedHours: number;
+  startDate: string | null; dueDate: string | null; clientDeliveryDate: string | null;
+};
+export type ClientLedgerEntry = ProjectClient & {
+  pids: ClientPidRow[];
+  projectCount: number; pidCount: number; liveCount: number; totalLoggedHours: number;
 };
 
 export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
@@ -400,6 +426,8 @@ export type ApiProject = {
   clientDeliveryDate?: string | null; workingHours?: number | null; actualHours?: number | null;
   /** Which project this is under its PID (1 for the first). A PID can hold several. */
   roundSeq?: number;
+  /** The delivery client. `name` is null unless the viewer is a Super Admin. */
+  projectClient?: { id: string; code: string; name: string | null } | null;
   /** GURGAON | JAIPUR — the owning office. Jaipur PIDs may hold multiple projects. */
   office?: string | null;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
@@ -996,6 +1024,8 @@ export const api = {
       pid?: string; pidAssigneeId?: string;
       /** GURGAON | JAIPUR — decides whether this project's PID may later hold more projects. */
       office?: string;
+      /** The delivery client this PID belongs to. */
+      projectClientId?: string;
       customType?: { label: string; tasks: string[]; save?: boolean };
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
@@ -1289,6 +1319,18 @@ export const api = {
     setMembers: (id: string, userIds: string[]) =>
       req<{ ok: boolean; count: number }>(`/tags/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
   },
+  projectClients: {
+    /** Codes for the picker (names redacted for non-Super-Admins). */
+    options: () => req<{ id: string; code: string; name: string | null }[]>('/project-clients/options'),
+    /** The client ledger: every client with its PIDs and where each stands. */
+    ledger: () => req<ClientLedgerEntry[]>('/project-clients/ledger'),
+    create: (data: Partial<ProjectClient>) =>
+      req<ProjectClient>('/project-clients', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Partial<ProjectClient>) =>
+      req<ProjectClient>(`/project-clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: string) => req<{ ok: boolean }>(`/project-clients/${id}`, { method: 'DELETE' }),
+  },
+
   dailyDigest: {
     report: (date?: string) => req<DigestReport>(`/daily-digest/report${date ? `?date=${date}` : ''}`),
     /** The deep, fully-linked report behind the Daily Digest module. */

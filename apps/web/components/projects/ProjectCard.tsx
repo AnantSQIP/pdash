@@ -46,6 +46,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
               <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold', phase.bg, phase.text)}>
                 {phase.label}
               </span>
+              {project.clientCode && (
+                <span title={project.clientName ? `Client: ${project.clientName}` : 'Client code'}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-mono font-semibold bg-purple-50 text-purple-700 border border-purple-100">
+                  {project.clientCode}
+                </span>
+              )}
               {project.projectType && (
                 <span title={`Project type: ${projectTypeLabel(project.projectType)}`}
                   className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
