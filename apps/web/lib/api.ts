@@ -1484,8 +1484,7 @@ export const api = {
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
     // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
-    // mode: 'WFH' punches in AND raises today's work-from-home request in the same call.
-    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string; mode?: 'WFH' }) =>
+    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
     // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
     requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>

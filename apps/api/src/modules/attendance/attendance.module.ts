@@ -157,7 +157,7 @@ export class AttendanceService {
    *   3. already clocked out    → REJECT — the day is locked so a stray third
    *      punch can never overwrite/erase the real check-out time.
    */
-  async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number; area?: string }, opts?: { wfh?: boolean }) {
+  async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number; area?: string }) {
     // The day a punch belongs to is the IST CALENDAR day, not the UTC one. utcDay() put every
     // punch made between 00:00 and 05:29 IST onto the PREVIOUS day's row — so an early-morning
     // punch silently marked yesterday present.
@@ -198,12 +198,8 @@ export class AttendanceService {
         where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } },
       });
       const organizationId = await this.orgOf(userId);
-      // "Punch in (from home)": record the day as WFH — that is where the work is actually
-      // happening, and the punch coordinates say so — and raise the authorisation request in the
-      // same call so somebody can't end up punched in with no request behind it. If HR rejects,
-      // the day is flipped back to OFFICE (see rejectWfh).
-      if (opts?.wfh && !approvedWfh) await this.autoWfhRequest(userId, organizationId, today);
-      const workMode = approvedWfh || opts?.wfh ? 'WFH' : 'OFFICE';
+      // WFH is decided by an APPROVED request, not at the moment of punching.
+      const workMode = approvedWfh ? 'WFH' : 'OFFICE';
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
         create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode, ...inLoc },
@@ -401,38 +397,6 @@ export class AttendanceService {
       select: { id: true },
     });
     return rows.map(r => r.id);
-  }
-
-  /**
-   * Raise today's WFH request off the back of a "punch in from home". Silently does nothing if a
-   * request already covers today (pending or approved) — punching in twice must not spam approvers
-   * with duplicates. Best-effort: a failure here never blocks the punch itself, because refusing to
-   * record attendance is a worse outcome than a missing request the person can raise by hand.
-   */
-  private async autoWfhRequest(userId: string, organizationId: string | null, day: Date) {
-    try {
-      const existing = await this.prisma.wfhRequest.findFirst({
-        where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: day }, endDate: { gte: day } },
-      });
-      if (existing) return;
-      const req = await this.prisma.wfhRequest.create({
-        data: {
-          userId, organizationId, startDate: day, endDate: day, status: 'PENDING',
-          reason: 'Punched in from home',
-        },
-        include: { user: this.regUserSelect },
-      });
-      const u = (req as any).user;
-      const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
-      await this.notifications.notify(await this.wfhApproverIds(organizationId), {
-        type: 'wfh.requested',
-        title: 'Work-from-home request to review',
-        message: `${name} punched in from home today (${dayKey(day)}) — approve or decline the WFH day.`,
-        link: '/attendance',
-      });
-    } catch (e) {
-      this.logger.warn(`Could not raise the automatic WFH request: ${e instanceof Error ? e.message : e}`);
-    }
   }
 
   async requestWfh(userId: string, data: { startDate: string; endDate: string; reason: string }) {
@@ -1381,7 +1345,7 @@ class AttendanceController {
   // Location is MANDATORY on every punch (in and out). `mode` is still accepted but ignored
   // (workMode is derived server-side from an approved WFH request, never client-chosen).
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string; mode?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     const lat = Number(body?.lat), lng = Number(body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -1389,8 +1353,7 @@ class AttendanceController {
     }
     const accuracy = Number.isFinite(Number(body?.accuracy)) ? Number(body.accuracy) : undefined;
     const area = typeof body?.area === 'string' ? body.area : undefined;
-    // mode=WFH is the "Punch in (Work from home)" button — punch in AND raise the WFH request.
-    return this.svc.punch(actorId, { lat, lng, accuracy, area }, { wfh: body?.mode === 'WFH' });
+    return this.svc.punch(actorId, { lat, lng, accuracy, area });
   }
 
   // ── work-from-home requests ────────────────────────────────────────────────────
