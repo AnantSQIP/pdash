@@ -1,7 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Fragment, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import clsx from 'clsx';
@@ -47,7 +46,7 @@ function csvCell(v: unknown): string {
 function exportCsv(rows: PidLedgerEntry[]) {
   const header = [
     'PID', 'PID Status', 'Projects under PID', 'Project #',
-    'Project', 'Description', 'Type', 'Phase', 'Priority', 'Client Code', 'Client', 'Progress %',
+    'Project', 'Description', 'Type', 'Phase', 'Priority', 'Client', 'Progress %',
     'Start', 'End / Deadline', 'Client Deadline',
     'Client Delivered', 'Logged Hours', 'PID Total Logged Hours', 'Working Hours', 'Actual Hours', 'Hours Variance', 'Completed On', 'Closed On',
     'Patents', 'Members', 'Created by', 'Project created',
@@ -57,12 +56,12 @@ function exportCsv(rows: PidLedgerEntry[]) {
     const rounds = r.rounds ?? [];
     // A PID with no project yet (reserved / discontinued-before-use) still gets its own row.
     if (!rounds.length) {
-      return [[r.pid, stateLabel(r.state), 0, '', ...Array(23).fill(''), r.generatedBy,
+      return [[r.pid, stateLabel(r.state), 0, '', ...Array(22).fill(''), r.generatedBy,
                formatDateTimeIST(r.createdAt), r.resolvedAt ? formatDateTimeIST(r.resolvedAt) : '']];
     }
     return rounds.map(rd => [
       r.pid, stateLabel(r.state), rounds.length, rd.round,
-      rd.title, rd.description ?? '', rd.type ?? '', rd.phase ?? '', rd.priority ?? '', rd.clientCode ?? '', rd.clientName ?? rd.client ?? '',
+      rd.title, rd.description ?? '', rd.type ?? '', rd.phase ?? '', rd.priority ?? '', rd.client ?? '',
       rd.progress != null ? `${rd.progress}` : '',
       rd.startDate ? formatDate(rd.startDate) : '',
       rd.dueDate ? formatDate(rd.dueDate) : '',
@@ -97,13 +96,8 @@ function exportCsv(rows: PidLedgerEntry[]) {
  */
 export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode }) {
   const [filter, setFilter] = useState<FilterKey>('All');
-  // Arriving from the client ledger ("open this PID") pre-fills the search and opens the row, so
-  // the two ledgers read as one system rather than two lists.
-  const params = useSearchParams();
-  const deepPid = params?.get('pid') ?? '';
-  const [search, setSearch] = useState(deepPid);
+  const [search, setSearch] = useState('');
   const [openId, setOpenId] = useState<string | null>(null); // expanded detail row
-  const [autoOpened, setAutoOpened] = useState(false);
   const [reinitId, setReinitId] = useState('');              // project currently being revived
   const qc = useQueryClient();
   const { can } = usePermissions();
@@ -132,13 +126,6 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
     queryFn: () => api.projects.pidLedger(),
     staleTime: 15_000,
   });
-
-  // Open the deep-linked PID as soon as it is on screen — once only, so it doesn't fight the user.
-  useEffect(() => {
-    if (!deepPid || autoOpened || !rows.length) return;
-    const hit = rows.find(r => r.pid === deepPid);
-    if (hit) { setOpenId(hit.id); setAutoOpened(true); }
-  }, [deepPid, autoOpened, rows]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -284,17 +271,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                     </div>
                                     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-4 gap-y-1.5">
                                       <div><span className="text-gray-400">Priority</span><p className="text-gray-800">{rd.priority ?? '—'}</p></div>
-                                      <div>
-                                        <span className="text-gray-400">Client</span>
-                                        <p className="text-gray-800">
-                                          {rd.clientCode
-                                            ? <>
-                                                <Link href={`/clients`} onClick={e => e.stopPropagation()} className="font-mono font-semibold text-brand-700 hover:underline">{rd.clientCode}</Link>
-                                                {rd.clientName ? <span className="text-gray-600"> · {rd.clientName}</span> : null}
-                                              </>
-                                            : (rd.client ?? '—')}
-                                        </p>
-                                      </div>
+                                      <div><span className="text-gray-400">Client</span><p className="text-gray-800">{rd.client ?? '—'}</p></div>
                                       <div><span className="text-gray-400">Start</span><p className="text-gray-800">{rd.startDate ? formatDate(rd.startDate) : '—'}</p></div>
                                       <div><span className="text-gray-400">End / deadline</span><p className="text-gray-800">{rd.dueDate ? formatDate(rd.dueDate) : '—'}</p></div>
                                       <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{rd.clientDueDate ? formatDate(rd.clientDueDate) : '—'}</p></div>

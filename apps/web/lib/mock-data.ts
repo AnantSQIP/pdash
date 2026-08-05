@@ -11,9 +11,6 @@ export interface MockProject {
   projectType?: string | null; // e.g. HML, Novelty, FTO — shown as a tag on the card
   /** Which project this is under its PID (1 for the first). A PID may hold several. */
   roundSeq?: number;
-  /** The delivery client — code is shareable, name is Super-Admin only (null otherwise). */
-  clientCode?: string | null;
-  clientName?: string | null;
   projectPhase: Phase;
   priority: Priority;
   completionPercentage: number;

@@ -109,11 +109,6 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
           </div>
         </td>
         <td className="px-4 py-3">
-          {project.clientCode
-            ? <span title={project.clientName ?? 'Client code'} className="text-[11px] px-2 py-0.5 rounded-full font-mono font-semibold bg-purple-50 text-purple-700 border border-purple-100 whitespace-nowrap">{project.clientCode}</span>
-            : <span className="text-xs text-gray-300">—</span>}
-        </td>
-        <td className="px-4 py-3">
           {project.type
             ? <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-700 border border-indigo-100 whitespace-nowrap">{projectTypeLabel(project.type)}</span>
             : <span className="text-xs text-gray-300">—</span>}
@@ -130,7 +125,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
       </tr>
       {expanded && (
         <tr className="bg-brand-50/40">
-          <td colSpan={8} className="px-4 py-4 shadow-[inset_3px_0_0_0_theme(colors.brand.500)]">
+          <td colSpan={7} className="px-4 py-4 shadow-[inset_3px_0_0_0_theme(colors.brand.500)]">
             <div className="rounded-xl border-2 border-brand-200 bg-white p-4">
               <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                 <div className="flex items-center gap-2 min-w-0">
@@ -152,11 +147,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
               {/* Everything known about the matter. */}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-5 gap-y-2 text-xs mb-4">
                 <div><span className="text-gray-400">Type</span><p className="text-gray-800">{project.type ? projectTypeLabel(project.type) : '—'}</p></div>
-                <div><span className="text-gray-400">Client</span><p className="text-gray-800">
-                  {project.clientCode
-                    ? <><span className="font-mono font-semibold text-purple-700">{project.clientCode}</span>{project.clientName ? ` · ${project.clientName}` : ''}</>
-                    : (project.client ?? '—')}
-                </p></div>
+                <div><span className="text-gray-400">Client</span><p className="text-gray-800">{project.client ?? '—'}</p></div>
                 <div><span className="text-gray-400">Status</span><p className="text-gray-800">{project.status ?? project.phase}</p></div>
                 <div><span className="text-gray-400">Start</span><p className="text-gray-800">{project.startDate ? formatDate(project.startDate) : '—'}</p></div>
                 <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{project.dueDate ? formatDate(project.dueDate) : '—'}</p></div>
@@ -239,7 +230,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
 export default function ReportsPage() {
   const { org } = useOrg();
   const qc = useQueryClient();
-  const [sortField, setSortField] = useState<'title' | 'clientCode' | 'progress' | 'phase' | 'priority'>('progress');
+  const [sortField, setSortField] = useState<'title' | 'progress' | 'phase' | 'priority'>('progress');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [openId, setOpenId] = useState<string | null>(null); // expanded project detail (spotlit)
   const [search, setSearch] = useState('');                   // by PID or project name
@@ -271,7 +262,7 @@ export default function ReportsPage() {
   // Search matches the PID or the name — the two things anyone actually has to hand.
   const q = search.trim().toLowerCase();
   const filtered = q
-    ? projects.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''} ${p.clientCode ?? ''} ${p.clientName ?? ''}`.toLowerCase().includes(q))
+    ? projects.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''}`.toLowerCase().includes(q))
     : projects;
 
   const sorted = [...filtered].sort((a, b) => {
@@ -468,7 +459,6 @@ export default function ReportsPage() {
                 <tr className="border-b border-gray-100 bg-gray-50">
                   {[
                     ['title', 'Project'],
-                    ['clientCode', 'Client'],
                     ['type', 'Type'],
                     ['phase', 'Phase'],
                     ['priority', 'Priority'],
@@ -489,7 +479,7 @@ export default function ReportsPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {sorted.length === 0 && (
-                  <tr><td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-400">
+                  <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
                     {q ? `No project matches “${search.trim()}”.` : 'No projects found.'}
                   </td></tr>
                 )}

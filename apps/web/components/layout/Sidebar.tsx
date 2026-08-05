@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, Building2, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -55,9 +55,6 @@ const ADMIN_NAV: NavItem[] = [
   // deadline — so it is Super-Admin only, matching the server-side gate in daily-digest.module.
   { href: '/digest',      icon: ClipboardList,  label: 'Daily Digest', superAdminOnly: true },
   { href: '/pid-ledger',  icon: KeyRound,       label: 'PID Ledger', perm: 'user.manage_access' },
-  // Codes are shareable, so anyone who can see projects can see the ledger; names are redacted
-  // server-side for anyone who is not a Super Admin.
-  { href: '/clients',     icon: Building2,      label: 'Client Ledger', perm: 'project.view' },
   { href: '/admin/audit', icon: History,        label: 'Audit Log', perm: ['audit.view'] },
 ];
 

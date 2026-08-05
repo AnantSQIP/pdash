@@ -19,7 +19,6 @@ import { PROJECT_TYPES, templateFor } from './project-templates';
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { financialYear, formatPid, pidScope } from '../../common/financial-year';
 import { designationRank } from './seniority';
-import { ProjectClientsService } from '../project-clients/project-clients.module';
 
 /** Hours to one decimal — the precision timesheets are logged at. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -44,7 +43,6 @@ export class ProjectsService {
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
-    private readonly projectClients: ProjectClientsService,
     private readonly access: ProjectAccessService,
     private readonly sequence: SequenceService,
   ) {}
@@ -188,7 +186,7 @@ export class ProjectsService {
 
     const source = await this.prisma.project.findFirst({
       where: { id: fromProjectId, deletedAt: null },
-      select: { id: true, code: true, office: true, clientId: true, projectClientId: true, title: true },
+      select: { id: true, code: true, office: true, clientId: true, title: true },
     });
     if (!source) throw new NotFoundException(`Project ${fromProjectId} not found`);
     if (!source.code) {
@@ -251,8 +249,6 @@ export class ProjectsService {
           // The PID, the client and the office all carry over — that is the point of a round.
           code: source.code,
           clientId: source.clientId,
-          // The client owns the PID, so every round under it belongs to the same client.
-          projectClientId: source.projectClientId,
           office: source.office,
           roundSeq,
           title: dto.title,
@@ -297,16 +293,6 @@ export class ProjectsService {
       });
     }
     return this.deadlines.redactProject(created, await this.deadlines.scope());
-  }
-
-  /**
-   * Strip client NAMES from a list of projects for a viewer who may not see them. The code stays —
-   * it is deliberately shareable — but the company behind it is Super-Admin-only.
-   */
-  private async withClientVisibility<T extends { projectClient?: { name?: string | null } | null }>(rows: T[]): Promise<T[]> {
-    if (await this.projectClients.canSeeIdentity()) return rows;
-    for (const r of rows) if (r.projectClient) r.projectClient.name = null;
-    return rows;
   }
 
   /**
@@ -482,27 +468,6 @@ export class ProjectsService {
       derivedClientId = clientIds[0] ?? null;
     }
 
-    // The DELIVERY client this PID belongs to. Chosen explicitly; when patents are attached the
-    // patent side derives its own confidential client, and we mirror it here by CODE so the same
-    // company never ends up recorded under two different codes.
-    let projectClientId: string | null = dto.projectClientId?.trim() || null;
-    if (projectClientId) {
-      const pc = await this.prisma.projectClient.findFirst({
-        where: { id: projectClientId, organizationId, deletedAt: null },
-        select: { id: true },
-      });
-      if (!pc) throw new BadRequestException('The selected client is not valid for this organization.');
-    }
-    if (!projectClientId && derivedClientId) {
-      const patentClient = await this.prisma.client.findFirst({
-        where: { id: derivedClientId }, select: { code: true, name: true },
-      });
-      if (patentClient) {
-        const mirrored = await this.projectClients.ensureByCode(organizationId, patentClient.code, patentClient.name, creator.id);
-        projectClientId = mirrored?.id ?? null;
-      }
-    }
-
     // A PID is NEVER assigned automatically. Even an authority must have explicitly generated one
     // (or typed one) — dto.pid carries that choice. Without it the project is created with a
     // PENDING code, exactly like a requester's, and the PID is attached later from the project or
@@ -526,7 +491,6 @@ export class ProjectsService {
           description: dto.description,
           projectType: effectiveType,
           clientId: derivedClientId,
-          projectClientId,
           projectPhase: 'ACTIVE',
           // The owning office decides whether this PID can later hold more projects. Taken from
           // the creator unless they picked another office on the form.
@@ -788,8 +752,7 @@ export class ProjectsService {
 
   /** Admin/Super-Admin PID ledger: every reservation with its status + project + person. */
   async allReservations(organizationId: string) {
-    await this.sweepExpired(organizationId);
-    const maySeeClientIdentity = await this.projectClients.canSeeIdentity(); // destroys expired + any legacy EXPIRED/RELEASED rows
+    await this.sweepExpired(organizationId); // destroys expired + any legacy EXPIRED/RELEASED rows
     const rows = await this.prisma.pidReservation.findMany({
       where: { organizationId, status: { in: ['RESERVED', 'ATTACHED', 'DISCONTINUED'] } },
       orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
@@ -804,7 +767,6 @@ export class ProjectsService {
       orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: {
         id: true, code: true, roundSeq: true, office: true,
-        projectClient: { select: { id: true, code: true, name: true } },
         title: true, description: true, projectPhase: true, projectType: true,
         priority: true, startDate: true, dueDate: true, clientDueDate: true,
         completionPercentage: true, createdBy: true, createdAt: true,
@@ -874,10 +836,6 @@ export class ProjectsService {
       loggedHours: loggedByProject.get(p.id) ?? 0,
       progress: p.completionPercentage ?? null,
       client: p.client?.name ?? p.client?.code ?? null,
-      /** The DELIVERY client this PID belongs to — the code is shareable, the name is not. */
-      clientCode: p.projectClient?.code ?? null,
-      clientName: maySeeClientIdentity ? (p.projectClient?.name ?? null) : null,
-      clientId: p.projectClient?.id ?? null,
       createdBy: p.createdBy ? (userById.get(p.createdBy) ?? null) : null,
       createdAt: p.createdAt ?? null,
       patents: (p.patents ?? []).map(pp => pp.patent.handle),
@@ -1155,8 +1113,6 @@ export class ProjectsService {
         // this as a tag — it was missing from this projection, so the tag silently never rendered
         // no matter what the card code did.
         projectType: true,
-        // Who the work is FOR. The code shows everywhere; the name is redacted below.
-        projectClient: { select: { id: true, code: true, name: true } },
         projectPhase: true,
         priority: true,
         completionPercentage: true,
@@ -1179,8 +1135,7 @@ export class ProjectsService {
         _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
       },
     });
-    const redacted = this.deadlines.redactProjects(projects, await this.deadlines.scope());
-    return this.withClientVisibility(redacted);
+    return this.deadlines.redactProjects(projects, await this.deadlines.scope());
   }
 
   /**
@@ -1211,7 +1166,6 @@ export class ProjectsService {
         clientDeliveryDate: true, workingHours: true, actualHours: true,
         createdBy: true, createdAt: true,
         client: { select: { name: true, code: true } },
-        projectClient: { select: { id: true, code: true, name: true } },
         currentStatus: { select: { name: true } },
         members: {
           where: { isActive: true },
@@ -1265,8 +1219,6 @@ export class ProjectsService {
         type: p.projectType ?? null, phase: p.projectPhase, priority: p.priority,
         status: p.currentStatus?.name ?? null,
         client: p.client?.name ?? p.client?.code ?? null,
-        clientCode: p.projectClient?.code ?? null,
-        clientName: p.projectClient?.name ?? null,
         billable: p.billable,
         progress: p.completionPercentage,
         startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
@@ -1298,9 +1250,7 @@ export class ProjectsService {
       };
     });
     // Redact the client deadline exactly as the list does — same rule, same scope.
-    const scoped = this.deadlines.redactProjects(shaped as never, await this.deadlines.scope()) as never as { clientName?: string | null }[];
-    if (!(await this.projectClients.canSeeIdentity())) scoped.forEach(r => { r.clientName = null; });
-    return scoped;
+    return this.deadlines.redactProjects(shaped as never, await this.deadlines.scope());
   }
 
   /**
@@ -1364,9 +1314,6 @@ export class ProjectsService {
         },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
         client: { select: { id: true, name: true, code: true } },
-        // The DELIVERY client — separate from the patent client above. Its CODE is shareable, so
-        // unlike `client` it is NOT stripped for non-admins; only its name is (below).
-        projectClient: { select: { id: true, code: true, name: true } },
         // Linked patents — HANDLES ONLY. clientId is omitted too, so a member without
         // patent.manage can't correlate the hidden client from the network payload (S2).
         patents: {
@@ -1390,10 +1337,6 @@ export class ProjectsService {
     // are stricter — patent.manage (Super Admin) only. The PID stays visible to everyone.
     const canViewPatents = actorId ? await this.permissions.check(actorId, 'patent.view') : false;
     const canViewClient = actorId ? await this.permissions.check(actorId, 'patent.manage') : false;
-    // The delivery client's CODE stays for everyone; its identity is Super-Admin only.
-    if (redacted.projectClient && !(await this.projectClients.canSeeIdentity())) {
-      redacted.projectClient = { ...redacted.projectClient, name: null };
-    }
     if (!canViewPatents) delete redacted.patents;
     if (!canViewClient) {
       delete redacted.client;
@@ -1441,16 +1384,6 @@ export class ProjectsService {
     const clientDue = resolveDate(dto.clientDueDate, existing.clientDueDate);
     this.deadlines.assertOrdered(due, clientDue);
 
-    // A project can only be moved to a client of its OWN organisation.
-    if (dto.projectClientId) {
-      const orgId = await this.orgOfProject(id);
-      const pc = await this.prisma.projectClient.findFirst({
-        where: { id: dto.projectClientId, deletedAt: null, ...(orgId ? { organizationId: orgId } : {}) },
-        select: { id: true },
-      });
-      if (!pc) throw new BadRequestException('The selected client is not valid for this project.');
-    }
-
     // Keep the lifecycle timestamps consistent with the phase however it is set. Setting
     // projectPhase via this generic edit used to skip completedAt/closedAt entirely (they
     // are set only by complete()/close()), so a project edited straight to COMPLETED/CLOSED
@@ -1475,8 +1408,6 @@ export class ProjectsService {
         ...(dto.startDate === undefined ? {} : { startDate: start }),
         ...(dto.dueDate === undefined ? {} : { dueDate: due }),
         ...(dto.clientDueDate === undefined ? {} : { clientDueDate: clientDue }),
-        // Re-point the delivery client. Same undefined/null rule: omitting leaves it, null detaches.
-        ...(dto.projectClientId === undefined ? {} : { projectClientId: dto.projectClientId || null }),
         // M24: completionPercentage is DERIVED from task rollup (recomputeProjectProgress)
         // — it is the single writer. Ignore any client-supplied value to avoid the two
         // writers clobbering each other.

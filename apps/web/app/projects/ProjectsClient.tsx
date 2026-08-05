@@ -53,8 +53,6 @@ function toDisplay(p: ApiProject): MockProject {
     description: p.description ?? '',
     projectType: p.projectType ?? null,
     roundSeq: p.roundSeq ?? 1,
-    clientCode: p.projectClient?.code ?? null,
-    clientName: p.projectClient?.name ?? null,
     projectPhase: p.projectPhase as Phase,
     priority: p.priority as any,
     completionPercentage: p.completionPercentage,
@@ -411,12 +409,6 @@ function ProjectRow({ project }: { project: MockProject }) {
             ? <span className="text-xs font-mono font-bold text-brand-700">{pidLabel(project.code, project.roundSeq)}</span>
             : <span className="text-xs font-mono font-bold text-amber-500">PID pending</span>}
           <span className={clsx('text-[11px] font-semibold px-2 py-0.5 rounded-full', phase.bg, phase.text)}>{phase.label}</span>
-          {project.clientCode && (
-            <span title={project.clientName ?? 'Client code'}
-              className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-100">
-              {project.clientCode}
-            </span>
-          )}
           {project.projectType && (
             <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
               {projectTypeLabel(project.projectType)}

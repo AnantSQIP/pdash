@@ -22,9 +22,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const { org, currentUser, users } = useOrg();
   const { can } = usePermissions();
   const { user } = useAuth();
-  const { data: clientOptions = [] } = useQuery({
-    queryKey: ['project-clients'], queryFn: () => api.projectClients.options(), staleTime: 300_000,
-  });
   // A PID AUTHORITY (project.generate_pid) mints the Project ID themselves. Everyone else
   // REQUESTS one: they nominate an authority who assigns the PID after the project is created.
   const canGeneratePid = can('project.generate_pid');
@@ -45,8 +42,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   // The office that owns the matter. Not cosmetic: a Jaipur PID may later hold several projects
   // for a returning client, while a Gurgaon PID stays one project.
   const [office, setOffice] = useState('');
-  // Which client this PID is for. Offered for the offices that run on client codes.
-  const [projectClientId, setProjectClientId] = useState('');
   // Default to the creator's own office as soon as we know it, without stamping on a manual pick.
   useEffect(() => { if (!office && user?.office) setOffice(user.office); }, [user?.office, office]);
   const [startDate, setStartDate] = useState('');
@@ -172,7 +167,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         description: description || undefined,
         priority,
         office: office || undefined,
-        projectClientId: projectClientId || undefined,
         startDate: startDate || undefined,
         dueDate: dueDate || undefined,
         clientDueDate: (canSetClientDue && clientDueDate) ? clientDueDate : undefined,
@@ -437,27 +431,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               </select>
               <p className="text-[11px] text-gray-400 mt-1">
                 They&apos;ll be notified to assign a Project ID. Only people with PID authority can be chosen.
-              </p>
-            </div>
-          )}
-
-          {/* The delivery client — who this Project ID's work is for. */}
-          {office === 'GURGAON' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Client</label>
-              <select
-                value={projectClientId}
-                onChange={e => setProjectClientId(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
-              >
-                <option value="">No client</option>
-                {clientOptions.map(c => (
-                  <option key={c.id} value={c.id}>{c.code}{c.name ? ` — ${c.name}` : ''}</option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-gray-400">
-                Links this Project ID to a client, so it shows on the client ledger with every other PID for them.
-                {' '}Codes are created in the Client Ledger.
               </p>
             </div>
           )}

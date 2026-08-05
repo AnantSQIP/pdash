@@ -17,7 +17,6 @@ import { HealthModule } from './modules/health/health.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { TaskListsModule } from './modules/tasklists/tasklists.module';
-import { ProjectClientsModule } from './modules/project-clients/project-clients.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { StatusesModule } from './modules/statuses/statuses.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
@@ -67,7 +66,6 @@ import { PatentsModule } from './modules/patents/patents.module';
     // Core project management
     ProjectsModule,
     TaskListsModule,
-    ProjectClientsModule,
     TasksModule,
     // Workflow engine
     WorkflowsModule,
