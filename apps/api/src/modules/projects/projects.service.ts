@@ -109,8 +109,11 @@ export class ProjectsService {
     });
     const initialStatusId = wf ? (wf.statuses.find(s => s.type === 'OPEN') ?? wf.statuses[0])?.id : undefined;
 
+    // This IS the project's group — not a second one sitting under an empty "General". A typed
+    // project used to get both, so every board opened with a pointless empty group above the
+    // actual work. Being the default also means new tasks land here.
     const list = await tx.taskList.create({
-      data: { projectId, name: template.taskListName ?? template.label ?? 'Tasks', sequence: 1 },
+      data: { projectId, name: template.taskListName ?? template.label ?? 'Tasks', isDefault: true, sequence: 0 },
     });
     // Sequentially, so ProjectTask.sequence reflects the workflow order.
     for (let i = 0; i < template.tasks.length; i++) {
@@ -259,7 +262,9 @@ export class ProjectsService {
           clientDueDate: clientDue,
           createdBy: creator.id,
           members: { create: members },
-          taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } },
+          ...(template?.tasks?.length
+            ? {}
+            : { taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } } }),
         },
       });
       if (template) await this.seedTemplateTasks(tx, project.id, template, creator.id);
@@ -497,9 +502,11 @@ export class ProjectsService {
           clientDueDate: clientDue,
           createdBy: creator.id,
           members: { create: members },
-          taskLists: {
-            create: { name: 'General', isDefault: true, sequence: 0 },
-          },
+          // "General" is only created when the type brings no group of its own — otherwise the
+          // type's group is the default and an empty "General" would just be noise.
+          ...(template?.tasks?.length
+            ? {}
+            : { taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } } }),
         },
         include: { taskLists: true },
       });
