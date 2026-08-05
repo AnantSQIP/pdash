@@ -27,7 +27,7 @@ const variance = (p: ReportProject) =>
   p.actualHours != null && p.workingHours != null ? Math.round((p.actualHours - p.workingHours) * 10) / 10 : '';
 
 export const PROJECT_COLUMNS = [
-  'PID', 'Project', 'Project Type', 'Phase', 'Status', 'Priority', 'Client', 'Billable',
+  'PID', 'Project #', 'Project', 'Project Type', 'Phase', 'Status', 'Priority', 'Client', 'Billable',
   'Progress %', 'Tasks', 'Tasks Closed', 'Tasks Open', 'Members',
   'Start', 'Deadline', 'Client Deadline', 'Client Delivered', 'Completed At', 'Closed At',
   'Working Hours', 'Actual Hours', 'Hours Variance', 'Logged Hours', 'Estimated Hours',
@@ -35,7 +35,7 @@ export const PROJECT_COLUMNS = [
 ];
 
 export const projectRow = (p: ReportProject) => [
-  p.pid ?? 'PID pending', p.title, p.type ? projectTypeLabel(p.type) : '', p.phase, p.status ?? '',
+  p.pid ?? 'PID pending', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '', p.phase, p.status ?? '',
   p.priority, p.client ?? '', p.billable ? 'Yes' : 'No',
   p.progress, p.taskCount, p.tasksClosed, p.tasksOpen, p.memberCount,
   d(p.startDate), d(p.dueDate), d(p.clientDueDate), dt(p.clientDeliveryDate), dt(p.completedAt), dt(p.closedAt),
@@ -47,7 +47,7 @@ export const projectRow = (p: ReportProject) => [
 ];
 
 export const TASK_COLUMNS = [
-  'PID', 'Project', 'Project Type', 'Task', 'Task Status', 'Closed', 'Priority', 'Task Deadline',
+  'PID', 'Project #', 'Project', 'Project Type', 'Task', 'Task Status', 'Closed', 'Priority', 'Task Deadline',
   'Task Estimated Hours', 'Task Actual Hours', 'Assignee', 'Assignee Role',
   'Assignee Estimated Hours', 'Assignee Deadline',
 ];
@@ -56,7 +56,7 @@ export const TASK_COLUMNS = [
 export const taskRows = (p: ReportProject) =>
   p.tasks.flatMap(t => {
     const base = [
-      p.pid ?? 'PID pending', p.title, p.type ? projectTypeLabel(p.type) : '',
+      p.pid ?? 'PID pending', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '',
       t.title, t.status ?? '', t.isClosed ? 'Yes' : 'No', t.priority, d(t.dueDate),
       t.estimatedHours ?? '', t.actualHours ?? '',
     ];

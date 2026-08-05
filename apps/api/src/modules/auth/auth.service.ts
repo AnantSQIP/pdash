@@ -18,6 +18,9 @@ function sha256(s: string): string { return createHash('sha256').update(s).diges
 export type AuthUser = {
   id: string; firstName: string; lastName: string; email: string;
   designation: string | null; status: string; organizationId: string; mustResetPassword: boolean;
+  /** GURGAON | JAIPUR. Defaults the office on a new project, which decides whether that
+   *  project's PID may later hold more than one project. */
+  office: string | null;
   /** False until the user has filled in their joining details — AppShell blocks on this. */
   profileCompleted: boolean;
 };
@@ -78,6 +81,7 @@ export class AuthService {
     return {
       id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email,
       designation: u.designation ?? null, status: u.status, organizationId: u.organizationId,
+      office: u.office ?? null,
       mustResetPassword: u.mustResetPassword,
       profileCompleted: !!u.profileCompletedAt,
     };

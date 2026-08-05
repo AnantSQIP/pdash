@@ -13,7 +13,7 @@ import { api, type DigestDetail, type DigestProject, type DigestTask, type Diges
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { formatDate, formatDateTimeIST } from '@/lib/date';
-import { projectTypeLabel } from '@/lib/mock-data';
+import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { digestCsv } from './export';
 
 const shift = (d: string, days: number) => new Date(new Date(`${d}T00:00:00`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
@@ -61,7 +61,7 @@ function ProjectCardRow({ p }: { p: DigestProject }) {
             {p.title} <ExternalLink size={12} className="text-gray-300" />
           </Link>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
-            <span className="text-[11px] font-mono font-bold text-brand-700">{p.pid ?? 'PID pending'}</span>
+            <span className="text-[11px] font-mono font-bold text-brand-700">{pidLabel(p.pid, p.roundSeq)}</span>
             {p.type && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">{projectTypeLabel(p.type)}</span>}
             <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{p.phase}</span>
             <span className={clsx('text-[11px] px-1.5 py-0.5 rounded-full border', PRIORITY_TINT[p.priority] ?? PRIORITY_TINT.LOW)}>{p.priority}</span>
@@ -121,7 +121,7 @@ function TaskCardRow({ t, showOverdue }: { t: DigestTask; showOverdue?: boolean 
           <div className="flex items-center gap-1.5 flex-wrap mt-1 text-[11px]">
             {t.project ? (
               <Link href={`/projects/${t.project.id}`} className="inline-flex items-center gap-1 text-brand-700 hover:underline">
-                <span className="font-mono font-bold">{t.project.pid ?? 'PID pending'}</span>
+                <span className="font-mono font-bold">{pidLabel(t.project.pid, t.project.roundSeq)}</span>
                 <span className="text-gray-600">{t.project.title}</span>
                 <ExternalLink size={10} className="text-gray-300" />
               </Link>
@@ -181,7 +181,7 @@ function PersonHoursRow({ p }: { p: DigestPersonHours }) {
               <div className="min-w-0">
                 {e.project ? (
                   <Link href={`/projects/${e.project.id}`} className="text-brand-700 hover:underline">
-                    <span className="font-mono font-bold">{e.project.pid ?? 'PID pending'}</span> <span className="text-gray-600">{e.project.title}</span>
+                    <span className="font-mono font-bold">{pidLabel(e.project.pid, e.project.roundSeq)}</span> <span className="text-gray-600">{e.project.title}</span>
                   </Link>
                 ) : <span className="text-gray-400">No project</span>}
                 {e.task && <span className="text-gray-500"> · {e.task.title}</span>}

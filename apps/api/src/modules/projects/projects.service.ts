@@ -310,6 +310,9 @@ export class ProjectsService {
       completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
       createdBy: true, createdAt: true,
       client: { select: { id: true, name: true, code: true } },
+      // The card's "Add task" needs the round's own default list.
+      taskLists: { where: { deletedAt: null }, select: { id: true, name: true, isDefault: true, sequence: true }, orderBy: { sequence: 'asc' } },
+      workflowId: true,
       members: {
         where: { isActive: true },
         select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true } } },
@@ -1074,6 +1077,9 @@ export class ProjectsService {
       select: {
         id: true,
         code: true, // P1: the PID (SQ_26_27_nnn) — so cards/rows/search can show & match it
+        // A PID can hold several projects; the round distinguishes them in every list.
+        roundSeq: true,
+        office: true,
         title: true,
         projectPhase: true,
         priority: true,
@@ -1120,7 +1126,8 @@ export class ProjectsService {
       where: { deletedAt: null, ...scope },
       orderBy: { createdAt: 'desc' },
       select: {
-        id: true, code: true, title: true, description: true, projectType: true,
+        id: true, code: true, roundSeq: true, office: true,
+        title: true, description: true, projectType: true,
         projectPhase: true, priority: true, completionPercentage: true, billable: true,
         startDate: true, dueDate: true, clientDueDate: true,
         completedAt: true, closedAt: true,
@@ -1175,7 +1182,8 @@ export class ProjectsService {
       const tasks = p.projectTasks.map(pt => pt.task);
       const closed = tasks.filter(t => t.currentStatus?.type === 'CLOSED').length;
       return {
-        id: p.id, pid: p.code ?? null, title: p.title, description: p.description ?? null,
+        id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, office: p.office ?? null,
+        title: p.title, description: p.description ?? null,
         type: p.projectType ?? null, phase: p.projectPhase, priority: p.priority,
         status: p.currentStatus?.name ?? null,
         client: p.client?.name ?? p.client?.code ?? null,

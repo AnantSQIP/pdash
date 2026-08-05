@@ -8,7 +8,7 @@ import clsx from 'clsx';
 import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
-import { PHASE_META, PRIORITY_META, projectTypeLabel, type Phase, type MockProject } from '@/lib/mock-data';
+import { PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -52,6 +52,7 @@ function toDisplay(p: ApiProject): MockProject {
     title: p.title,
     description: p.description ?? '',
     projectType: p.projectType ?? null,
+    roundSeq: p.roundSeq ?? 1,
     projectPhase: p.projectPhase as Phase,
     priority: p.priority as any,
     completionPercentage: p.completionPercentage,
@@ -405,7 +406,7 @@ function ProjectRow({ project }: { project: MockProject }) {
         <p className="font-semibold text-gray-900 truncate group-hover:text-brand-600 transition-colors">{project.title}</p>
         <div className="flex items-center gap-2 flex-wrap mt-1">
           {project.code
-            ? <span className="text-xs font-mono font-bold text-brand-700">{project.code}</span>
+            ? <span className="text-xs font-mono font-bold text-brand-700">{pidLabel(project.code, project.roundSeq)}</span>
             : <span className="text-xs font-mono font-bold text-amber-500">PID pending</span>}
           <span className={clsx('text-[11px] font-semibold px-2 py-0.5 rounded-full', phase.bg, phase.text)}>{phase.label}</span>
           {project.projectType && (

@@ -8,7 +8,7 @@ import clsx from 'clsx';
 import { api, type DashboardStats, type ReportProject } from '@/lib/api';
 import { formatDate, formatDateTimeIST } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
-import { projectTypeLabel } from '@/lib/mock-data';
+import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
 import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
 
@@ -102,7 +102,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
             {expanded ? <ChevronDown size={14} className="text-brand-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
             <div className="min-w-0">
               <span className={clsx('block text-[11px] font-mono font-bold', expanded ? 'text-brand-800' : 'text-brand-700')}>
-                {project.pid ?? 'PID pending'}
+                {pidLabel(project.pid, project.roundSeq)}
               </span>
               <span className={clsx('text-sm', expanded ? 'font-semibold text-gray-900' : 'font-medium text-gray-900')}>{project.title}</span>
             </div>
@@ -129,7 +129,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
             <div className="rounded-xl border-2 border-brand-200 bg-white p-4">
               <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-mono font-bold text-brand-700">{project.pid ?? 'PID pending'}</span>
+                  <span className="text-sm font-mono font-bold text-brand-700">{pidLabel(project.pid, project.roundSeq)}</span>
                   <Link href={`/projects/${project.id}`} onClick={e => e.stopPropagation()}
                     className="text-sm font-semibold text-gray-900 hover:text-brand-600 hover:underline inline-flex items-center gap-1">
                     {project.title} <ExternalLink size={12} className="text-gray-300" />

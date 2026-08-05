@@ -19,6 +19,10 @@ import FilesTab from '@/components/projects/FilesTab';
 import { EditProjectModal } from '@/components/projects/EditProjectModal';
 import { CompleteProjectModal } from '@/components/projects/CompleteProjectModal';
 import { ProjectCapacityTab } from '@/components/projects/ProjectCapacityTab';
+import { TaskListView, OverviewView } from '@/components/projects/views';
+import { RoundCard } from '@/components/projects/RoundCard';
+import { RoundTabContent } from '@/components/projects/RoundTabContent';
+import { AddRoundModal } from '@/components/projects/AddRoundModal';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -56,6 +60,9 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [editingProject, setEditingProject] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [completing, setCompleting] = useState(false); // the completion form (delivery + hours)
+  const [addingRound, setAddingRound] = useState(false); // "new project under this PID"
+  // Which project a task came from, so the detail panel edits the right one on a multi-project PID.
+  const [taskProjectId, setTaskProjectId] = useState(projectId);
 
   // Lifecycle: Complete → Close → Reopen. Completing goes through its own form (it has to capture
   // the client delivery date and the hours), so it is NOT a plain confirm like the others.
@@ -113,19 +120,42 @@ export function ProjectDetailClient({ projectId }: Props) {
     placeholderData: keepPreviousData,
   });
 
+  // Every project sharing this PID. A Gurgaon (single-project) PID reports multiRound=false and
+  // the page renders exactly as it always has — the card layout is additive, not a replacement.
+  const { data: roundsData } = useQuery({
+    queryKey: ['project-rounds', projectId],
+    queryFn: () => api.projects.rounds(projectId),
+    enabled: !!project,
+    staleTime: 30_000,
+  });
+  const multiRound = !!roundsData?.multiRound && (roundsData?.rounds?.length ?? 0) > 0;
+  const rounds = roundsData?.rounds ?? [];
+
   // Workflow statuses power the Kanban columns
   const { data: statuses = [] } = useQuery({
     queryKey: ['workflow-statuses', project?.workflowId ?? 'default'],
     queryFn: () => api.workflows.statuses(project?.workflowId ?? 'default'),
     // Needed by the Board (columns) AND the Task List (inline status control).
-    enabled: !!project && (activeTab === 'Board' || activeTab === 'Task List'),
+    // On a multi-project PID every card's Task List and Board needs them, so load them there too.
+    enabled: !!project && (activeTab === 'Board' || activeTab === 'Task List' || multiRound),
     staleTime: 5 * 60_000,
   });
 
-  function openAddTask(statusId?: string) {
+  // On a multi-project PID the task is added to the round whose card was clicked, not to
+  // whichever project the URL happens to point at.
+  const [addTaskProjectId, setAddTaskProjectId] = useState(projectId);
+  function openAddTask(statusId?: string, forProjectId?: string) {
+    setAddTaskProjectId(forProjectId ?? projectId);
     setAddTaskStatusId(statusId);
     setShowAddTask(true);
   }
+  /** The task list a new task should land in, for whichever project the card belongs to. */
+  const addTaskList = addTaskProjectId === projectId
+    ? (project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0])
+    : (() => {
+        const r = rounds.find(x => x.id === addTaskProjectId);
+        return r?.taskLists?.find(tl => tl.isDefault) ?? r?.taskLists?.[0];
+      })();
 
   function invalidateTasks() {
     // Invalidate broadly (M36 + L14): a task can appear in other projects/lists and
@@ -268,8 +298,13 @@ export function ProjectDetailClient({ projectId }: Props) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 {project.code ? (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
                     {project.code}
+                    {multiRound && (
+                      <span className="font-sans font-medium text-gray-500">
+                        · {rounds.length} project{rounds.length === 1 ? '' : 's'}
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <>
@@ -322,6 +357,17 @@ export function ProjectDetailClient({ projectId }: Props) {
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {/* A returning client keeps this PID; their next piece of work becomes another
+                  project under it rather than being forced into this one's task list. */}
+              {multiRound && can('project.create') && project.code && (
+                <button
+                  onClick={() => setAddingRound(true)}
+                  title={`Start another project under ${project.code}`}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors"
+                >
+                  <Plus size={14} /> New project
+                </button>
+              )}
               {can('project.update') && ['ACTIVE', 'ON_HOLD'].includes(project.projectPhase) && (
                 <button
                   onClick={() => setCompleting(true)}
@@ -468,6 +514,32 @@ export function ProjectDetailClient({ projectId }: Props) {
 
 
       {/* Tab content */}
+      {/* A multi-project PID stacks one card per project and shows the SAME tab inside each, so
+          the whole client history is visible in one place. A single-project PID falls through to
+          the original rendering below, byte for byte. */}
+      {multiRound ? (
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+          {rounds.map((r, i) => (
+            <RoundCard
+              key={r.id}
+              round={r}
+              index={i}
+              total={rounds.length}
+              canEdit={can('project.update')}
+              // Finished work starts collapsed; the live round (and the one you navigated to) is open.
+              defaultOpen={r.id === projectId || !['COMPLETED', 'CLOSED'].includes(r.projectPhase)}
+            >
+              <RoundTabContent
+                round={r}
+                tab={activeTab}
+                statuses={statuses}
+                onTaskClick={(t, pid) => { setTaskProjectId(pid); setSelectedTask(t); }}
+                onAddTask={(pid, statusId) => openAddTask(statusId, pid)}
+              />
+            </RoundCard>
+          ))}
+        </div>
+      ) : (
       <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-4 sm:p-6')}>
         {activeTab === 'Task List' && (
           <TaskListView
@@ -499,11 +571,12 @@ export function ProjectDetailClient({ projectId }: Props) {
         {activeTab === 'Timesheets' && <TimesheetsTab projectId={projectId} />}
         {activeTab === 'Discussions' && <DiscussionsTab projectId={projectId} />}
       </div>
+      )}
 
-      {showAddTask && defaultTaskList && (
+      {showAddTask && addTaskList && (
         <AddTaskModal
-          projectId={projectId}
-          taskListId={defaultTaskList.id}
+          projectId={addTaskProjectId}
+          taskListId={addTaskList.id}
           initialStatusId={addTaskStatusId}
           workflowId={project.workflowId}
           onClose={() => setShowAddTask(false)}
@@ -513,7 +586,7 @@ export function ProjectDetailClient({ projectId }: Props) {
 
       <TaskDetailPanel
         task={selectedTask}
-        projectId={projectId}
+        projectId={multiRound ? taskProjectId : projectId}
         projectClosed={['COMPLETED', 'CLOSED'].includes(project.projectPhase)}
         defaultManagerId={projectManagerId}
         onClose={() => setSelectedTask(null)}
@@ -539,6 +612,18 @@ export function ProjectDetailClient({ projectId }: Props) {
         />
       )}
 
+      {addingRound && project.code && (
+        <AddRoundModal
+          fromProjectId={projectId}
+          pid={project.code}
+          onClose={() => setAddingRound(false)}
+          onCreated={() => {
+            setAddingRound(false);
+            qc.invalidateQueries({ queryKey: ['project-rounds', projectId] });
+          }}
+        />
+      )}
+
       {/* Completing asks for the client delivery date and the hours — the only moment anyone
           actually knows them. */}
       {completing && (
@@ -550,281 +635,6 @@ export function ProjectDetailClient({ projectId }: Props) {
           onConfirm={v => runLifecycle('complete', v)}
         />
       )}
-    </div>
-  );
-}
-
-
-function TaskListView({
-  tasks, loading, statuses, canAddTask, listName, onTaskClick, onAddTask, onStatusChange,
-}: {
-  tasks: ApiTask[];
-  loading: boolean;
-  statuses: WorkflowStatus[];
-  canAddTask: boolean;
-  listName?: string;
-  onTaskClick: (task: ApiTask) => void;
-  onAddTask: () => void;
-  onStatusChange: (taskId: string, statusId: string) => void;
-}) {
-  // Toggle done↔open from the row checkbox, via the workflow (reversible).
-  function toggleComplete(task: ApiTask) {
-    const target = isTaskClosed(task) ? statuses.find(s => s.type === OPEN_TYPE) : statuses.find(s => s.type === CLOSED_TYPE);
-    if (target) onStatusChange(task.id, target.id);
-  }
-
-  if (loading) {
-    return (
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-gray-50 animate-pulse">
-            <div className="w-4 h-4 rounded border-2 border-gray-200 shrink-0" />
-            <div className="flex-1 h-4 bg-gray-100 rounded" />
-            <div className="w-24 h-3 bg-gray-100 rounded hidden md:block" />
-            <div className="w-16 h-3 bg-gray-100 rounded hidden lg:block" />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* List header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50">
-        <div className="flex items-center gap-2">
-          <LayoutList size={15} className="text-gray-400" />
-          <span className="text-sm font-semibold text-gray-700">{listName ?? 'General'}</span>
-          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{tasks.length}</span>
-        </div>
-        <button onClick={onAddTask} className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium">
-          <Plus size={12} /> Add task
-        </button>
-      </div>
-
-      {/* Column headers */}
-      <div className="flex items-center gap-4 px-5 py-2.5 border-b border-gray-100 text-xs font-medium text-gray-400 uppercase tracking-wide">
-        <span className="w-4 shrink-0" />
-        <span className="flex-1">Task</span>
-        <span className="w-32 hidden sm:block">Status</span>
-        <span className="w-20 hidden lg:block">Priority</span>
-        <span className="w-20 hidden sm:block">Assignees</span>
-        <span className="w-24 hidden lg:block text-right">Due Date</span>
-      </div>
-
-      {tasks.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-sm text-gray-400">
-          <CheckSquare size={32} className="mb-3 text-gray-200" />
-          <p>No tasks yet</p>
-          <button onClick={onAddTask} className="mt-2 text-brand-600 hover:underline text-xs font-medium">
-            Add the first task
-          </button>
-        </div>
-      )}
-
-      {tasks.map((task, i) => {
-        const closed = isTaskClosed(task);
-
-        return (
-          <div
-            key={task.id}
-            onClick={() => onTaskClick(task)}
-            className={clsx(
-              'flex items-center gap-4 px-5 py-3.5 hover:bg-gray-50 transition-colors cursor-pointer',
-              i < tasks.length - 1 && 'border-b border-gray-50',
-            )}
-          >
-            <button
-              onClick={e => { e.stopPropagation(); toggleComplete(task); }}
-              aria-label={closed ? 'Reopen task' : 'Mark task complete'}
-              title={closed ? 'Completed — click to reopen' : 'Mark complete'}
-              className={clsx(
-                'w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors',
-                closed ? 'bg-green-500 border-green-500' : 'border-gray-300 hover:border-green-400',
-              )}
-            >
-              {closed && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M2 6l3 3 5-5" />
-                </svg>
-              )}
-            </button>
-
-            <span className={clsx('flex-1 text-sm min-w-0 truncate', closed ? 'line-through text-gray-400' : 'text-gray-800')}>
-              {task.title}
-            </span>
-
-            {/* Status control */}
-            <div className="hidden sm:block w-32 shrink-0" onClick={e => e.stopPropagation()}>
-              <select
-                value={task.currentWorkflowStatusId ?? ''}
-                onChange={e => onStatusChange(task.id, e.target.value)}
-                disabled={statuses.length === 0}
-                aria-label="Task status"
-                className="w-full text-xs font-medium rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand-500/30 cursor-pointer disabled:cursor-default"
-                style={task.currentStatus ? { backgroundColor: task.currentStatus.colorHex + '22', color: task.currentStatus.colorHex } : { backgroundColor: '#f1f5f9', color: '#64748b' }}
-              >
-                {!task.currentStatus && <option value="">—</option>}
-                {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
-
-
-            <div className="hidden lg:block w-20 shrink-0">
-              <span className={clsx('text-xs font-medium', PRIORITY_FLAG[task.priority] ?? 'text-gray-400')}>
-                <Flag size={11} className="inline mr-1" />
-                {task.priority ? task.priority.charAt(0) + task.priority.slice(1).toLowerCase() : '—'}
-              </span>
-            </div>
-
-            <div className="hidden sm:flex items-center w-20 shrink-0">
-              <AvatarStack
-                users={taskAssigneeUsers(task)}
-                size={24}
-                max={3}
-                empty={<div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />}
-              />
-            </div>
-
-            <span className="hidden lg:block w-24 shrink-0 text-right text-xs text-gray-500">
-              {formatDate(task.dueDate)}
-            </span>
-          </div>
-        );
-      })}
-
-      <div
-        onClick={onAddTask}
-        className="flex items-center gap-3 px-5 py-3 text-sm text-gray-400 hover:bg-gray-50 cursor-pointer transition-colors border-t border-dashed border-gray-200"
-      >
-        <Plus size={14} /> Add a task...
-      </div>
-    </div>
-  );
-}
-
-// ── Overview View ──────────────────────────────────────────────────────────────
-
-function OverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[] }) {
-  const { toast } = useToast();
-  const statusCounts: Record<string, { count: number; color: string }> = {};
-  for (const t of tasks) {
-    const name = t.currentStatus?.name ?? 'Open';
-    const color = t.currentStatus?.colorHex ?? '#64748b';
-    if (!statusCounts[name]) statusCounts[name] = { count: 0, color };
-    statusCounts[name].count++;
-  }
-  const statuses = Object.entries(statusCounts).map(([label, { count, color }]) => ({ label, count, color }));
-  const members = [...(project.members ?? [])].sort((a, b) => byName(a.user, b.user));
-
-  // #11: add / remove project members.
-  const { users } = useOrg();
-  const { can } = usePermissions();
-  const qc = useQueryClient();
-  const canManage = can('project.update');
-  const [adding, setAdding] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const memberIds = new Set(members.map(m => m.userId));
-  const candidates = (users ?? []).filter(u => !memberIds.has(u.id));
-  const refresh = () => { qc.invalidateQueries({ queryKey: ['project', project.id] }); qc.invalidateQueries({ queryKey: ['projects'] }); };
-  async function addMember(userId: string) {
-    setBusy(true);
-    try { await api.projects.addMember(project.id, userId); setAdding(false); refresh(); toast('Member added.', 'success'); }
-    catch (e) { toast(e instanceof Error ? e.message : 'Could not add member.', 'error'); }
-    finally { setBusy(false); }
-  }
-  async function removeMember(userId: string) {
-    if (!window.confirm('Remove this member from the project?')) return;
-    setBusy(true);
-    try { await api.projects.removeMember(project.id, userId); refresh(); toast('Member removed.', 'info'); }
-    catch (e) { toast(e instanceof Error ? e.message : 'Could not remove member.', 'error'); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-      {/* Progress card */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4">Overall Progress</h3>
-        <div className="flex items-center gap-4 mb-4">
-          <div className="relative w-24 h-24 shrink-0">
-            <svg viewBox="0 0 36 36" className="w-24 h-24 -rotate-90">
-              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#f3f4f6" strokeWidth="3" />
-              <circle
-                cx="18" cy="18" r="15.9" fill="none"
-                stroke="#E8533A" strokeWidth="3"
-                strokeDasharray={`${project.completionPercentage} ${100 - project.completionPercentage}`}
-              />
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-xl font-bold text-gray-900">{project.completionPercentage}%</span>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {statuses.length === 0 ? (
-              <p className="text-sm text-gray-400">No tasks yet</p>
-            ) : statuses.map(s => (
-              <div key={s.label} className="flex items-center gap-2 text-sm">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
-                <span className="text-gray-600">{s.label}</span>
-                <span className="font-medium text-gray-900 ml-auto pl-4">{s.count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Team */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-gray-700">Team Members</h3>
-          {canManage && !adding && candidates.length > 0 && (
-            <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
-              <UserPlus size={13} /> Add member
-            </button>
-          )}
-        </div>
-        {canManage && adding && (
-          <div className="flex items-center gap-2 mb-3">
-            <select
-              disabled={busy}
-              defaultValue=""
-              onChange={e => { if (e.target.value) addMember(e.target.value); }}
-              className="flex-1 text-sm border border-gray-300 rounded-lg px-2 py-1.5"
-              autoFocus
-            >
-              <option value="" disabled>Select a teammate…</option>
-              {candidates.map(u => (
-                <option key={u.id} value={u.id}>{`${u.firstName} ${u.lastName ?? ''}`.trim()}</option>
-              ))}
-            </select>
-            <button onClick={() => setAdding(false)} className="p-1.5 text-gray-400 hover:text-gray-600"><XIcon size={15} /></button>
-          </div>
-        )}
-        <div className="space-y-3">
-          {members.length === 0 ? (
-            <p className="text-sm text-gray-400">No members assigned</p>
-          ) : members.map((m, i) => (
-            <div key={m.userId} className="flex items-center gap-3 group">
-              <Avatar user={m.user} size={32} />
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-800 truncate">{`${m.user.firstName} ${m.user.lastName ?? ''}`.trim()}</p>
-                <p className="text-xs text-gray-500">{m.projectRole ?? (i === 0 ? 'Manager' : 'Member')}</p>
-              </div>
-              {canManage && (m.projectRole !== 'MANAGER') && (
-                <button
-                  onClick={() => removeMember(m.userId)}
-                  disabled={busy}
-                  title="Remove from project"
-                  className="ml-auto p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
-                >
-                  <XIcon size={14} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

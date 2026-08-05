@@ -161,6 +161,8 @@ export type UserSummary = {
 export type AuthUser = {
   id: string; firstName: string; lastName: string; email: string;
   designation?: string | null; status: string; organizationId: string; mustResetPassword: boolean;
+  /** GURGAON | JAIPUR — defaults the office on a new project. */
+  office?: string | null;
   /** False until they have filled in their joining details — AppShell blocks on this. */
   profileCompleted: boolean;
 };
@@ -233,7 +235,7 @@ export type DigestReport = {
 // dead end.
 export type DigestPerson = { id: string; name: string };
 export type DigestProject = {
-  id: string; pid: string | null; title: string; type: string | null;
+  id: string; pid: string | null; roundSeq?: number; title: string; type: string | null;
   phase: string; priority: string; client: string | null;
   startDate: string | null; dueDate: string | null; clientDueDate: string | null;
   clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
@@ -244,12 +246,12 @@ export type DigestProject = {
 export type DigestTask = {
   id: string; title: string; dueDate: string | null; priority: string; status: string | null;
   estimatedHours: number | null; actualHours: number | null; daysOverdue: number;
-  project: { id: string; pid: string | null; title: string; type: string | null; progress: number } | null;
+  project: { id: string; pid: string | null; roundSeq?: number; title: string; type: string | null; progress: number } | null;
   assignees: (DigestPerson & { role: string; estimatedHours: number | null; dueDate: string | null })[];
 };
 export type DigestHoursEntry = {
   hours: number; billable: boolean; notes: string | null;
-  project: { id: string; pid: string | null; title: string } | null;
+  project: { id: string; pid: string | null; roundSeq?: number; title: string } | null;
   task: { id: string; title: string } | null;
 };
 export type DigestPersonHours = {
@@ -282,7 +284,8 @@ export type ReportTask = {
   assignees: ReportTaskAssignee[];
 };
 export type ReportProject = {
-  id: string; pid: string | null; title: string; description: string | null;
+  id: string; pid: string | null; roundSeq: number; office: string | null;
+  title: string; description: string | null;
   type: string | null; phase: string; priority: string; status: string | null;
   client: string | null; billable: boolean; progress: number;
   startDate: string | null; dueDate: string | null; clientDueDate: string | null;
@@ -298,6 +301,38 @@ export type ReportProject = {
   tasks: ReportTask[];
 };
 
+/** One project under a PID — the "card" the PID page stacks. */
+export type PidRound = {
+  id: string; code: string | null; roundSeq: number; office: string | null;
+  title: string; description: string | null;
+  projectType: string | null; projectPhase: string; priority: string;
+  completionPercentage: number;
+  startDate: string | null; dueDate: string | null; clientDueDate: string | null;
+  completedAt: string | null; closedAt: string | null;
+  clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
+  createdBy: string | null; createdAt: string | null;
+  client: { id: string; name: string | null; code: string } | null;
+  /** The round's own task lists — its card adds tasks into its default one. */
+  taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
+  workflowId?: string | null;
+  members: { projectRole: string | null; user: UserSummary }[];
+  _count?: { projectTasks: number; members: number };
+};
+/** Every project sharing a PID. `multiRound` is false for a normal single-project PID. */
+export type PidRounds = { pid: string | null; multiRound: boolean; rounds: PidRound[] };
+
+/** A single project under a PID, as the ledger reports it. */
+export type PidLedgerRound = {
+  id: string; round: number; title: string; description?: string | null;
+  phase: string | null; type?: string | null; priority?: string | null; office?: string | null;
+  startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+  completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
+  workingHours?: number | null; actualHours?: number | null;
+  progress?: number | null; client?: string | null;
+  createdBy?: string | null; createdAt?: string | null;
+  patents?: string[]; members?: { name: string; role: string }[];
+};
+
 export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
 export type PidLedgerEntry = {
   id: string; pid: string; fyLabel: string; serial: number;
@@ -305,6 +340,11 @@ export type PidLedgerEntry = {
   /** The PID's real lifecycle, derived from the attached project's phase (drives the badge/filter). */
   state: PidLedgerState;
   generatedBy: string;
+  /** Every project under this PID, oldest first. One entry for a single-project PID. */
+  rounds?: PidLedgerRound[];
+  roundCount?: number;
+  multiRound?: boolean;
+  /** The LATEST round — kept so single-project consumers keep working unchanged. */
   project: {
     id: string; title: string; phase: string | null;
     description?: string | null; type?: string | null; priority?: string | null;
@@ -353,6 +393,10 @@ export type ApiProject = {
   /** Captured at completion: when the work reached the CLIENT (distinct from completedAt, which is
    *  when someone pressed the button), the hours on paper, and the hand-typed real cost. */
   clientDeliveryDate?: string | null; workingHours?: number | null; actualHours?: number | null;
+  /** Which project this is under its PID (1 for the first). A PID can hold several. */
+  roundSeq?: number;
+  /** GURGAON | JAIPUR — the owning office. Jaipur PIDs may hold multiple projects. */
+  office?: string | null;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
@@ -942,6 +986,8 @@ export const api = {
       description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
       pid?: string; pidAssigneeId?: string;
+      /** GURGAON | JAIPUR — decides whether this project's PID may later hold more projects. */
+      office?: string;
       customType?: { label: string; tasks: string[]; save?: boolean };
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
@@ -952,6 +998,15 @@ export const api = {
     pidLedger: () => req<PidLedgerEntry[]>('/projects/pid-ledger'),
     /** Every project with its full detail — the Reports module's table and CSV share this. */
     fullReport: () => req<ReportProject[]>('/projects/full-report'),
+    /** Every project sharing this one's PID — the PID page's stack of cards. */
+    rounds: (id: string) => req<PidRounds>(`/projects/${id}/rounds`),
+    /** Start ANOTHER project under this one's PID (returning client, Jaipur only). */
+    addRound: (id: string, body: {
+      title: string; projectType?: string; description?: string; priority?: string;
+      startDate?: string | null; endDate?: string | null; clientDueDate?: string | null;
+      members?: { userId: string; projectRole?: string }[];
+      customType?: { label: string; tasks: string[]; save?: boolean };
+    }) => req<ApiProject>(`/projects/${id}/rounds`, { method: 'POST', body: JSON.stringify(body) }),
     /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */
     attachPid: (id: string, pid?: string) =>
       req<{ pid: string; projectId: string }>(`/projects/${id}/attach-pid`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),

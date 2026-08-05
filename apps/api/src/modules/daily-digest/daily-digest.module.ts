@@ -204,7 +204,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       : new Date(today.getTime() + 86_400_000);
 
     const projectSelect = {
-      id: true, code: true, title: true, projectType: true, projectPhase: true, priority: true,
+      id: true, code: true, roundSeq: true, title: true, projectType: true, projectPhase: true, priority: true,
       startDate: true, dueDate: true, clientDueDate: true, completionPercentage: true,
       completedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
       client: { select: { name: true, code: true } },
@@ -219,7 +219,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       id: true, title: true, dueDate: true, priority: true, estimatedHours: true, actualHours: true,
       currentStatus: { select: { name: true, type: true } },
       assignees: { select: { estimatedHours: true, dueDate: true, role: true, user: { select: { id: true, firstName: true, lastName: true } } } },
-      projectTasks: { select: { project: { select: { id: true, code: true, title: true, projectType: true, completionPercentage: true } } } },
+      projectTasks: { select: { project: { select: { id: true, code: true, roundSeq: true, title: true, projectType: true, completionPercentage: true } } } },
     } as const;
 
     const [createdProjects, completedProjects, tasksClosed, deadlinesMet, overdueTasks, upcomingTasks, upcomingProjects, hoursRows, activeProjects] =
@@ -256,7 +256,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
           select: {
             hoursLogged: true, billable: true, notes: true,
             user: { select: { id: true, firstName: true, lastName: true, designation: true } },
-            project: { select: { id: true, code: true, title: true } },
+            project: { select: { id: true, code: true, roundSeq: true, title: true } },
             task: { select: { id: true, title: true } },
           },
         }),
@@ -269,7 +269,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     const shapeProject = (p: any) => {
       const managers = (p.members ?? []).filter((m: any) => m.projectRole === 'PM' || m.projectRole === 'MANAGER');
       return {
-        id: p.id, pid: p.code ?? null, title: p.title, type: p.projectType ?? null,
+        id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, title: p.title, type: p.projectType ?? null,
         phase: p.projectPhase, priority: p.priority,
         client: p.client?.name ?? p.client?.code ?? null,
         startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
@@ -290,7 +290,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
         status: t.currentStatus?.name ?? null,
         estimatedHours: t.estimatedHours ?? null, actualHours: t.actualHours ?? null,
         daysOverdue: due && due < dayStart ? Math.round((dayStart.getTime() - due.getTime()) / 86_400_000) : 0,
-        project: proj ? { id: proj.id, pid: proj.code ?? null, title: proj.title, type: proj.projectType ?? null, progress: proj.completionPercentage } : null,
+        project: proj ? { id: proj.id, pid: proj.code ?? null, roundSeq: proj.roundSeq, title: proj.title, type: proj.projectType ?? null, progress: proj.completionPercentage } : null,
         assignees: (t.assignees ?? []).map((a: any) => ({
           ...person(a.user), role: a.role ?? 'MEMBER',
           estimatedHours: a.estimatedHours ?? null, dueDate: a.dueDate ?? null,
@@ -310,7 +310,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       if (h.billable) row.billableHours += h.hoursLogged;
       row.entries.push({
         hours: h.hoursLogged, billable: h.billable, notes: h.notes ?? null,
-        project: h.project ? { id: h.project.id, pid: h.project.code ?? null, title: h.project.title } : null,
+        project: h.project ? { id: h.project.id, pid: h.project.code ?? null, roundSeq: h.project.roundSeq, title: h.project.title } : null,
         task: h.task ? { id: h.task.id, title: h.task.title } : null,
       });
       byPerson.set(key, row);

@@ -8,6 +8,7 @@ import clsx from 'clsx';
 import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useAuth } from '@/lib/auth-context';
 import { DateField } from '@/components/ui/DateField';
 import { fullName } from '@/lib/avatar';
 
@@ -20,6 +21,7 @@ interface NewProjectModalProps {
 export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: NewProjectModalProps) {
   const { org, currentUser, users } = useOrg();
   const { can } = usePermissions();
+  const { user } = useAuth();
   // A PID AUTHORITY (project.generate_pid) mints the Project ID themselves. Everyone else
   // REQUESTS one: they nominate an authority who assigns the PID after the project is created.
   const canGeneratePid = can('project.generate_pid');
@@ -37,6 +39,11 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [patentSearch, setPatentSearch] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
+  // The office that owns the matter. Not cosmetic: a Jaipur PID may later hold several projects
+  // for a returning client, while a Gurgaon PID stays one project.
+  const [office, setOffice] = useState('');
+  // Default to the creator's own office as soon as we know it, without stamping on a manual pick.
+  useEffect(() => { if (!office && user?.office) setOffice(user.office); }, [user?.office, office]);
   const [startDate, setStartDate] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [clientDueDate, setClientDueDate] = useState('');
@@ -159,6 +166,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
         patentIds: patentIds.length ? patentIds : undefined,
         description: description || undefined,
         priority,
+        office: office || undefined,
         startDate: startDate || undefined,
         dueDate: dueDate || undefined,
         clientDueDate: (canSetClientDue && clientDueDate) ? clientDueDate : undefined,
@@ -426,6 +434,23 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               </p>
             </div>
           )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Office</label>
+            <select
+              value={office}
+              onChange={e => setOffice(e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
+            >
+              <option value="GURGAON">Gurgaon</option>
+              <option value="JAIPUR">Jaipur</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-400">
+              {office === 'JAIPUR'
+                ? 'A Jaipur Project ID can hold several projects — when this client returns, their next piece of work is added under the same PID.'
+                : 'A Gurgaon Project ID holds one project.'}
+            </p>
+          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>

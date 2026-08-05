@@ -9,6 +9,8 @@ export interface MockProject {
   title: string;
   description: string;
   projectType?: string | null; // e.g. HML, Novelty, FTO — shown as a tag on the card
+  /** Which project this is under its PID (1 for the first). A PID may hold several. */
+  roundSeq?: number;
   projectPhase: Phase;
   priority: Priority;
   completionPercentage: number;
@@ -61,4 +63,17 @@ export function projectTypeLabel(value?: string | null): string {
   const bare = value.replace(/^CUSTOM_/, '');
   return PROJECT_TYPE_LABEL[bare]
     ?? bare.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/**
+ * How a project is identified once a PID can hold more than one.
+ *
+ * A returning client's second engagement shares the first's Project ID, so "SQ_26_27_001" alone
+ * is ambiguous the moment there are two. Anywhere a project is listed next to others — reports,
+ * the digest, timesheet pickers, the capacity board — append the round so they can be told apart.
+ * Round 1 of a single-project PID adds nothing, keeping Gurgaon's display exactly as it was.
+ */
+export function pidLabel(code?: string | null, roundSeq?: number | null): string {
+  const pid = code ?? 'PID pending';
+  return roundSeq && roundSeq > 1 ? `${pid} · P${roundSeq}` : pid;
 }

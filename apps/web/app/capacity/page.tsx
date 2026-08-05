@@ -36,6 +36,7 @@ import { PersonPanel, ExtendMenu } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
+import { pidLabel } from '@/lib/mock-data';
 
 export default function CapacityPage() {
   const { org } = useOrg();
@@ -198,7 +199,7 @@ export default function CapacityPage() {
               title={isPast ? 'Project filter applies to the forward view' : 'Filter by project team'}
               className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white disabled:opacity-50 max-w-[180px]">
               <option value="">All projects</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${p.code} — ` : ''}{p.title}</option>)}
+              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}</option>)}
             </select>
             {departments.length > 0 && (
               <select value={dept} onChange={e => setDept(e.target.value)}
@@ -644,7 +645,7 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
             <select autoFocus value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); }}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
               <option value="">Select a project…</option>
-              {assignable.map(p => <option key={p.id} value={p.id}>{p.code ? `${p.code} · ` : ''}{p.title}</option>)}
+              {assignable.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} · ` : ''}{p.title}</option>)}
             </select>
           </div>
 

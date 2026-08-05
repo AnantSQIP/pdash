@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { CheckSquare, Users, Calendar, ArrowUpRight } from 'lucide-react';
 import clsx from 'clsx';
-import { MockProject, PHASE_META, PRIORITY_META, projectTypeLabel } from '@/lib/mock-data';
+import { MockProject, PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { progressColor, progressTrack } from '@/lib/progress';
 import { formatDate } from '@/lib/date';
 
@@ -40,7 +40,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
               {project.title}
             </h3>
             {project.code
-              ? <span className="block mt-1.5 text-sm font-mono font-bold text-brand-700 tracking-tight">{project.code}</span>
+              ? <span className="block mt-1.5 text-sm font-mono font-bold text-brand-700 tracking-tight">{pidLabel(project.code, project.roundSeq)}</span>
               : <span className="block mt-1.5 text-sm font-mono font-bold text-amber-500">PID pending</span>}
             <div className="flex items-center gap-1.5 flex-wrap mt-2">
               <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold', phase.bg, phase.text)}>

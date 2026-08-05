@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
+import { pidLabel } from '@/lib/mock-data';
 import { api, type ApiTask, type ApiProject } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { Modal } from '@/components/ui/Modal';
@@ -54,7 +55,8 @@ export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; 
           <select required value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); }}
             className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white">
             <option value="">{lp ? 'Loading…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project by its PID'}</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{(p.code ?? 'PID pending')} — {p.title}</option>)}
+            {/* One PID can hold several projects — show the round so the right one is picked. */}
+            {projects.map(p => <option key={p.id} value={p.id}>{pidLabel(p.code, p.roundSeq)} — {p.title}</option>)}
           </select>
           {selectedProject && <p className="text-[11px] text-gray-500 mt-1">Project type: <span className="font-medium text-gray-700">{selectedProject.projectType ?? '—'}</span></p>}
         </div>

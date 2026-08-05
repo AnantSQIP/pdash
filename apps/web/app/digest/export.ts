@@ -19,12 +19,12 @@ const dt = (v: string | null | undefined) =>
   v ? new Date(v).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '';
 
 const PROJECT_COLUMNS = [
-  'PID', 'Project', 'Type', 'Phase', 'Priority', 'Client', 'Progress %', 'Tasks',
+  'PID', 'Project #', 'Project', 'Type', 'Phase', 'Priority', 'Client', 'Progress %', 'Tasks',
   'Start', 'Deadline', 'Client Deadline', 'Client Delivered', 'Completed At',
   'Working Hours', 'Actual Hours', 'Hours Variance', 'Project Managers', 'Members',
 ];
 const projectRow = (p: DigestProject) => [
-  p.pid ?? 'PID pending', p.title, p.type ?? '', p.phase, p.priority, p.client ?? '',
+  p.pid ?? 'PID pending', p.roundSeq ?? 1, p.title, p.type ?? '', p.phase, p.priority, p.client ?? '',
   p.progress, p.taskCount,
   d(p.startDate), d(p.dueDate), d(p.clientDueDate), dt(p.clientDeliveryDate), dt(p.completedAt),
   p.workingHours ?? '', p.actualHours ?? '',
@@ -35,11 +35,11 @@ const projectRow = (p: DigestProject) => [
 ];
 
 const TASK_COLUMNS = [
-  'PID', 'Project', 'Project Type', 'Project Progress %', 'Task', 'Status', 'Priority',
+  'PID', 'Project #', 'Project', 'Project Type', 'Project Progress %', 'Task', 'Status', 'Priority',
   'Deadline', 'Days Overdue', 'Estimated Hours', 'Actual Hours', 'Assignees',
 ];
 const taskRow = (t: DigestTask) => [
-  t.project?.pid ?? '', t.project?.title ?? '', t.project?.type ?? '', t.project?.progress ?? '',
+  t.project?.pid ?? '', t.project?.roundSeq ?? '', t.project?.title ?? '', t.project?.type ?? '', t.project?.progress ?? '',
   t.title, t.status ?? '', t.priority, d(t.dueDate), t.daysOverdue || '',
   t.estimatedHours ?? '', t.actualHours ?? '',
   t.assignees.map(a => {
@@ -96,9 +96,9 @@ export function digestCsv(report: DigestDetail): void {
     'Nobody logged time.');
 
   // Every individual entry, so the per-person totals can be audited rather than trusted.
-  section('HOURS LOGGED — EVERY ENTRY', ['Person', 'PID', 'Project', 'Task', 'Hours', 'Billable', 'Notes'],
+  section('HOURS LOGGED — EVERY ENTRY', ['Person', 'PID', 'Project #', 'Project', 'Task', 'Hours', 'Billable', 'Notes'],
     report.hoursByPerson.flatMap(p => p.entries.map(e => [
-      p.name, e.project?.pid ?? '', e.project?.title ?? '', e.task?.title ?? '',
+      p.name, e.project?.pid ?? '', e.project?.roundSeq ?? '', e.project?.title ?? '', e.task?.title ?? '',
       e.hours, e.billable ? 'Yes' : 'No', e.notes ?? '',
     ])),
     'No time entries.');
