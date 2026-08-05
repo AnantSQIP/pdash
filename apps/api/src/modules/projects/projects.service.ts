@@ -4,12 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
-import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto } from './dto';
+import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto, AddProjectRoundDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
@@ -18,6 +19,21 @@ import { PROJECT_TYPES, templateFor } from './project-templates';
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { financialYear, formatPid, pidScope } from '../../common/financial-year';
 import { designationRank } from './seniority';
+
+/** Hours to one decimal — the precision timesheets are logged at. */
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Offices whose PIDs may hold MORE THAN ONE project.
+ *
+ * A returning client keeps the Project ID they already know, and each new piece of work for them
+ * becomes another project under that same PID (a "round"). Jaipur works this way; Gurgaon keeps
+ * the original one-PID-one-project behaviour untouched. Adding an office here is the only change
+ * needed to switch it on for them.
+ */
+const MULTI_ROUND_OFFICES = new Set(['JAIPUR']);
+export const supportsRounds = (office?: string | null): boolean =>
+  !!office && MULTI_ROUND_OFFICES.has(office);
 
 @Injectable()
 export class ProjectsService {
@@ -70,6 +86,255 @@ export class ProjectsService {
    * The mandatory "General" task list (and any project-type template tasks) are created in the
    * same transaction, so a partial failure never leaves a half-built workflow.
    */
+  /**
+   * Create a project type's standard task list and its tasks inside an open transaction.
+   *
+   * Shared by project creation and by adding a later round to a PID: a second piece of work for a
+   * returning client is a fresh project and deserves the same ready-made workflow as the first,
+   * so this must not be duplicated in two places that can drift apart.
+   */
+  private async seedTemplateTasks(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    template: { taskListName?: string; label?: string; tasks?: string[] },
+    creatorId: string,
+  ): Promise<void> {
+    if (!template.tasks?.length) return;
+    // Resolve the org's GLOBAL workflow and its first OPEN status so the generated tasks open in
+    // the correct board column (mirrors TasksService.create).
+    const wf = await tx.workflow.findFirst({
+      where: { type: 'GLOBAL' },
+      orderBy: { name: 'asc' },
+      select: { id: true, statuses: { orderBy: { sequence: 'asc' }, select: { id: true, type: true } } },
+    });
+    const initialStatusId = wf ? (wf.statuses.find(s => s.type === 'OPEN') ?? wf.statuses[0])?.id : undefined;
+
+    const list = await tx.taskList.create({
+      data: { projectId, name: template.taskListName ?? template.label ?? 'Tasks', sequence: 1 },
+    });
+    // Sequentially, so ProjectTask.sequence reflects the workflow order.
+    for (let i = 0; i < template.tasks.length; i++) {
+      const task = await tx.task.create({
+        data: {
+          title: template.tasks[i],
+          priority: 'MEDIUM',
+          createdBy: creatorId,
+          ...(wf ? { workflowId: wf.id } : {}),
+          ...(initialStatusId ? { currentWorkflowStatusId: initialStatusId } : {}),
+        },
+      });
+      await tx.projectTask.create({ data: { projectId, taskId: task.id, taskListId: list.id, sequence: i } });
+    }
+  }
+
+  /**
+   * Work out which task template applies, from the three places a type can come from:
+   * a built-in type, an inline one-off custom type, or a saved org-wide template.
+   * Returns the effective type VALUE to store alongside it.
+   */
+  private async resolveTemplate(
+    organizationId: string,
+    creatorId: string,
+    dto: { projectType?: string; customType?: { label?: string; tasks?: string[]; save?: boolean } },
+  ): Promise<{ template: { value?: string; label?: string; taskListName?: string; tasks?: string[]; description?: string } | null; effectiveType: string | null }> {
+    let template = templateFor(dto.projectType) as { value?: string; label?: string; taskListName?: string; tasks?: string[]; description?: string } | null;
+    let effectiveType: string | null = dto.projectType ?? null;
+    if (dto.customType?.label) {
+      const label = dto.customType.label.trim();
+      const tasks = (dto.customType.tasks ?? []).map(t => t.trim()).filter(Boolean);
+      const value = (`CUSTOM_${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`).slice(0, 60) || 'CUSTOM';
+      effectiveType = value;
+      template = { value, label, description: '', taskListName: label, tasks };
+      if (dto.customType.save) {
+        await this.prisma.projectTemplate.upsert({
+          where: { organizationId_value: { organizationId, value } },
+          create: { organizationId, value, label, taskListName: label, tasks, isActive: true, createdBy: creatorId },
+          update: { label, taskListName: label, tasks, isActive: true },
+        });
+      }
+    } else if (!template && dto.projectType) {
+      const db = await this.prisma.projectTemplate.findFirst({ where: { organizationId, value: dto.projectType, isActive: true } });
+      if (db) template = { value: db.value, label: db.label, description: db.description ?? '', taskListName: db.taskListName ?? db.label, tasks: db.tasks };
+    }
+    return { template, effectiveType };
+  }
+
+  /**
+   * A NEW PROJECT UNDER AN EXISTING PID — the returning-client flow.
+   *
+   * The old model reopened the finished project in place, which only works when the client comes
+   * back with *the same* work. In practice they return with a different brief: new name, new type,
+   * new dates, new team. Piling those tasks into the previous project's list makes the record
+   * unreadable and destroys any per-engagement reporting.
+   *
+   * So each return creates a SIBLING project sharing the PID. The client keeps the number they
+   * know; every round keeps its own tasks, time, files, issues and dates; and every module that
+   * already works per-project keeps working with no rewiring.
+   *
+   * Only offices in MULTI_ROUND_OFFICES may do this — a Gurgaon PID stays one project.
+   */
+  async addRound(fromProjectId: string, dto: AddProjectRoundDto) {
+    const actorId = getActorId();
+    const creator = actorId
+      ? await this.prisma.user.findFirst({ where: { id: actorId, deletedAt: null } })
+      : null;
+    if (!creator) throw new ForbiddenException('You must be signed in to add a project.');
+    await this.access.assertProjectAccess(actorId, fromProjectId);
+
+    const source = await this.prisma.project.findFirst({
+      where: { id: fromProjectId, deletedAt: null },
+      select: { id: true, code: true, office: true, clientId: true, title: true },
+    });
+    if (!source) throw new NotFoundException(`Project ${fromProjectId} not found`);
+    if (!source.code) {
+      throw new BadRequestException('This project has no Project ID yet. Attach a PID before adding another project under it.');
+    }
+    if (!supportsRounds(source.office)) {
+      throw new BadRequestException(
+        'This PID holds a single project. Adding further projects under one PID is enabled for the Jaipur office.',
+      );
+    }
+    const organizationId = creator.organizationId;
+
+    // The next round number is derived from what already exists, INCLUDING soft-deleted rounds, so
+    // a deleted round never causes a number to be handed out twice.
+    const last = await this.prisma.project.findFirst({
+      where: { code: source.code },
+      orderBy: { roundSeq: 'desc' },
+      select: { roundSeq: true },
+    });
+    const roundSeq = (last?.roundSeq ?? 0) + 1;
+
+    // Dates: "end date" is this round's own finish, stored as the project's due date.
+    const startD = dto.startDate ? new Date(dto.startDate) : undefined;
+    const endD = dto.endDate ? new Date(dto.endDate) : undefined;
+    if (startD && endD && endD < startD) {
+      throw new BadRequestException('The end date cannot be before the start date.');
+    }
+    const clientDue = dto.clientDueDate ? new Date(dto.clientDueDate) : undefined;
+    if (clientDue) await this.deadlines.assertMaySetClientDue([], await this.deadlines.scope(creator.id));
+    this.deadlines.assertOrdered(endD, clientDue);
+
+    if (dto.projectType) {
+      const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
+      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+    }
+    const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
+
+    // Staffing: whoever was chosen for THIS round, with the creator leading if nobody was named.
+    let members = [{ userId: creator.id, projectRole: 'MANAGER' }];
+    if (dto.members?.length) {
+      const wanted = [...new Set(dto.members.map(m => m.userId))];
+      const found = await this.prisma.user.findMany({
+        where: { id: { in: wanted }, organizationId, deletedAt: null, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (found.length !== wanted.length) {
+        throw new BadRequestException('One or more selected members are not active in this organization.');
+      }
+      members = dto.members.map(m => ({ userId: m.userId, projectRole: m.projectRole ?? 'MEMBER' }));
+      // Somebody has to own it: if no manager was named, the creator leads.
+      if (!members.some(m => m.projectRole === 'MANAGER')) {
+        members = members.filter(m => m.userId !== creator.id);
+        members.unshift({ userId: creator.id, projectRole: 'MANAGER' });
+      }
+    }
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({
+        data: {
+          // The PID, the client and the office all carry over — that is the point of a round.
+          code: source.code,
+          clientId: source.clientId,
+          office: source.office,
+          roundSeq,
+          title: dto.title,
+          description: dto.description,
+          projectType: effectiveType,
+          projectPhase: 'ACTIVE',
+          priority: dto.priority ?? 'MEDIUM',
+          startDate: startD,
+          dueDate: endD,
+          clientDueDate: clientDue,
+          createdBy: creator.id,
+          members: { create: members },
+          taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } },
+        },
+      });
+      if (template) await this.seedTemplateTasks(tx, project.id, template, creator.id);
+      return project;
+    });
+
+    // The reservation points at the LATEST round, so anything still reading a single projectId
+    // lands on the live piece of work rather than a finished one.
+    await this.prisma.pidReservation.updateMany({
+      where: { organizationId, pid: source.code },
+      data: { status: 'ATTACHED', projectId: created.id, resolvedAt: new Date() },
+    });
+
+    await this.events.emit({
+      action: EVENTS.PROJECT_CREATED, entityType: 'PROJECT', entityId: created.id,
+      organizationId, actorId: creator.id,
+      metadata: { projectId: created.id, title: created.title, pid: source.code, roundSeq },
+    });
+    const recipients = members.map(m => m.userId).filter(uid => uid !== creator.id);
+    if (recipients.length) {
+      await this.notifications.notify(recipients, {
+        type: 'project.created',
+        title: `New project under ${source.code}`,
+        message: `"${created.title}" was started under ${source.code} (project ${roundSeq}).`,
+        link: `/projects/${created.id}`,
+      });
+    }
+    return this.deadlines.redactProject(created, await this.deadlines.scope());
+  }
+
+  /**
+   * Every project sharing this project's PID, oldest round first — what the PID page renders as
+   * its stack of cards. A project with no PID yet, or one whose office does not use rounds,
+   * simply returns itself, so callers never need a special case.
+   */
+  async roundsForProject(projectId: string) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    const self = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null },
+      select: { id: true, code: true, office: true },
+    });
+    if (!self) throw new NotFoundException(`Project ${projectId} not found`);
+
+    const scope = await this.deadlines.scope();
+    const shape = {
+      id: true, code: true, roundSeq: true, office: true, title: true, description: true,
+      projectType: true, projectPhase: true, priority: true, completionPercentage: true,
+      startDate: true, dueDate: true, clientDueDate: true,
+      completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
+      createdBy: true, createdAt: true,
+      client: { select: { id: true, name: true, code: true } },
+      // The card's "Add task" needs the round's own default list.
+      taskLists: { where: { deletedAt: null }, select: { id: true, name: true, isDefault: true, sequence: true }, orderBy: { sequence: 'asc' } },
+      workflowId: true,
+      members: {
+        where: { isActive: true },
+        select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true } } },
+      },
+      _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
+    } as const;
+
+    if (!self.code || !supportsRounds(self.office)) {
+      const one = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
+      return {
+        pid: self.code, multiRound: false,
+        rounds: this.deadlines.redactProjects([one] as never, scope),
+      };
+    }
+    const rounds = await this.prisma.project.findMany({
+      where: { code: self.code, deletedAt: null },
+      orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
+      select: shape,
+    });
+    return { pid: self.code, multiRound: true, rounds: this.deadlines.redactProjects(rounds as never, scope) };
+  }
+
   async create(dto: CreateProjectDto) {
     // Identity & org come from the verified cookie actor — never the client body
     // (fixes spoofable createdBy and the email-vs-id create bug).
@@ -170,25 +435,7 @@ export class ProjectsService {
     //   2. an INLINE one-off custom type ("+ Create new type") — used for this project, and
     //      persisted as a reusable org-wide ProjectTemplate when `save` is set,
     //   3. a saved org ProjectTemplate value.
-    let template = templateFor(dto.projectType);
-    let effectiveType: string | null = dto.projectType ?? null;
-    if (dto.customType?.label) {
-      const label = dto.customType.label.trim();
-      const tasks = (dto.customType.tasks ?? []).map(t => t.trim()).filter(Boolean);
-      const value = (`CUSTOM_${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`).slice(0, 60) || 'CUSTOM';
-      effectiveType = value;
-      template = { value, label, description: '', taskListName: label, tasks };
-      if (dto.customType.save) {
-        await this.prisma.projectTemplate.upsert({
-          where: { organizationId_value: { organizationId, value } },
-          create: { organizationId, value, label, taskListName: label, tasks, isActive: true, createdBy: creator.id },
-          update: { label, taskListName: label, tasks, isActive: true },
-        });
-      }
-    } else if (!template && dto.projectType) {
-      const db = await this.prisma.projectTemplate.findFirst({ where: { organizationId, value: dto.projectType, isActive: true } });
-      if (db) template = { value: db.value, label: db.label, description: db.description ?? '', taskListName: db.taskListName ?? db.label, tasks: db.tasks };
-    }
+    const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
 
     // ── Patent linkage (Phase 1) — the client is DERIVED from the patents, never picked.
     // Only patent.view holders (Super Admin by default, or anyone granted it) may attach
@@ -215,12 +462,13 @@ export class ProjectsService {
       derivedClientId = clientIds[0] ?? null;
     }
 
-    // An authority attaches a PID now — reserving their generated (or typed, or auto-assigned)
-    // serial. It's flipped RESERVED → ATTACHED once the project row exists (markAttached below).
-    // A requester's project starts with a null (pending) code, filled in later via fulfillPidRequest.
+    // A PID is NEVER assigned automatically. Even an authority must have explicitly generated one
+    // (or typed one) — dto.pid carries that choice. Without it the project is created with a
+    // PENDING code, exactly like a requester's, and the PID is attached later from the project or
+    // the PID flow. This stops serials being burned on every project someone happens to create.
     let pidReservation: { pid: string; reservationId: string } | null = null;
-    if (canGeneratePid) {
-      pidReservation = await this.ensureReservation(organizationId, creator.id, dto.pid || undefined);
+    if (canGeneratePid && dto.pid?.trim()) {
+      pidReservation = await this.ensureReservation(organizationId, creator.id, dto.pid.trim());
     }
     const pid: string | null = pidReservation?.pid ?? null;
 
@@ -238,6 +486,10 @@ export class ProjectsService {
           projectType: effectiveType,
           clientId: derivedClientId,
           projectPhase: 'ACTIVE',
+          // The owning office decides whether this PID can later hold more projects. Taken from
+          // the creator unless they picked another office on the form.
+          office: dto.office ?? creator.office ?? null,
+          roundSeq: 1,
           priority: dto.priority ?? 'MEDIUM',
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
           dueDate: internalDue,
@@ -258,35 +510,7 @@ export class ProjectsService {
         });
       }
 
-      if (template) {
-        // Resolve the org's GLOBAL workflow and its first OPEN status so the generated
-        // tasks open in the correct board column (mirrors TasksService.create).
-        const wf = await tx.workflow.findFirst({
-          where: { type: 'GLOBAL' },
-          orderBy: { name: 'asc' },
-          select: { id: true, statuses: { orderBy: { sequence: 'asc' }, select: { id: true, type: true } } },
-        });
-        const initialStatusId = wf ? (wf.statuses.find(s => s.type === 'OPEN') ?? wf.statuses[0])?.id : undefined;
-
-        const list = await tx.taskList.create({
-          data: { projectId: created.id, name: template.taskListName!, sequence: 1 },
-        });
-        // Sequentially, so ProjectTask.sequence reflects the workflow order.
-        for (let i = 0; i < template.tasks!.length; i++) {
-          const task = await tx.task.create({
-            data: {
-              title: template.tasks![i],
-              priority: 'MEDIUM',
-              createdBy: creator.id,
-              ...(wf ? { workflowId: wf.id } : {}),
-              ...(initialStatusId ? { currentWorkflowStatusId: initialStatusId } : {}),
-            },
-          });
-          await tx.projectTask.create({
-            data: { projectId: created.id, taskId: task.id, taskListId: list.id, sequence: i },
-          });
-        }
-      }
+      if (template) await this.seedTemplateTasks(tx, created.id, template, creator.id);
 
       // A requester's project carries a pending PID request, routed to the chosen authority.
       if (pidAssigneeId) {
@@ -504,7 +728,10 @@ export class ProjectsService {
     try {
       await this.prisma.project.update({ where: { id: projectId }, data: { code: pid } });
     } catch (e: any) {
-      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      // project.code is no longer UNIQUE (a PID can hold several projects), so a duplicate code
+      // cannot surface here any more — ensureReservation above is what rejects an in-use PID.
+      // The catch stays for any other constraint, reported plainly rather than as a 500.
+      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} could not be attached.`);
       throw e;
     }
     await this.markAttached(reservationId, projectId);
@@ -523,14 +750,19 @@ export class ProjectsService {
       orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
       take: 1000,
     });
-    const projectIds = [...new Set(rows.map(r => r.projectId).filter(Boolean) as string[])];
-    // EVERY detail about the project the PID is attached to (for the detail view + export).
-    const projects = projectIds.length ? await this.prisma.project.findMany({
-      where: { id: { in: projectIds } },
+    // A PID can now hold MORE THAN ONE project — a returning client keeps their number and each
+    // new piece of work is another round under it. So the ledger resolves by CODE, not by the
+    // reservation's single projectId (which only ever points at the latest round).
+    const pids = [...new Set(rows.map(r => r.pid))];
+    const projects = pids.length ? await this.prisma.project.findMany({
+      where: { code: { in: pids }, deletedAt: null },
+      orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: {
-        id: true, title: true, description: true, projectPhase: true, projectType: true,
+        id: true, code: true, roundSeq: true, office: true,
+        title: true, description: true, projectPhase: true, projectType: true,
         priority: true, startDate: true, dueDate: true, clientDueDate: true,
         completionPercentage: true, createdBy: true, createdAt: true,
+        completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
         client: { select: { name: true, code: true } },
         members: { where: { isActive: true }, select: { projectRole: true, user: { select: { firstName: true, lastName: true } } } },
         patents: { select: { patent: { select: { handle: true } } } },
@@ -539,7 +771,14 @@ export class ProjectsService {
     const userIds = [...new Set([...rows.map(r => r.generatedById), ...projects.map(p => p.createdBy)])];
     const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [];
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
-    const projById = new Map(projects.map(p => [p.id, p]));
+    // Every round grouped under its PID, in order.
+    const byPid = new Map<string, typeof projects>();
+    for (const p of projects) {
+      if (!p.code) continue;
+      const list = byPid.get(p.code) ?? [];
+      list.push(p);
+      byPid.set(p.code, list);
+    }
     // The ledger badge reflects the PID's REAL lifecycle, derived from the attached project's phase
     // (not just the reservation row) — so a Completed project reads "Completed", a Closed one
     // "Closed", regardless of how it was closed. Only a PID with no live project falls back to the
@@ -551,35 +790,53 @@ export class ProjectsService {
         case 'CLOSED': return 'CLOSED';
         case 'ARCHIVED':
         case 'CANCELLED': return 'DISCONTINUED';
-        default: return 'WORKING'; // ACTIVE / PLANNING / IDEA / ON_HOLD …
+        default: return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD …
       }
     };
+    const shapeRound = (p: (typeof projects)[number]) => ({
+      id: p.id,
+      round: p.roundSeq,
+      title: p.title,
+      description: p.description ?? null,
+      phase: p.projectPhase,
+      type: p.projectType ?? null,
+      priority: p.priority ?? null,
+      office: p.office ?? null,
+      startDate: p.startDate ?? null,
+      dueDate: p.dueDate ?? null,
+      clientDueDate: p.clientDueDate ?? null,
+      // Completion record — what was delivered, when, and what it cost.
+      completedAt: p.completedAt ?? null,
+      closedAt: p.closedAt ?? null,
+      clientDeliveryDate: p.clientDeliveryDate ?? null,
+      workingHours: p.workingHours ?? null,
+      actualHours: p.actualHours ?? null,
+      progress: p.completionPercentage ?? null,
+      client: p.client?.name ?? p.client?.code ?? null,
+      createdBy: p.createdBy ? (userById.get(p.createdBy) ?? null) : null,
+      createdAt: p.createdAt ?? null,
+      patents: (p.patents ?? []).map(pp => pp.patent.handle),
+      members: (p.members ?? []).map(m => ({
+        name: `${m.user.firstName} ${m.user.lastName}`.trim(),
+        role: m.projectRole ?? 'MEMBER',
+      })),
+    });
+
     return rows.map(r => {
-      const p = r.projectId ? projById.get(r.projectId) : undefined;
+      const rounds = byPid.get(r.pid) ?? [];
+      // The PID's headline state comes from its LATEST round: that is the live piece of work.
+      // An earlier completed round must not make a PID with active work read as "Completed".
+      const latest = rounds[rounds.length - 1];
       return {
         id: r.id, pid: r.pid, fyLabel: r.fyLabel, serial: r.serial, status: r.status,
-        state: deriveState(r.status, p?.projectPhase, !!p),
+        state: deriveState(r.status, latest?.projectPhase, rounds.length > 0),
         generatedBy: userById.get(r.generatedById) ?? '—',
-        project: r.projectId ? {
-          id: r.projectId,
-          title: p?.title ?? '(deleted)',
-          description: p?.description ?? null,
-          phase: p?.projectPhase ?? null,
-          type: p?.projectType ?? null,
-          priority: p?.priority ?? null,
-          startDate: p?.startDate ?? null,
-          dueDate: p?.dueDate ?? null,
-          clientDueDate: p?.clientDueDate ?? null,
-          progress: p?.completionPercentage ?? null,
-          client: p?.client?.name ?? p?.client?.code ?? null,
-          createdBy: p?.createdBy ? (userById.get(p.createdBy) ?? null) : null,
-          createdAt: p?.createdAt ?? null,
-          patents: (p?.patents ?? []).map(pp => pp.patent.handle),
-          members: (p?.members ?? []).map(m => ({
-            name: `${m.user.firstName} ${m.user.lastName}`.trim(),
-            role: m.projectRole ?? 'MEMBER',
-          })),
-        } : null,
+        /** Every project under this PID, oldest first. One entry for a normal single-round PID. */
+        rounds: rounds.map(shapeRound),
+        roundCount: rounds.length,
+        multiRound: supportsRounds(latest?.office),
+        /** The latest round, kept so existing single-project consumers keep working unchanged. */
+        project: latest ? shapeRound(latest) : null,
         createdAt: r.createdAt, expiresAt: r.expiresAt, resolvedAt: r.resolvedAt,
       };
     });
@@ -823,6 +1080,9 @@ export class ProjectsService {
       select: {
         id: true,
         code: true, // P1: the PID (SQ_26_27_nnn) — so cards/rows/search can show & match it
+        // A PID can hold several projects; the round distinguishes them in every list.
+        roundSeq: true,
+        office: true,
         title: true,
         projectPhase: true,
         priority: true,
@@ -847,6 +1107,121 @@ export class ProjectsService {
       },
     });
     return this.deadlines.redactProjects(projects, await this.deadlines.scope());
+  }
+
+  /**
+   * The COMPLETE project dataset for the Reports module, in one call.
+   *
+   * The reports table used to fetch a thin project list and then lazily pull tasks per row, which
+   * meant an export could only ever contain what the table happened to have loaded — seven columns
+   * and no staffing. This returns every field a report needs, tasks and assignees included, so the
+   * screen and the CSV are the same data.
+   *
+   * Scope and client-deadline redaction are identical to list(): a report must never become a way
+   * to read a matter you aren't on, or a client date you aren't cleared for.
+   */
+  async fullReport(organizationId: string) {
+    const actorId = getActorId();
+    const scope = actorId
+      ? await this.access.projectScopeWhere(actorId, organizationId)
+      : { members: { some: { user: { organizationId } } } };
+    const projects = await this.prisma.project.findMany({
+      where: { deletedAt: null, ...scope },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, code: true, roundSeq: true, office: true,
+        title: true, description: true, projectType: true,
+        projectPhase: true, priority: true, completionPercentage: true, billable: true,
+        startDate: true, dueDate: true, clientDueDate: true,
+        completedAt: true, closedAt: true,
+        clientDeliveryDate: true, workingHours: true, actualHours: true,
+        createdBy: true, createdAt: true,
+        client: { select: { name: true, code: true } },
+        currentStatus: { select: { name: true } },
+        members: {
+          where: { isActive: true },
+          select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true, designation: true } } },
+        },
+        patents: { select: { patent: { select: { handle: true } } } },
+        projectTasks: {
+          where: { task: { deletedAt: null } },
+          select: {
+            task: {
+              select: {
+                id: true, title: true, dueDate: true, priority: true,
+                estimatedHours: true, actualHours: true,
+                currentStatus: { select: { name: true, type: true } },
+                assignees: {
+                  select: {
+                    role: true, estimatedHours: true, dueDate: true,
+                    user: { select: { id: true, firstName: true, lastName: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
+      },
+    });
+
+    // Hours actually logged per project — the report's "what did this cost" column, which is not
+    // the same as the workingHours snapshot taken at completion.
+    const logged = await this.prisma.timesheet.groupBy({
+      by: ['projectId'],
+      where: { projectId: { in: projects.map(p => p.id) }, deletedAt: null },
+      _sum: { hoursLogged: true },
+    });
+    const loggedById = new Map(logged.map(l => [l.projectId, round1(l._sum.hoursLogged ?? 0)]));
+
+    const creatorIds = [...new Set(projects.map(p => p.createdBy).filter(Boolean))];
+    const creators = creatorIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, firstName: true, lastName: true } })
+      : [];
+    const creatorById = new Map(creators.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+
+    const name = (u: { firstName: string | null; lastName: string | null }) => `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim();
+    const shaped = projects.map(p => {
+      const tasks = p.projectTasks.map(pt => pt.task);
+      const closed = tasks.filter(t => t.currentStatus?.type === 'CLOSED').length;
+      return {
+        id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, office: p.office ?? null,
+        title: p.title, description: p.description ?? null,
+        type: p.projectType ?? null, phase: p.projectPhase, priority: p.priority,
+        status: p.currentStatus?.name ?? null,
+        client: p.client?.name ?? p.client?.code ?? null,
+        billable: p.billable,
+        progress: p.completionPercentage,
+        startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
+        completedAt: p.completedAt, closedAt: p.closedAt,
+        clientDeliveryDate: p.clientDeliveryDate ?? null,
+        workingHours: p.workingHours ?? null, actualHours: p.actualHours ?? null,
+        loggedHours: loggedById.get(p.id) ?? 0,
+        estimatedHours: round1(tasks.reduce((n, t) => n + (t.estimatedHours ?? 0), 0)),
+        taskCount: tasks.length, tasksClosed: closed, tasksOpen: tasks.length - closed,
+        memberCount: p._count.members,
+        createdBy: creatorById.get(p.createdBy) ?? null, createdAt: p.createdAt,
+        patents: p.patents.map(pp => pp.patent.handle),
+        managers: p.members.filter(m => m.projectRole === 'PM' || m.projectRole === 'MANAGER')
+          .map(m => ({ id: m.user.id, name: name(m.user) })),
+        members: p.members.map(m => ({
+          id: m.user.id, name: name(m.user), role: m.projectRole ?? 'MEMBER',
+          designation: m.user.designation ?? null,
+        })),
+        tasks: tasks.map(t => ({
+          id: t.id, title: t.title, status: t.currentStatus?.name ?? null,
+          isClosed: t.currentStatus?.type === 'CLOSED',
+          priority: t.priority, dueDate: t.dueDate,
+          estimatedHours: t.estimatedHours ?? null, actualHours: t.actualHours ?? null,
+          assignees: t.assignees.map(a => ({
+            id: a.user.id, name: name(a.user), role: a.role ?? 'MEMBER',
+            estimatedHours: a.estimatedHours ?? null, dueDate: a.dueDate ?? null,
+          })),
+        })),
+      };
+    });
+    // Redact the client deadline exactly as the list does — same rule, same scope.
+    return this.deadlines.redactProjects(shaped as never, await this.deadlines.scope());
   }
 
   /**
@@ -958,7 +1333,7 @@ export class ProjectsService {
     await this.access.assertProjectAccess(getActorId(), id);
     const existing = await this.getRaw(id);
     // The generic edit may only move a project between the NON-terminal phases
-    // (IDEA/PLANNING/ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
+    // (PLANNING/ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
     // actions — Complete/Close (which stamp completedAt/closedAt + emit canonical events) and
     // Delete (ARCHIVED) — so a plain edit can no longer slip a project into
     // COMPLETED/CLOSED/ARCHIVED/CANCELLED, which used to leave it visible AND still writable
@@ -1100,25 +1475,84 @@ export class ProjectsService {
   }
 
   /** ACTIVE/ON_HOLD → COMPLETED. Work is done; the project stays listed but locked. */
-  async complete(id: string) {
+  /**
+   * The hours a project has consumed ON PAPER — the sum of logged timesheets, falling back to the
+   * sum of task estimates when nobody logged time. This is what prefills the completion form; the
+   * closer can overwrite it, and `actualHours` is a separate, hand-typed number for what it really
+   * took. Exposed so the UI can show the suggestion before anyone commits to it.
+   */
+  async completionHoursSuggestion(id: string): Promise<{ loggedHours: number; estimatedHours: number; suggested: number }> {
+    const [logged, tasks] = await Promise.all([
+      this.prisma.timesheet.aggregate({ where: { projectId: id, deletedAt: null }, _sum: { hoursLogged: true } }),
+      this.prisma.projectTask.findMany({
+        where: { projectId: id, task: { deletedAt: null } },
+        select: { task: { select: { estimatedHours: true } } },
+      }),
+    ]);
+    const loggedHours = round1(logged._sum.hoursLogged ?? 0);
+    const estimatedHours = round1(tasks.reduce((sum, t) => sum + (t.task.estimatedHours ?? 0), 0));
+    return { loggedHours, estimatedHours, suggested: loggedHours > 0 ? loggedHours : estimatedHours };
+  }
+
+  async complete(id: string, dto?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) {
     await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase === 'COMPLETED') return this.get(id);
     if (phase === 'CLOSED') throw new BadRequestException('This project is closed. Reopen it before marking it complete.');
     if (phase === 'PLANNING') throw new BadRequestException('A project still in planning cannot be completed — activate it first.');
+
+    // A project is only "complete" when its WORK is complete. Every task must be closed (or
+    // deleted) first — otherwise a project could be signed off with live work still on it.
+    const openTasks = await this.prisma.projectTask.findMany({
+      where: {
+        projectId: id,
+        task: { deletedAt: null, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+      },
+      select: { task: { select: { title: true } } },
+      take: 50,
+    });
+    if (openTasks.length) {
+      const names = openTasks.slice(0, 3).map(t => `“${t.task.title}”`).join(', ');
+      const more = openTasks.length > 3 ? ` and ${openTasks.length - 3} more` : '';
+      throw new BadRequestException(
+        `${openTasks.length} task${openTasks.length === 1 ? ' is' : 's are'} still open — ${names}${more}. Close or delete every task before completing the project.`,
+      );
+    }
+
     const actorId = getActorId();
+    // Delivery + cost are captured AT completion, because that is the only moment anyone actually
+    // knows them. Anything the caller omits falls back to something honest: delivery defaults to
+    // now (the work is being signed off), and working hours to what the timesheets say.
+    const suggestion = await this.completionHoursSuggestion(id);
+    const delivery = dto?.clientDeliveryDate ? new Date(dto.clientDeliveryDate) : new Date();
+    if (isNaN(delivery.getTime())) throw new BadRequestException('The client delivery date is not a valid date/time.');
+    const hours = (v: unknown, label: string): number | null => {
+      if (v == null || v === '') return null;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw new BadRequestException(`${label} must be a number of hours (0 or more).`);
+      // A project cannot plausibly have consumed more than a decade of one person's working life;
+      // this only exists to catch a fat-fingered 80000 before it poisons every report.
+      if (n > 100_000) throw new BadRequestException(`${label} looks wrong — ${n} hours.`);
+      return round1(n);
+    };
+    const workingHours = hours(dto?.workingHours, 'Working hours') ?? suggestion.suggested;
+    const actualHours = hours(dto?.actualHours, 'Actual hours');
     const updated = await this.prisma.project.update({
       where: { id },
-      data: { projectPhase: 'COMPLETED', completedAt: new Date() },
+      data: {
+        projectPhase: 'COMPLETED', completedAt: new Date(),
+        clientDeliveryDate: delivery, workingHours, actualHours,
+      },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_COMPLETED, entityType: 'PROJECT', entityId: id,
-      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
+      actorId: actorId ?? undefined,
+      metadata: { projectId: id, title: project.title, clientDeliveryDate: delivery.toISOString(), workingHours, actualHours },
     });
     await this.notifyMembers(project, actorId, {
       type: 'project.completed', title: 'Project completed',
-      message: `"${project.title}" was marked complete.`,
+      message: `"${project.title}" was marked complete — delivered ${delivery.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}${actualHours != null ? `, ${actualHours}h actual` : ''}.`,
     });
     return this.deadlines.redactProject(updated, await this.deadlines.scope());
   }
@@ -1186,30 +1620,36 @@ export class ProjectsService {
   }
 
   /**
-   * Re-initialize a COMPLETED project (a returning client) — reopen it in place KEEPING the SAME
-   * PID and all its existing data/context, so nothing is re-entered. This differs from reopen():
-   *   • complete() does NOT discontinue the PID, so a completed project still holds its ATTACHED
-   *     reservation + code — we keep both.
-   *   • reopen() (used for CLOSED projects) clears the code because a closed project's PID was
-   *     discontinued and can't be revived; re-initialize must not do that.
-   * Only a COMPLETED project can be re-initialized; a CLOSED one stays archived.
+   * Re-initialize a finished project for a returning client — put it back to work in place,
+   * KEEPING THE SAME PID and every bit of its existing data, so nothing is re-entered.
+   *
+   * Works from COMPLETED or CLOSED. The two differ only in what close() did to the reservation:
+   * completing leaves it ATTACHED, closing marks it DISCONTINUED. Either way the serial was never
+   * freed for anyone else, so restoring it is integrity-safe — this is what lets an admin bring a
+   * matter back from the PID ledger under the number the client already knows.
    */
   async reinitialize(id: string) {
     await this.access.assertProjectAccess(getActorId(), id);
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
-    if (phase !== 'COMPLETED') {
-      throw new BadRequestException('Only a completed project can be re-initialized. A closed project must be reopened (and gets a fresh PID).');
+    if (phase !== 'COMPLETED' && phase !== 'CLOSED') {
+      throw new BadRequestException('Only a completed or closed project can be re-initialized.');
     }
     const actorId = getActorId();
-    // Back to ACTIVE, clear completedAt, KEEP code (PID) + its ATTACHED reservation untouched.
+    // Back to ACTIVE, clearing both end-state timestamps. The code (PID) is never touched.
     const updated = await this.prisma.project.update({
       where: { id },
-      data: { projectPhase: 'ACTIVE', completedAt: null },
+      data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
+    });
+    // Closing discontinued the reservation; bring it back so the ledger reads "Working" again.
+    // A completed project's reservation is still ATTACHED, so this simply matches nothing.
+    await this.prisma.pidReservation.updateMany({
+      where: { projectId: id, status: 'DISCONTINUED' },
+      data: { status: 'ATTACHED', resolvedAt: new Date() },
     });
     await this.events.emit({
       action: EVENTS.PROJECT_REOPENED, entityType: 'PROJECT', entityId: id,
-      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title, reinitialized: true },
+      actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title, reinitialized: true, fromPhase: phase },
     });
     await this.notifyMembers(project, actorId, {
       type: 'project.reopened', title: 'Project re-initialized',

@@ -457,9 +457,21 @@ model WorkflowTransition {
 
 model Project {
   id                      String    @id @default(cuid())
-  // Human project code = the PID "SQ_<FY>_<serial>" (e.g. SQ_26_27_001). Unique; also
-  // matched by global search. Backfilled for legacy rows, then always set on new projects.
-  code                    String?   @unique
+  // Human project code = the PID "SQ_<FY>_<serial>" (e.g. SQ_26_27_001). Also matched by
+  // global search. Backfilled for legacy rows, then always set on new projects.
+  //
+  // NOT unique. A returning client keeps the same PID, and each new piece of work for them is a
+  // new Project row sharing that code — so one PID groups many projects ("rounds"). PID
+  // uniqueness itself is still enforced where it belongs, on PidReservation(organizationId, pid);
+  // the reservation remains the single authority for which serials exist.
+  code                    String?
+  // Which round this project is under its PID: 1 for the first, 2 for the next, and so on.
+  // Always 1 for a single-round (Gurgaon) project.
+  roundSeq                Int       @default(1)
+  // GURGAON | JAIPUR — the office that owns the matter, captured at creation from the creator
+  // and editable afterwards. Jaipur projects support multiple rounds under one PID; Gurgaon
+  // projects behave exactly as they always have.
+  office                  String?
   title                   String
   description             String?
   // The kind of patent-analysis matter this project is (HML, Claim Chart, FTO, Novelty,
@@ -488,6 +500,17 @@ model Project {
   // Reopening clears both and returns the project to ACTIVE.
   completedAt             DateTime?
   closedAt                DateTime?
+  // Captured when the project is marked COMPLETE (see complete()):
+  //   clientDeliveryDate — when the work was actually DELIVERED to the client. Distinct from
+  //     completedAt (when someone pressed the button) and from clientDueDate (what we promised).
+  //     Date AND time, because same-day delivery timing is what gets disputed.
+  //   workingHours — hours the project consumed on paper. Prefilled from logged timesheets
+  //     (falling back to the sum of task estimates) and editable by whoever closes it.
+  //   actualHours — what it REALLY took, typed by hand. Deliberately not derived: it exists
+  //     precisely to record the number the system cannot see.
+  clientDeliveryDate      DateTime?
+  workingHours            Float?
+  actualHours             Float?
   workflowId              String?
   currentWorkflowStatusId String?
   createdBy               String
@@ -511,6 +534,7 @@ model Project {
 
   @@index([deletedAt])
   @@index([clientId])
+  @@index([code])
   @@map("project")
 }
 
@@ -1007,7 +1031,9 @@ model Attendance {
   checkInArea      String?
   checkOutArea     String?
   // PRESENT | ABSENT | HALF_DAY | ON_LEAVE | HOLIDAY | WEEKEND | LATE
-  status           String    @default("PRESENT")
+  // Default is ABSENT, never PRESENT: an attendance row that nobody explicitly filled in must not
+  // assert that somebody showed up. Every app write sets this explicitly.
+  status           String    @default("ABSENT")
   // Where the work happened — a WORK MODE, not a leave type. OFFICE | WFH.
   workMode         String    @default("OFFICE")
   note             String?
@@ -1179,6 +1205,10 @@ model LeaveRequest {
   leaveType      String // LeaveType.code
   startDate      DateTime
   endDate        DateTime
+  // FULL or HALF. A HALF-day leave covers a single date and consumes 0.5 of the balance.
+  dayType        String    @default("FULL")
+  // Which half of the day a HALF leave covers — FIRST (morning) or SECOND (afternoon).
+  halfPeriod     String?
   numDays        Float     @default(1)
   reason         String?
   // DRAFT | PENDING | APPROVED | REJECTED | CANCELLED

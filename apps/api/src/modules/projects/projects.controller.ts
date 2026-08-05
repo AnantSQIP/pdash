@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, UpdateProjectDto } from './dto';
+import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -28,6 +28,12 @@ export class ProjectsController {
    * Project requests routed to me (as their manager) or, for admins, any pending one.
    * Org comes from the SESSION — a client-supplied org here would be a cross-tenant read.
    */
+  /** Every project with its full detail (tasks, staffing, hours, delivery) — the Reports module. */
+  @Get('full-report') @RequirePermission('report.view')
+  async fullReport() {
+    return this.projects.fullReport(await this.actor.requireOrgId());
+  }
+
   @Get('pending-approvals')
   async pendingApprovals() {
     return this.projects.pendingApprovals(await this.actor.requireOrgId());
@@ -117,9 +123,27 @@ export class ProjectsController {
     return this.projects.removeMember(id, userId);
   }
 
+  /** What the completion form should prefill "working hours" with (logged time, else estimates). */
+  @Get(':id/completion-hours') @RequirePermission('project.view')
+  completionHours(@Param('id') id: string) {
+    return this.projects.completionHoursSuggestion(id);
+  }
+
+  /** Start ANOTHER project under this one's PID — the returning-client flow (Jaipur). */
+  @Post(':id/rounds') @RequirePermission('project.create')
+  addRound(@Param('id') id: string, @Body() body: AddProjectRoundDto) {
+    return this.projects.addRound(id, body);
+  }
+
+  /** Every project sharing this one's PID, oldest first — drives the PID page's cards. */
+  @Get(':id/rounds')
+  async rounds(@Param('id') id: string) {
+    return this.projects.roundsForProject(id);
+  }
+
   @Post(':id/complete') @RequirePermission('project.update')
-  complete(@Param('id') id: string) {
-    return this.projects.complete(id);
+  complete(@Param('id') id: string, @Body() body?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) {
+    return this.projects.complete(id, body);
   }
 
 

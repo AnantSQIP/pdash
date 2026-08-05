@@ -18,7 +18,6 @@ export const PHASE_COLORS: Record<string, { bg: string; text: string; label: str
   CLOSED:    { bg: 'bg-slate-100',  text: 'text-slate-600',  label: 'Closed'    },
   CANCELLED: { bg: 'bg-rose-100',   text: 'text-rose-600',   label: 'Cancelled' },
   ARCHIVED:  { bg: 'bg-gray-100',   text: 'text-gray-500',   label: 'Archived'  },
-  IDEA:      { bg: 'bg-purple-100', text: 'text-purple-700', label: 'Idea'      },
 };
 
 /** A human phase label + colours for any phase, falling back gracefully for unknowns. */

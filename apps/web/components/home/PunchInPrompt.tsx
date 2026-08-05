@@ -6,8 +6,12 @@ import { usePunch } from './usePunch';
 
 /**
  * First-login-of-the-day punch-in prompt. When someone opens the app and hasn't clocked in yet
- * today, a small dialog invites them to Punch In (captures location) or "Punch in later" (dismissed
- * for the rest of the day, per-device). It disappears automatically once they've punched in.
+ * today, a small dialog invites them to Punch In (captures location) or "Punch in later"
+ * (dismissed for the rest of the day, per-device). It disappears automatically once they've
+ * punched in.
+ *
+ * Deliberately just those two choices. Working from home is arranged through the WFH request in
+ * the Leaves section, not decided at the moment of clocking in.
  */
 export function PunchInPrompt() {
   const { allowed, ready, att, dayComplete, busy, punch } = usePunch();

@@ -8,7 +8,7 @@ import clsx from 'clsx';
 import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
-import { PHASE_META, PRIORITY_META, type Phase, type MockProject } from '@/lib/mock-data';
+import { PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel, type Phase, type MockProject } from '@/lib/mock-data';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -22,7 +22,6 @@ const PHASES: { value: Phase | 'ALL'; label: string }[] = [
   { value: 'PLANNING',  label: 'Planning' },
   { value: 'ON_HOLD',   label: 'On Hold' },
   { value: 'COMPLETED', label: 'Completed' },
-  { value: 'IDEA',      label: 'Idea' },
   { value: 'CLOSED',    label: 'Closed' },
 ];
 
@@ -31,7 +30,6 @@ const PHASE_COLOR: Record<string, string> = {
   PLANNING:  '#3b82f6',
   ON_HOLD:   '#f97316',
   COMPLETED: '#16a34a',
-  IDEA:      '#9aa0a6',
   CLOSED:    '#64748b',
   ARCHIVED:  '#6b7280',
   CANCELLED: '#ef4444',
@@ -54,6 +52,7 @@ function toDisplay(p: ApiProject): MockProject {
     title: p.title,
     description: p.description ?? '',
     projectType: p.projectType ?? null,
+    roundSeq: p.roundSeq ?? 1,
     projectPhase: p.projectPhase as Phase,
     priority: p.priority as any,
     completionPercentage: p.completionPercentage,
@@ -401,12 +400,22 @@ function ProjectRow({ project }: { project: MockProject }) {
   return (
     <a href={`/projects/${project.id}`} className="flex items-center gap-4 bg-white rounded-xl border border-gray-200 hover:border-brand-500 px-5 py-4 transition-all group">
       <div className="w-2 h-8 rounded-full shrink-0" style={{ backgroundColor: project.statusColor }} />
+      {/* Same order as the card: NAME → PID → PHASE → TYPE. The row never showed the PID at all,
+          so the list view couldn't be used to look one up. */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', phase.bg, phase.text)}>{phase.label}</span>
-          <span className={clsx('text-xs font-semibold', priority.color)}>{priority.label}</span>
+        <p className="font-semibold text-gray-900 truncate group-hover:text-brand-600 transition-colors">{project.title}</p>
+        <div className="flex items-center gap-2 flex-wrap mt-1">
+          {project.code
+            ? <span className="text-xs font-mono font-bold text-brand-700">{pidLabel(project.code, project.roundSeq)}</span>
+            : <span className="text-xs font-mono font-bold text-amber-500">PID pending</span>}
+          <span className={clsx('text-[11px] font-semibold px-2 py-0.5 rounded-full', phase.bg, phase.text)}>{phase.label}</span>
+          {project.projectType && (
+            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+              {projectTypeLabel(project.projectType)}
+            </span>
+          )}
+          <span className={clsx('text-[11px] font-semibold', priority.color)}>{priority.label}</span>
         </div>
-        <p className="font-medium text-gray-900 truncate mt-0.5 group-hover:text-brand-600 transition-colors">{project.title}</p>
       </div>
       <div className="shrink-0 text-right">
         <p className="text-sm font-semibold text-gray-700">{project.completionPercentage}%</p>

@@ -1,8 +1,12 @@
 import {
   BadRequestException, Body, Controller, Get, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit, Patch, Post, Query,
 } from '@nestjs/common';
+import { ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { PermissionService } from '../permissions/permission.service';
+import { PermissionsModule } from '../permissions/permissions.module';
+import { getActorId } from '../../common/context/request-context';
 import { startOfIstDay } from '../../common/dates';
 import { TimesheetsModule } from '../timesheets/timesheets.module';
 import { TimesheetsService } from '../timesheets/timesheets.service';
@@ -34,7 +38,20 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly timesheets: TimesheetsService,
+    private readonly permissions: PermissionService,
   ) {}
+
+  /**
+   * The Daily Digest module is Super-Admin only. It aggregates the whole organisation — every
+   * project, every person's hours, every deadline — so it is gated on the ROLE rather than on a
+   * permission code an admin might also hold. Checked explicitly (no new permission, no regrant).
+   */
+  async assertSuperAdmin(): Promise<void> {
+    const actorId = getActorId();
+    if (!actorId) throw new ForbiddenException('Not authenticated.');
+    const eff = await this.permissions.getEffectivePermissions(actorId);
+    if (!eff.isSuperAdmin) throw new ForbiddenException('The daily digest is available to Super Admins only.');
+  }
 
   onModuleInit() {
     if (process.env.RUN_BACKGROUND_JOBS === 'false') return;
@@ -146,32 +163,191 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** Aggregate the same numbers over an arbitrary [from, to] IST date range (inclusive), for the
-   *  reports digest — day / week / month / quarter / year. */
-  async buildRangeReport(fromStr: string, toStr: string) {
-    const from = startOfIstDay(new Date(`${fromStr.slice(0, 10)}T12:00:00.000Z`));
-    const to = startOfIstDay(new Date(`${toStr.slice(0, 10)}T12:00:00.000Z`));
-    if (isNaN(from.getTime()) || isNaN(to.getTime())) throw new BadRequestException('A valid date range is required.');
-    if (to < from) throw new BadRequestException('The end date must be on or after the start date.');
-    const rangeStart = from;
-    const rangeEnd = new Date(to.getTime() + 86_400_000); // inclusive of the last day
-    const [created, completed, tasksClosed, overdueTasks, deadlinesMet, activeProjects] = await Promise.all([
-      this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: rangeStart, lt: rangeEnd } }, select: { title: true, code: true } }),
-      this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: rangeStart, lt: rangeEnd } }, select: { title: true, code: true } }),
-      this.prisma.task.count({ where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: rangeStart, lt: rangeEnd } } }),
-      this.prisma.task.findMany({
-        where: { deletedAt: null, dueDate: { lt: startOfIstDay(new Date()) }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
-        select: { title: true, dueDate: true }, orderBy: { dueDate: 'asc' }, take: 500,
-      }),
-      this.prisma.task.count({ where: { deletedAt: null, dueDate: { gte: rangeStart, lt: rangeEnd }, currentStatus: { type: 'CLOSED' } } }),
-      this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE' } }),
-    ]);
+  // ── Deep report (the Daily Digest module) ─────────────────────────────────────
+  // The notification digest is a summary; this is the thing behind it. Every number resolves to
+  // the actual rows, and every row carries the ids the UI needs to link straight through to the
+  // project, the task and the person. Nothing here is a count without its evidence.
+
+  /** How far ahead the "coming up" panel looks, counted in WORKING days (weekends skipped). */
+  private static readonly LOOKAHEAD_WORKING_DAYS = 5;
+
+  /** The next N working days starting from `from` (inclusive), skipping weekends and holidays. */
+  private async workingDaysFrom(from: Date, count: number): Promise<Date[]> {
+    const horizon = new Date(from.getTime() + (count * 3 + 14) * 86_400_000); // generous scan window
+    const holidays = await this.prisma.holiday.findMany({
+      where: { date: { gte: from, lte: horizon } }, select: { date: true },
+    });
+    const holidaySet = new Set(holidays.map(h => h.date.toISOString().slice(0, 10)));
+    const out: Date[] = [];
+    for (let d = new Date(from); out.length < count && d <= horizon; d = new Date(d.getTime() + 86_400_000)) {
+      const wd = d.getUTCDay();
+      if (wd === 0 || wd === 6) continue;
+      if (holidaySet.has(d.toISOString().slice(0, 10))) continue;
+      out.push(new Date(d));
+    }
+    return out;
+  }
+
+  /** Everything the digest screen needs for one IST day, fully linked and drillable. */
+  async buildDetail(dateStr?: string) {
+    const base = dateStr ? new Date(`${dateStr.slice(0, 10)}T12:00:00.000Z`) : new Date();
+    if (isNaN(base.getTime())) throw new BadRequestException('A valid date is required.');
+    const dayStart = startOfIstDay(base);
+    const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+    const today = startOfIstDay(new Date());
+
+    // The lookahead always runs from TODAY — "what is coming up" is a question about now, not
+    // about the historical day someone happens to be reading.
+    const workingDays = await this.workingDaysFrom(today, DailyDigestService.LOOKAHEAD_WORKING_DAYS);
+    const lookaheadEnd = workingDays.length
+      ? new Date(workingDays[workingDays.length - 1].getTime() + 86_400_000)
+      : new Date(today.getTime() + 86_400_000);
+
+    const projectSelect = {
+      id: true, code: true, roundSeq: true, title: true, projectType: true, projectPhase: true, priority: true,
+      startDate: true, dueDate: true, clientDueDate: true, completionPercentage: true,
+      completedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
+      client: { select: { name: true, code: true } },
+      members: {
+        where: { isActive: true },
+        select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true } } },
+      },
+      _count: { select: { projectTasks: true } },
+    } as const;
+
+    const taskSelect = {
+      id: true, title: true, dueDate: true, priority: true, estimatedHours: true, actualHours: true,
+      currentStatus: { select: { name: true, type: true } },
+      assignees: { select: { estimatedHours: true, dueDate: true, role: true, user: { select: { id: true, firstName: true, lastName: true } } } },
+      projectTasks: { select: { project: { select: { id: true, code: true, roundSeq: true, title: true, projectType: true, completionPercentage: true } } } },
+    } as const;
+
+    const [createdProjects, completedProjects, tasksClosed, deadlinesMet, overdueTasks, upcomingTasks, upcomingProjects, hoursRows, activeProjects] =
+      await Promise.all([
+        this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
+        this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
+        this.prisma.task.findMany({
+          where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: dayStart, lt: dayEnd } },
+          select: { ...taskSelect, updatedAt: true }, take: 500,
+        }),
+        this.prisma.task.findMany({
+          where: { deletedAt: null, dueDate: { gte: dayStart, lt: dayEnd }, currentStatus: { type: 'CLOSED' } },
+          select: taskSelect, take: 500,
+        }),
+        this.prisma.task.findMany({
+          where: { deletedAt: null, dueDate: { lt: dayStart }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+          select: taskSelect, orderBy: { dueDate: 'asc' }, take: 500,
+        }),
+        // Coming up: still-open work due inside the next N WORKING days.
+        this.prisma.task.findMany({
+          where: {
+            deletedAt: null, dueDate: { gte: today, lt: lookaheadEnd },
+            OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
+          },
+          select: taskSelect, orderBy: { dueDate: 'asc' }, take: 500,
+        }),
+        this.prisma.project.findMany({
+          where: { deletedAt: null, projectPhase: { in: ['ACTIVE', 'ON_HOLD', 'PLANNING'] }, dueDate: { gte: today, lt: lookaheadEnd } },
+          select: projectSelect, orderBy: { dueDate: 'asc' },
+        }),
+        // Who worked, and on what, that day — the "working hours" side of the picture.
+        this.prisma.timesheet.findMany({
+          where: { deletedAt: null, date: { gte: dayStart, lt: dayEnd } },
+          select: {
+            hoursLogged: true, billable: true, notes: true,
+            user: { select: { id: true, firstName: true, lastName: true, designation: true } },
+            project: { select: { id: true, code: true, roundSeq: true, title: true } },
+            task: { select: { id: true, title: true } },
+          },
+        }),
+        this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE' } }),
+      ]);
+
+    const person = (u: { id: string; firstName: string | null; lastName: string | null }) =>
+      ({ id: u.id, name: `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() || 'Unknown' });
+
+    const shapeProject = (p: any) => {
+      const managers = (p.members ?? []).filter((m: any) => m.projectRole === 'PM' || m.projectRole === 'MANAGER');
+      return {
+        id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, title: p.title, type: p.projectType ?? null,
+        phase: p.projectPhase, priority: p.priority,
+        client: p.client?.name ?? p.client?.code ?? null,
+        startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
+        clientDeliveryDate: p.clientDeliveryDate ?? null,
+        workingHours: p.workingHours ?? null, actualHours: p.actualHours ?? null,
+        completedAt: p.completedAt ?? null,
+        progress: p.completionPercentage, taskCount: p._count?.projectTasks ?? 0,
+        managers: managers.map((m: any) => person(m.user)),
+        members: (p.members ?? []).map((m: any) => ({ ...person(m.user), role: m.projectRole ?? 'MEMBER' })),
+      };
+    };
+
+    const shapeTask = (t: any) => {
+      const proj = t.projectTasks?.[0]?.project ?? null;
+      const due = t.dueDate ? new Date(t.dueDate) : null;
+      return {
+        id: t.id, title: t.title, dueDate: t.dueDate, priority: t.priority,
+        status: t.currentStatus?.name ?? null,
+        estimatedHours: t.estimatedHours ?? null, actualHours: t.actualHours ?? null,
+        daysOverdue: due && due < dayStart ? Math.round((dayStart.getTime() - due.getTime()) / 86_400_000) : 0,
+        project: proj ? { id: proj.id, pid: proj.code ?? null, roundSeq: proj.roundSeq, title: proj.title, type: proj.projectType ?? null, progress: proj.completionPercentage } : null,
+        assignees: (t.assignees ?? []).map((a: any) => ({
+          ...person(a.user), role: a.role ?? 'MEMBER',
+          estimatedHours: a.estimatedHours ?? null, dueDate: a.dueDate ?? null,
+        })),
+      };
+    };
+
+    // Hours logged that day, rolled up per person and kept per entry for the drill-down.
+    const byPerson = new Map<string, { id: string; name: string; designation: string | null; hours: number; billableHours: number; entries: any[] }>();
+    for (const h of hoursRows) {
+      const key = h.user.id;
+      const row = byPerson.get(key) ?? {
+        id: h.user.id, name: `${h.user.firstName ?? ''} ${h.user.lastName ?? ''}`.trim(),
+        designation: h.user.designation ?? null, hours: 0, billableHours: 0, entries: [],
+      };
+      row.hours += h.hoursLogged;
+      if (h.billable) row.billableHours += h.hoursLogged;
+      row.entries.push({
+        hours: h.hoursLogged, billable: h.billable, notes: h.notes ?? null,
+        project: h.project ? { id: h.project.id, pid: h.project.code ?? null, roundSeq: h.project.roundSeq, title: h.project.title } : null,
+        task: h.task ? { id: h.task.id, title: h.task.title } : null,
+      });
+      byPerson.set(key, row);
+    }
+    const r1 = (n: number) => Math.round(n * 10) / 10;
+    const people = [...byPerson.values()]
+      .map(p => ({ ...p, hours: r1(p.hours), billableHours: r1(p.billableHours) }))
+      .sort((a, b) => b.hours - a.hours);
+
+    // Group the lookahead BY DAY so "which deadlines are coming" is answered day by day.
+    const upcomingByDay = workingDays.map(d => {
+      const k = d.toISOString().slice(0, 10);
+      const sameDay = (v: Date | null) => !!v && new Date(v).toISOString().slice(0, 10) === k;
+      return {
+        date: k,
+        tasks: upcomingTasks.filter(t => sameDay(t.dueDate)).map(shapeTask),
+        projects: upcomingProjects.filter(p => sameDay(p.dueDate)).map(shapeProject),
+      };
+    });
+
     return {
-      from: rangeStart.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
-      projectsCreated: created, projectsCompleted: completed,
-      tasksCompleted: tasksClosed, deadlinesMet,
-      overdueCount: overdueTasks.length, overdueSample: overdueTasks.slice(0, 100),
-      activeProjects,
+      date: dayStart.toISOString().slice(0, 10),
+      lookaheadDays: workingDays.map(d => d.toISOString().slice(0, 10)),
+      projectsCreated: createdProjects.map(shapeProject),
+      projectsCompleted: completedProjects.map(shapeProject),
+      tasksCompleted: tasksClosed.map(shapeTask),
+      deadlinesMet: deadlinesMet.map(shapeTask),
+      overdue: overdueTasks.map(shapeTask),
+      upcoming: upcomingByDay,
+      upcomingTotal: upcomingByDay.reduce((n, d) => n + d.tasks.length + d.projects.length, 0),
+      hoursByPerson: people,
+      totals: {
+        hoursLogged: r1(people.reduce((n, p) => n + p.hours, 0)),
+        billableHours: r1(people.reduce((n, p) => n + p.billableHours, 0)),
+        peopleWhoLogged: people.length,
+        activeProjects,
+      },
     };
   }
 
@@ -216,28 +392,34 @@ class DailyDigestController {
 
   /** Manual trigger (for testing / on-demand). Admin only. */
   @Post('send') @RequirePermission('user.manage_access')
-  async send() { return { sent: await this.svc.sendDigests() }; }
+  async send() { await this.svc.assertSuperAdmin(); return { sent: await this.svc.sendDigests() }; }
 
   /** The detailed report for a day (defaults to today) — powers the digest detail screen. */
   @Get('report') @RequirePermission('user.manage_access')
   async report(@Query('date') date?: string) {
+    await this.svc.assertSuperAdmin();
     const now = date ? new Date(`${date.slice(0, 10)}T12:00:00.000Z`) : new Date();
     return this.svc.buildReport(isNaN(now.getTime()) ? new Date() : now);
   }
 
-  /** The report aggregated over a date range (day / week / month / quarter / year) — reports page. */
-  @Get('report-range') @RequirePermission('report.view')
-  async reportRange(@Query('from') from: string, @Query('to') to: string) {
-    return this.svc.buildRangeReport(from, to);
+  /** The DEEP report — every number resolved to its rows, with ids so the UI can link through,
+   *  plus the next 5 working days of deadlines. Powers the Daily Digest module. */
+  @Get('detail') @RequirePermission('user.manage_access')
+  async detail(@Query('date') date?: string) {
+    await this.svc.assertSuperAdmin();
+    return this.svc.buildDetail(date);
   }
 
   /** Read / set the admin-configured send hour (IST). */
   @Get('schedule') @RequirePermission('user.manage_access')
-  async getSchedule() { return this.svc.getSchedule(); }
+  async getSchedule() { await this.svc.assertSuperAdmin(); return this.svc.getSchedule(); }
 
   @Patch('schedule') @RequirePermission('user.manage_access')
-  async setSchedule(@Body() body: { hourIst: number }) { return this.svc.setSchedule(Number(body?.hourIst)); }
+  async setSchedule(@Body() body: { hourIst: number }) {
+    await this.svc.assertSuperAdmin();
+    return this.svc.setSchedule(Number(body?.hourIst));
+  }
 }
 
-@Module({ imports: [TimesheetsModule], providers: [DailyDigestService], controllers: [DailyDigestController], exports: [DailyDigestService] })
+@Module({ imports: [TimesheetsModule, PermissionsModule], providers: [DailyDigestService], controllers: [DailyDigestController], exports: [DailyDigestService] })
 export class DailyDigestModule {}

@@ -30,22 +30,12 @@ import { DateField } from '@/components/ui/DateField';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { TeamCalendarView } from '@/components/calendar/TeamCalendarView';
+import { EVENT_COLORS, EVENT_LABELS, EVENT_LEGEND_ORDER, eventColor, type CalendarEventType } from '@/lib/calendar-colors';
+import { WEEKDAYS_SHORT, WEEKDAYS_FULL, weekdayIndex, monthLeadPad, startOfWeekMonday } from '@/lib/date';
 
-type EventType = 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER' | 'HOLIDAY' | 'LEAVE' | 'COMPOFF' | 'WFH';
-const TYPE_COLORS: Record<EventType, string> = {
-  EVENT:     '#3d8de2',
-  MEETING:   '#fe841f',
-  TASK_DUE:  '#34a853',
-  MILESTONE: '#9334e6',
-  REMINDER:  '#ea4335',
-  HOLIDAY:   '#d93025',
-  LEAVE:     '#fe841f',
-  COMPOFF:   '#6366f1',
-  WFH:       '#8b5cf6',
-};
-const TYPE_LABELS: Record<EventType, string> = {
-  EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task Due', MILESTONE: 'Milestone', REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off', WFH: 'WFH',
-};
+type EventType = CalendarEventType;
+const TYPE_COLORS = EVENT_COLORS;
+const TYPE_LABELS = EVENT_LABELS;
 const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   EVENT:     RiCalendarEventLine,
   MEETING:   RiTeamLine,
@@ -58,33 +48,28 @@ const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   WFH:       RiHomeOfficeLine,
 };
 
-/** A synthetic calendar event is one the calendar itself does not own (a holiday). It is
- *  read-only — no edit/delete. */
-const isReadOnlyEvent = (id: string) => id.startsWith('holiday-');
-const ALL_TYPES = Object.keys(TYPE_LABELS) as EventType[];
+// Derived entries that have no editable CalendarEvent row behind them: company holidays
+// (managed under Attendance) and not-yet-approved leave/WFH/comp-off requests (which live on
+// their own request records and are decided from Attendance, not here).
+const isReadOnlyEvent = (id: string) => id.startsWith('holiday-') || id.startsWith('pending:');
+// Grouped for the legend: schedule → delivery → availability.
+const ALL_TYPES = EVENT_LEGEND_ORDER;
 
 function asType(t: string): EventType {
   return (ALL_TYPES.includes(t as EventType) ? t : 'EVENT') as EventType;
 }
-function colorOf(ev: CalendarEvent) {
-  return ev.color || TYPE_COLORS[asType(ev.type)] || '#3d8de2';
-}
+const colorOf = eventColor;
 
 function getDaysInMonth(year: number, month: number) {
   return new Date(year, month + 1, 0).getDate();
 }
 function getFirstDayOfMonth(year: number, month: number) {
-  return new Date(year, month, 1).getDay();
+  return monthLeadPad(year, month); // Monday-first — see lib/date
 }
 function sameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
-function startOfWeek(d: Date) {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  r.setDate(r.getDate() - r.getDay());
-  return r;
-}
+const startOfWeek = startOfWeekMonday;
 function addDays(d: Date, n: number) {
   const r = new Date(d);
   r.setDate(r.getDate() + n);
@@ -98,8 +83,8 @@ function fmtTime(iso: string) {
 }
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-const DAY_NAMES_FULL = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const DAY_NAMES = WEEKDAYS_SHORT;
+const DAY_NAMES_FULL = WEEKDAYS_FULL;
 
 type ViewMode = 'month' | 'week' | 'agenda' | 'team';
 
@@ -338,15 +323,21 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
   );
 }
 
-// Compact chip rendered inside a day cell / week column.
+// Compact chip rendered inside a day cell / week column. A PENDING request (leave/WFH/comp-off
+// not yet approved) is drawn hollow — dashed outline in the type colour rather than a solid
+// fill — so "requested" never reads as "confirmed" at a glance.
 function EventChip({ ev, onSelect }: { ev: CalendarEvent; onSelect: (ev: CalendarEvent) => void }) {
+  const color = colorOf(ev);
   return (
     <button
       type="button"
       onClick={e => { e.stopPropagation(); onSelect(ev); }}
-      className="group/chip w-full flex items-center gap-1 text-left text-xs px-1.5 py-0.5 rounded truncate text-white font-medium transition-all hover:brightness-110 hover:shadow-sm"
-      style={{ backgroundColor: colorOf(ev) }}
-      title={ev.title}
+      className={clsx(
+        'group/chip w-full flex items-center gap-1 text-left text-xs px-1.5 py-0.5 rounded truncate font-medium transition-all hover:brightness-110 hover:shadow-sm',
+        ev.pending ? 'border border-dashed bg-white' : 'text-white',
+      )}
+      style={ev.pending ? { borderColor: color, color } : { backgroundColor: color }}
+      title={ev.pending ? `${ev.title} — awaiting approval` : ev.title}
     >
       {!ev.allDay && <span className="opacity-90 tabular-nums text-[10px] shrink-0">{fmtTime(ev.startDate)}</span>}
       <span className="truncate">{ev.title}</span>
@@ -580,12 +571,28 @@ export default function CalendarPage() {
   }
 
   // ---- Derived data --------------------------------------------------------
+  // A multi-day event belongs to EVERY day it spans, not just its start date. This used to key
+  // on the start alone, so a Mon–Fri leave showed a single chip on Monday and the rest of the
+  // week looked free — the exact thing that makes a leave calendar untrustworthy.
+  const MAX_SPAN_DAYS = 366; // guard: a corrupt endDate must not build a giant map
   const eventsByDay = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
-    for (const ev of events) {
-      const key = dateKey(new Date(ev.startDate));
+    const push = (key: string, ev: CalendarEvent) => {
       const arr = map.get(key);
       if (arr) arr.push(ev); else map.set(key, [ev]);
+    };
+    for (const ev of events) {
+      const start = new Date(ev.startDate);
+      const end = new Date(ev.endDate ?? ev.startDate);
+      if (Number.isNaN(+start)) continue;
+      let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      const last = Number.isNaN(+end) || end < start
+        ? cursor
+        : new Date(end.getFullYear(), end.getMonth(), end.getDate());
+      for (let i = 0; cursor <= last && i < MAX_SPAN_DAYS; i++) {
+        push(dateKey(cursor), ev);
+        cursor = addDays(cursor, 1);
+      }
     }
     for (const arr of map.values()) arr.sort((a, b) => +new Date(a.startDate) - +new Date(b.startDate));
     return map;
@@ -827,7 +834,7 @@ export default function CalendarPage() {
                       key={d.toISOString()}
                       className={clsx('px-2 py-2 text-center', isToday ? 'bg-brand-50/60' : 'bg-gray-50')}
                     >
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{DAY_NAMES[d.getDay()]}</div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{DAY_NAMES[weekdayIndex(d)]}</div>
                       <div className={clsx(
                         'mx-auto mt-1 w-7 h-7 rounded-full flex items-center justify-center text-sm font-semibold',
                         isToday ? 'bg-brand-600 text-white shadow-sm' : 'text-gray-700',
@@ -902,7 +909,7 @@ export default function CalendarPage() {
                       <div key={dateKey(group.date)}>
                         <div className="flex items-baseline gap-2 mb-2 px-1">
                           <span className={clsx('text-sm font-semibold', isToday ? 'text-brand-600' : 'text-gray-900')}>
-                            {isToday ? 'Today' : DAY_NAMES_FULL[group.date.getDay()]}
+                            {isToday ? 'Today' : DAY_NAMES_FULL[weekdayIndex(group.date)]}
                           </span>
                           <span className="text-xs text-gray-400">
                             {MONTH_NAMES[group.date.getMonth()]} {group.date.getDate()}, {group.date.getFullYear()}
@@ -976,6 +983,11 @@ export default function CalendarPage() {
                 </span>
                 {selectedEvent.allDay && (
                   <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">All day</span>
+                )}
+                {selectedEvent.pending && (
+                  <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-medium border border-dashed border-amber-400 text-amber-600 bg-amber-50">
+                    Awaiting approval
+                  </span>
                 )}
               </div>
               <div className="flex items-start gap-2">
@@ -1055,7 +1067,11 @@ export default function CalendarPage() {
             })()}
 
             {isReadOnlyEvent(selectedEvent.id) ? (
-              <p className="text-xs text-gray-400 px-1">Company holiday — managed under Attendance &rsaquo; Holidays.</p>
+              <p className="text-xs text-gray-400 px-1">
+                {selectedEvent.pending
+                  ? 'Requested, not yet approved — approve or decline it under Attendance › Requests.'
+                  : 'Company holiday — managed under Attendance › Holidays.'}
+              </p>
             ) : (
               <>
                 <NotesEditor event={selectedEvent} onSaved={(e) => { setSelectedEvent(e); invalidate(); }} />

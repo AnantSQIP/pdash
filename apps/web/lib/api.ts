@@ -161,6 +161,8 @@ export type UserSummary = {
 export type AuthUser = {
   id: string; firstName: string; lastName: string; email: string;
   designation?: string | null; status: string; organizationId: string; mustResetPassword: boolean;
+  /** GURGAON | JAIPUR — defaults the office on a new project. */
+  office?: string | null;
   /** False until they have filled in their joining details — AppShell blocks on this. */
   profileCompleted: boolean;
 };
@@ -227,15 +229,108 @@ export type DigestReport = {
   activeProjects: number;
 };
 
-export type DigestRangeReport = {
-  from: string; to: string;
-  projectsCreated: { title: string; code: string | null }[];
-  projectsCompleted: { title: string; code: string | null }[];
-  tasksCompleted: number;
-  deadlinesMet: number;
-  overdueCount: number;
-  overdueSample: { title: string; dueDate: string | null }[];
-  activeProjects: number;
+// ── Daily Digest module (Super Admin) ─────────────────────────────────────────
+// Everything the digest screen shows carries the ids it needs to link straight through to the
+// project, the task and the person — the whole point of the module is that no number is a
+// dead end.
+export type DigestPerson = { id: string; name: string };
+export type DigestProject = {
+  id: string; pid: string | null; roundSeq?: number; title: string; type: string | null;
+  phase: string; priority: string; client: string | null;
+  startDate: string | null; dueDate: string | null; clientDueDate: string | null;
+  clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
+  completedAt: string | null; progress: number; taskCount: number;
+  managers: DigestPerson[];
+  members: (DigestPerson & { role: string })[];
+};
+export type DigestTask = {
+  id: string; title: string; dueDate: string | null; priority: string; status: string | null;
+  estimatedHours: number | null; actualHours: number | null; daysOverdue: number;
+  project: { id: string; pid: string | null; roundSeq?: number; title: string; type: string | null; progress: number } | null;
+  assignees: (DigestPerson & { role: string; estimatedHours: number | null; dueDate: string | null })[];
+};
+export type DigestHoursEntry = {
+  hours: number; billable: boolean; notes: string | null;
+  project: { id: string; pid: string | null; roundSeq?: number; title: string } | null;
+  task: { id: string; title: string } | null;
+};
+export type DigestPersonHours = {
+  id: string; name: string; designation: string | null;
+  hours: number; billableHours: number; entries: DigestHoursEntry[];
+};
+export type DigestDetail = {
+  date: string;
+  /** The next 5 WORKING days (weekends + holidays skipped), from today. */
+  lookaheadDays: string[];
+  projectsCreated: DigestProject[];
+  projectsCompleted: DigestProject[];
+  tasksCompleted: DigestTask[];
+  deadlinesMet: DigestTask[];
+  overdue: DigestTask[];
+  upcoming: { date: string; tasks: DigestTask[]; projects: DigestProject[] }[];
+  upcomingTotal: number;
+  hoursByPerson: DigestPersonHours[];
+  totals: { hoursLogged: number; billableHours: number; peopleWhoLogged: number; activeProjects: number };
+};
+
+
+/** The complete per-project dataset behind the Reports module (table AND export are this shape). */
+export type ReportTaskAssignee = {
+  id: string; name: string; role: string; estimatedHours: number | null; dueDate: string | null;
+};
+export type ReportTask = {
+  id: string; title: string; status: string | null; isClosed: boolean; priority: string;
+  dueDate: string | null; estimatedHours: number | null; actualHours: number | null;
+  assignees: ReportTaskAssignee[];
+};
+export type ReportProject = {
+  id: string; pid: string | null; roundSeq: number; office: string | null;
+  title: string; description: string | null;
+  type: string | null; phase: string; priority: string; status: string | null;
+  client: string | null; billable: boolean; progress: number;
+  startDate: string | null; dueDate: string | null; clientDueDate: string | null;
+  completedAt: string | null; closedAt: string | null;
+  clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
+  /** Hours actually logged on timesheets — not the same as the workingHours snapshot at completion. */
+  loggedHours: number; estimatedHours: number;
+  taskCount: number; tasksClosed: number; tasksOpen: number; memberCount: number;
+  createdBy: string | null; createdAt: string | null;
+  patents: string[];
+  managers: { id: string; name: string }[];
+  members: { id: string; name: string; role: string; designation: string | null }[];
+  tasks: ReportTask[];
+};
+
+/** One project under a PID — the "card" the PID page stacks. */
+export type PidRound = {
+  id: string; code: string | null; roundSeq: number; office: string | null;
+  title: string; description: string | null;
+  projectType: string | null; projectPhase: string; priority: string;
+  completionPercentage: number;
+  startDate: string | null; dueDate: string | null; clientDueDate: string | null;
+  completedAt: string | null; closedAt: string | null;
+  clientDeliveryDate: string | null; workingHours: number | null; actualHours: number | null;
+  createdBy: string | null; createdAt: string | null;
+  client: { id: string; name: string | null; code: string } | null;
+  /** The round's own task lists — its card adds tasks into its default one. */
+  taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
+  workflowId?: string | null;
+  members: { projectRole: string | null; user: UserSummary }[];
+  _count?: { projectTasks: number; members: number };
+};
+/** Every project sharing a PID. `multiRound` is false for a normal single-project PID. */
+export type PidRounds = { pid: string | null; multiRound: boolean; rounds: PidRound[] };
+
+/** A single project under a PID, as the ledger reports it. */
+export type PidLedgerRound = {
+  id: string; round: number; title: string; description?: string | null;
+  phase: string | null; type?: string | null; priority?: string | null; office?: string | null;
+  startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+  completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
+  workingHours?: number | null; actualHours?: number | null;
+  progress?: number | null; client?: string | null;
+  createdBy?: string | null; createdAt?: string | null;
+  patents?: string[]; members?: { name: string; role: string }[];
 };
 
 export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
@@ -245,10 +340,18 @@ export type PidLedgerEntry = {
   /** The PID's real lifecycle, derived from the attached project's phase (drives the badge/filter). */
   state: PidLedgerState;
   generatedBy: string;
+  /** Every project under this PID, oldest first. One entry for a single-project PID. */
+  rounds?: PidLedgerRound[];
+  roundCount?: number;
+  multiRound?: boolean;
+  /** The LATEST round — kept so single-project consumers keep working unchanged. */
   project: {
     id: string; title: string; phase: string | null;
     description?: string | null; type?: string | null; priority?: string | null;
     startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+    /** Completion record: when it was signed off, when it reached the client, and the hours. */
+    completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
+    workingHours?: number | null; actualHours?: number | null;
     progress?: number | null; client?: string | null;
     createdBy?: string | null; createdAt?: string | null;
     patents?: string[];
@@ -287,6 +390,13 @@ export type ApiProject = {
   billable?: boolean | null;
   /** Set when the project reaches its lifecycle end-states (COMPLETED / CLOSED). */
   completedAt?: string | null; closedAt?: string | null;
+  /** Captured at completion: when the work reached the CLIENT (distinct from completedAt, which is
+   *  when someone pressed the button), the hours on paper, and the hand-typed real cost. */
+  clientDeliveryDate?: string | null; workingHours?: number | null; actualHours?: number | null;
+  /** Which project this is under its PID (1 for the first). A PID can hold several. */
+  roundSeq?: number;
+  /** GURGAON | JAIPUR — the owning office. Jaipur PIDs may hold multiple projects. */
+  office?: string | null;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
@@ -339,6 +449,9 @@ export type TimesheetCalendarDay = {
   status: 'COMPLETE' | 'PARTIAL' | 'LOW' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
   /** Set when the day has a comp-off claim — APPROVED makes it a required working day; PENDING shows an asterisk. */
   compOff?: 'APPROVED' | 'PENDING';
+  /** An undecided leave/WFH/comp-off request covering this day. The target is unchanged — the
+   *  hours are still owed until the request is actually approved. */
+  pending?: { kind: string; label: string } | null;
 };
 export type TimesheetCalendar = { year: number; month: number; days: TimesheetCalendarDay[] };
 
@@ -358,8 +471,17 @@ export type CalendarEvent = {
   location?: string | null; joinUrl?: string | null; reminderMinutes?: number | null;
   recurrence?: string | null; recurrenceUntil?: string | null; recurrenceParentId?: string | null; notes?: string | null;
   attendees?: { userId: string; response?: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> }[];
+  /** True for a leave/WFH/comp-off request that has been raised but NOT yet approved. These are
+   *  derived server-side (id is `pending:<kind>:<requestId>`) and cannot be edited or deleted. */
+  pending?: boolean;
 };
-export type FreeBusy = { userId: string; busy: { start: string; end: string; title: string; allDay: boolean }[] };
+/** Availability blocks for the team calendar / scheduling assistant. The server deliberately
+ *  omits private detail (leave type, reason, meeting title) — `kind` is enough to colour and
+ *  label the block, and `pending` marks a request that hasn't been approved yet. */
+export type FreeBusy = {
+  userId: string;
+  busy: { start: string; end: string; title: string; allDay: boolean; kind?: string; pending?: boolean }[];
+};
 // A bookmarked message, carrying its channel and when it was saved.
 export type SavedMessage = Message & { channel: { id: string; name: string }; savedAt: string };
 
@@ -585,7 +707,7 @@ export type DepartmentSummary = {
 // ─── Team capacity / availability ────────────────────────────────────────────
 export type DayState =
   | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'LEAVE_PENDING' | 'FREE' | 'LIGHT' | 'BUSY'
-  | 'PRESENT' | 'ABSENT' | 'COMPOFF';
+  | 'PRESENT' | 'ABSENT' | 'COMPOFF' | 'NOT_MARKED';
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
   utilization: number; free: number; note?: string;
@@ -693,6 +815,9 @@ export type Attendance = {
 export type AttendanceDay = {
   date: string; status: string; workMode?: string; checkIn?: string | null; checkOut?: string | null;
   totalHours?: number | null; isRegularized: boolean; note?: string | null;
+  /** A leave/WFH/comp-off request covering this day that has NOT been decided yet. The day's
+   *  `status` is unaffected — nothing is agreed until it's approved. */
+  pending?: { kind: string; label: string } | null;
 };
 export type AttendanceMonth = {
   userId: string; year: number; month: number;
@@ -725,6 +850,8 @@ export type OrgAttendanceReport = {
 export type LeaveRequestItem = {
   id: string; userId: string; organizationId?: string; leaveType: string;
   startDate: string; endDate: string; numDays: number; reason?: string | null;
+  /** FULL or HALF; halfPeriod is FIRST (morning) / SECOND (afternoon) on a HALF request. */
+  dayType?: string; halfPeriod?: string | null;
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
   createdAt: string; user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
 };
@@ -753,13 +880,33 @@ export type WfhRequestItem = {
 export type CompOffRequest = {
   id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
   projectRef?: string | null; hoursWorked?: number | null; status: string;
+  /** FULL or HALF — a HALF claim earns half a day of comp-off credit. */
+  dayType?: string;
   reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null; createdAt: string;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
   evidence?: CompOffEvidence | null;
 };
 export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
-export type LeaveBalance = { code: string; name: string; quota: number; used: number; remaining: number; colorHex: string };
+export type LeaveBalance = {
+  code: string; name: string; quota: number; used: number; remaining: number; colorHex: string;
+  /** Comp-off is not an annual quota: `quota` is what has been EARNED, and `credits` is how many
+   *  approved claims that came from (a half-day claim earns 0.5). */
+  isCompOff?: boolean; credits?: number;
+};
 export type Holiday = { id: string; organizationId: string; name: string; date: string; type: string; recurring: boolean };
+
+/** WFH-vs-office across a window. `mode` is only WFH/OFFICE on a day actually worked — leave,
+ *  holidays, weekends and no-shows report as themselves rather than counting as "office". */
+export type WorkModeCell = {
+  date: string; mode: 'WFH' | 'OFFICE' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'ABSENT' | 'NOT_MARKED';
+  wfhStatus?: string | null; checkIn?: string | null; area?: string | null;
+};
+export type OrgWorkModes = {
+  from: string; to: string; dates: string[];
+  rows: { userId: string; name: string; designation?: string; office?: string; profilePhoto?: string;
+          days: WorkModeCell[]; wfhDays: number; officeDays: number }[];
+  today: { wfh: number; office: number; leave: number; notMarked: number; absent: number };
+};
 
 export type Expense = {
   id: string; userId: string; organizationId?: string | null;
@@ -839,6 +986,8 @@ export const api = {
       description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
       pid?: string; pidAssigneeId?: string;
+      /** GURGAON | JAIPUR — decides whether this project's PID may later hold more projects. */
+      office?: string;
       customType?: { label: string; tasks: string[]; save?: boolean };
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
@@ -847,6 +996,17 @@ export const api = {
     myPidReservation: () => req<{ reservation: { pid: string; createdAt: string; expiresAt: string } | null }>('/projects/pid-reservation'),
     /** The full PID ledger (working / discontinued / history). Admin + Super Admin only. */
     pidLedger: () => req<PidLedgerEntry[]>('/projects/pid-ledger'),
+    /** Every project with its full detail — the Reports module's table and CSV share this. */
+    fullReport: () => req<ReportProject[]>('/projects/full-report'),
+    /** Every project sharing this one's PID — the PID page's stack of cards. */
+    rounds: (id: string) => req<PidRounds>(`/projects/${id}/rounds`),
+    /** Start ANOTHER project under this one's PID (returning client, Jaipur only). */
+    addRound: (id: string, body: {
+      title: string; projectType?: string; description?: string; priority?: string;
+      startDate?: string | null; endDate?: string | null; clientDueDate?: string | null;
+      members?: { userId: string; projectRole?: string }[];
+      customType?: { label: string; tasks: string[]; save?: boolean };
+    }) => req<ApiProject>(`/projects/${id}/rounds`, { method: 'POST', body: JSON.stringify(body) }),
     /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */
     attachPid: (id: string, pid?: string) =>
       req<{ pid: string; projectId: string }>(`/projects/${id}/attach-pid`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
@@ -880,11 +1040,15 @@ export const api = {
     reject: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/reject`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
     // Lifecycle: Complete → Close → Reopen (distinct from delete).
-    complete: (id: string) => req<ApiProject>(`/projects/${id}/complete`, { method: 'POST' }),
+    complete: (id: string, body?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) =>
+      req<ApiProject>(`/projects/${id}/complete`, { method: 'POST', body: JSON.stringify(body ?? {}) }),
     close: (id: string) => req<ApiProject>(`/projects/${id}/close`, { method: 'POST' }),
     reopen: (id: string) => req<ApiProject>(`/projects/${id}/reopen`, { method: 'POST' }),
     /** Re-initialize a COMPLETED project (returning client) — same PID, existing data reused. */
     reinitialize: (id: string) => req<ApiProject>(`/projects/${id}/reinitialize`, { method: 'POST' }),
+    /** What the completion form should prefill "working hours" with (logged time, else estimates). */
+    completionHours: (id: string) =>
+      req<{ loggedHours: number; estimatedHours: number; suggested: number }>(`/projects/${id}/completion-hours`),
     addMember: (id: string, userId: string, projectRole?: string) =>
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
@@ -1114,7 +1278,8 @@ export const api = {
   },
   dailyDigest: {
     report: (date?: string) => req<DigestReport>(`/daily-digest/report${date ? `?date=${date}` : ''}`),
-    reportRange: (from: string, to: string) => req<DigestRangeReport>(`/daily-digest/report-range?from=${from}&to=${to}`),
+    /** The deep, fully-linked report behind the Daily Digest module. */
+    detail: (date?: string) => req<DigestDetail>(`/daily-digest/detail${date ? `?date=${date}` : ''}`),
     getSchedule: () => req<{ hourIst: number }>('/daily-digest/schedule'),
     setSchedule: (hourIst: number) => req<{ hourIst: number }>('/daily-digest/schedule', { method: 'PATCH', body: JSON.stringify({ hourIst }) }),
     send: () => req<{ sent: number }>('/daily-digest/send', { method: 'POST' }),
@@ -1325,6 +1490,8 @@ export const api = {
     requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
       req<WfhRequestItem>('/attendance/wfh', { method: 'POST', body: JSON.stringify(data) }),
     myWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/me'),
+    /** Who is working from home vs the office — today plus the preceding days. HR/Admin only. */
+    orgWorkModes: (days = 7) => req<OrgWorkModes>(`/attendance/org/work-modes?days=${days}`),
     pendingWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/pending'),
     approveWfh: (id: string, note?: string) =>
       req<WfhRequestItem>(`/attendance/wfh/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
@@ -1365,7 +1532,7 @@ export const api = {
       if (status) p.set('status', status);
       return req<LeaveRequestItem[]>(`/leave/requests/org?${p}`);
     },
-    create: (data: { leaveType: string; startDate: string; endDate: string; reason?: string }) =>
+    create: (data: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: 'FULL' | 'HALF'; halfPeriod?: 'FIRST' | 'SECOND' }) =>
       req<LeaveRequestItem>('/leave/requests', { method: 'POST', body: JSON.stringify(data) }),
     approve: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
     reject: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),

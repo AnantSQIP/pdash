@@ -21,6 +21,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { progressColor } from '@/lib/progress';
+import { pidLabel } from '@/lib/mock-data';
 import {
   Card, CardHeader, CountBadge, StatTile, MetricRow, EmptyHint, ErrorState, SkeletonRows,
   PersonRow, ConfirmButton, BADGE, phaseChip, priorityDotClass,
@@ -286,7 +287,7 @@ export function MyProjectsCard() {
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: statusColor }} />
               <Link href={`/projects/${project.id}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 flex-1 truncate">{project.title}</Link>
               {project.code
-                ? <span className="hidden md:inline text-[11px] font-mono text-gray-500 shrink-0">{project.code}</span>
+                ? <span className="hidden md:inline text-[11px] font-mono text-gray-500 shrink-0">{pidLabel(project.code, project.roundSeq)}</span>
                 : <span className="hidden md:inline text-[11px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded shrink-0">PID pending</span>}
               <span className={clsx('hidden sm:inline text-xs px-2 py-0.5 rounded-full font-medium shrink-0', phase.bg, phase.text)}>{phase.label}</span>
               <div className="w-16 sm:w-28 shrink-0">
@@ -304,7 +305,7 @@ export function MyProjectsCard() {
 }
 
 // ── Project status summary (project.view, side) ─────────────────────────────
-const PHASE_ORDER = ['ACTIVE', 'PLANNING', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED', 'ARCHIVED', 'IDEA'];
+const PHASE_ORDER = ['ACTIVE', 'PLANNING', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED', 'ARCHIVED'];
 export function ProjectStatusCard() {
   const { org } = useOrg();
   const { can } = usePermissions();

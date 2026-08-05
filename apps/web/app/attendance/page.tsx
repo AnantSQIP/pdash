@@ -15,6 +15,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { getCurrentLocation, reverseGeocode, mapLink } from '@/lib/geolocation';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
+import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
 
 // ── status styling ──────────────────────────────────────────────────────────────
 const STATUS_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
@@ -383,27 +384,35 @@ const REGULARIZABLE = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LATE', 'NONE', 'WEEKEND
 function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth; year: number; monthNum: number; onPick?: (key: string) => void }) {
   const byDate = useMemo(() => new Map((month?.days ?? []).map(d => [d.date, d])), [month]);
   const daysInMonth = new Date(year, monthNum, 0).getDate();
-  const firstWeekday = new Date(Date.UTC(year, monthNum - 1, 1)).getUTCDay();
+  const firstWeekday = monthLeadPad(year, monthNum - 1); // Monday-first — see lib/date
   const cells: ({ day: number; key: string } | null)[] = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push({ day: d, key: `${year}-${String(monthNum).padStart(2, '0')}-${String(d).padStart(2, '0')}` });
 
   return (
     <div className="grid grid-cols-7 gap-1.5">
-      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} className="text-center text-[10px] font-semibold text-gray-400 uppercase pb-0.5">{d}</div>)}
+      {WEEKDAYS_SHORT.map((d, i) => <div key={i} className="text-center text-[10px] font-semibold text-gray-400 uppercase pb-0.5">{d}</div>)}
       {cells.map((c, i) => {
         if (!c) return <div key={i} />;
         const rec = byDate.get(c.key);
         const st = STATUS_STYLE[rec?.status ?? 'FUTURE'] ?? STATUS_STYLE.FUTURE;
-        const title = rec ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}` : c.key;
+        const pend = rec?.pending;
+        const title = rec
+          ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}${pend ? ` · ${pend.label} (awaiting approval)` : ''}`
+          : c.key;
         const canReg = !!onPick && REGULARIZABLE.includes(rec?.status ?? '');
-        const cls = clsx('min-h-[52px] rounded-lg border flex flex-col items-center justify-center relative p-1 leading-none', st.bg, canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
+        // A pending request gets a dashed amber outline: the day is visibly "asked for" without
+        // pretending the request has been granted.
+        const cls = clsx('min-h-[52px] rounded-lg border flex flex-col items-center justify-center relative p-1 leading-none', st.bg,
+          pend && 'ring-1 ring-amber-400 ring-offset-0 border-dashed border-amber-400',
+          canReg && 'cursor-pointer hover:ring-2 hover:ring-brand-300 transition');
         const inner = (
           <>
             <span className="text-[13px] font-semibold">{c.day}</span>
             {rec?.totalHours != null && <span className="text-[10px] opacity-70 mt-1 tabular-nums">{rec.totalHours}h</span>}
             {rec?.isRegularized && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
-            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-purple-500" title="Worked from home" />}
+            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-cyan-600" title="Worked from home" />}
+            {pend && <span className="absolute bottom-0.5 text-[8px] font-semibold text-amber-600 uppercase tracking-tight">req</span>}
           </>
         );
         return canReg
@@ -423,12 +432,16 @@ const REG_STATUSES: { value: string; label: string }[] = [
 
 // Values MUST match the server's accepted set (REG_TYPES in attendance.module):
 // MISSED_PUNCH | LATE | ON_DUTY | WFH | OTHER.
+// PAST_MIDNIGHT is deliberately last and unadvertised: the auto punch-out closes every shift at
+// 11:59 pm, so working past midnight is the rare exception that needs an approver's sign-off
+// rather than a feature anyone should be nudged towards.
 const REG_TYPES = [
   { value: 'MISSED_PUNCH', label: 'Forgot / missed a punch' },
   { value: 'LATE', label: 'Late punch-in' },
   { value: 'ON_DUTY', label: 'On duty / client visit / field work' },
   { value: 'WFH', label: 'Worked from home' },
   { value: 'OTHER', label: 'Other' },
+  { value: 'PAST_MIDNIGHT', label: 'Worked past midnight' },
 ];
 
 const REG_STATUS_STYLE: Record<string, string> = {
@@ -509,6 +522,12 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
             <select value={requestType} onChange={e => setRequestType(e.target.value)} className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
               {REG_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
+            {requestType === 'PAST_MIDNIGHT' && (
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                Shifts close automatically at 11:59 pm. Give the real out-time below — hours past midnight
+                are only counted once this is approved.
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Mark as</label>
@@ -550,19 +569,82 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
 }
 
 // ── Leaves tab ──────────────────────────────────────────────────────────────────
+
+/** Days as people say them: "0.5" reads as a bug, "half a day" reads as an answer. */
+function fmtDays(n: number): string {
+  if (n === 0) return '0 days';
+  if (n === 0.5) return 'half a day';
+  const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return `${s} day${n === 1 ? '' : 's'}`;
+}
+/** "half day (morning)" / "3 days" for a leave request row. */
+function describeLeaveDays(r: { numDays: number; dayType?: string; halfPeriod?: string | null }): string {
+  if (r.dayType === 'HALF') return `half day (${r.halfPeriod === 'SECOND' ? 'afternoon' : 'morning'})`;
+  return fmtDays(r.numDays);
+}
+
+// The four things somebody can actually ask for. Splitting FULL from HALF up front (rather than
+// burying a toggle inside one form) is what the four options are for: each mode asks for exactly
+// the fields it needs and nothing else.
+type RequestMode = 'FULL' | 'HALF' | 'CO_AVAIL' | 'CO_CREDIT';
+const REQUEST_MODES: { id: RequestMode; label: string; hint: string }[] = [
+  { id: 'FULL',      label: 'Full-day leave',   hint: 'One or more whole days off' },
+  { id: 'HALF',      label: 'Half-day leave',   hint: 'Morning or afternoon of a single day' },
+  { id: 'CO_AVAIL',  label: 'Comp-off — avail', hint: 'Spend a comp-off credit you have earned' },
+  { id: 'CO_CREDIT', label: 'Comp-off — credit', hint: 'You worked a weekend/holiday — claim it back' },
+];
+
 function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy }: {
   balances: LeaveBalance[]; myRequests: LeaveRequestItem[]; leaveTypes: LeaveType[]; onChanged: () => void; busy: boolean; setBusy: (b: boolean) => void;
 }) {
+  const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ leaveType: '', startDate: '', endDate: '', reason: '' });
+  const [mode, setMode] = useState<RequestMode>('FULL');
+  const [form, setForm] = useState({ leaveType: '', startDate: '', endDate: '', reason: '', halfPeriod: 'FIRST' as 'FIRST' | 'SECOND' });
+  // Comp-off CREDIT needs different inputs entirely: the day worked, the PID, and what was done.
+  const [claim, setClaim] = useState<{ workDate: string; reason: string; projectRef: string; dayType: 'FULL' | 'HALF' }>(
+    { workDate: '', reason: '', projectRef: '', dayType: 'FULL' });
+  const today = new Date().toISOString().slice(0, 10);
+
+  const compOff = balances.find(b => b.isCompOff);
+  // Comp-off is spent as a CO leave; everything else picks a type. Availing never offers CO twice.
+  const pickableTypes = leaveTypes.filter(t => t.code !== 'CO');
+  const isClaim = mode === 'CO_CREDIT';
+  const isHalf = mode === 'HALF';
+
+  function resetForm() {
+    setForm({ leaveType: '', startDate: '', endDate: '', reason: '', halfPeriod: 'FIRST' });
+    setClaim({ workDate: '', reason: '', projectRef: '', dayType: 'FULL' });
+  }
+  function switchMode(m: RequestMode) { setMode(m); resetForm(); }
+
+  const canSubmit = isClaim
+    ? !!claim.workDate && !!claim.reason.trim() && !!claim.projectRef.trim()
+    : !!form.startDate && !!(isHalf ? true : form.endDate) && (mode === 'CO_AVAIL' || !!form.leaveType);
 
   async function submit() {
-    if (busy || !form.leaveType || !form.startDate || !form.endDate) return;
+    if (busy || !canSubmit) return;
     setBusy(true);
-    // M32: surface backend rejections (overlap / past dates / no working days) instead
+    try {
+      if (isClaim) {
+        await api.leave.requestCompOff(claim);
+        qc.invalidateQueries({ queryKey: ['compoff-mine'] });
+      } else {
+        // A half day is one date, so the end mirrors the start — the server enforces this too.
+        await api.leave.create({
+          leaveType: mode === 'CO_AVAIL' ? 'CO' : form.leaveType,
+          startDate: form.startDate,
+          endDate: isHalf ? form.startDate : form.endDate,
+          reason: form.reason.trim() || undefined,
+          dayType: isHalf ? 'HALF' : 'FULL',
+          halfPeriod: isHalf ? form.halfPeriod : undefined,
+        });
+      }
+      setShowForm(false); resetForm(); onChanged();
+    }
+    // Surface backend rejections (overlap / past dates / no credits / no working days) instead
     // of silently doing nothing.
-    try { await api.leave.create(form); setShowForm(false); setForm({ leaveType: '', startDate: '', endDate: '', reason: '' }); onChanged(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the leave request.'); }
+    catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the request.'); }
     finally { setBusy(false); }
   }
   async function cancel(id: string) {
@@ -575,40 +657,148 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
   return (
     <div className="space-y-4">
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      {/* Balances */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-gray-700">Leaves Request Status for Jan–Dec {new Date().getUTCFullYear()}</h3>
-          <button onClick={() => setShowForm(s => !s)} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700"><Plus size={13} /> Request</button>
+      {/* Balances — the card people check before asking for anything, so it gets real estate
+          and says the number out loud ("3 out of 4 remaining") instead of a cryptic "3 / 4 left". */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="flex items-start justify-between gap-3 mb-5">
+          <div>
+            <h3 className="text-base font-semibold text-gray-800">Leave balance</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Jan–Dec {new Date().getUTCFullYear()}</p>
+          </div>
+          <button onClick={() => setShowForm(s => !s)} className="inline-flex items-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg bg-brand-600 text-white hover:bg-brand-700 shrink-0"><Plus size={15} /> Request</button>
         </div>
-        <div className="space-y-3">
+        <div className="space-y-4">
           {balances.length === 0 && <p className="text-sm text-gray-300">No leave types configured</p>}
-          {balances.map(b => (
-            <div key={b.code}>
-              <div className="flex items-center justify-between text-sm mb-1">
-                <span className="text-gray-700">{b.name}</span>
-                <span className="text-gray-400 text-xs">{b.remaining} / {b.quota} left</span>
+          {balances.map(b => {
+            const usedPct = Math.min(100, (b.used / Math.max(0.5, b.quota)) * 100);
+            return (
+              <div key={b.code}>
+                <div className="flex items-end justify-between gap-2 mb-1.5">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-800 truncate">{b.name}</p>
+                    {/* Comp-off has no annual quota — its "total" is what you earned, so say so. */}
+                    {b.isCompOff && (
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        {b.credits ? `${b.credits} approved claim${b.credits === 1 ? '' : 's'} · ` : ''}
+                        earned {fmtDays(b.quota)} · used {fmtDays(b.used)}
+                      </p>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-600 shrink-0 tabular-nums">
+                    <span className="text-xl font-bold text-gray-900">{fmtDays(b.remaining)}</span>
+                    <span className="text-gray-400"> out of {fmtDays(b.quota)} remaining</span>
+                  </p>
+                </div>
+                <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all" style={{ width: `${usedPct}%`, backgroundColor: b.colorHex }} />
+                </div>
+                {b.isCompOff && b.quota === 0 && (
+                  <p className="text-[11px] text-gray-400 mt-1.5">No comp-off earned yet — claim a weekend or holiday you worked to earn one.</p>
+                )}
               </div>
-              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full rounded-full" style={{ width: `${Math.min(100, (b.used / Math.max(1, b.quota)) * 100)}%`, backgroundColor: b.colorHex }} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+
         {showForm && (
-          <div className="mt-4 pt-4 border-t border-gray-100 space-y-2.5">
-            <select value={form.leaveType} onChange={e => setForm(f => ({ ...f, leaveType: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
-              <option value="">Select leave type…</option>
-              {leaveTypes.map(t => <option key={t.code} value={t.code}>{t.name}</option>)}
-            </select>
-            <div className="grid grid-cols-2 gap-2">
-              <DateField type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
-              <DateField type="date" value={form.endDate} min={form.startDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+          <div className="mt-5 pt-5 border-t border-gray-100 space-y-3">
+            {/* What are you asking for? Each mode then shows only its own fields. */}
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">What do you want to request?</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {REQUEST_MODES.map(m => (
+                  <button key={m.id} type="button" onClick={() => switchMode(m.id)} title={m.hint}
+                    className={clsx('text-left px-2.5 py-2 rounded-lg border text-xs transition-colors',
+                      mode === m.id ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+                    <span className="block font-semibold">{m.label}</span>
+                    <span className="block text-[10px] text-gray-400 leading-tight mt-0.5">{m.hint}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-            <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason (optional)" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+
+            {mode === 'CO_AVAIL' && (
+              <p className={clsx('text-xs rounded-lg px-2.5 py-2', (compOff?.remaining ?? 0) > 0 ? 'bg-indigo-50 text-indigo-700' : 'bg-amber-50 text-amber-700')}>
+                {(compOff?.remaining ?? 0) > 0
+                  ? `You have ${fmtDays(compOff!.remaining)} of comp-off available to spend.`
+                  : 'You have no comp-off credits yet — claim a weekend or holiday you worked first.'}
+              </p>
+            )}
+
+            {isClaim ? (
+              <>
+                <div>
+                  <label className="block text-[11px] font-medium text-gray-500 mb-1">Day you worked (weekend/holiday)</label>
+                  <DateField type="date" value={claim.workDate} max={today} onChange={e => setClaim(f => ({ ...f, workDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Project ID (PID) <span className="text-red-500">*</span></label>
+                    <input value={claim.projectRef} onChange={e => setClaim(f => ({ ...f, projectRef: e.target.value }))} placeholder="e.g. SQ_26_27_001" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-500 mb-1">How much did you work?</label>
+                    <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                      {(['FULL', 'HALF'] as const).map(dt => (
+                        <button key={dt} type="button" onClick={() => setClaim(f => ({ ...f, dayType: dt }))}
+                          className={clsx('flex-1 px-2 py-2 text-xs font-medium transition-colors', claim.dayType === dt ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}>
+                          {dt === 'FULL' ? 'Full day' : 'Half day'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <input value={claim.reason} onChange={e => setClaim(f => ({ ...f, reason: e.target.value }))} placeholder="What did you work on?" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                <p className="text-[11px] text-gray-400">A half day earns half a day of comp-off.</p>
+              </>
+            ) : (
+              <>
+                {mode !== 'CO_AVAIL' && (
+                  <select value={form.leaveType} onChange={e => setForm(f => ({ ...f, leaveType: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2 bg-white">
+                    <option value="">Select leave type…</option>
+                    {pickableTypes.map(t => <option key={t.code} value={t.code}>{t.name}</option>)}
+                  </select>
+                )}
+                {isHalf ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-medium text-gray-500 mb-1">Date</label>
+                      <DateField type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-gray-500 mb-1">Which half?</label>
+                      <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+                        {([['FIRST', 'Morning'], ['SECOND', 'Afternoon']] as const).map(([v, l]) => (
+                          <button key={v} type="button" onClick={() => setForm(f => ({ ...f, halfPeriod: v }))}
+                            className={clsx('flex-1 px-2 py-2 text-xs font-medium transition-colors', form.halfPeriod === v ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}>
+                            {l}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-medium text-gray-500 mb-1">From</label>
+                      <DateField type="date" value={form.startDate} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-gray-500 mb-1">To</label>
+                      <DateField type="date" value={form.endDate} min={form.startDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                    </div>
+                  </div>
+                )}
+                <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Reason (optional)" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+                {isHalf && <p className="text-[11px] text-gray-400">A half day uses 0.5 of your balance.</p>}
+              </>
+            )}
+
             <div className="flex gap-2">
-              <button onClick={submit} disabled={busy || !form.leaveType || !form.startDate || !form.endDate} className="flex-1 text-sm font-medium px-3 py-2 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50">Submit request</button>
-              <button onClick={() => setShowForm(false)} className="text-sm px-3 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
+              <button onClick={submit} disabled={busy || !canSubmit} className="flex-1 text-sm font-medium px-3 py-2 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50">
+                {isClaim ? 'Submit claim' : 'Submit request'}
+              </button>
+              <button onClick={() => { setShowForm(false); resetForm(); }} className="text-sm px-3 py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
             </div>
           </div>
         )}
@@ -624,7 +814,7 @@ function LeavesTab({ balances, myRequests, leaveTypes, onChanged, busy, setBusy 
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0"><Plane size={16} /></div>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">{r.leaveType} · {r.numDays} day{r.numDays > 1 ? 's' : ''}</p>
+                  <p className="text-sm font-medium text-gray-800 truncate">{r.leaveType} · {describeLeaveDays(r)}</p>
                   <p className="text-xs text-gray-400">{format(new Date(r.startDate), 'MMM d')} – {format(new Date(r.endDate), 'MMM d')}{r.reason ? ` · ${r.reason}` : ''}</p>
                 </div>
               </div>
@@ -824,6 +1014,120 @@ function CompOffCard() {
 }
 
 // ── Team tab (admin) ──────────────────────────────────────────────────────────────
+/**
+ * Who is working from home vs the office. The punch-location table answers "where was this person
+ * standing"; this answers what an admin actually asks — how much of the team is remote right now,
+ * and how that has looked over the past week. A day nobody worked (leave, holiday, weekend, no
+ * punch) is shown as itself rather than being quietly counted as "office".
+ */
+const WORK_MODE_META: Record<string, { label: string; cell: string; short: string }> = {
+  WFH:        { label: 'Work from home', cell: 'bg-cyan-100 text-cyan-800 border-cyan-200',    short: 'H' },
+  OFFICE:     { label: 'In office',      cell: 'bg-brand-100 text-brand-700 border-brand-200', short: 'O' },
+  LEAVE:      { label: 'On leave',       cell: 'bg-pink-50 text-pink-600 border-pink-200',     short: 'L' },
+  HOLIDAY:    { label: 'Holiday',        cell: 'bg-red-50 text-red-500 border-red-100',        short: '·' },
+  WEEKEND:    { label: 'Weekend',        cell: 'bg-gray-50 text-gray-300 border-gray-100',     short: '' },
+  ABSENT:     { label: 'No punch',       cell: 'bg-white text-gray-300 border-gray-200',       short: '–' },
+  NOT_MARKED: { label: 'Not marked yet', cell: 'bg-white text-gray-300 border-dashed border-gray-300', short: '?' },
+};
+
+function WorkModePanel() {
+  const [days, setDays] = useState(7);
+  const { data, isLoading } = useQuery({
+    queryKey: ['attn-work-modes', days],
+    queryFn: () => api.attendance.orgWorkModes(days),
+    staleTime: 30_000,
+  });
+  const dow = (iso: string) => WEEKDAYS_SHORT[(new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7];
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2 flex-wrap">
+        <h3 className="text-sm font-semibold text-gray-700">Working from home vs office</h3>
+        {isLoading && <Loader size={13} className="animate-spin text-gray-400" />}
+        <select value={days} onChange={e => setDays(Number(e.target.value))}
+          className="ml-auto text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:outline-none focus:border-brand-400">
+          <option value={1}>Today</option>
+          <option value={7}>Today + past week</option>
+          <option value={14}>Past 2 weeks</option>
+          <option value={30}>Past 30 days</option>
+        </select>
+      </div>
+
+      {/* Today at a glance — the number most people open this panel for. */}
+      {data && (
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-5 flex-wrap">
+          {([['From home', data.today.wfh, 'text-cyan-700'], ['In office', data.today.office, 'text-brand-700'],
+             ['On leave', data.today.leave, 'text-pink-600'], ['Not punched in', data.today.notMarked, 'text-gray-400']] as const).map(([l, v, c]) => (
+            <div key={l}>
+              <p className={clsx('text-2xl font-bold tabular-nums leading-none', c)}>{v}</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">{l} today</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-100">
+              <th className="px-4 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky left-0 bg-gray-50">Member</th>
+              {(data?.dates ?? []).map(d => (
+                <th key={d} className="px-1 py-2 text-center text-[10px] font-semibold text-gray-500">
+                  <span className="block">{dow(d)}</span>
+                  <span className="block text-gray-400 font-normal">{d.slice(8, 10)}</span>
+                </th>
+              ))}
+              <th className="px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-right whitespace-nowrap">Home / Office</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {(data?.rows ?? []).length === 0 && !isLoading && (
+              <tr><td colSpan={(data?.dates?.length ?? 0) + 2} className="px-4 py-6 text-center text-xs text-gray-400">No members to show.</td></tr>
+            )}
+            {(data?.rows ?? []).map(r => (
+              <tr key={r.userId} className="hover:bg-gray-50/60">
+                <td className="px-4 py-2 sticky left-0 bg-white">
+                  <p className="text-sm text-gray-800 truncate">{r.name}</p>
+                  {r.office && <p className="text-[10px] text-gray-400">{r.office}</p>}
+                </td>
+                {r.days.map(c => {
+                  const meta = WORK_MODE_META[c.mode] ?? WORK_MODE_META.ABSENT;
+                  const pendingWfh = c.mode === 'WFH' && c.wfhStatus === 'PENDING';
+                  return (
+                    <td key={c.date} className="px-1 py-1.5 text-center">
+                      <span title={`${c.date} · ${meta.label}${pendingWfh ? ' (request awaiting approval)' : ''}${c.area ? ` · ${c.area}` : ''}`}
+                        className={clsx('inline-flex items-center justify-center w-7 h-7 rounded-md border text-[11px] font-bold', meta.cell,
+                          pendingWfh && 'border-dashed border-amber-400')}>
+                        {meta.short}
+                      </span>
+                    </td>
+                  );
+                })}
+                <td className="px-3 py-2 text-right text-xs tabular-nums whitespace-nowrap">
+                  <span className="text-cyan-700 font-semibold">{r.wfhDays}</span>
+                  <span className="text-gray-300"> / </span>
+                  <span className="text-brand-700 font-semibold">{r.officeDays}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="px-5 py-2.5 border-t border-gray-100 flex items-center gap-3 flex-wrap">
+        {['WFH', 'OFFICE', 'LEAVE', 'HOLIDAY', 'ABSENT', 'NOT_MARKED'].map(k => (
+          <span key={k} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+            <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded border text-[9px] font-bold', WORK_MODE_META[k].cell)}>{WORK_MODE_META[k].short}</span>
+            {WORK_MODE_META[k].label}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+          <span className="w-4 h-4 rounded border border-dashed border-amber-400" />WFH request awaiting approval
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }: {
   orgSummary?: OrgAttendanceSummary; pending: LeaveRequestItem[];
   pendingReg: RegularizationRequest[]; onReviewed: () => void; onRegReviewed: () => void;
@@ -924,6 +1228,9 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
 
   return (
     <div className="space-y-6">
+      {/* Who is remote vs in the office — today and the days before it. */}
+      <WorkModePanel />
+
       {/* Punch locations — HR/Admin see where each member clocked in/out, on any day in the last
           year, with the office area; full data exports to CSV. */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

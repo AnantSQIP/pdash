@@ -20,6 +20,12 @@ function round(n: number, p = 1): number { const f = 10 ** p; return Math.round(
 // the auto-punch-out job closes stale shifts at end of day so this cap is only a safety net.
 const MAX_SHIFT_HOURS = 16;
 const IST_OFFSET_MS = 5.5 * 3_600_000;
+/** The IST calendar day a moment falls on, encoded as UTC midnight (how date-only cols are stored).
+ *  Use this — never utcDay(new Date()) — when deciding "which day is this punch for". */
+function istDay(d: Date): Date {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()));
+}
 /** Hours between two punches, rounded (2dp) and hard-capped at MAX_SHIFT_HOURS (never negative). */
 function shiftHours(inD: Date, outD: Date): number {
   return round(Math.min(MAX_SHIFT_HOURS, Math.max(0, (outD.getTime() - inD.getTime()) / 3_600_000)), 2);
@@ -59,7 +65,10 @@ function parseDayStrict(s: unknown, field = 'date'): Date {
 const MARK_STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE', 'HOLIDAY', 'LATE'];
 // What kind of day a regularisation is about (free-form before — a rogue "WFH" type even
 // re-routed around the dedicated WFH approval flow).
-const REG_TYPES = ['MISSED_PUNCH', 'LATE', 'ON_DUTY', 'WFH', 'OTHER'];
+// PAST_MIDNIGHT covers the rare case of working past 23:59: the auto punch-out closes every
+// shift at the end of its own IST day, so hours after midnight are only credited through a
+// regularisation an approver signs off on.
+const REG_TYPES = ['MISSED_PUNCH', 'LATE', 'ON_DUTY', 'WFH', 'PAST_MIDNIGHT', 'OTHER'];
 // Upper bounds on free-text so a single request can't store/broadcast a novel-length blob.
 const MAX_REASON = 2000;
 const MAX_PID = 120;
@@ -87,9 +96,16 @@ function statusForHours(totalHours: number): string {
   return totalHours >= HALF_DAY_HOURS ? 'PRESENT' : 'HALF_DAY';
 }
 
+/** Human wording for a leave length — "half day (morning)", "1 day", "3 days". */
+function describeDays(numDays: number, dayType?: string | null, halfPeriod?: string | null): string {
+  if (dayType === 'HALF') return `half day (${halfPeriod === 'SECOND' ? 'afternoon' : 'morning'})`;
+  return `${numDays} day${numDays === 1 ? '' : 's'}`;
+}
+
 // ════════════════════════════════════════════════════════════════════════════════
 @Injectable()
 export class AttendanceService {
+  private readonly logger = new Logger(AttendanceService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
@@ -142,7 +158,10 @@ export class AttendanceService {
    *      punch can never overwrite/erase the real check-out time.
    */
   async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number; area?: string }) {
-    const today = utcDay(new Date());
+    // The day a punch belongs to is the IST CALENDAR day, not the UTC one. utcDay() put every
+    // punch made between 00:00 and 05:29 IST onto the PREVIOUS day's row — so an early-morning
+    // punch silently marked yesterday present.
+    const today = istDay(new Date());
     const now = new Date();
     // Location is mandatory on every punch (client captures it; the server enforces it too). The
     // area/landmark is reverse-geocoded on the client and stored so the team table is dynamic.
@@ -178,8 +197,9 @@ export class AttendanceService {
       const approvedWfh = await this.prisma.wfhRequest.findFirst({
         where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } },
       });
-      const workMode = approvedWfh ? 'WFH' : 'OFFICE';
       const organizationId = await this.orgOf(userId);
+      // WFH is decided by an APPROVED request, not at the moment of punching.
+      const workMode = approvedWfh ? 'WFH' : 'OFFICE';
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
         create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode, ...inLoc },
@@ -462,7 +482,7 @@ export class AttendanceService {
         data: {
           organizationId: req.organizationId, title: `${name} — Working from home`,
           type: 'WFH', startDate: req.startDate, endDate: req.endDate,
-          allDay: true, color: '#8b5cf6', createdBy: req.userId,
+          allDay: true, color: '#0e7490', createdBy: req.userId, // WFH — see apps/web/lib/calendar-colors.ts
         },
       });
     }
@@ -486,6 +506,23 @@ export class AttendanceService {
       where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
       include: { user: this.regUserSelect },
     });
+    // A "punch in from home" marks the day WFH up front. If it's declined, the day must stop
+    // claiming WFH — unless some OTHER approved request still covers it.
+    const stillApproved = await this.prisma.wfhRequest.findMany({
+      where: { userId: req.userId, status: 'APPROVED', startDate: { lte: req.endDate }, endDate: { gte: req.startDate } },
+      select: { startDate: true, endDate: true },
+    });
+    const covered = (d: Date) => stillApproved.some(a => a.startDate <= d && d <= a.endDate);
+    const toRevert: Date[] = [];
+    for (let d = new Date(req.startDate); d <= req.endDate; d = new Date(d.getTime() + 86_400_000)) {
+      if (!covered(d)) toRevert.push(utcDay(d));
+    }
+    if (toRevert.length) {
+      await this.prisma.attendance.updateMany({
+        where: { userId: req.userId, date: { in: toRevert }, workMode: 'WFH' },
+        data: { workMode: 'OFFICE' },
+      });
+    }
     const range = dayKey(req.startDate) === dayKey(req.endDate) ? dayKey(req.startDate) : `${dayKey(req.startDate)} – ${dayKey(req.endDate)}`;
     await this.notifications.notify(req.userId, {
       type: 'wfh.rejected',
@@ -529,19 +566,38 @@ export class AttendanceService {
     const daysInMonth = last.getUTCDate();
     const organizationId = await this.orgOf(userId);
 
-    const [rows, leaves, holidays, sheets] = await Promise.all([
+    const [rows, leaves, holidays, sheets, pendLeave, pendWfh, pendCompoff] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } } }),
       this.prisma.holiday.findMany({ where: { organizationId: organizationId ?? undefined, date: { gte: first, lte: last } } }),
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: first, lte: last } }, select: { date: true } }),
+      // Requests still awaiting a decision. They don't change the day's STATUS (nothing is
+      // agreed yet) but the day is marked so the calendar can show "requested" rather than
+      // looking as if nothing has been asked for.
+      this.prisma.leaveRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } } }),
+      this.prisma.wfhRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } } }),
+      this.prisma.compOffRequest.findMany({ where: { userId, status: 'PENDING', workDate: { gte: first, lte: last } } }),
     ]);
     const byDay = new Map(rows.map(r => [dayKey(r.date), r]));
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h]));
     const tsDays = new Set(sheets.map(s => dayKey(s.date)));
     const onLeave = (k: string) => leaves.some(l => dayKey(l.startDate) <= k && k <= dayKey(l.endDate));
-    const todayKey = dayKey(utcDay(new Date()));
+    // "Today" is the IST calendar day. utcDay() lags it by 5.5h, so between midnight and 05:30
+    // IST every cell for the real today was treated as past and rendered ABSENT.
+    const todayKey = dayKey(istDay(new Date()));
 
-    type DayCell = { date: string; status: string; workMode?: string; checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean; note: string | null };
+    // A day carries at most one pending marker; leave outranks WFH outranks comp-off.
+    const pendingFor = (k: string): { kind: string; label: string } | null => {
+      const l = pendLeave.find(r => dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
+      if (l) return { kind: 'LEAVE', label: `${l.leaveType} leave requested` };
+      const w = pendWfh.find(r => dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
+      if (w) return { kind: 'WFH', label: 'Work from home requested' };
+      const c = pendCompoff.find(r => dayKey(r.workDate) === k);
+      if (c) return { kind: 'COMPOFF', label: `Comp-off claim (${c.dayType === 'HALF' ? 'half' : 'full'} day)` };
+      return null;
+    };
+
+    type DayCell = { date: string; status: string; workMode?: string; checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean; note: string | null; pending?: { kind: string; label: string } | null };
     const days: DayCell[] = [];
     for (let i = 1; i <= daysInMonth; i++) {
       const d = new Date(Date.UTC(year, month - 1, i));
@@ -556,14 +612,20 @@ export class AttendanceService {
         days.push({ date: k, status: 'WEEKEND', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       } else if (onLeave(k)) {
         days.push({ date: k, status: 'ON_LEAVE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
-      } else if (tsDays.has(k)) {
-        days.push({ date: k, status: 'PRESENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: 'from timesheet' });
+      // A TIMESHEET IS NOT ATTENDANCE. This used to render PRESENT whenever the person had logged
+      // any time that day — with no punch and no attendance row — so back-filling a timesheet
+      // (allowed up to 30 days later) retroactively turned a day "present". The day now stays
+      // ABSENT/NOT-MARKED and carries a hint so they can regularise it properly.
       } else if (k < todayKey) {
-        days.push({ date: k, status: 'ABSENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
+        days.push({
+          date: k, status: 'ABSENT', checkIn: null, checkOut: null, totalHours: null, isRegularized: false,
+          note: tsDays.has(k) ? 'Time logged but no punch — raise a regularisation' : null,
+        });
       } else {
         days.push({ date: k, status: k === todayKey ? 'NONE' : 'FUTURE', checkIn: null, checkOut: null, totalHours: null, isRegularized: false, note: null });
       }
     }
+    for (const d of days) d.pending = pendingFor(d.date);
     const count = (s: string) => days.filter(d => d.status === s).length;
     const present = count('PRESENT') + count('HALF_DAY');
     // A HALF_DAY is half a day present — it must not score as a full day in the rate.
@@ -624,7 +686,8 @@ export class AttendanceService {
         if (holidaySet.has(k)) { holiday++; continue; }
         if (wd === 0 || wd === 6) continue;
         if ((leavesByUser.get(u.id) ?? []).some(l => l.start <= k && k <= l.end)) { onLeave++; continue; }
-        if (tsByUserDay.has(`${u.id}|${k}`)) { present++; continue; }
+        // A timesheet entry alone is NOT attendance (see getMonth) — it must not count as present
+        // in the team table or inflate the attendance rate.
         if (k < todayKey) absent++;
       }
       // Approved leave is not an expected working day, so it must not drag the rate
@@ -660,10 +723,84 @@ export class AttendanceService {
           // Dynamic area from where they actually punched (falls back to the office label).
           area: a?.checkInArea ?? a?.checkOutArea ?? areaOf(u.office),
           checkIn: a?.checkIn ?? null, checkOut: a?.checkOut ?? null, status: a?.status ?? null,
+          workMode: a?.workMode ?? null,
           checkInLat: a?.checkInLat ?? null, checkInLng: a?.checkInLng ?? null, checkInArea: a?.checkInArea ?? null,
           checkOutLat: a?.checkOutLat ?? null, checkOutLng: a?.checkOutLng ?? null, checkOutArea: a?.checkOutArea ?? null,
         };
       }),
+    };
+  }
+
+  /**
+   * Who worked from HOME vs the OFFICE, for today and the days before it (default a week).
+   *
+   * The punch-location table answers "where was this person standing"; this answers the question
+   * an admin actually asks — how much of the team is remote right now, and how has that been
+   * trending. Work mode is only meaningful on a day somebody was actually working, so leave,
+   * holidays, weekends and no-shows are reported as their own states rather than being silently
+   * counted as "office".
+   */
+  async orgWorkModes(organizationId: string, days = 7) {
+    const span = Math.max(1, Math.min(31, Math.trunc(days) || 7));
+    const today = istDay(new Date());
+    const from = new Date(today.getTime() - (span - 1) * 86_400_000);
+    const [users, att, holidays, wfhReqs] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { organizationId, deletedAt: null, status: 'ACTIVE' },
+        select: { id: true, firstName: true, lastName: true, designation: true, office: true, profilePhoto: true },
+        orderBy: [{ firstName: 'asc' }],
+      }),
+      this.prisma.attendance.findMany({ where: { organizationId, date: { gte: from, lte: today } } }),
+      this.prisma.holiday.findMany({ where: { organizationId, date: { gte: from, lte: today } }, select: { date: true, name: true } }),
+      // Pending requests matter here: a day can be worked-from-home while HR hasn't decided yet,
+      // and an admin looking at this table is often the person who needs to decide.
+      this.prisma.wfhRequest.findMany({
+        where: { organizationId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: today }, endDate: { gte: from } },
+        select: { userId: true, startDate: true, endDate: true, status: true },
+      }),
+    ]);
+    const dayKeys: string[] = [];
+    for (let d = new Date(from); d <= today; d = new Date(d.getTime() + 86_400_000)) dayKeys.push(dayKey(d));
+    const attByUserDay = new Map(att.map(a => [`${a.userId}|${dayKey(a.date)}`, a]));
+    const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
+    const wfhStatusFor = (userId: string, k: string): string | null => {
+      const hit = wfhReqs.filter(r => r.userId === userId && dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
+      if (!hit.length) return null;
+      return hit.some(r => r.status === 'APPROVED') ? 'APPROVED' : 'PENDING';
+    };
+    const todayKey = dayKey(today);
+
+    const rows = users.map(u => {
+      const cells = dayKeys.map(k => {
+        const a = attByUserDay.get(`${u.id}|${k}`);
+        const wd = new Date(`${k}T00:00:00Z`).getUTCDay();
+        const wfhStatus = wfhStatusFor(u.id, k);
+        let mode: string;
+        if (a && (a.status === 'PRESENT' || a.status === 'HALF_DAY' || a.status === 'LATE' || a.checkIn)) {
+          mode = a.workMode === 'WFH' ? 'WFH' : 'OFFICE';
+        } else if (a?.status === 'ON_LEAVE') mode = 'LEAVE';
+        else if (holidayByDay.has(k)) mode = 'HOLIDAY';
+        else if (wd === 0 || wd === 6) mode = 'WEEKEND';
+        else if (k === todayKey) mode = 'NOT_MARKED';   // the day isn't over — not an absence
+        else mode = 'ABSENT';
+        return { date: k, mode, wfhStatus, checkIn: a?.checkIn ?? null, area: a?.checkInArea ?? null };
+      });
+      return {
+        userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
+        office: u.office ?? undefined, profilePhoto: u.profilePhoto ?? undefined,
+        days: cells,
+        wfhDays: cells.filter(c => c.mode === 'WFH').length,
+        officeDays: cells.filter(c => c.mode === 'OFFICE').length,
+      };
+    });
+
+    const countToday = (m: string) => rows.filter(r => r.days[r.days.length - 1]?.mode === m).length;
+    return {
+      from: dayKeys[0], to: todayKey, dates: dayKeys, rows,
+      today: {
+        wfh: countToday('WFH'), office: countToday('OFFICE'), leave: countToday('LEAVE'),
+        notMarked: countToday('NOT_MARKED'), absent: countToday('ABSENT'),
+      },
     };
   }
 
@@ -748,7 +885,7 @@ export class LeaveService {
     return days;
   }
 
-  async create(userId: string, dto: { leaveType: string; startDate: string; endDate: string; reason?: string }) {
+  async create(userId: string, dto: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: string; halfPeriod?: string }) {
     const start = parseDayStrict(dto.startDate, 'startDate');
     const end = parseDayStrict(dto.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
@@ -774,9 +911,17 @@ export class LeaveService {
       where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
     });
     if (clash) throw new BadRequestException('You already have a leave (pending or approved) on one or more of these days — only one leave can apply to a day.');
+    // A HALF day is exactly that: half of ONE working day. Allowing a range would make
+    // "half day" mean "half of each of five days", which is not a thing anyone can take.
+    const dayType = dto.dayType === 'HALF' ? 'HALF' : 'FULL';
+    const halfPeriod = dayType === 'HALF' ? (dto.halfPeriod === 'SECOND' ? 'SECOND' : 'FIRST') : null;
+    if (dayType === 'HALF' && dayKey(start) !== dayKey(end)) {
+      throw new BadRequestException('A half-day leave covers a single date — pick the same start and end date.');
+    }
     // Count business days only — weekends and holidays do not consume leave balance.
-    const numDays = (await this.businessDays(organizationId, start, end)).length;
-    if (numDays === 0) throw new BadRequestException('Selected dates contain no working days');
+    const workingDays = await this.businessDays(organizationId, start, end);
+    if (workingDays.length === 0) throw new BadRequestException('Selected dates contain no working days');
+    const numDays = dayType === 'HALF' ? 0.5 : workingDays.length;
     // Comp-off leave is spent against EARNED credits (approved comp-off claims), not a quota.
     if (dto.leaveType === 'CO') {
       const { available } = await this.compOffBalance(userId);
@@ -800,7 +945,10 @@ export class LeaveService {
       }
     }
     const created = await this.prisma.leaveRequest.create({
-      data: { userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end, numDays, reason: dto.reason ?? null, status: 'PENDING' },
+      data: {
+        userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end,
+        numDays, dayType, halfPeriod, reason: dto.reason ?? null, status: 'PENDING',
+      },
       include: { user: this.userSelect },
     });
     // Route the request to approvers — parity with WFH and comp-off, which both notify.
@@ -810,7 +958,7 @@ export class LeaveService {
     await this.notifications.notify(await this.leaveApprovers(organizationId), {
       type: 'leave.requested',
       title: 'Leave request to review',
-      message: `${name} requested ${dto.leaveType} leave (${numDays} day${numDays === 1 ? '' : 's'}) for ${range}.`,
+      message: `${name} requested ${dto.leaveType} leave (${describeDays(numDays, dayType, halfPeriod)}) for ${range}.`,
       link: '/attendance',
     });
     return created;
@@ -826,7 +974,17 @@ export class LeaveService {
     // Write ON_LEAVE attendance only for business days (skip weekends + holidays),
     // so leave spanning a weekend doesn't inflate ON_LEAVE / working-day counts.
     const days = await this.businessDays(req.organizationId, req.startDate, req.endDate);
-    const rows = days.map(date => ({ userId: req.userId, organizationId: req.organizationId, date, status: 'ON_LEAVE', note: `${req.leaveType} leave` }));
+    // A HALF-day leave still has the person at work for the other half, so the day is HALF_DAY,
+    // not ON_LEAVE — marking it ON_LEAVE would excuse the whole day from the attendance rate
+    // and zero the timesheet target for hours they are still expected to log.
+    const isHalf = (req as { dayType?: string }).dayType === 'HALF';
+    const half = (req as { halfPeriod?: string }).halfPeriod === 'SECOND' ? 'afternoon' : 'morning';
+    const rows = days.map(date => ({
+      userId: req.userId, organizationId: req.organizationId, date,
+      status: isHalf ? 'HALF_DAY' : 'ON_LEAVE',
+      totalHours: isHalf ? HALF_DAY_HOURS : null,
+      note: isHalf ? `${req.leaveType} half-day leave (${half})` : `${req.leaveType} leave`,
+    }));
     if (rows.length) await this.prisma.attendance.createMany({ data: rows, skipDuplicates: true });
 
     const updated = await this.prisma.leaveRequest.update({
@@ -842,12 +1000,12 @@ export class LeaveService {
       await this.prisma.calendarEvent.create({
         data: {
           organizationId: req.organizationId,
-          title: `${name} — ${req.leaveType} leave`,
+          title: `${name} — ${req.leaveType} ${isHalf ? `half-day leave (${half})` : 'leave'}`,
           type: 'LEAVE',
           startDate: req.startDate,
           endDate: req.endDate,
           allDay: true,
-          color: '#fe841f',
+          color: '#db2777', // LEAVE — see apps/web/lib/calendar-colors.ts
           createdBy: req.userId,
         },
       });
@@ -856,7 +1014,7 @@ export class LeaveService {
     await this.notifications.notify(req.userId, {
       type: 'leave.approved',
       title: 'Leave approved',
-      message: `Your ${req.leaveType} leave (${req.numDays} day${req.numDays === 1 ? '' : 's'}) was approved.`,
+      message: `Your ${req.leaveType} leave (${describeDays(req.numDays, (req as { dayType?: string }).dayType, (req as { halfPeriod?: string }).halfPeriod)}) was approved.`,
     });
 
     // Emergency-leave coverage: if this is short-notice leave and the person holds
@@ -919,6 +1077,9 @@ export class LeaveService {
     const year = new Date().getUTCFullYear();
     const start = new Date(Date.UTC(year, 0, 1));
     const end = new Date(Date.UTC(year + 1, 0, 1));
+    // Comp Off was only created the first time a claim was APPROVED, so until then the type was
+    // invisible — people couldn't see a zero balance, or find "Comp-off" in the leave dropdown.
+    await this.ensureCompOffType(organizationId);
     const types = await this.prisma.leaveType.findMany({ where: { organizationId }, orderBy: { name: 'asc' } });
     const approved = await this.prisma.leaveRequest.groupBy({
       by: ['leaveType'],
@@ -931,7 +1092,10 @@ export class LeaveService {
       // non-working days (approved comp-off claims) minus what you've already availed.
       if (t.code === 'CO') {
         const b = await this.compOffBalance(userId);
-        return { code: 'CO', name: t.name, quota: b.earned, used: b.used, remaining: b.available, colorHex: t.colorHex };
+        return {
+          code: 'CO', name: t.name, quota: b.earned, used: b.used, remaining: b.available,
+          colorHex: t.colorHex, isCompOff: true, credits: b.credits,
+        };
       }
       const used = usedByCode.get(t.code) ?? 0;
       return { code: t.code, name: t.name, quota: t.annualQuota, used, remaining: Math.max(0, t.annualQuota - used), colorHex: t.colorHex };
@@ -991,13 +1155,19 @@ export class LeaveService {
   }
 
   /** Earned (approved) comp-off credits minus CO leave already availed (pending + approved). */
-  async compOffBalance(userId: string): Promise<{ earned: number; used: number; available: number }> {
-    const [earned, used] = await Promise.all([
-      this.prisma.compOffRequest.count({ where: { userId, status: 'APPROVED' } }),
+  async compOffBalance(userId: string): Promise<{ earned: number; used: number; available: number; credits: number }> {
+    const [claims, used] = await Promise.all([
+      // A HALF-day claim earns HALF a day off. This used to count() the rows, so working a
+      // Saturday morning bought a whole day back.
+      this.prisma.compOffRequest.groupBy({
+        by: ['dayType'], where: { userId, status: 'APPROVED' }, _count: { _all: true },
+      }),
       this.prisma.leaveRequest.aggregate({ where: { userId, leaveType: 'CO', status: { in: ['PENDING', 'APPROVED'] } }, _sum: { numDays: true } }),
     ]);
+    const earned = claims.reduce((sum, c) => sum + c._count._all * (c.dayType === 'HALF' ? 0.5 : 1), 0);
     const usedDays = used._sum.numDays ?? 0;
-    return { earned, used: usedDays, available: Math.max(0, earned - usedDays) };
+    const credits = claims.reduce((sum, c) => sum + c._count._all, 0);
+    return { earned, used: usedDays, available: Math.max(0, earned - usedDays), credits };
   }
 
   async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: string }) {
@@ -1086,7 +1256,7 @@ export class LeaveService {
         data: {
           organizationId: req.organizationId, title: `${name} — Comp Off earned (worked)`,
           type: 'COMPOFF', startDate: utcDay(req.workDate), endDate: utcDay(req.workDate),
-          allDay: true, color: '#6366f1', createdBy: req.userId,
+          allDay: true, color: '#1e3a8a', createdBy: req.userId, // COMPOFF — see apps/web/lib/calendar-colors.ts
         },
       });
     }
@@ -1175,7 +1345,7 @@ class AttendanceController {
   // Location is MANDATORY on every punch (in and out). `mode` is still accepted but ignored
   // (workMode is derived server-side from an approved WFH request, never client-chosen).
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string; mode?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     const lat = Number(body?.lat), lng = Number(body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -1307,6 +1477,13 @@ class AttendanceController {
     return this.svc.orgPunchLocations(await this.actor.requireOrgId(), date);
   }
 
+  /** Who is working from home vs the office — today plus the preceding days (default a week). */
+  @Get('org/work-modes')
+  @RequirePermission('attendance.view.organization')
+  async orgWorkModes(@Query('days') days?: string) {
+    return this.svc.orgWorkModes(await this.actor.requireOrgId(), Number(days) || 7);
+  }
+
   /** Full attendance data for a date range (up to 1 year) — admins/HR, for the CSV export. */
   @Get('org/report')
   @RequirePermission('attendance.view.organization')
@@ -1343,7 +1520,7 @@ class LeaveController {
 
   @Post('requests')
   @RequirePermission('leave.request')
-  create(@Actor() actorId: string | null, @Body() body: { leaveType: string; startDate: string; endDate: string; reason?: string }) {
+  create(@Actor() actorId: string | null, @Body() body: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: string; halfPeriod?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.create(actorId, body);
   }
@@ -1448,7 +1625,10 @@ export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDest
   private readonly logger = new Logger('AttendanceAutoPunchOut');
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   onModuleInit() {
     if (process.env.RUN_BACKGROUND_JOBS === 'false') return;
@@ -1463,7 +1643,7 @@ export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDest
     this.running = true;
     try {
       const open = await this.prisma.attendance.findMany({
-        where: { checkIn: { not: null }, checkOut: null }, select: { id: true, checkIn: true }, take: 2000,
+        where: { checkIn: { not: null }, checkOut: null }, select: { id: true, checkIn: true, userId: true, date: true }, take: 2000,
       });
       let closed = 0;
       for (const a of open) {
@@ -1474,6 +1654,17 @@ export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDest
         await this.prisma.attendance.update({
           where: { id: a.id }, data: { checkOut: closeAt, totalHours, status: statusForHours(totalHours) },
         });
+        // The day is capped at 23:59 by design. Anyone who genuinely worked past midnight needs a
+        // route to claim it, so tell them once, here, rather than leaving them to notice the
+        // missing hours later. Best-effort: a failed notification must not stop the sweep.
+        try {
+          await this.notifications.notify(a.userId, {
+            type: 'attendance.auto_punch_out',
+            title: 'Your shift was closed at 11:59 pm',
+            message: `You hadn't punched out on ${dayKey(a.date)}, so the day was closed at 11:59 pm (${totalHours.toFixed(1)}h). If you worked past midnight, raise a regularisation to have the extra hours counted.`,
+            link: '/attendance',
+          });
+        } catch { /* notification is best-effort */ }
         closed++;
       }
       if (closed) this.logger.log(`auto punched-out ${closed} stale shift(s) at 23:59`);

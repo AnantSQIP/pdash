@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { api, type ApiTask, type ApiProject } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { pidLabel } from '@/lib/mock-data';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 
@@ -175,7 +176,13 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
               >
                 <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project'}</option>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+                {/* A PID can hold several projects for a returning client, so the round has to be
+                    on the option — otherwise two entries look identical and time lands on the wrong one. */}
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}
+                  </option>
+                ))}
               </select>
             </div>
 
