@@ -457,9 +457,21 @@ model WorkflowTransition {
 
 model Project {
   id                      String    @id @default(cuid())
-  // Human project code = the PID "SQ_<FY>_<serial>" (e.g. SQ_26_27_001). Unique; also
-  // matched by global search. Backfilled for legacy rows, then always set on new projects.
-  code                    String?   @unique
+  // Human project code = the PID "SQ_<FY>_<serial>" (e.g. SQ_26_27_001). Also matched by
+  // global search. Backfilled for legacy rows, then always set on new projects.
+  //
+  // NOT unique. A returning client keeps the same PID, and each new piece of work for them is a
+  // new Project row sharing that code — so one PID groups many projects ("rounds"). PID
+  // uniqueness itself is still enforced where it belongs, on PidReservation(organizationId, pid);
+  // the reservation remains the single authority for which serials exist.
+  code                    String?
+  // Which round this project is under its PID: 1 for the first, 2 for the next, and so on.
+  // Always 1 for a single-round (Gurgaon) project.
+  roundSeq                Int       @default(1)
+  // GURGAON | JAIPUR — the office that owns the matter, captured at creation from the creator
+  // and editable afterwards. Jaipur projects support multiple rounds under one PID; Gurgaon
+  // projects behave exactly as they always have.
+  office                  String?
   title                   String
   description             String?
   // The kind of patent-analysis matter this project is (HML, Claim Chart, FTO, Novelty,
@@ -522,6 +534,7 @@ model Project {
 
   @@index([deletedAt])
   @@index([clientId])
+  @@index([code])
   @@map("project")
 }
 

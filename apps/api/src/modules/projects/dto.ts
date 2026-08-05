@@ -41,6 +41,7 @@ export class CustomTypeDto {
 // Task/project priority is a fixed set — free-text used to be stored verbatim.
 export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 // The project lifecycle phases (free-text before — any string was accepted).
+export const OFFICES = ['GURGAON', 'JAIPUR'];
 export const PROJECT_PHASES = ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
 
 export class CreateProjectDto {
@@ -119,6 +120,15 @@ export class CreateProjectDto {
   @IsOptional()
   @IsIn(PROJECT_PRIORITIES)
   priority?: string;
+
+  /**
+   * The office that owns this matter (GURGAON | JAIPUR). Defaults to the creator's own office.
+   * It is not cosmetic: a JAIPUR project's PID may hold MULTIPLE projects (a returning client
+   * gets a new one under the same PID), while a GURGAON PID stays one project as it always has.
+   */
+  @IsOptional()
+  @IsIn(OFFICES)
+  office?: string;
 
   // An emptied form field submits "", which @IsDateString would reject with a 400. Treat it
   // as "not supplied" so leaving an optional date blank just omits it.
@@ -255,4 +265,75 @@ export class ApprovalDto {
   @IsOptional()
   @IsString()
   reason?: string;
+}
+
+/**
+ * A NEW PROJECT UNDER AN EXISTING PID — the returning-client flow.
+ *
+ * Deliberately smaller than CreateProjectDto: the PID, the client and the office are inherited
+ * from the round before it, so they are never asked for again and cannot be contradicted here.
+ * What genuinely changes for a second piece of work is the name, the kind of work, when it runs,
+ * who staffs it, and how urgent it is.
+ */
+export class AddProjectRoundDto {
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
+  @MaxLength(100)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  projectType?: string;
+
+  /** Inline one-off custom type, same shape as project creation. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CustomTypeDto)
+  customType?: CustomTypeDto;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+
+  @IsOptional()
+  @IsIn(PROJECT_PRIORITIES)
+  priority?: string;
+
+  /** When the round starts. */
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
+
+  /** When the round is expected to finish. Stored as the project's due date. */
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  endDate?: string | null;
+
+  /** CLIENT deadline — restricted, same rule as creating a project. */
+  @IsOptional()
+  @IsDateString()
+  @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
+
+  /** Who staffs THIS round. Empty = just the creator, as its manager. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RoundMemberDto)
+  members?: RoundMemberDto[];
+}
+
+export class RoundMemberDto {
+  @IsString()
+  userId!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  projectRole?: string;
 }

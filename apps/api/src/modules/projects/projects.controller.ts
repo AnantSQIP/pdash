@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, UpdateProjectDto } from './dto';
+import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -127,6 +127,18 @@ export class ProjectsController {
   @Get(':id/completion-hours') @RequirePermission('project.view')
   completionHours(@Param('id') id: string) {
     return this.projects.completionHoursSuggestion(id);
+  }
+
+  /** Start ANOTHER project under this one's PID — the returning-client flow (Jaipur). */
+  @Post(':id/rounds') @RequirePermission('project.create')
+  addRound(@Param('id') id: string, @Body() body: AddProjectRoundDto) {
+    return this.projects.addRound(id, body);
+  }
+
+  /** Every project sharing this one's PID, oldest first — drives the PID page's cards. */
+  @Get(':id/rounds')
+  async rounds(@Param('id') id: string) {
+    return this.projects.roundsForProject(id);
   }
 
   @Post(':id/complete') @RequirePermission('project.update')

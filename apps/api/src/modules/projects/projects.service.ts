@@ -4,12 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
-import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto } from './dto';
+import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto, AddProjectRoundDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
@@ -21,6 +22,18 @@ import { designationRank } from './seniority';
 
 /** Hours to one decimal — the precision timesheets are logged at. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Offices whose PIDs may hold MORE THAN ONE project.
+ *
+ * A returning client keeps the Project ID they already know, and each new piece of work for them
+ * becomes another project under that same PID (a "round"). Jaipur works this way; Gurgaon keeps
+ * the original one-PID-one-project behaviour untouched. Adding an office here is the only change
+ * needed to switch it on for them.
+ */
+const MULTI_ROUND_OFFICES = new Set(['JAIPUR']);
+export const supportsRounds = (office?: string | null): boolean =>
+  !!office && MULTI_ROUND_OFFICES.has(office);
 
 @Injectable()
 export class ProjectsService {
@@ -73,6 +86,252 @@ export class ProjectsService {
    * The mandatory "General" task list (and any project-type template tasks) are created in the
    * same transaction, so a partial failure never leaves a half-built workflow.
    */
+  /**
+   * Create a project type's standard task list and its tasks inside an open transaction.
+   *
+   * Shared by project creation and by adding a later round to a PID: a second piece of work for a
+   * returning client is a fresh project and deserves the same ready-made workflow as the first,
+   * so this must not be duplicated in two places that can drift apart.
+   */
+  private async seedTemplateTasks(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    template: { taskListName?: string; label?: string; tasks?: string[] },
+    creatorId: string,
+  ): Promise<void> {
+    if (!template.tasks?.length) return;
+    // Resolve the org's GLOBAL workflow and its first OPEN status so the generated tasks open in
+    // the correct board column (mirrors TasksService.create).
+    const wf = await tx.workflow.findFirst({
+      where: { type: 'GLOBAL' },
+      orderBy: { name: 'asc' },
+      select: { id: true, statuses: { orderBy: { sequence: 'asc' }, select: { id: true, type: true } } },
+    });
+    const initialStatusId = wf ? (wf.statuses.find(s => s.type === 'OPEN') ?? wf.statuses[0])?.id : undefined;
+
+    const list = await tx.taskList.create({
+      data: { projectId, name: template.taskListName ?? template.label ?? 'Tasks', sequence: 1 },
+    });
+    // Sequentially, so ProjectTask.sequence reflects the workflow order.
+    for (let i = 0; i < template.tasks.length; i++) {
+      const task = await tx.task.create({
+        data: {
+          title: template.tasks[i],
+          priority: 'MEDIUM',
+          createdBy: creatorId,
+          ...(wf ? { workflowId: wf.id } : {}),
+          ...(initialStatusId ? { currentWorkflowStatusId: initialStatusId } : {}),
+        },
+      });
+      await tx.projectTask.create({ data: { projectId, taskId: task.id, taskListId: list.id, sequence: i } });
+    }
+  }
+
+  /**
+   * Work out which task template applies, from the three places a type can come from:
+   * a built-in type, an inline one-off custom type, or a saved org-wide template.
+   * Returns the effective type VALUE to store alongside it.
+   */
+  private async resolveTemplate(
+    organizationId: string,
+    creatorId: string,
+    dto: { projectType?: string; customType?: { label?: string; tasks?: string[]; save?: boolean } },
+  ): Promise<{ template: { value?: string; label?: string; taskListName?: string; tasks?: string[]; description?: string } | null; effectiveType: string | null }> {
+    let template = templateFor(dto.projectType) as { value?: string; label?: string; taskListName?: string; tasks?: string[]; description?: string } | null;
+    let effectiveType: string | null = dto.projectType ?? null;
+    if (dto.customType?.label) {
+      const label = dto.customType.label.trim();
+      const tasks = (dto.customType.tasks ?? []).map(t => t.trim()).filter(Boolean);
+      const value = (`CUSTOM_${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`).slice(0, 60) || 'CUSTOM';
+      effectiveType = value;
+      template = { value, label, description: '', taskListName: label, tasks };
+      if (dto.customType.save) {
+        await this.prisma.projectTemplate.upsert({
+          where: { organizationId_value: { organizationId, value } },
+          create: { organizationId, value, label, taskListName: label, tasks, isActive: true, createdBy: creatorId },
+          update: { label, taskListName: label, tasks, isActive: true },
+        });
+      }
+    } else if (!template && dto.projectType) {
+      const db = await this.prisma.projectTemplate.findFirst({ where: { organizationId, value: dto.projectType, isActive: true } });
+      if (db) template = { value: db.value, label: db.label, description: db.description ?? '', taskListName: db.taskListName ?? db.label, tasks: db.tasks };
+    }
+    return { template, effectiveType };
+  }
+
+  /**
+   * A NEW PROJECT UNDER AN EXISTING PID — the returning-client flow.
+   *
+   * The old model reopened the finished project in place, which only works when the client comes
+   * back with *the same* work. In practice they return with a different brief: new name, new type,
+   * new dates, new team. Piling those tasks into the previous project's list makes the record
+   * unreadable and destroys any per-engagement reporting.
+   *
+   * So each return creates a SIBLING project sharing the PID. The client keeps the number they
+   * know; every round keeps its own tasks, time, files, issues and dates; and every module that
+   * already works per-project keeps working with no rewiring.
+   *
+   * Only offices in MULTI_ROUND_OFFICES may do this — a Gurgaon PID stays one project.
+   */
+  async addRound(fromProjectId: string, dto: AddProjectRoundDto) {
+    const actorId = getActorId();
+    const creator = actorId
+      ? await this.prisma.user.findFirst({ where: { id: actorId, deletedAt: null } })
+      : null;
+    if (!creator) throw new ForbiddenException('You must be signed in to add a project.');
+    await this.access.assertProjectAccess(actorId, fromProjectId);
+
+    const source = await this.prisma.project.findFirst({
+      where: { id: fromProjectId, deletedAt: null },
+      select: { id: true, code: true, office: true, clientId: true, title: true },
+    });
+    if (!source) throw new NotFoundException(`Project ${fromProjectId} not found`);
+    if (!source.code) {
+      throw new BadRequestException('This project has no Project ID yet. Attach a PID before adding another project under it.');
+    }
+    if (!supportsRounds(source.office)) {
+      throw new BadRequestException(
+        'This PID holds a single project. Adding further projects under one PID is enabled for the Jaipur office.',
+      );
+    }
+    const organizationId = creator.organizationId;
+
+    // The next round number is derived from what already exists, INCLUDING soft-deleted rounds, so
+    // a deleted round never causes a number to be handed out twice.
+    const last = await this.prisma.project.findFirst({
+      where: { code: source.code },
+      orderBy: { roundSeq: 'desc' },
+      select: { roundSeq: true },
+    });
+    const roundSeq = (last?.roundSeq ?? 0) + 1;
+
+    // Dates: "end date" is this round's own finish, stored as the project's due date.
+    const startD = dto.startDate ? new Date(dto.startDate) : undefined;
+    const endD = dto.endDate ? new Date(dto.endDate) : undefined;
+    if (startD && endD && endD < startD) {
+      throw new BadRequestException('The end date cannot be before the start date.');
+    }
+    const clientDue = dto.clientDueDate ? new Date(dto.clientDueDate) : undefined;
+    if (clientDue) await this.deadlines.assertMaySetClientDue([], await this.deadlines.scope(creator.id));
+    this.deadlines.assertOrdered(endD, clientDue);
+
+    if (dto.projectType) {
+      const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
+      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+    }
+    const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
+
+    // Staffing: whoever was chosen for THIS round, with the creator leading if nobody was named.
+    let members = [{ userId: creator.id, projectRole: 'MANAGER' }];
+    if (dto.members?.length) {
+      const wanted = [...new Set(dto.members.map(m => m.userId))];
+      const found = await this.prisma.user.findMany({
+        where: { id: { in: wanted }, organizationId, deletedAt: null, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (found.length !== wanted.length) {
+        throw new BadRequestException('One or more selected members are not active in this organization.');
+      }
+      members = dto.members.map(m => ({ userId: m.userId, projectRole: m.projectRole ?? 'MEMBER' }));
+      // Somebody has to own it: if no manager was named, the creator leads.
+      if (!members.some(m => m.projectRole === 'MANAGER')) {
+        members = members.filter(m => m.userId !== creator.id);
+        members.unshift({ userId: creator.id, projectRole: 'MANAGER' });
+      }
+    }
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({
+        data: {
+          // The PID, the client and the office all carry over — that is the point of a round.
+          code: source.code,
+          clientId: source.clientId,
+          office: source.office,
+          roundSeq,
+          title: dto.title,
+          description: dto.description,
+          projectType: effectiveType,
+          projectPhase: 'ACTIVE',
+          priority: dto.priority ?? 'MEDIUM',
+          startDate: startD,
+          dueDate: endD,
+          clientDueDate: clientDue,
+          createdBy: creator.id,
+          members: { create: members },
+          taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } },
+        },
+      });
+      if (template) await this.seedTemplateTasks(tx, project.id, template, creator.id);
+      return project;
+    });
+
+    // The reservation points at the LATEST round, so anything still reading a single projectId
+    // lands on the live piece of work rather than a finished one.
+    await this.prisma.pidReservation.updateMany({
+      where: { organizationId, pid: source.code },
+      data: { status: 'ATTACHED', projectId: created.id, resolvedAt: new Date() },
+    });
+
+    await this.events.emit({
+      action: EVENTS.PROJECT_CREATED, entityType: 'PROJECT', entityId: created.id,
+      organizationId, actorId: creator.id,
+      metadata: { projectId: created.id, title: created.title, pid: source.code, roundSeq },
+    });
+    const recipients = members.map(m => m.userId).filter(uid => uid !== creator.id);
+    if (recipients.length) {
+      await this.notifications.notify(recipients, {
+        type: 'project.created',
+        title: `New project under ${source.code}`,
+        message: `"${created.title}" was started under ${source.code} (project ${roundSeq}).`,
+        link: `/projects/${created.id}`,
+      });
+    }
+    return this.deadlines.redactProject(created, await this.deadlines.scope());
+  }
+
+  /**
+   * Every project sharing this project's PID, oldest round first — what the PID page renders as
+   * its stack of cards. A project with no PID yet, or one whose office does not use rounds,
+   * simply returns itself, so callers never need a special case.
+   */
+  async roundsForProject(projectId: string) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    const self = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null },
+      select: { id: true, code: true, office: true },
+    });
+    if (!self) throw new NotFoundException(`Project ${projectId} not found`);
+
+    const scope = await this.deadlines.scope();
+    const shape = {
+      id: true, code: true, roundSeq: true, office: true, title: true, description: true,
+      projectType: true, projectPhase: true, priority: true, completionPercentage: true,
+      startDate: true, dueDate: true, clientDueDate: true,
+      completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
+      createdBy: true, createdAt: true,
+      client: { select: { id: true, name: true, code: true } },
+      members: {
+        where: { isActive: true },
+        select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true } } },
+      },
+      _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
+    } as const;
+
+    if (!self.code || !supportsRounds(self.office)) {
+      const one = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
+      return {
+        pid: self.code, multiRound: false,
+        rounds: this.deadlines.redactProjects([one] as never, scope),
+      };
+    }
+    const rounds = await this.prisma.project.findMany({
+      where: { code: self.code, deletedAt: null },
+      orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
+      select: shape,
+    });
+    return { pid: self.code, multiRound: true, rounds: this.deadlines.redactProjects(rounds as never, scope) };
+  }
+
   async create(dto: CreateProjectDto) {
     // Identity & org come from the verified cookie actor — never the client body
     // (fixes spoofable createdBy and the email-vs-id create bug).
@@ -173,25 +432,7 @@ export class ProjectsService {
     //   2. an INLINE one-off custom type ("+ Create new type") — used for this project, and
     //      persisted as a reusable org-wide ProjectTemplate when `save` is set,
     //   3. a saved org ProjectTemplate value.
-    let template = templateFor(dto.projectType);
-    let effectiveType: string | null = dto.projectType ?? null;
-    if (dto.customType?.label) {
-      const label = dto.customType.label.trim();
-      const tasks = (dto.customType.tasks ?? []).map(t => t.trim()).filter(Boolean);
-      const value = (`CUSTOM_${label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`).slice(0, 60) || 'CUSTOM';
-      effectiveType = value;
-      template = { value, label, description: '', taskListName: label, tasks };
-      if (dto.customType.save) {
-        await this.prisma.projectTemplate.upsert({
-          where: { organizationId_value: { organizationId, value } },
-          create: { organizationId, value, label, taskListName: label, tasks, isActive: true, createdBy: creator.id },
-          update: { label, taskListName: label, tasks, isActive: true },
-        });
-      }
-    } else if (!template && dto.projectType) {
-      const db = await this.prisma.projectTemplate.findFirst({ where: { organizationId, value: dto.projectType, isActive: true } });
-      if (db) template = { value: db.value, label: db.label, description: db.description ?? '', taskListName: db.taskListName ?? db.label, tasks: db.tasks };
-    }
+    const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
 
     // ── Patent linkage (Phase 1) — the client is DERIVED from the patents, never picked.
     // Only patent.view holders (Super Admin by default, or anyone granted it) may attach
@@ -242,6 +483,10 @@ export class ProjectsService {
           projectType: effectiveType,
           clientId: derivedClientId,
           projectPhase: 'ACTIVE',
+          // The owning office decides whether this PID can later hold more projects. Taken from
+          // the creator unless they picked another office on the form.
+          office: dto.office ?? creator.office ?? null,
+          roundSeq: 1,
           priority: dto.priority ?? 'MEDIUM',
           startDate: dto.startDate ? new Date(dto.startDate) : undefined,
           dueDate: internalDue,
@@ -262,35 +507,7 @@ export class ProjectsService {
         });
       }
 
-      if (template) {
-        // Resolve the org's GLOBAL workflow and its first OPEN status so the generated
-        // tasks open in the correct board column (mirrors TasksService.create).
-        const wf = await tx.workflow.findFirst({
-          where: { type: 'GLOBAL' },
-          orderBy: { name: 'asc' },
-          select: { id: true, statuses: { orderBy: { sequence: 'asc' }, select: { id: true, type: true } } },
-        });
-        const initialStatusId = wf ? (wf.statuses.find(s => s.type === 'OPEN') ?? wf.statuses[0])?.id : undefined;
-
-        const list = await tx.taskList.create({
-          data: { projectId: created.id, name: template.taskListName!, sequence: 1 },
-        });
-        // Sequentially, so ProjectTask.sequence reflects the workflow order.
-        for (let i = 0; i < template.tasks!.length; i++) {
-          const task = await tx.task.create({
-            data: {
-              title: template.tasks![i],
-              priority: 'MEDIUM',
-              createdBy: creator.id,
-              ...(wf ? { workflowId: wf.id } : {}),
-              ...(initialStatusId ? { currentWorkflowStatusId: initialStatusId } : {}),
-            },
-          });
-          await tx.projectTask.create({
-            data: { projectId: created.id, taskId: task.id, taskListId: list.id, sequence: i },
-          });
-        }
-      }
+      if (template) await this.seedTemplateTasks(tx, created.id, template, creator.id);
 
       // A requester's project carries a pending PID request, routed to the chosen authority.
       if (pidAssigneeId) {
@@ -527,12 +744,16 @@ export class ProjectsService {
       orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
       take: 1000,
     });
-    const projectIds = [...new Set(rows.map(r => r.projectId).filter(Boolean) as string[])];
-    // EVERY detail about the project the PID is attached to (for the detail view + export).
-    const projects = projectIds.length ? await this.prisma.project.findMany({
-      where: { id: { in: projectIds } },
+    // A PID can now hold MORE THAN ONE project — a returning client keeps their number and each
+    // new piece of work is another round under it. So the ledger resolves by CODE, not by the
+    // reservation's single projectId (which only ever points at the latest round).
+    const pids = [...new Set(rows.map(r => r.pid))];
+    const projects = pids.length ? await this.prisma.project.findMany({
+      where: { code: { in: pids }, deletedAt: null },
+      orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: {
-        id: true, title: true, description: true, projectPhase: true, projectType: true,
+        id: true, code: true, roundSeq: true, office: true,
+        title: true, description: true, projectPhase: true, projectType: true,
         priority: true, startDate: true, dueDate: true, clientDueDate: true,
         completionPercentage: true, createdBy: true, createdAt: true,
         completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
@@ -544,7 +765,14 @@ export class ProjectsService {
     const userIds = [...new Set([...rows.map(r => r.generatedById), ...projects.map(p => p.createdBy)])];
     const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [];
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
-    const projById = new Map(projects.map(p => [p.id, p]));
+    // Every round grouped under its PID, in order.
+    const byPid = new Map<string, typeof projects>();
+    for (const p of projects) {
+      if (!p.code) continue;
+      const list = byPid.get(p.code) ?? [];
+      list.push(p);
+      byPid.set(p.code, list);
+    }
     // The ledger badge reflects the PID's REAL lifecycle, derived from the attached project's phase
     // (not just the reservation row) — so a Completed project reads "Completed", a Closed one
     // "Closed", regardless of how it was closed. Only a PID with no live project falls back to the
@@ -559,38 +787,50 @@ export class ProjectsService {
         default: return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD …
       }
     };
+    const shapeRound = (p: (typeof projects)[number]) => ({
+      id: p.id,
+      round: p.roundSeq,
+      title: p.title,
+      description: p.description ?? null,
+      phase: p.projectPhase,
+      type: p.projectType ?? null,
+      priority: p.priority ?? null,
+      office: p.office ?? null,
+      startDate: p.startDate ?? null,
+      dueDate: p.dueDate ?? null,
+      clientDueDate: p.clientDueDate ?? null,
+      // Completion record — what was delivered, when, and what it cost.
+      completedAt: p.completedAt ?? null,
+      closedAt: p.closedAt ?? null,
+      clientDeliveryDate: p.clientDeliveryDate ?? null,
+      workingHours: p.workingHours ?? null,
+      actualHours: p.actualHours ?? null,
+      progress: p.completionPercentage ?? null,
+      client: p.client?.name ?? p.client?.code ?? null,
+      createdBy: p.createdBy ? (userById.get(p.createdBy) ?? null) : null,
+      createdAt: p.createdAt ?? null,
+      patents: (p.patents ?? []).map(pp => pp.patent.handle),
+      members: (p.members ?? []).map(m => ({
+        name: `${m.user.firstName} ${m.user.lastName}`.trim(),
+        role: m.projectRole ?? 'MEMBER',
+      })),
+    });
+
     return rows.map(r => {
-      const p = r.projectId ? projById.get(r.projectId) : undefined;
+      const rounds = byPid.get(r.pid) ?? [];
+      // The PID's headline state comes from its LATEST round: that is the live piece of work.
+      // An earlier completed round must not make a PID with active work read as "Completed".
+      const latest = rounds[rounds.length - 1];
       return {
         id: r.id, pid: r.pid, fyLabel: r.fyLabel, serial: r.serial, status: r.status,
-        state: deriveState(r.status, p?.projectPhase, !!p),
+        state: deriveState(r.status, latest?.projectPhase, rounds.length > 0),
         generatedBy: userById.get(r.generatedById) ?? '—',
-        project: r.projectId ? {
-          id: r.projectId,
-          title: p?.title ?? '(deleted)',
-          description: p?.description ?? null,
-          phase: p?.projectPhase ?? null,
-          type: p?.projectType ?? null,
-          priority: p?.priority ?? null,
-          startDate: p?.startDate ?? null,
-          dueDate: p?.dueDate ?? null,
-          clientDueDate: p?.clientDueDate ?? null,
-          // Completion record — what was delivered, when, and what it cost.
-          completedAt: p?.completedAt ?? null,
-          closedAt: p?.closedAt ?? null,
-          clientDeliveryDate: p?.clientDeliveryDate ?? null,
-          workingHours: p?.workingHours ?? null,
-          actualHours: p?.actualHours ?? null,
-          progress: p?.completionPercentage ?? null,
-          client: p?.client?.name ?? p?.client?.code ?? null,
-          createdBy: p?.createdBy ? (userById.get(p.createdBy) ?? null) : null,
-          createdAt: p?.createdAt ?? null,
-          patents: (p?.patents ?? []).map(pp => pp.patent.handle),
-          members: (p?.members ?? []).map(m => ({
-            name: `${m.user.firstName} ${m.user.lastName}`.trim(),
-            role: m.projectRole ?? 'MEMBER',
-          })),
-        } : null,
+        /** Every project under this PID, oldest first. One entry for a normal single-round PID. */
+        rounds: rounds.map(shapeRound),
+        roundCount: rounds.length,
+        multiRound: supportsRounds(latest?.office),
+        /** The latest round, kept so existing single-project consumers keep working unchanged. */
+        project: latest ? shapeRound(latest) : null,
         createdAt: r.createdAt, expiresAt: r.expiresAt, resolvedAt: r.resolvedAt,
       };
     });
