@@ -208,7 +208,8 @@ export type ApiTask = {
   assignedBy?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'> | null;
   assignees?: AssigneeRef[];
   subtasks?: Subtask[];
-  projectTasks?: { projectId: string; taskListId?: string; sequence: number; project?: { id: string; title: string } }[];
+  /** Which project(s) and task GROUP this task sits in — drives the grouped task list. */
+  projectTasks?: { projectId: string; taskListId?: string | null; sequence: number; project?: { id: string; title: string } }[];
   _count?: { subtasks: number; checklists?: number };
 };
 
@@ -1098,6 +1099,10 @@ export const api = {
     list: (projectId: string) => req<any[]>(`/projects/${projectId}/tasklists`),
     create: (projectId: string, data: { name: string }) =>
       req<any>(`/projects/${projectId}/tasklists`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Rename a task group (the "General" tag on a card). */
+    update: (projectId: string, id: string, data: { name?: string; sequence?: number }) =>
+      req<{ id: string; name: string; isDefault: boolean; sequence: number }>(
+        `/projects/${projectId}/tasklists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     remove: (projectId: string, id: string) =>
       req<void>(`/projects/${projectId}/tasklists/${id}`, { method: 'DELETE' }),
   },

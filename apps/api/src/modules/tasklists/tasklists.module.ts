@@ -61,10 +61,12 @@ export class TaskListsService {
   }
 
   async update(projectId: string, id: string, dto: UpdateTaskListDto) {
-    const list = await this.get(projectId, id);
-    if (list.isDefault && dto.name && dto.name !== list.name) {
-      throw new BadRequestException('Cannot rename the default "General" task list.');
-    }
+    await this.get(projectId, id);
+    // The DEFAULT group may be renamed. "General" is a placeholder nobody chose, and on a project
+    // running several pieces of work it has to be able to say what it actually is ("Prior-art
+    // search", "Round 2"). What must not change is its ROLE: isDefault is untouched here, so it
+    // remains the fallback new tasks land in — which is what actually needs protecting, not its
+    // name. Deleting it is still refused (see remove).
     return this.prisma.taskList.update({
       where: { id },
       data: { name: dto.name, sequence: dto.sequence },

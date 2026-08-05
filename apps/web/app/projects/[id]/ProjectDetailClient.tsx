@@ -22,6 +22,7 @@ import { ProjectCapacityTab } from '@/components/projects/ProjectCapacityTab';
 import { TaskListView, OverviewView } from '@/components/projects/views';
 import { RoundCard } from '@/components/projects/RoundCard';
 import { RoundTabContent } from '@/components/projects/RoundTabContent';
+import { TaskGroups } from '@/components/projects/TaskGroups';
 import { AddRoundModal } from '@/components/projects/AddRoundModal';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
@@ -144,18 +145,23 @@ export function ProjectDetailClient({ projectId }: Props) {
   // On a multi-project PID the task is added to the round whose card was clicked, not to
   // whichever project the URL happens to point at.
   const [addTaskProjectId, setAddTaskProjectId] = useState(projectId);
-  function openAddTask(statusId?: string, forProjectId?: string) {
+  // Which GROUP the new task lands in. Null = the project's default group.
+  const [addTaskListId, setAddTaskListId] = useState<string | null>(null);
+  function openAddTask(statusId?: string, forProjectId?: string, taskListId?: string) {
     setAddTaskProjectId(forProjectId ?? projectId);
+    setAddTaskListId(taskListId ?? null);
     setAddTaskStatusId(statusId);
     setShowAddTask(true);
   }
   /** The task list a new task should land in, for whichever project the card belongs to. */
-  const addTaskList = addTaskProjectId === projectId
-    ? (project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0])
-    : (() => {
-        const r = rounds.find(x => x.id === addTaskProjectId);
-        return r?.taskLists?.find(tl => tl.isDefault) ?? r?.taskLists?.[0];
-      })();
+  const addTaskList = addTaskListId
+    ? { id: addTaskListId }
+    : addTaskProjectId === projectId
+      ? (project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0])
+      : (() => {
+          const r = rounds.find(x => x.id === addTaskProjectId);
+          return r?.taskLists?.find(tl => tl.isDefault) ?? r?.taskLists?.[0];
+        })();
 
   function invalidateTasks() {
     // Invalidate broadly (M36 + L14): a task can appear in other projects/lists and
@@ -542,7 +548,9 @@ export function ProjectDetailClient({ projectId }: Props) {
                 tab={activeTab}
                 statuses={statuses}
                 onTaskClick={(t, pid) => { setTaskProjectId(pid); setSelectedTask(t); }}
+                canEdit={can('task.create')}
                 onAddTask={(pid, statusId) => openAddTask(statusId, pid)}
+                onAddTaskToGroup={(pid, listId) => openAddTask(undefined, pid, listId)}
               />
             </RoundCard>
           ))}
@@ -550,14 +558,15 @@ export function ProjectDetailClient({ projectId }: Props) {
       ) : (
       <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-4 sm:p-6')}>
         {activeTab === 'Task List' && (
-          <TaskListView
+          /* Grouped: "General" is a placeholder nobody chose, so groups can be renamed and added. */
+          <TaskGroups
+            projectId={projectId}
             tasks={tasks}
             loading={tasksLoading}
             statuses={statuses}
-            canAddTask={!!defaultTaskList}
-            listName={defaultTaskList?.name}
+            canEdit={can('task.create')}
             onTaskClick={task => setSelectedTask(task)}
-            onAddTask={() => openAddTask()}
+            onAddTask={listId => openAddTask(undefined, projectId, listId)}
             onStatusChange={handleMove}
           />
         )}

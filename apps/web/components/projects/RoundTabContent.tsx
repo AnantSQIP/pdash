@@ -3,7 +3,8 @@
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api, type ApiTask, type ApiProject, type PidRound, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
-import { TaskListView, OverviewView } from './views';
+import { OverviewView } from './views';
+import { TaskGroups } from './TaskGroups';
 import { KanbanBoard } from './KanbanBoard';
 import GanttView from './GanttView';
 import DiscussionsTab from './DiscussionsTab';
@@ -27,12 +28,14 @@ export type ProjectTab =
  * Every tab component here already takes a projectId, so nothing below needed changing to become
  * round-aware — that is precisely why a round is modelled as a project.
  */
-export function RoundTabContent({ round, tab, statuses, onTaskClick, onAddTask }: {
+export function RoundTabContent({ round, tab, statuses, canEdit, onTaskClick, onAddTask, onAddTaskToGroup }: {
   round: PidRound;
   tab: ProjectTab;
   statuses: WorkflowStatus[];
+  canEdit: boolean;
   onTaskClick: (task: ApiTask, projectId: string) => void;
   onAddTask: (projectId: string, statusId?: string) => void;
+  onAddTaskToGroup: (projectId: string, taskListId: string) => void;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -71,16 +74,20 @@ export function RoundTabContent({ round, tab, statuses, onTaskClick, onAddTask }
 
   switch (tab) {
     case 'Task List':
+      // Grouped, so a project running several pieces of work isn't one undifferentiated pile.
       return (
-        <TaskListView
-          tasks={tasks}
-          loading={isLoading}
-          statuses={statuses}
-          canAddTask
-          onTaskClick={t => onTaskClick(t, round.id)}
-          onAddTask={() => onAddTask(round.id)}
-          onStatusChange={handleMove}
-        />
+        <div className="p-3">
+          <TaskGroups
+            projectId={round.id}
+            tasks={tasks}
+            loading={isLoading}
+            statuses={statuses}
+            canEdit={canEdit}
+            onTaskClick={t => onTaskClick(t, round.id)}
+            onAddTask={listId => onAddTaskToGroup(round.id, listId)}
+            onStatusChange={handleMove}
+          />
+        </div>
       );
     case 'Board':
       return (

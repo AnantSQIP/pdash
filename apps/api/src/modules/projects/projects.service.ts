@@ -1084,6 +1084,10 @@ export class ProjectsService {
         roundSeq: true,
         office: true,
         title: true,
+        // The KIND of matter (FTO / Invalidity / HML / Claim Chart …). Cards and list rows show
+        // this as a tag — it was missing from this projection, so the tag silently never rendered
+        // no matter what the card code did.
+        projectType: true,
         projectPhase: true,
         priority: true,
         completionPercentage: true,
