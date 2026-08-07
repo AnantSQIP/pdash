@@ -202,10 +202,14 @@ function BalanceCard({ year, balances, onApply }: { year: number; balances: Leav
                       <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: b.colorHex }} />
                       <span className="font-medium text-gray-800">{b.name}</span>
                     </span>
-                    {/* Comp-off has no annual entitlement — what you "have" is what you earned. */}
+                    {/* Comp-off has no annual entitlement: its "Eligible" is what you earned by
+                        working non-working days, so the row has to say so or the number reads
+                        like a grant somebody gave you. */}
                     {b.isCompOff && (
                       <span className="block text-[11px] text-gray-400 mt-0.5 pl-4.5">
-                        earned, not granted{b.credits ? ` · ${b.credits} approved claim${b.credits === 1 ? '' : 's'}` : ''}
+                        {b.quota === 0
+                          ? 'You earn comp-off by working a weekend or holiday, then claiming it (Credit).'
+                          : `Earned by working ${b.credits ?? 0} approved weekend/holiday${(b.credits ?? 0) === 1 ? '' : 's'} — not an annual grant.`}
                       </span>
                     )}
                   </td>
@@ -221,6 +225,13 @@ function BalanceCard({ year, balances, onApply }: { year: number; balances: Leav
               ))}
             </tbody>
           </table>
+          <p className="px-5 py-2.5 text-[11px] text-gray-400 border-t border-gray-50 leading-relaxed">
+            <strong className="text-gray-500">Eligible</strong> is your entitlement for the year ·{' '}
+            <strong className="text-gray-500">Availed</strong> is what has been approved and taken ·{' '}
+            <strong className="text-gray-500">Pending</strong> is on requests still awaiting a decision ·{' '}
+            <strong className="text-gray-500">Balance</strong> is what you can still book. Pending days are
+            already out of Balance, because a day cannot be promised twice.
+          </p>
         </div>
       )}
     </div>
@@ -509,9 +520,10 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
     leaveType: '', choice: 'FULL' as LeaveChoice, startDate: '', endDate: '',
     halfPeriod: 'FIRST' as 'FIRST' | 'SECOND', startTime: '', endTime: '',
     encashmentDays: '', alternateEmployeeId: '', alternateNumber: '', alternateAddress: '', reason: '',
-    // Comp-off is two opposite things sharing one leave type: EARN a credit for a day already
-    // worked, or SPEND a credit you have. TeamNest asks which up front, so we do too.
-    compOffMode: 'AVAIL' as 'AVAIL' | 'CREDIT', compOffDate: '', projectRef: '',
+    // Comp-off is two opposite things sharing one leave type, and they are named the way a
+    // ledger names them: CREDIT puts a day in (you worked a weekend), DEBIT takes one out
+    // (you avail it). Defaults to DEBIT — somebody in "Apply for Leave" is usually taking time off.
+    compOffMode: 'DEBIT' as 'DEBIT' | 'CREDIT', compOffDate: '', projectRef: '',
   });
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
@@ -639,7 +651,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
               <div>
                 <label className={label}>Comp Off Request Type <span className="text-red-500">*</span></label>
                 <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-                  {(plan ? ([['AVAIL', 'Avail']] as const) : ([['AVAIL', 'Avail'], ['CREDIT', 'Credit']] as const)).map(([v, l]) => (
+                  {(plan ? ([['DEBIT', 'Debit']] as const) : ([['CREDIT', 'Credit'], ['DEBIT', 'Debit']] as const)).map(([v, l]) => (
                     <button key={v} type="button" onClick={() => setF(s => ({ ...s, compOffMode: v, choice: 'FULL' }))}
                       className={clsx('flex-1 px-2 py-2 text-xs font-medium transition-colors',
                         f.compOffMode === v ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}>
@@ -648,7 +660,9 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
                   ))}
                 </div>
                 <p className="text-[11px] text-gray-400 mt-1">
-                  {f.compOffMode === 'AVAIL' ? 'Take a day off against a credit you have earned.' : 'You worked a weekend or holiday — claim it back.'}
+                  {f.compOffMode === 'CREDIT'
+                    ? 'Credit — you worked a weekend or holiday, so a day goes INTO your comp-off balance.'
+                    : 'Debit — you avail a day OFF, taken OUT of the comp-off balance you already earned.'}
                 </p>
               </div>
               {isClaim && (
