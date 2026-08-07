@@ -7,7 +7,7 @@ import clsx from 'clsx';
 import {
   FileBarChart, FolderPlus, CheckCircle2, ListChecks, CalendarCheck, AlertTriangle, Activity,
   Loader, Shield, Clock, ChevronLeft, ChevronRight, ChevronDown, Timer, CalendarClock, Users,
-  Truck, ExternalLink, Download,
+  Truck, ExternalLink, Download, FolderKanban, CheckSquare, CircleDot,
 } from 'lucide-react';
 import { api, type DigestDetail, type DigestProject, type DigestTask, type DigestPersonHours } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
@@ -295,7 +295,6 @@ export default function DigestPage() {
               <Stat Icon={AlertTriangle} label="Overdue tasks" value={d.overdue.length} tint="bg-red-50 text-red-600"
                 active={openSection === 'overdue'} onClick={() => toggle('overdue')} />
               <Stat Icon={CalendarClock} label="Due next 5 working days" value={d.upcomingTotal} tint="bg-orange-50 text-orange-600"
-                active={openSection === 'upcoming'} onClick={() => toggle('upcoming')}
                 sub={d.lookaheadDays.length ? `${dayLabel(d.lookaheadDays[0])} – ${dayLabel(d.lookaheadDays[d.lookaheadDays.length - 1])}` : undefined} />
               <Stat Icon={Timer} label="Hours logged" value={d.totals.hoursLogged} tint="bg-cyan-50 text-cyan-700"
                 active={openSection === 'hours'} onClick={() => toggle('hours')}
@@ -303,35 +302,7 @@ export default function DigestPage() {
               <Stat Icon={Activity} label="Active projects" value={d.totals.activeProjects} tint="bg-amber-50 text-amber-600" />
             </div>
 
-            {/* Coming up — the only forward-looking panel, so it is always open. */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2 flex-wrap">
-                <CalendarClock size={15} className="text-orange-500" />
-                <h3 className="text-sm font-semibold text-gray-800">Coming up — next 5 working days</h3>
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700">{d.upcomingTotal}</span>
-                <span className="ml-auto text-[11px] text-gray-400">Weekends and holidays are skipped</span>
-              </div>
-              {d.upcomingTotal === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-gray-400">Nothing due in the next five working days.</p>
-              ) : (
-                <div className="divide-y divide-gray-100">
-                  {d.upcoming.map(day => (
-                    <div key={day.date}>
-                      <div className="px-4 py-2 bg-gray-50/70 flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-700">{dayLabel(day.date)}</span>
-                        <span className="text-[11px] text-gray-400">
-                          {day.projects.length + day.tasks.length === 0
-                            ? 'clear'
-                            : `${day.projects.length} project${day.projects.length === 1 ? '' : 's'} · ${day.tasks.length} task${day.tasks.length === 1 ? '' : 's'}`}
-                        </span>
-                      </div>
-                      {day.projects.map(p => <ProjectCardRow key={p.id} p={p} />)}
-                      {day.tasks.map(t => <TaskCardRow key={t.id} t={t} />)}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <UpcomingPanel days={d.upcoming} total={d.upcomingTotal} />
 
             {openSection === 'created' && (
               <Section title="Projects created" count={d.projectsCreated.length} empty="No projects were created.">
@@ -358,14 +329,6 @@ export default function DigestPage() {
                 {d.overdue.map(t => <TaskCardRow key={t.id} t={t} showOverdue />)}
               </Section>
             )}
-            {openSection === 'upcoming' && (
-              <Section title="Everything due in the next 5 working days" count={d.upcomingTotal} empty="Nothing due.">
-                {d.upcoming.flatMap(day => [
-                  ...day.projects.map(p => <ProjectCardRow key={`p-${p.id}`} p={p} />),
-                  ...day.tasks.map(t => <TaskCardRow key={`t-${t.id}`} t={t} />),
-                ])}
-              </Section>
-            )}
             {openSection === 'hours' && (
               <Section title="Hours logged, by person" count={d.hoursByPerson.length} empty="Nobody logged time.">
                 {d.hoursByPerson.map(p => <PersonHoursRow key={p.id} p={p} />)}
@@ -389,5 +352,201 @@ export default function DigestPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// ── Coming up — next 5 working days ───────────────────────────────────────────
+// The old version stacked full detail cards under a thin grey strip, five days deep, which read
+// as one undifferentiated wall. This gives each day its own card with a date rail, and each item
+// one tidy line that still carries the whole story: what it is, which project and PID, priority,
+// deadline, hours and who is on it — every one of them a working link.
+
+const UP_PRIORITY_DOT: Record<string, string> = {
+  CRITICAL: 'bg-red-500', HIGH: 'bg-orange-500', MEDIUM: 'bg-amber-400', LOW: 'bg-gray-300',
+};
+
+/** "Today" / "Tomorrow" / "Mon" — people navigate the near future by name, not by date. */
+function relativeDay(dateKey: string): string | null {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(`${dateKey}T00:00:00`);
+  const diff = Math.round((d.getTime() - today.getTime()) / 86_400_000);
+  return diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : null;
+}
+
+function UpcomingPanel({ days, total }: { days: DigestDetail['upcoming']; total: number }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-4 sm:px-5 py-3 border-b border-gray-100 flex items-center gap-2 flex-wrap">
+        <CalendarClock size={15} className="text-orange-500" />
+        <h3 className="text-sm font-semibold text-gray-800">Coming up</h3>
+        <span className="text-[11px] text-gray-400">next 5 working days</span>
+        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-100">{total}</span>
+        <span className="ml-auto text-[11px] text-gray-400">Weekends and holidays are skipped</span>
+      </div>
+
+      {total === 0 ? (
+        <p className="px-4 py-10 text-center text-sm text-gray-400">Nothing due in the next five working days.</p>
+      ) : (
+        <div className="p-3 sm:p-4 space-y-2.5">
+          {days.map(day => {
+            const count = day.projects.length + day.tasks.length;
+            const rel = relativeDay(day.date);
+            const dt = new Date(`${day.date}T00:00:00`);
+            return (
+              <div key={day.date}
+                className={clsx('rounded-xl border overflow-hidden',
+                  count === 0 ? 'border-gray-100 bg-gray-50/40' : 'border-gray-200 bg-white')}>
+                <div className="flex items-stretch">
+                  {/* Date rail — the day is read at a glance, not parsed out of a sentence. */}
+                  <div className={clsx('w-16 sm:w-20 shrink-0 flex flex-col items-center justify-center py-3 border-r',
+                    count === 0 ? 'bg-gray-50 border-gray-100' : rel === 'Today' ? 'bg-orange-50 border-orange-100' : 'bg-gray-50/80 border-gray-100')}>
+                    <span className={clsx('text-[10px] font-semibold uppercase tracking-wide',
+                      rel === 'Today' ? 'text-orange-600' : 'text-gray-400')}>
+                      {dt.toLocaleDateString('en-IN', { weekday: 'short' })}
+                    </span>
+                    <span className={clsx('text-2xl font-bold leading-tight tabular-nums',
+                      count === 0 ? 'text-gray-300' : rel === 'Today' ? 'text-orange-700' : 'text-gray-800')}>
+                      {dt.getDate()}
+                    </span>
+                    <span className="text-[10px] text-gray-400">{dt.toLocaleDateString('en-IN', { month: 'short' })}</span>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="px-3 sm:px-4 py-2 flex items-center gap-2 flex-wrap border-b border-gray-50">
+                      {rel && (
+                        <span className={clsx('text-[10px] font-semibold px-1.5 py-0.5 rounded-full',
+                          rel === 'Today' ? 'bg-orange-100 text-orange-700' : 'bg-brand-50 text-brand-700')}>{rel}</span>
+                      )}
+                      <span className="text-xs font-medium text-gray-500">
+                        {count === 0 ? 'Clear'
+                          : [day.projects.length && `${day.projects.length} project${day.projects.length === 1 ? '' : 's'}`,
+                             day.tasks.length && `${day.tasks.length} task${day.tasks.length === 1 ? '' : 's'}`]
+                            .filter(Boolean).join(' · ')}
+                      </span>
+                    </div>
+                    {count === 0 ? (
+                      <p className="px-3 sm:px-4 py-3 text-xs text-gray-400">Nothing due.</p>
+                    ) : (
+                      <ul className="divide-y divide-gray-50">
+                        {day.projects.map(p => <UpcomingProject key={p.id} p={p} />)}
+                        {day.tasks.map(t => <UpcomingTask key={t.id} t={t} />)}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Small shared bits so a project row and a task row line up with each other. */
+function PidChip({ pid, roundSeq }: { pid: string | null; roundSeq?: number }) {
+  if (!pid) return null;
+  return <span className="text-[11px] font-mono font-bold text-brand-700 shrink-0">{pidLabel(pid, roundSeq)}</span>;
+}
+function PersonChip({ id, name, note }: { id: string; name: string; note?: string }) {
+  return (
+    <Link href={`/users/${id}`}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-white border border-gray-200 text-[11px] text-gray-700 hover:border-brand-300 hover:text-brand-600 hover:bg-brand-50/40 transition-colors">
+      <span className="font-medium">{name}</span>
+      {note && <span className="text-gray-400">· {note}</span>}
+    </Link>
+  );
+}
+
+function UpcomingProject({ p }: { p: DigestProject }) {
+  return (
+    <li className="px-3 sm:px-4 py-2.5 hover:bg-gray-50/60 transition-colors">
+      <div className="flex items-start gap-2.5">
+        <span className="w-6 h-6 rounded-md bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5" title="Project deadline">
+          <FolderKanban size={13} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <Link href={`/projects/${p.id}`} className="text-sm font-semibold text-gray-900 hover:text-brand-600 hover:underline">
+              {p.title}
+            </Link>
+            <PidChip pid={p.pid} roundSeq={p.roundSeq} />
+            <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', UP_PRIORITY_DOT[p.priority] ?? UP_PRIORITY_DOT.LOW)} title={`${p.priority} priority`} />
+            <span className="text-[11px] text-gray-400">{p.priority.toLowerCase()}</span>
+          </div>
+          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap mt-1 text-[11px] text-gray-500">
+            {p.type && <span className="text-indigo-600">{projectTypeLabel(p.type)}</span>}
+            <span>{p.phase}</span>
+            {p.client && <span>{p.client}</span>}
+            <span>{p.taskCount} task{p.taskCount === 1 ? '' : 's'}</span>
+            {p.clientDueDate && <span>client {formatDate(p.clientDueDate)}</span>}
+            {(p.workingHours != null || p.actualHours != null) && (
+              <span>{p.workingHours != null ? `${p.workingHours}h working` : ''}{p.workingHours != null && p.actualHours != null ? ' · ' : ''}{p.actualHours != null ? `${p.actualHours}h actual` : ''}</span>
+            )}
+          </div>
+          {(p.managers.length > 0 || p.members.length > 0) && (
+            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+              {p.managers.map(m => <PersonChip key={m.id} id={m.id} name={m.name} note="PM" />)}
+              {p.members.map(m => <PersonChip key={m.id} id={m.id} name={m.name} note={m.role} />)}
+            </div>
+          )}
+        </div>
+        {/* Progress sits on the right where the eye can compare it down the column. */}
+        <div className="flex items-center gap-2 shrink-0 pt-0.5">
+          <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full bg-brand-500" style={{ width: `${p.progress}%` }} />
+          </div>
+          <span className="text-[11px] font-semibold text-gray-600 tabular-nums w-8 text-right">{p.progress}%</span>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function UpcomingTask({ t }: { t: DigestTask }) {
+  return (
+    <li className="px-3 sm:px-4 py-2.5 hover:bg-gray-50/60 transition-colors">
+      <div className="flex items-start gap-2.5">
+        <span className="w-6 h-6 rounded-md bg-gray-100 text-gray-500 flex items-center justify-center shrink-0 mt-0.5" title="Task deadline">
+          <CheckSquare size={13} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            {/* A task has no page of its own — everywhere in the app it opens its project. */}
+            {t.project ? (
+              <Link href={`/projects/${t.project.id}`} className="text-sm font-medium text-gray-900 hover:text-brand-600 hover:underline">
+                {t.title}
+              </Link>
+            ) : <span className="text-sm font-medium text-gray-900">{t.title}</span>}
+            <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', UP_PRIORITY_DOT[t.priority] ?? UP_PRIORITY_DOT.LOW)} title={`${t.priority} priority`} />
+            <span className="text-[11px] text-gray-400">{t.priority.toLowerCase()}</span>
+          </div>
+          <div className="flex items-center gap-x-3 gap-y-1 flex-wrap mt-1 text-[11px] text-gray-500">
+            {t.project ? (
+              <Link href={`/projects/${t.project.id}`} className="inline-flex items-center gap-1 hover:text-brand-600">
+                <PidChip pid={t.project.pid} roundSeq={t.project.roundSeq} />
+                <span>{t.project.title}</span>
+                <ExternalLink size={9} className="text-gray-300" />
+              </Link>
+            ) : <span className="text-gray-400">No project</span>}
+            {t.project?.type && <span className="text-indigo-600">{projectTypeLabel(t.project.type)}</span>}
+            {t.status && <span>{t.status}</span>}
+            {(t.estimatedHours != null || t.actualHours != null) && (
+              <span>{t.estimatedHours != null ? `${t.estimatedHours}h est` : ''}{t.estimatedHours != null && t.actualHours != null ? ' · ' : ''}{t.actualHours != null ? `${t.actualHours}h actual` : ''}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+            {t.assignees.length > 0 ? t.assignees.map(a => (
+              <PersonChip key={a.id} id={a.id} name={a.name}
+                note={[a.role, a.estimatedHours != null ? `${a.estimatedHours}h` : null].filter(Boolean).join(' · ')} />
+            )) : (
+              <span className="inline-flex items-center gap-1 text-[11px] text-amber-600">
+                <CircleDot size={10} /> Nobody staffed
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }

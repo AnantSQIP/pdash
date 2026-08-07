@@ -120,6 +120,7 @@ model User {
   timesheets             Timesheet[]
   attendance             Attendance[]
   leaveRequests          LeaveRequest[]
+  leaveCoverFor          LeaveRequest[] @relation("LeaveAlternateEmployee")
   regularizationRequests RegularizationRequest[]
   compOffRequests        CompOffRequest[]
   wfhRequests            WfhRequest[]
@@ -1095,7 +1096,9 @@ model Expense {
   currency          String    @default("INR")
   spentOn           DateTime
   description       String
-  receiptDocumentId String?   // optional uploaded receipt (DocumentBlob)
+  // The uploaded bill. A real relation rather than a loose id, so the row can be read back
+  // with its receipt in one query instead of the claim merely remembering a cuid.
+  receiptDocumentId String?
   // PENDING | APPROVED | REJECTED | REIMBURSED | CANCELLED
   status            String    @default("PENDING")
   reviewedBy        String?
@@ -1105,10 +1108,12 @@ model Expense {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  receipt Document? @relation(fields: [receiptDocumentId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([organizationId, status])
+  @@index([receiptDocumentId])
   @@map("expense")
 }
 
@@ -1205,10 +1210,23 @@ model LeaveRequest {
   leaveType      String // LeaveType.code
   startDate      DateTime
   endDate        DateTime
-  // FULL or HALF. A HALF-day leave covers a single date and consumes 0.5 of the balance.
+  // FULL, HALF or HOURLY. A HALF-day leave covers a single date and consumes 0.5 of the balance;
+  // an HOURLY one covers part of a single date, between startTime and endTime.
   dayType        String    @default("FULL")
   // Which half of the day a HALF leave covers — FIRST (morning) or SECOND (afternoon).
   halfPeriod     String?
+  // HH:mm bounds for an HOURLY leave. Null for FULL and HALF.
+  startTime      String?
+  endTime        String?
+  // Who to reach while this person is away, so the team is not left guessing.
+  alternateEmployeeId String?
+  alternateNumber     String?
+  alternateAddress    String?
+  // Days of accrued leave being encashed rather than taken.
+  encashmentDays      Float?
+  // Proof attached to the request (medical certificate, travel document …). Uses the shared
+  // Document store, so it inherits its size limits, storage driver and access rules.
+  supportingDocId     String?
   numDays        Float     @default(1)
   reason         String?
   // DRAFT | PENDING | APPROVED | REJECTED | CANCELLED
@@ -1219,10 +1237,13 @@ model LeaveRequest {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alternateEmployee User?     @relation("LeaveAlternateEmployee", fields: [alternateEmployeeId], references: [id], onDelete: SetNull)
+  supportingDoc     Document? @relation(fields: [supportingDocId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([organizationId, status])
+  @@index([alternateEmployeeId])
   @@map("leave_request")
 }
 
@@ -1340,6 +1361,8 @@ model Document {
   blob               DocumentBlob?
   messageAttachments MessageAttachment[]
   commentAttachments CommentAttachment[]
+  leaveRequests      LeaveRequest[]
+  expenses           Expense[]
   policies           Policy[]
 
   @@index([uploadedBy])

@@ -858,10 +858,16 @@ export type OrgAttendanceReport = {
 export type LeaveRequestItem = {
   id: string; userId: string; organizationId?: string; leaveType: string;
   startDate: string; endDate: string; numDays: number; reason?: string | null;
-  /** FULL or HALF; halfPeriod is FIRST (morning) / SECOND (afternoon) on a HALF request. */
+  /** FULL, HALF or HOURLY; halfPeriod is FIRST (morning) / SECOND (afternoon) on a HALF request. */
   dayType?: string; halfPeriod?: string | null;
+  /** "HH:mm" bounds, present only on an HOURLY request. */
+  startTime?: string | null; endTime?: string | null;
+  alternateEmployeeId?: string | null; alternateNumber?: string | null; alternateAddress?: string | null;
+  encashmentDays?: number | null; supportingDocId?: string | null;
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
   createdAt: string; user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
+  alternateEmployee?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> | null;
+  supportingDoc?: { id: string; name: string; fileUrl: string; mimeType?: string | null; fileSize?: number | null } | null;
 };
 export type RegularizationRequest = {
   id: string; userId: string; organizationId?: string | null; date: string; reason: string;
@@ -897,6 +903,9 @@ export type CompOffRequest = {
 export type LeaveType = { id: string; organizationId: string; name: string; code: string; annualQuota: number; colorHex: string };
 export type LeaveBalance = {
   code: string; name: string; quota: number; used: number; remaining: number; colorHex: string;
+  /** Days on requests still awaiting a decision. They are already deducted from `remaining`,
+   *  because the server refuses anything that would exceed approved + pending. */
+  pending?: number;
   /** Comp-off is not an annual quota: `quota` is what has been EARNED, and `credits` is how many
    *  approved claims that came from (a half-day claim earns 0.5). */
   isCompOff?: boolean; credits?: number;
@@ -920,6 +929,7 @@ export type Expense = {
   id: string; userId: string; organizationId?: string | null;
   category: string; amount: number; currency: string; spentOn: string; description: string;
   receiptDocumentId?: string | null; status: string;
+  receipt?: { id: string; name: string; fileUrl: string; mimeType?: string | null; fileSize?: number | null } | null;
   reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null; reimbursedAt?: string | null;
   createdAt: string;
   user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email' | 'profilePhoto'>;
@@ -1544,8 +1554,18 @@ export const api = {
       if (status) p.set('status', status);
       return req<LeaveRequestItem[]>(`/leave/requests/org?${p}`);
     },
-    create: (data: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: 'FULL' | 'HALF'; halfPeriod?: 'FIRST' | 'SECOND' }) =>
+    create: (data: {
+      leaveType: string; startDate: string; endDate: string; reason?: string;
+      dayType?: 'FULL' | 'HALF' | 'HOURLY'; halfPeriod?: 'FIRST' | 'SECOND';
+      startTime?: string; endTime?: string;
+      alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
+      encashmentDays?: number; supportingDocId?: string | null;
+      /** Pencil it in for later instead of submitting it — shows on the Leave Planner. */
+      plan?: boolean;
+    }) =>
       req<LeaveRequestItem>('/leave/requests', { method: 'POST', body: JSON.stringify(data) }),
+    /** Turn a planned leave into a real application (re-checks balance and clashes). */
+    submitPlan: (id: string) => req<LeaveRequestItem>(`/leave/requests/${id}/submit`, { method: 'POST' }),
     approve: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
     reject: (id: string, note?: string) => req<LeaveRequestItem>(`/leave/requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
     cancel: (id: string) => req<LeaveRequestItem>(`/leave/requests/${id}/cancel`, { method: 'POST' }),

@@ -18,6 +18,8 @@ const MAX_DESC = 2000;
 const MAX_NOTE = 2000;
 const MAX_AGE_YEARS = 5;
 const userSelect = { select: { id: true, firstName: true, lastName: true, email: true, profilePhoto: true } };
+// Enough of the receipt to render a link — never the bytes.
+const receiptSelect = { select: { id: true, name: true, fileUrl: true, mimeType: true, fileSize: true } };
 
 @Injectable()
 export class ExpensesService {
@@ -110,7 +112,7 @@ export class ExpensesService {
         spentOn, description: data.description.trim(), receiptDocumentId: data.receiptDocumentId ?? null,
         status: 'PENDING',
       },
-      include: { user: userSelect },
+      include: { user: userSelect, receipt: receiptSelect },
     });
     const u = (expense as { user?: { firstName?: string; lastName?: string } }).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
@@ -124,7 +126,7 @@ export class ExpensesService {
   }
 
   mine(userId: string) {
-    return this.prisma.expense.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 100, include: { user: userSelect } });
+    return this.prisma.expense.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 100, include: { user: userSelect, receipt: receiptSelect } });
   }
 
   async forOrg(reviewerId: string, status?: string) {
@@ -133,7 +135,7 @@ export class ExpensesService {
     if (!organizationId) return [];
     return this.prisma.expense.findMany({
       where: { organizationId, ...(status ? { status } : {}) },
-      orderBy: { createdAt: status === 'PENDING' ? 'asc' : 'desc' }, take: 200, include: { user: userSelect },
+      orderBy: { createdAt: status === 'PENDING' ? 'asc' : 'desc' }, take: 200, include: { user: userSelect, receipt: receiptSelect },
     });
   }
 
@@ -148,7 +150,7 @@ export class ExpensesService {
     const updated = await this.prisma.expense.update({
       where: { id },
       data: { status: approve ? 'APPROVED' : 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
-      include: { user: userSelect },
+      include: { user: userSelect, receipt: receiptSelect },
     });
     await this.notifications.notify(exp.userId, {
       type: approve ? 'expense.approved' : 'expense.rejected',
@@ -172,7 +174,7 @@ export class ExpensesService {
     if (exp.userId === actorId) throw new ForbiddenException('You cannot reimburse your own expense.');
     if (exp.reviewedBy === actorId) throw new ForbiddenException('The person who approved an expense cannot also mark it reimbursed.');
     const updated = await this.prisma.expense.update({
-      where: { id }, data: { status: 'REIMBURSED', reimbursedAt: new Date() }, include: { user: userSelect },
+      where: { id }, data: { status: 'REIMBURSED', reimbursedAt: new Date() }, include: { user: userSelect, receipt: receiptSelect },
     });
     await this.notifications.notify(exp.userId, {
       type: 'expense.reimbursed', title: 'Expense reimbursed',

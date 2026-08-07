@@ -84,6 +84,35 @@ const ESCALATION_EMAIL = 'yash@squarkip.com';
 // A day is a full "present" only if at least this many hours were worked; below it,
 // the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
 const HALF_DAY_HOURS = 4;
+// A standard working day. An hourly leave is charged against this, so 4 hours off = half a day.
+const FULL_DAY_HOURS = 8;
+
+/** "HH:mm" on a 24-hour clock, or a clear error. Used for part-day leave bounds. */
+function parseClock(v: unknown, field: string): string {
+  const s = typeof v === 'string' ? v.trim() : '';
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (!m) throw new BadRequestException(`${field} must be a time like 14:30.`);
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) throw new BadRequestException(`${field} is not a real time.`);
+  return `${String(h).padStart(2, '0')}:${m[2]}`;
+}
+const clockMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+/**
+ * A contact number somebody can actually be reached on while they are away. Punctuation people
+ * type (spaces, dashes, brackets) is dropped; a leading + is kept for international numbers.
+ */
+function cleanPhone(v: unknown): string | null {
+  const raw = typeof v === 'string' ? v.trim() : '';
+  if (!raw) return null;
+  const plus = raw.startsWith('+');
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 7 || digits.length > 15) {
+    throw new BadRequestException('Alternate contact number must be 7 to 15 digits.');
+  }
+  return (plus ? '+' : '') + digits;
+}
 
 // Office → the human "area / address" shown in the team-location table. Jaipur's exact area can be
 // updated here when confirmed.
@@ -96,9 +125,13 @@ function statusForHours(totalHours: number): string {
   return totalHours >= HALF_DAY_HOURS ? 'PRESENT' : 'HALF_DAY';
 }
 
-/** Human wording for a leave length — "half day (morning)", "1 day", "3 days". */
-function describeDays(numDays: number, dayType?: string | null, halfPeriod?: string | null): string {
+/** Human wording for a leave length — "half day (morning)", "10:00–13:00", "1 day", "3 days". */
+function describeDays(
+  numDays: number, dayType?: string | null, halfPeriod?: string | null,
+  startTime?: string | null, endTime?: string | null,
+): string {
   if (dayType === 'HALF') return `half day (${halfPeriod === 'SECOND' ? 'afternoon' : 'morning'})`;
+  if (dayType === 'HOURLY' && startTime && endTime) return `${startTime}–${endTime}`;
   return `${numDays} day${numDays === 1 ? '' : 's'}`;
 }
 
@@ -854,17 +887,24 @@ export class LeaveService {
   }
 
   private readonly userSelect = { select: { id: true, firstName: true, lastName: true, email: true } };
+  // The cover person and the attached proof are shown on the request row, so they have to come
+  // back with it — an id alone would leave the UI printing a cuid at the reader.
+  private readonly detailInclude = {
+    user: this.userSelect,
+    alternateEmployee: this.userSelect,
+    supportingDoc: { select: { id: true, name: true, mimeType: true, fileSize: true, fileUrl: true } },
+  };
 
   listForUser(userId: string, status?: string) {
     return this.prisma.leaveRequest.findMany({
       where: { userId, ...(status ? { status } : {}) },
-      include: { user: this.userSelect }, orderBy: { createdAt: 'desc' },
+      include: this.detailInclude, orderBy: { createdAt: 'desc' },
     });
   }
   listForOrg(organizationId: string, status?: string) {
     return this.prisma.leaveRequest.findMany({
       where: { organizationId, ...(status ? { status } : {}) },
-      include: { user: this.userSelect }, orderBy: { createdAt: 'desc' },
+      include: this.detailInclude, orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -885,7 +925,15 @@ export class LeaveService {
     return days;
   }
 
-  async create(userId: string, dto: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: string; halfPeriod?: string }) {
+  async create(userId: string, dto: {
+    leaveType: string; startDate: string; endDate: string; reason?: string;
+    dayType?: string; halfPeriod?: string;
+    startTime?: string; endTime?: string;
+    alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
+    encashmentDays?: number; supportingDocId?: string | null;
+    /** A PLAN — pencilled in for later, not submitted to an approver yet. */
+    plan?: boolean;
+  }) {
     const start = parseDayStrict(dto.startDate, 'startDate');
     const end = parseDayStrict(dto.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
@@ -913,17 +961,75 @@ export class LeaveService {
     if (clash) throw new BadRequestException('You already have a leave (pending or approved) on one or more of these days — only one leave can apply to a day.');
     // A HALF day is exactly that: half of ONE working day. Allowing a range would make
     // "half day" mean "half of each of five days", which is not a thing anyone can take.
-    const dayType = dto.dayType === 'HALF' ? 'HALF' : 'FULL';
+    const dayType = dto.dayType === 'HALF' ? 'HALF' : dto.dayType === 'HOURLY' ? 'HOURLY' : 'FULL';
     const halfPeriod = dayType === 'HALF' ? (dto.halfPeriod === 'SECOND' ? 'SECOND' : 'FIRST') : null;
-    if (dayType === 'HALF' && dayKey(start) !== dayKey(end)) {
-      throw new BadRequestException('A half-day leave covers a single date — pick the same start and end date.');
+    if (dayType !== 'FULL' && dayKey(start) !== dayKey(end)) {
+      throw new BadRequestException(
+        `A ${dayType === 'HALF' ? 'half-day' : 'part-day'} leave covers a single date — pick the same start and end date.`,
+      );
+    }
+    // An hourly leave is bounded by a start and end time on that one date. Without both we
+    // cannot say how much of the day is being taken, so we cannot debit the balance either.
+    let startTime: string | null = null;
+    let endTime: string | null = null;
+    let hourlyDays = 0;
+    if (dayType === 'HOURLY') {
+      startTime = parseClock(dto.startTime, 'Start Time');
+      endTime = parseClock(dto.endTime, 'End Time');
+      const mins = clockMinutes(endTime) - clockMinutes(startTime);
+      if (mins <= 0) throw new BadRequestException('End Time must be after Start Time.');
+      if (mins > FULL_DAY_HOURS * 60) throw new BadRequestException(`An hourly leave cannot exceed ${FULL_DAY_HOURS} hours — apply for a full day instead.`);
+      // Debit the balance in proportion to a standard working day, so 4 hours costs half a day.
+      hourlyDays = Math.round((mins / 60 / FULL_DAY_HOURS) * 100) / 100;
     }
     // Count business days only — weekends and holidays do not consume leave balance.
     const workingDays = await this.businessDays(organizationId, start, end);
     if (workingDays.length === 0) throw new BadRequestException('Selected dates contain no working days');
-    const numDays = dayType === 'HALF' ? 0.5 : workingDays.length;
+    const numDays = dayType === 'HALF' ? 0.5 : dayType === 'HOURLY' ? hourlyDays : workingDays.length;
+
+    // Who covers the work while they are out. It has to be a real, active colleague in the
+    // same organisation — and not themselves, which would defeat the point of asking.
+    let alternateEmployeeId: string | null = null;
+    if (dto.alternateEmployeeId) {
+      if (dto.alternateEmployeeId === userId) throw new BadRequestException('Pick a colleague other than yourself as the alternate employee.');
+      const alt = await this.prisma.user.findFirst({
+        where: { id: dto.alternateEmployeeId, organizationId: organizationId ?? undefined, status: 'ACTIVE', deletedAt: null },
+        select: { id: true },
+      });
+      if (!alt) throw new BadRequestException('That alternate employee is not an active member of this organisation.');
+      alternateEmployeeId = alt.id;
+    }
+    const alternateNumber = cleanPhone(dto.alternateNumber);
+    const alternateAddress = dto.alternateAddress?.trim() || null;
+    if (alternateAddress && alternateAddress.length > MAX_REASON) throw new BadRequestException('Alternate address is too long.');
+
+    // Encashment converts accrued days to money instead of time off, so it can never exceed
+    // what is actually left in the quota after this request.
+    let encashmentDays: number | null = null;
+    if (dto.encashmentDays != null && dto.encashmentDays !== 0) {
+      const enc = Number(dto.encashmentDays);
+      if (!Number.isFinite(enc) || enc < 0) throw new BadRequestException('Leave encashment days must be a positive number.');
+      if (Math.round(enc * 2) !== enc * 2) throw new BadRequestException('Leave encashment days must be in steps of half a day.');
+      encashmentDays = enc || null;
+    }
+
+    // The proof has to be a document this person actually uploaded — accepting any id would
+    // let a request point at somebody else's file.
+    let supportingDocId: string | null = null;
+    if (dto.supportingDocId) {
+      const doc = await this.prisma.document.findFirst({
+        where: { id: dto.supportingDocId, uploadedBy: userId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!doc) throw new BadRequestException('That supporting document could not be found.');
+      supportingDocId = doc.id;
+    }
     // Comp-off leave is spent against EARNED credits (approved comp-off claims), not a quota.
-    if (dto.leaveType === 'CO') {
+    // A plan spends nothing yet, so it is not measured against either — the balance is checked
+    // for real when the plan is submitted as an application.
+    if (dto.plan) {
+      // nothing to debit
+    } else if (dto.leaveType === 'CO') {
       const { available } = await this.compOffBalance(userId);
       if (available < numDays) {
         throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
@@ -939,18 +1045,38 @@ export class LeaveService {
         _sum: { numDays: true },
       });
       const used = usedAgg._sum.numDays ?? 0;
-      if (used + numDays > type.annualQuota) {
+      // Encashed days come out of the same quota as days taken off — otherwise somebody could
+      // encash their whole entitlement and still book leave against it.
+      const claimed = numDays + (encashmentDays ?? 0);
+      if (used + claimed > type.annualQuota) {
         const remaining = Math.max(0, type.annualQuota - used);
         throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
       }
+    } else if (encashmentDays) {
+      throw new BadRequestException(`${type.name} has no annual quota, so there is nothing to encash.`);
     }
     const created = await this.prisma.leaveRequest.create({
       data: {
         userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end,
-        numDays, dayType, halfPeriod, reason: dto.reason ?? null, status: 'PENDING',
+        numDays, dayType, halfPeriod, startTime, endTime,
+        alternateEmployeeId, alternateNumber, alternateAddress, encashmentDays, supportingDocId,
+        reason: dto.reason ?? null, status: dto.plan ? 'DRAFT' : 'PENDING',
       },
-      include: { user: this.userSelect },
+      include: this.detailInclude,
     });
+    // Nobody needs to review a plan, so it notifies nobody — not the approvers, not the stand-in.
+    if (dto.plan) return created;
+    // The stand-in should hear it from the system, not in a corridor.
+    if (alternateEmployeeId) {
+      const u0 = (created as { user?: { firstName?: string; lastName?: string } }).user;
+      const who = u0 ? `${u0.firstName ?? ''} ${u0.lastName ?? ''}`.trim() || 'A teammate' : 'A teammate';
+      await this.notifications.notify(alternateEmployeeId, {
+        type: 'leave.alternate_named',
+        title: 'You are named as cover',
+        message: `${who} has listed you as their alternate contact for leave on ${dayKey(start) === dayKey(end) ? dayKey(start) : `${dayKey(start)} – ${dayKey(end)}`}.`,
+        link: '/attendance',
+      });
+    }
     // Route the request to approvers — parity with WFH and comp-off, which both notify.
     const u = (created as { user?: { firstName?: string; lastName?: string } }).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() || 'An employee' : 'An employee';
@@ -958,9 +1084,44 @@ export class LeaveService {
     await this.notifications.notify(await this.leaveApprovers(organizationId), {
       type: 'leave.requested',
       title: 'Leave request to review',
-      message: `${name} requested ${dto.leaveType} leave (${describeDays(numDays, dayType, halfPeriod)}) for ${range}.`,
+      message: `${name} requested ${dto.leaveType} leave (${describeDays(numDays, dayType, halfPeriod, startTime, endTime)}) for ${range}.`,
       link: '/attendance',
     });
+    return created;
+  }
+
+  /**
+   * Turn a PLAN into a real application. The plan skipped the balance and clash checks when it
+   * was pencilled in, so this re-runs the whole of create() with today's numbers — a plan made in
+   * January must not smuggle a request past a quota that has since been used up.
+   */
+  async submitPlan(id: string, actorId: string) {
+    const plan = await this.prisma.leaveRequest.findUnique({ where: { id } });
+    if (!plan) throw new NotFoundException(`Leave plan ${id} not found`);
+    if (plan.userId !== actorId) throw new ForbiddenException('You can only submit your own leave plans');
+    if (plan.status !== 'DRAFT') throw new BadRequestException('Only a planned leave can be submitted.');
+    const p = plan as typeof plan & {
+      startTime?: string | null; endTime?: string | null; alternateEmployeeId?: string | null;
+      alternateNumber?: string | null; alternateAddress?: string | null;
+      encashmentDays?: number | null; supportingDocId?: string | null; halfPeriod?: string | null; dayType?: string;
+    };
+    const created = await this.create(actorId, {
+      leaveType: plan.leaveType,
+      startDate: dayKey(plan.startDate),
+      endDate: dayKey(plan.endDate),
+      reason: plan.reason ?? undefined,
+      dayType: p.dayType,
+      halfPeriod: p.halfPeriod ?? undefined,
+      startTime: p.startTime ?? undefined,
+      endTime: p.endTime ?? undefined,
+      alternateEmployeeId: p.alternateEmployeeId ?? null,
+      alternateNumber: p.alternateNumber ?? undefined,
+      alternateAddress: p.alternateAddress ?? undefined,
+      encashmentDays: p.encashmentDays ?? undefined,
+      supportingDocId: p.supportingDocId ?? null,
+    });
+    // Only once the application exists — if create() threw, the plan is still there to fix.
+    await this.prisma.leaveRequest.delete({ where: { id } });
     return created;
   }
 
@@ -978,8 +1139,11 @@ export class LeaveService {
     // not ON_LEAVE — marking it ON_LEAVE would excuse the whole day from the attendance rate
     // and zero the timesheet target for hours they are still expected to log.
     const isHalf = (req as { dayType?: string }).dayType === 'HALF';
+    // An HOURLY leave is a few hours out of a day the person otherwise works, so their punches
+    // remain the truth for that day — writing an attendance row here would overwrite them.
+    const isHourly = (req as { dayType?: string }).dayType === 'HOURLY';
     const half = (req as { halfPeriod?: string }).halfPeriod === 'SECOND' ? 'afternoon' : 'morning';
-    const rows = days.map(date => ({
+    const rows = (isHourly ? [] : days).map(date => ({
       userId: req.userId, organizationId: req.organizationId, date,
       status: isHalf ? 'HALF_DAY' : 'ON_LEAVE',
       totalHours: isHalf ? HALF_DAY_HOURS : null,
@@ -1000,7 +1164,7 @@ export class LeaveService {
       await this.prisma.calendarEvent.create({
         data: {
           organizationId: req.organizationId,
-          title: `${name} — ${req.leaveType} ${isHalf ? `half-day leave (${half})` : 'leave'}`,
+          title: `${name} — ${req.leaveType} ${isHalf ? `half-day leave (${half})` : isHourly ? `leave (${(req as { startTime?: string }).startTime}–${(req as { endTime?: string }).endTime})` : 'leave'}`,
           type: 'LEAVE',
           startDate: req.startDate,
           endDate: req.endDate,
@@ -1014,7 +1178,7 @@ export class LeaveService {
     await this.notifications.notify(req.userId, {
       type: 'leave.approved',
       title: 'Leave approved',
-      message: `Your ${req.leaveType} leave (${describeDays(req.numDays, (req as { dayType?: string }).dayType, (req as { halfPeriod?: string }).halfPeriod)}) was approved.`,
+      message: `Your ${req.leaveType} leave (${describeDays(req.numDays, (req as { dayType?: string }).dayType, (req as { halfPeriod?: string }).halfPeriod, (req as { startTime?: string }).startTime, (req as { endTime?: string }).endTime)}) was approved.`,
     });
 
     // Emergency-leave coverage: if this is short-notice leave and the person holds
@@ -1052,11 +1216,19 @@ export class LeaveService {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
     if (req.userId !== actorId) throw new ForbiddenException('You can only cancel your own leave requests');
-    if (!['PENDING', 'APPROVED'].includes(req.status)) throw new BadRequestException('Cannot cancel this request');
-    // Remove generated ON_LEAVE attendance + the shared-calendar event if it was approved,
-    // so the person no longer shows as on-leave anywhere after cancelling.
+    if (!['DRAFT', 'PENDING', 'APPROVED'].includes(req.status)) throw new BadRequestException('Cannot cancel this request');
+    // A plan was never submitted to anybody, so dropping it should leave no trace.
+    if (req.status === 'DRAFT') {
+      await this.prisma.leaveRequest.delete({ where: { id } });
+      return { ...req, status: 'CANCELLED' };
+    }
+    // Remove the generated attendance + the shared-calendar event if it was approved, so the
+    // person no longer shows as on-leave anywhere after cancelling. A HALF-day leave writes a
+    // HALF_DAY row rather than ON_LEAVE, so matching only ON_LEAVE used to strand it — the day
+    // stayed marked as a half-day of leave that no longer existed.
     if (req.status === 'APPROVED') {
-      await this.prisma.attendance.deleteMany({ where: { userId: req.userId, status: 'ON_LEAVE', date: { gte: utcDay(req.startDate), lte: utcDay(req.endDate) } } });
+      const wrote = (req as { dayType?: string }).dayType === 'HALF' ? 'HALF_DAY' : 'ON_LEAVE';
+      await this.prisma.attendance.deleteMany({ where: { userId: req.userId, status: wrote, date: { gte: utcDay(req.startDate), lte: utcDay(req.endDate) } } });
       if (req.organizationId) {
         await this.prisma.calendarEvent.deleteMany({
           where: { organizationId: req.organizationId, type: 'LEAVE', createdBy: req.userId, startDate: req.startDate, endDate: req.endDate },
@@ -1081,24 +1253,39 @@ export class LeaveService {
     // invisible — people couldn't see a zero balance, or find "Comp-off" in the leave dropdown.
     await this.ensureCompOffType(organizationId);
     const types = await this.prisma.leaveType.findMany({ where: { organizationId }, orderBy: { name: 'asc' } });
-    const approved = await this.prisma.leaveRequest.groupBy({
-      by: ['leaveType'],
-      where: { userId, status: 'APPROVED', startDate: { gte: start, lt: end } },
-      _sum: { numDays: true },
-    });
+    // Approved and pending are counted SEPARATELY but both reduce what is left to book. The
+    // card used to show approved days only, while create() refused anything over approved +
+    // pending — so it could read "8 of 8 remaining" and still reject the next request.
+    const [approved, awaiting] = await Promise.all([
+      this.prisma.leaveRequest.groupBy({
+        by: ['leaveType'],
+        where: { userId, status: 'APPROVED', startDate: { gte: start, lt: end } },
+        _sum: { numDays: true },
+      }),
+      this.prisma.leaveRequest.groupBy({
+        by: ['leaveType'],
+        where: { userId, status: 'PENDING', startDate: { gte: start, lt: end } },
+        _sum: { numDays: true },
+      }),
+    ]);
     const usedByCode = new Map(approved.map(a => [a.leaveType, a._sum.numDays ?? 0]));
+    const pendingByCode = new Map(awaiting.map(a => [a.leaveType, a._sum.numDays ?? 0]));
     return Promise.all(types.map(async t => {
       // Comp Off is not an annual quota — its "balance" is what you EARNED by working
       // non-working days (approved comp-off claims) minus what you've already availed.
       if (t.code === 'CO') {
         const b = await this.compOffBalance(userId);
         return {
-          code: 'CO', name: t.name, quota: b.earned, used: b.used, remaining: b.available,
+          code: 'CO', name: t.name, quota: b.earned, used: b.used, pending: b.pending, remaining: b.available,
           colorHex: t.colorHex, isCompOff: true, credits: b.credits,
         };
       }
       const used = usedByCode.get(t.code) ?? 0;
-      return { code: t.code, name: t.name, quota: t.annualQuota, used, remaining: Math.max(0, t.annualQuota - used), colorHex: t.colorHex };
+      const pending = pendingByCode.get(t.code) ?? 0;
+      return {
+        code: t.code, name: t.name, quota: t.annualQuota, used, pending,
+        remaining: Math.max(0, t.annualQuota - used - pending), colorHex: t.colorHex,
+      };
     }));
   }
 
@@ -1155,19 +1342,22 @@ export class LeaveService {
   }
 
   /** Earned (approved) comp-off credits minus CO leave already availed (pending + approved). */
-  async compOffBalance(userId: string): Promise<{ earned: number; used: number; available: number; credits: number }> {
-    const [claims, used] = await Promise.all([
+  async compOffBalance(userId: string): Promise<{ earned: number; used: number; pending: number; available: number; credits: number }> {
+    const [claims, spent, awaiting] = await Promise.all([
       // A HALF-day claim earns HALF a day off. This used to count() the rows, so working a
       // Saturday morning bought a whole day back.
       this.prisma.compOffRequest.groupBy({
         by: ['dayType'], where: { userId, status: 'APPROVED' }, _count: { _all: true },
       }),
-      this.prisma.leaveRequest.aggregate({ where: { userId, leaveType: 'CO', status: { in: ['PENDING', 'APPROVED'] } }, _sum: { numDays: true } }),
+      this.prisma.leaveRequest.aggregate({ where: { userId, leaveType: 'CO', status: 'APPROVED' }, _sum: { numDays: true } }),
+      this.prisma.leaveRequest.aggregate({ where: { userId, leaveType: 'CO', status: 'PENDING' }, _sum: { numDays: true } }),
     ]);
     const earned = claims.reduce((sum, c) => sum + c._count._all * (c.dayType === 'HALF' ? 0.5 : 1), 0);
-    const usedDays = used._sum.numDays ?? 0;
+    const usedDays = spent._sum.numDays ?? 0;
+    const pending = awaiting._sum.numDays ?? 0;
     const credits = claims.reduce((sum, c) => sum + c._count._all, 0);
-    return { earned, used: usedDays, available: Math.max(0, earned - usedDays), credits };
+    // A credit that is already spoken for by a pending request is not available to spend twice.
+    return { earned, used: usedDays, pending, available: Math.max(0, earned - usedDays - pending), credits };
   }
 
   async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: string }) {
@@ -1520,9 +1710,22 @@ class LeaveController {
 
   @Post('requests')
   @RequirePermission('leave.request')
-  create(@Actor() actorId: string | null, @Body() body: { leaveType: string; startDate: string; endDate: string; reason?: string; dayType?: string; halfPeriod?: string }) {
+  create(@Actor() actorId: string | null, @Body() body: {
+    leaveType: string; startDate: string; endDate: string; reason?: string;
+    dayType?: string; halfPeriod?: string; startTime?: string; endTime?: string;
+    alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
+    encashmentDays?: number; supportingDocId?: string | null; plan?: boolean;
+  }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.create(actorId, body);
+  }
+
+  /** Promote a planned leave to a submitted application. */
+  @Post('requests/:id/submit')
+  @RequirePermission('leave.request')
+  submitPlan(@Actor() actorId: string | null, @Param('id') id: string) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.submitPlan(id, actorId);
   }
 
   @Post('requests/:id/approve')
