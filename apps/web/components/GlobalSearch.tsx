@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Search, X, FolderKanban, ListTodo, User, Loader } from 'lucide-react';
 import { api, type SearchResults } from '@/lib/api';
+import { domainLabelOf } from '@/components/projects/TechnologyDomainPicker';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 
@@ -88,6 +89,14 @@ export function GlobalSearch() {
                     <Row key={p.id} onClick={() => go(`/projects/${p.id}`)}>
                       <FolderKanban size={16} className="text-brand-500 shrink-0" />
                       <span className="text-sm text-gray-800 truncate">{p.title}</span>
+                      {/* Say WHY a project matched when the hit came from its domain rather than
+                          its name — otherwise searching "medical" returns titles with no medical
+                          in them and looks broken. */}
+                      {p.technologyDomain && (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-100 shrink-0">
+                          {domainLabelOf(p.technologyDomain)}
+                        </span>
+                      )}
                       <span className={`text-[11px] ml-auto ${PHASE_TINT[p.projectPhase] ?? 'text-gray-400'}`}>{p.projectPhase}</span>
                     </Row>
                   ))}

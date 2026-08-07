@@ -479,6 +479,10 @@ model Project {
   // Invalidity, Reverse Engineering, Risk & Strategy, …). Drives the workflow task template
   // auto-created on project creation. Null = a general project with no preset workflow.
   projectType             String?
+  // The technology area the work sits in (Medical, Automobile, Source Code …). Independent of
+  // projectType: the TYPE says what kind of study it is, the DOMAIN says what field it is in.
+  // Same shape as projectType — a stable slug, either a built-in or an org's saved custom one.
+  technologyDomain        String?
   // The client/matter this project is for (drives the "{Type} - {Client}" title and the
   // confidential patent picker). Null for internal/General projects.
   clientId                String?
@@ -663,6 +667,24 @@ model PidReservation {
 // A custom project-type template saved by an Admin/Manager/PM — org-wide, reusable by anyone.
 // Folded into the built-in PROJECT_TYPES so it appears in the New Project type dropdown and
 // auto-creates its task list on project creation, exactly like a built-in type.
+/// A technology domain an organisation added itself, saved so the next project can pick it
+/// from the list instead of retyping it. Built-in domains live in project-technology-domains.ts;
+/// these extend that catalog per organisation, exactly as ProjectTemplate extends PROJECT_TYPES.
+model TechnologyDomain {
+  id             String   @id @default(cuid())
+  organizationId String
+  value          String   // stable slug used as Project.technologyDomain (unique per org)
+  label          String
+  isActive       Boolean  @default(true)
+  createdBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, value])
+  @@index([organizationId, isActive])
+  @@map("technology_domain")
+}
+
 model ProjectTemplate {
   id             String   @id @default(cuid())
   organizationId String
@@ -1220,8 +1242,6 @@ model LeaveRequest {
   alternateEmployeeId String?
   alternateNumber     String?
   alternateAddress    String?
-  // Days of accrued leave being encashed rather than taken. Same half-day rule as numDays.
-  encashmentDays      Float?
   // Proof attached to the request (medical certificate, travel document …). Uses the shared
   // Document store, so it inherits its size limits, storage driver and access rules.
   supportingDocId     String?

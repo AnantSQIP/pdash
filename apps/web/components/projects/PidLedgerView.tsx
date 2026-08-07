@@ -131,9 +131,13 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
     return rows.filter(r => {
       // State filter (derived lifecycle, not the raw reservation).
       if (filter !== 'All' && r.state !== FILTER_STATE[filter]) return false;
-      // Free-text search: PID, project title, or client name.
+      // Free-text search: PID, project title, client name, or technology domain. The domain is
+      // matched across EVERY round, not just the latest — "medical" should surface a PID whose
+      // first engagement was medical even if its current round is not.
       if (q) {
-        const hay = `${r.pid} ${r.project?.title ?? ''} ${r.project?.client ?? ''}`.toLowerCase();
+        const domains = (r.rounds ?? []).map(rd => rd.domainLabel ?? rd.domain ?? '').join(' ');
+        const titles = (r.rounds ?? []).map(rd => rd.title).join(' ');
+        const hay = `${r.pid} ${titles} ${r.project?.title ?? ''} ${r.project?.client ?? ''} ${domains}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -158,7 +162,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search PID or client…"
+              placeholder="Search PID, client, project or domain…"
               className="w-52 pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400"
             />
           </div>
@@ -264,6 +268,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                       </div>
                                       <div className="flex items-center gap-1.5 shrink-0">
                                         {rd.type && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">{projectTypeLabel(rd.type)}</span>}
+                                        {rd.domainLabel && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-100">{rd.domainLabel}</span>}
                                         {rd.phase && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{rd.phase}</span>}
                                         {rd.progress != null && <span className="text-[11px] text-gray-500 tabular-nums">{rd.progress}%</span>}
                                       </div>

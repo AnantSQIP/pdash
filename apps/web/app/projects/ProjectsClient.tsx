@@ -9,6 +9,7 @@ import { ProjectCard } from '@/components/projects/ProjectCard';
 import { NewProjectModal } from '@/components/projects/NewProjectModal';
 import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
 import { PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel, type Phase, type MockProject } from '@/lib/mock-data';
+import { useTechnologyDomains, domainLabelOf } from '@/components/projects/TechnologyDomainPicker';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -51,6 +52,7 @@ function toDisplay(p: ApiProject): MockProject {
     title: p.title,
     description: p.description ?? '',
     projectType: p.projectType ?? null,
+    technologyDomain: p.technologyDomain ?? null,
     roundSeq: p.roundSeq ?? 1,
     projectPhase: p.projectPhase as Phase,
     priority: p.priority as any,
@@ -90,6 +92,10 @@ export function ProjectsClient() {
   const [generating, setGenerating] = useState(false);
   const router = useRouter();
   const [search, setSearch] = useState('');
+  // A PID now holds several projects, so the order matters: newest first puts the round somebody
+  // is actually asking about at the top instead of burying it under the client's history.
+  const [sort, setSort] = useState('NEWEST');
+  const [domain, setDomain] = useState('');
 
   const canGeneratePid = can('project.generate_pid');
   // Authorities see their pending PID-request queue count.
@@ -117,9 +123,13 @@ export function ProjectsClient() {
     }
   }
 
+  const { data: domains = [] } = useTechnologyDomains();
+
   const { data: rawProjects = [], isLoading: projectsLoading, isError } = useQuery({
-    queryKey: ['projects', org?.id],
-    queryFn: () => api.projects.list(org!.id),
+    // Sorting and domain filtering happen server-side, so the key carries them: two different
+    // orders are two different results, and sharing a cache entry would show the wrong one.
+    queryKey: ['projects', org?.id, sort, domain],
+    queryFn: () => api.projects.list(org!.id, undefined, { sort, technologyDomain: domain || undefined }),
     enabled: !!org,
     staleTime: 30_000,
     placeholderData: keepPreviousData,
@@ -133,7 +143,11 @@ export function ProjectsClient() {
     // Closed projects live in their own section — keep them out of every other view
     // (including "All Projects"); they only appear under the Closed filter.
     if (phase !== 'ALL' && p.projectPhase !== phase) return false;
-    if (search && !`${p.title} ${p.code ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false;
+    // Typing a domain name finds its projects too — "medical" should work like a filter click.
+    if (search) {
+      const hay = `${p.title} ${p.code ?? ''} ${domainLabelOf(p.technologyDomain, domains) ?? ''}`.toLowerCase();
+      if (!hay.includes(search.toLowerCase())) return false;
+    }
     return true;
   });
 
@@ -232,6 +246,31 @@ export function ProjectsClient() {
           to `auto` too, which clipped the search autocomplete dropdown. Wrap instead. */}
       <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6 py-3 bg-gray-50 border-b border-gray-200 shrink-0">
         <ProjectSearch value={search} onChange={setSearch} suggestions={projects} />
+
+        {/* Domain filter — "show me our source-code work", the question the domain exists for. */}
+        <select
+          value={domain} onChange={e => setDomain(e.target.value)}
+          title="Filter by technology domain"
+          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500"
+        >
+          <option value="">All domains</option>
+          {domains.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+        </select>
+
+        {/* Order. Newest first by default now that one PID can hold many projects. */}
+        <select
+          value={sort} onChange={e => setSort(e.target.value)}
+          title="Sort projects"
+          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500"
+        >
+          <option value="NEWEST">Newest first</option>
+          <option value="OLDEST">Oldest first</option>
+          <option value="DEADLINE">Deadline (soonest)</option>
+          <option value="NAME">Name (A–Z)</option>
+          <option value="PID">PID (latest round first)</option>
+          <option value="PROGRESS">Progress (highest)</option>
+        </select>
+
         <div className="flex flex-wrap items-center gap-1">
           {PHASES.map(({ value: v, label }) => (
             <button

@@ -20,8 +20,12 @@ export class ProjectsController {
   // pass another org's id and enumerate its projects (S3). The ?organizationId= param the web
   // still sends is ignored.
   @Get()
-  async list(@Query('phase') phase?: string) {
-    return this.projects.list(await this.actor.requireOrgId(), { phase });
+  async list(
+    @Query('phase') phase?: string,
+    @Query('technologyDomain') technologyDomain?: string,
+    @Query('sort') sort?: string,
+  ) {
+    return this.projects.list(await this.actor.requireOrgId(), { phase, technologyDomain, sort });
   }
 
   /**
@@ -49,6 +53,12 @@ export class ProjectsController {
   @Get('types')
   async projectTypes() {
     return this.projects.projectTypes(await this.actor.requireOrgId());
+  }
+
+  /** Built-in technology domains + the org's saved custom ones, alphabetical. */
+  @Get('technology-domains')
+  async technologyDomains() {
+    return this.projects.technologyDomains(await this.actor.requireOrgId());
   }
 
   /** Non-binding preview of the PID the next created project would receive. */

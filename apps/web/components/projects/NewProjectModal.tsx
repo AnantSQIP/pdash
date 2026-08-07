@@ -9,6 +9,7 @@ import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useAuth } from '@/lib/auth-context';
+import { TechnologyDomainPicker, domainPayload } from './TechnologyDomainPicker';
 import { DateField } from '@/components/ui/DateField';
 import { fullName } from '@/lib/avatar';
 
@@ -35,6 +36,10 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [customLabel, setCustomLabel] = useState('');
   const [customTasks, setCustomTasks] = useState('');   // one task per line
   const [saveTemplate, setSaveTemplate] = useState(false);
+  // Technology domain — the FIELD the work is in, asked alongside the type it is.
+  const [techDomain, setTechDomain] = useState('');
+  const [customDomainLabel, setCustomDomainLabel] = useState('');
+  const [saveDomain, setSaveDomain] = useState(false);
   const [patentIds, setPatentIds] = useState<string[]>([]);
   const [patentSearch, setPatentSearch] = useState('');
   const [description, setDescription] = useState('');
@@ -158,6 +163,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
       await api.projects.create({
         title,
         projectType: isCustom ? undefined : (projectType || undefined),
+        ...domainPayload(techDomain, customDomainLabel, saveDomain),
         customType: isCustom ? {
           label: customLabel.trim(),
           tasks: customTasks.split('\n').map(t => t.trim()).filter(Boolean),
@@ -179,6 +185,7 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
       // If we saved a new custom type as a template, refresh the types list so it shows up the
       // NEXT time anyone opens this modal (the query is staleTime:Infinity, so force it).
       if (isCustom && saveTemplate) await queryClient.invalidateQueries({ queryKey: ['project-types'] });
+      if (saveDomain && customDomainLabel.trim()) await queryClient.invalidateQueries({ queryKey: ['technology-domains'] });
       onSuccess?.();
       onClose();
     } catch (err) {
@@ -320,6 +327,15 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                 )}
               </div>
             )}
+          </div>
+
+          {/* The FIELD the work is in, next to the KIND of work it is. */}
+          <div>
+            <TechnologyDomainPicker
+              value={techDomain} onChange={setTechDomain}
+              customLabel={customDomainLabel} onCustomLabel={setCustomDomainLabel}
+              save={saveDomain} onSave={setSaveDomain}
+            />
           </div>
 
           {/* Patent IDs — pick the handles to link. A search box helps when there are many. */}

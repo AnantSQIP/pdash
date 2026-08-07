@@ -927,7 +927,7 @@ export class LeaveService {
     leaveType: string; startDate: string; endDate: string; reason?: string;
     dayType?: string; halfPeriod?: string;
     alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
-    encashmentDays?: number; supportingDocId?: string | null;
+    supportingDocId?: string | null;
     /** A PLAN — pencilled in for later, not submitted to an approver yet. */
     plan?: boolean;
   }) {
@@ -993,16 +993,6 @@ export class LeaveService {
     const alternateAddress = dto.alternateAddress?.trim() || null;
     if (alternateAddress && alternateAddress.length > MAX_REASON) throw new BadRequestException('Alternate address is too long.');
 
-    // Encashment converts accrued days to money instead of time off, so it can never exceed
-    // what is actually left in the quota after this request.
-    let encashmentDays: number | null = null;
-    if (dto.encashmentDays != null && dto.encashmentDays !== 0) {
-      const enc = Number(dto.encashmentDays);
-      if (!Number.isFinite(enc) || enc < 0) throw new BadRequestException('Leave encashment days must be a positive number.');
-      assertHalfDayStep(enc, 'Leave encashment days');
-      encashmentDays = enc || null;
-    }
-
     // The proof has to be a document this person actually uploaded — accepting any id would
     // let a request point at somebody else's file.
     let supportingDocId: string | null = null;
@@ -1035,21 +1025,16 @@ export class LeaveService {
         _sum: { numDays: true },
       });
       const used = usedAgg._sum.numDays ?? 0;
-      // Encashed days come out of the same quota as days taken off — otherwise somebody could
-      // encash their whole entitlement and still book leave against it.
-      const claimed = numDays + (encashmentDays ?? 0);
-      if (used + claimed > type.annualQuota) {
+      if (used + numDays > type.annualQuota) {
         const remaining = Math.max(0, type.annualQuota - used);
         throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
       }
-    } else if (encashmentDays) {
-      throw new BadRequestException(`${type.name} has no annual quota, so there is nothing to encash.`);
     }
     const created = await this.prisma.leaveRequest.create({
       data: {
         userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end,
         numDays, dayType, halfPeriod,
-        alternateEmployeeId, alternateNumber, alternateAddress, encashmentDays, supportingDocId,
+        alternateEmployeeId, alternateNumber, alternateAddress, supportingDocId,
         reason: dto.reason ?? null, status: dto.plan ? 'DRAFT' : 'PENDING',
       },
       include: this.detailInclude,
@@ -1093,7 +1078,7 @@ export class LeaveService {
     const p = plan as typeof plan & {
       alternateEmployeeId?: string | null;
       alternateNumber?: string | null; alternateAddress?: string | null;
-      encashmentDays?: number | null; supportingDocId?: string | null; halfPeriod?: string | null; dayType?: string;
+      supportingDocId?: string | null; halfPeriod?: string | null; dayType?: string;
     };
     const created = await this.create(actorId, {
       leaveType: plan.leaveType,
@@ -1105,7 +1090,6 @@ export class LeaveService {
       alternateEmployeeId: p.alternateEmployeeId ?? null,
       alternateNumber: p.alternateNumber ?? undefined,
       alternateAddress: p.alternateAddress ?? undefined,
-      encashmentDays: p.encashmentDays ?? undefined,
       supportingDocId: p.supportingDocId ?? null,
     });
     // Only once the application exists — if create() threw, the plan is still there to fix.
@@ -1699,7 +1683,7 @@ class LeaveController {
     leaveType: string; startDate: string; endDate: string; reason?: string;
     dayType?: string; halfPeriod?: string;
     alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
-    encashmentDays?: number; supportingDocId?: string | null; plan?: boolean;
+    supportingDocId?: string | null; plan?: boolean;
   }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     return this.svc.create(actorId, body);

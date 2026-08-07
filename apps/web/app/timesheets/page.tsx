@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, KeyRound, CalendarClock, ChevronDown, type LucideIcon } from 'lucide-react';
+import { Timer, Plus, Clock, DollarSign, Trash2, Loader, CalendarDays, KeyRound, CalendarClock, ChevronDown, Phone, type LucideIcon } from 'lucide-react';
 import { api, type Timesheet } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
@@ -13,8 +13,10 @@ import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
+/** A client call: booked to a PID but to no task, so it is not a buffer awaiting one either. */
+const isCall = (e: Timesheet) => e.category === 'CLIENT_CALL';
 /** A buffer entry (logged without a PID) — no task/issue/project, and not "Other". */
-const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e);
+const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e) && !isCall(e);
 const bufferDaysLeft = (e: Timesheet): number | null =>
   e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
 
@@ -148,6 +150,7 @@ export default function TimesheetsPage() {
                       <>
                         <span className="text-xs font-mono font-semibold text-gray-800">{entry.project.code}</span>
                         {entry.projectType && <span className="block text-[10px] text-gray-400">{entry.projectType}</span>}
+                        {isCall(entry) && <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-sky-100 text-sky-700"><Phone size={9} /> Client call</span>}
                       </>
                     ) : isOther(entry) ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600">Other</span>
@@ -166,7 +169,10 @@ export default function TimesheetsPage() {
                   {/* Task + notes */}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
-                      {entry.task?.title ?? entry.issue?.title ?? (isOther(entry) ? (entry.title ?? 'Non-project time') : 'Unassigned time')}
+                      {entry.task?.title ?? entry.issue?.title
+                        ?? (isOther(entry) ? (entry.title ?? 'Non-project time')
+                          : isCall(entry) ? (entry.title ?? 'Client call')
+                            : 'Unassigned time')}
                       {entry.issue && <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
                     </p>
                     {entry.notes && <p className="text-xs text-gray-500 mt-0.5 break-words">{entry.notes}</p>}

@@ -433,7 +433,6 @@ function LeaveDetail({ r }: { r: LeaveRequestItem }) {
   const items: [string, string][] = [
     ['Leave choice', r.dayType === 'HALF' ? `Half day — ${r.halfPeriod === 'SECOND' ? 'second half' : 'first half'}` : 'Full day'],
     ['Days', fmtDays(r.numDays)],
-    ...(r.encashmentDays ? [['Encashment', fmtDays(r.encashmentDays)] as [string, string]] : []),
     ['Alternate employee', alt ? `${alt.firstName ?? ''} ${alt.lastName ?? ''}`.trim() || alt.email : '—'],
     ['Alternate contact', r.alternateNumber || '—'],
     ['Alternate address', r.alternateAddress || '—'],
@@ -518,7 +517,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
   const [f, setF] = useState({
     leaveType: '', choice: 'FULL' as LeaveChoice, startDate: '', endDate: '',
     halfPeriod: 'FIRST' as 'FIRST' | 'SECOND',
-    encashmentDays: '', alternateEmployeeId: '', alternateNumber: '', alternateAddress: '', reason: '',
+    alternateEmployeeId: '', alternateNumber: '', alternateAddress: '', reason: '',
     // Comp-off is two opposite things sharing one leave type, and they are named the way a
     // ledger names them: CREDIT puts a day in (you worked a weekend), DEBIT takes one out
     // (you avail it). Defaults to DEBIT — somebody in "Apply for Leave" is usually taking time off.
@@ -536,8 +535,6 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
 
   const single = f.choice !== 'FULL';
   const balance = balances.find(b => b.code === f.leaveType);
-  const type = leaveTypes.find(t => t.code === f.leaveType);
-  const canEncash = !!type && (type.annualQuota ?? 0) > 0;
   const isCompOff = f.leaveType === 'CO';
   // Claiming a credit is a different form: it is about a day already worked, not a day off.
   const isClaim = isCompOff && f.compOffMode === 'CREDIT';
@@ -571,7 +568,6 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
         reason: f.reason.trim() || undefined,
         dayType: f.choice,
         halfPeriod: f.choice === 'HALF' ? f.halfPeriod : undefined,
-        encashmentDays: f.encashmentDays ? Number(f.encashmentDays) : undefined,
         alternateEmployeeId: f.alternateEmployeeId || null,
         alternateNumber: f.alternateNumber.trim() || undefined,
         alternateAddress: f.alternateAddress.trim() || undefined,
@@ -717,16 +713,6 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
                 <label className={label}>Leave End Date <span className="text-red-500">*</span></label>
                 <DateField type="date" value={f.endDate} min={f.startDate} onChange={e => setF(v => ({ ...v, endDate: e.target.value }))} className={input} />
               </div>
-            </div>
-          )}
-
-          {canEncash && !isClaim && (
-            <div>
-              <label className={label}>Leave Encashment Days</label>
-              <input type="number" min={0} step={0.5} value={f.encashmentDays}
-                onChange={e => setF(v => ({ ...v, encashmentDays: e.target.value }))}
-                placeholder="0" className={clsx(input, 'max-w-[160px]')} />
-              <p className="text-[11px] text-gray-400 mt-1">Days you want paid out instead of taken. Comes out of the same entitlement.</p>
             </div>
           )}
 

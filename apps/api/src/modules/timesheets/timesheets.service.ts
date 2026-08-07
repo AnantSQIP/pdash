@@ -211,6 +211,47 @@ export class TimesheetsService {
       return entry;
     }
 
+    // ── Client call: time on the phone to a client, booked to the PID rather than to a task.
+    //    Three deliberate departures from a normal entry, all for the same reason — a call is
+    //    about a MATTER, not about a piece of work inside it:
+    //      • no task is needed, and none is recorded;
+    //      • the caller need not be staffed on the project, because whoever picks up the phone
+    //        is the one who took the call;
+    //      • the matter may be finished. Clients ring about work that closed last month, and
+    //        refusing to record that time does not make it not have happened.
+    //    It is billable by default like any other client-facing time. ──
+    if (dto.category === 'CLIENT_CALL') {
+      const title = dto.title?.trim();
+      if (!title) throw new BadRequestException('Say what the call was about.');
+      if (!dto.projectId) throw new BadRequestException('Choose the PID the call was about.');
+      // The PID must be one that exists in the caller's own organisation — this is the only
+      // check left, so it is the one that stops time being booked to another firm's matter.
+      const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
+      const organizationId = me?.organizationId ?? undefined;
+      const project = await this.prisma.project.findFirst({
+        where: {
+          id: dto.projectId, deletedAt: null,
+          members: { some: { user: { organizationId } } },
+        },
+        select: { id: true, projectType: true },
+      });
+      if (!project) throw new NotFoundException('That project could not be found.');
+      await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
+      const entry = await this.prisma.timesheet.create({
+        data: {
+          userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
+          projectId: project.id, projectType: project.projectType,
+          billable, category: 'CLIENT_CALL', title, notes: dto.notes,
+        },
+        include: INCLUDE,
+      });
+      await this.events.emit({
+        action: EVENTS.TIME_LOGGED, entityType: 'TIMESHEET', entityId: entry.id, actorId,
+        metadata: { category: 'CLIENT_CALL', projectId: project.id, title, hours: dto.hoursLogged, billable: entry.billable },
+      });
+      return entry;
+    }
+
     // ── Buffer entry: log hours now, assign the PID (task) later (within a week). No task yet
     //    means no project/type; the 24h/day cap still applies. `entryDay` is normalised to the
     //    calendar-day boundary so the cap can't be side-stepped with a time component. ──
@@ -289,6 +330,7 @@ export class TimesheetsService {
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
     // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a PID.
     if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a PID.');
+    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its PID — there is nothing to assign.');
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).

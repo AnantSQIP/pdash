@@ -18,10 +18,11 @@ import { Modal } from '@/components/ui/Modal';
  *  • Other — miscellaneous NON-PROJECT time (admin, meetings, training): a titled entry,
  *    always non-billable, never tied to a project/task.
  */
-type LogMode = 'task' | 'other';
+type LogMode = 'task' | 'call' | 'other';
 
 const MODES: { key: LogMode; label: string }[] = [
   { key: 'task', label: 'Project task' },
+  { key: 'call', label: 'Client call' },
   { key: 'other', label: 'Other' },
 ];
 
@@ -43,12 +44,16 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
 
   const isTask = mode === 'task';
   const isOther = mode === 'other';
+  // A client call belongs to a MATTER, not to a task inside it — so it needs the PID and
+  // nothing else. It is deliberately allowed on finished matters: clients ring about work
+  // that closed last month, and that time still has to go somewhere.
+  const isCall = mode === 'call';
 
   // Projects the actor may see (the API already scopes to their memberships).
   const { data: projects = [], isLoading: loadingProjects } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
-    enabled: !!org?.id && isTask,
+    enabled: !!org?.id && (isTask || isCall),
     staleTime: 30_000,
   });
 
@@ -74,6 +79,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
 
   const canSubmit = !!hours
     && (!isTask || (!!projectId && !!taskId && (!needPid || hasPid)))  // project + task always; PID unless buffer
+    && (!isCall || (!!projectId && !!title.trim()))                    // a call needs its PID and a subject
     && (!isOther || !!title.trim())
     && !loading;
 
@@ -84,7 +90,8 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
       if (!projectId || !taskId) return;
       if (needPid && !hasPid) { setError('This project has no PID yet — turn on “Assign PID later” to log without one.'); return; }
     }
-    if (isOther && !title.trim()) { setError('Please give this time a title.'); return; }
+    if (isCall && !projectId) { setError('Choose the PID this call was about.'); return; }
+    if ((isOther || isCall) && !title.trim()) { setError('Please give this time a title.'); return; }
     const parsed = parseFloat(hours);
     if (isNaN(parsed) || parsed < 0.25 || parsed > 24) {
       setError('Hours must be between 0.25 and 24');
@@ -94,12 +101,13 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
     setError('');
     try {
       await api.timesheets.create({
-        taskId: isTask ? taskId : undefined,       // the task records the project (+ PID when it exists)
-        category: isOther ? 'OTHER' : undefined,   // "OTHER" = non-project, non-billable
-        title: isOther ? title.trim() : undefined, // the label for a non-project entry
+        taskId: isTask ? taskId : undefined,        // the task records the project (+ PID when it exists)
+        category: isOther ? 'OTHER' : isCall ? 'CLIENT_CALL' : undefined,
+        projectId: isCall ? projectId : undefined,  // a call books straight to the PID
+        title: isOther || isCall ? title.trim() : undefined,
         date,
         hoursLogged: parsed,
-        billable: isOther ? false : billable,      // "Other" time is always non-billable
+        billable: isOther ? false : billable,       // "Other" time is always non-billable
         notes: notes.trim() || undefined,
       });
       onSuccess();
@@ -114,7 +122,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
   return (
     <Modal
       title="Log Time"
-      subtitle="Record hours against a task, or as other (non-project) time"
+      subtitle="Record hours against a task, a client call, or other (non-project) time"
       size="md"
       onClose={onClose}
       footer={
@@ -136,8 +144,8 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
       }
     >
       <form id="log-time-standalone-form" onSubmit={handleSubmit} className="space-y-4">
-        {/* Two options: a project task, or other (non-project) time. */}
-        <div className="grid grid-cols-2 gap-2">
+        {/* Three options: a task, a client call booked to a PID, or other non-project time. */}
+        <div className="grid grid-cols-3 gap-2">
           {MODES.map(m => (
             <button
               key={m.key} type="button" onClick={() => setMode(m.key)}
@@ -213,6 +221,38 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
                 <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
                 {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
               </select>
+            </div>
+          </>
+        )}
+
+        {/* ── CLIENT CALL — a PID and what the call was about, nothing else ───────── */}
+        {isCall && (
+          <>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">PID <span className="text-red-500">*</span></label>
+              <select
+                value={projectId} onChange={e => setProjectId(e.target.value)} required
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500 transition"
+              >
+                <option value="">{loadingProjects ? 'Loading…' : 'Select the PID this call was about…'}</option>
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.code ? `${p.code} — ` : ''}{p.title}{p.projectPhase === 'COMPLETED' ? ' (completed)' : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-500 mt-1">
+                Any PID, open or finished — a client can ring about work that closed months ago.
+                No task needed, and you do not have to be staffed on it.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">What was the call about? <span className="text-red-500">*</span></label>
+              <input
+                type="text" required value={title} onChange={e => setTitle(e.target.value)}
+                placeholder="e.g. Client query on claim chart scope"
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+              />
             </div>
           </>
         )}

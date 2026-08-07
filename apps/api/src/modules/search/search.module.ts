@@ -31,6 +31,11 @@ export class SearchService {
     const term = (q ?? '').trim();
     if (term.length < 2) return EMPTY;
     const like = { contains: term, mode: 'insensitive' as const };
+    // A domain is stored as a slug (SOURCE_CODE, CLOUD_SERVER), so somebody typing "source code"
+    // or "cloud / server" must still match. Spaces and punctuation become the underscore the
+    // slug actually uses.
+    const domainTerm = term.trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const domainLike = { contains: domainTerm || term, mode: 'insensitive' as const };
 
     // Resolve the actor's effective permissions ONCE and gate each category by them.
     const eff = await this.permissions.getEffectivePermissions(actorId);
@@ -52,8 +57,15 @@ export class SearchService {
       // (or all, for a delivery lead) via projectScopeWhere.
       projectScope
         ? this.prisma.project.findMany({
-            where: { deletedAt: null, ...projectScope, OR: [{ title: like }, { code: like }] },
-            select: { id: true, title: true, code: true, projectPhase: true }, take: 6, orderBy: { updatedAt: 'desc' },
+            // Also match the technology domain, so "medical" finds every medical matter rather
+            // than only the ones with the word in their title. The stored value is a slug
+            // (SOURCE_CODE), so a typed space is matched against an underscore too.
+            where: {
+              deletedAt: null, ...projectScope,
+              OR: [{ title: like }, { code: like }, { technologyDomain: domainLike }],
+            },
+            select: { id: true, title: true, code: true, projectPhase: true, technologyDomain: true },
+            take: 6, orderBy: { updatedAt: 'desc' },
           })
         : Promise.resolve([]),
       // Channels + messages — the Discuss module was removed, so search returns none (kept in

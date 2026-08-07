@@ -14,14 +14,24 @@ export class CreateTimesheetDto {
   @IsOptional()
   taskId?: string;
 
-  // OPTIONAL: "OTHER" logs miscellaneous non-project time (admin, internal meetings, training).
-  // It's always non-billable and is never a PID buffer to assign. Omitted for normal entries.
-  @IsIn(['OTHER'])
+  // OPTIONAL entry kinds. Omitted for a normal task entry.
+  //   OTHER       — miscellaneous non-project time (admin, internal meetings, training).
+  //                 Always non-billable, never a PID buffer to assign.
+  //   CLIENT_CALL — a call with a client, booked straight to a PID. It needs no task, no
+  //                 assignment to one, and works whether the matter is open or finished:
+  //                 clients ring about work that closed last month, and that time is real.
+  @IsIn(['OTHER', 'CLIENT_CALL'])
   @IsOptional()
   category?: string;
 
-  // A short label for the entry — required for "OTHER" time (it has no task to name it),
-  // ignored for normal task/buffer entries.
+  // Required for CLIENT_CALL: which PID the call was about. A call belongs to a matter even
+  // though it belongs to no task within it.
+  @IsString()
+  @IsOptional()
+  projectId?: string;
+
+  // A short label for the entry — required for "OTHER" and "CLIENT_CALL" time (neither has a
+  // task to take its name from), ignored for normal task/buffer entries.
   @IsString()
   @IsOptional()
   @MaxLength(200)

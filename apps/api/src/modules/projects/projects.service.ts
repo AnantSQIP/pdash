@@ -16,6 +16,29 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { resolveDate } from '../../common/dates';
 import { PROJECT_TYPES, templateFor } from './project-templates';
+import { TECHNOLOGY_DOMAINS, builtInDomain, slugifyDomain, domainLabel } from './technology-domains';
+
+/**
+ * The orders a project list can be read in.
+ *
+ * NEWEST is the default and the one that matters most now that a PID holds several projects:
+ * the latest round is almost always the one somebody means, so listing oldest-first buried it
+ * under history. The rest exist because "what is due next" and "what is this client called"
+ * are genuinely different questions from "what changed most recently".
+ *
+ * Every order ends with a tiebreak on id so paging is stable — two projects created in the
+ * same millisecond otherwise swap places between requests.
+ */
+export const PROJECT_SORTS: Record<string, { [k: string]: 'asc' | 'desc' }[]> = {
+  NEWEST:       [{ createdAt: 'desc' }, { id: 'desc' }],
+  OLDEST:       [{ createdAt: 'asc' }, { id: 'asc' }],
+  DEADLINE:     [{ dueDate: 'asc' }, { createdAt: 'desc' }],
+  NAME:         [{ title: 'asc' }, { createdAt: 'desc' }],
+  // Group a PID's rounds together, latest round first within each.
+  PID:          [{ code: 'desc' }, { roundSeq: 'desc' }],
+  PROGRESS:     [{ completionPercentage: 'desc' }, { createdAt: 'desc' }],
+};
+export const PROJECT_SORT_VALUES = Object.keys(PROJECT_SORTS);
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { financialYear, formatPid, pidScope } from '../../common/financial-year';
 import { designationRank } from './seniority';
@@ -161,6 +184,54 @@ export class ProjectsService {
   }
 
   /**
+   * Work out the technology domain to store, from the same three places a project type can come
+   * from: a built-in, an inline one-off somebody typed, or a domain this org saved earlier.
+   *
+   * Saving is opt-in per request (`save`), so a one-off domain does not silently enlarge the
+   * list everybody else picks from — the same bargain the custom project type makes.
+   */
+  private async resolveDomain(
+    organizationId: string,
+    creatorId: string,
+    dto: { technologyDomain?: string; customDomain?: { label?: string; save?: boolean } },
+  ): Promise<string | null> {
+    const typed = dto.customDomain?.label?.trim();
+    if (typed) {
+      const value = slugifyDomain(typed);
+      if (dto.customDomain?.save) {
+        // A built-in already covers this name — saving a duplicate would show it twice.
+        if (!builtInDomain(value)) {
+          await this.prisma.technologyDomain.upsert({
+            where: { organizationId_value: { organizationId, value } },
+            create: { organizationId, value, label: typed, isActive: true, createdBy: creatorId },
+            update: { label: typed, isActive: true },
+          });
+        }
+      }
+      return value;
+    }
+    if (!dto.technologyDomain) return null;
+    if (builtInDomain(dto.technologyDomain)) return dto.technologyDomain;
+    // Not a built-in: it must be one this organisation actually saved, or it is not a domain
+    // at all — accepting any string here would let the filter fill up with typos.
+    const saved = await this.prisma.technologyDomain.findFirst({
+      where: { organizationId, value: dto.technologyDomain, isActive: true },
+      select: { value: true },
+    });
+    if (!saved) throw new BadRequestException(`"${dto.technologyDomain}" is not a technology domain this organisation offers.`);
+    return saved.value;
+  }
+
+  /** Built-in domains + this org's saved ones, alphabetical — drives the create-form picker. */
+  async technologyDomains(organizationId: string) {
+    const custom = await this.prisma.technologyDomain.findMany({
+      where: { organizationId, isActive: true }, orderBy: { label: 'asc' },
+    });
+    return [...TECHNOLOGY_DOMAINS, ...custom.map(c => ({ value: c.value, label: c.label, custom: true }))]
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  /**
    * A NEW PROJECT UNDER AN EXISTING PID — the returning-client flow.
    *
    * The old model reopened the finished project in place, which only works when the client comes
@@ -217,6 +288,7 @@ export class ProjectsService {
       if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
     }
     const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
+    const technologyDomain = await this.resolveDomain(organizationId, creator.id, dto);
 
     // Staffing: whoever was chosen for THIS round, with the creator leading if nobody was named.
     let members = [{ userId: creator.id, projectRole: 'MANAGER' }];
@@ -248,6 +320,7 @@ export class ProjectsService {
           title: dto.title,
           description: dto.description,
           projectType: effectiveType,
+          technologyDomain,
           // Usually ACTIVE, but a returning client's next round can be booked in ahead of time.
           projectPhase: dto.projectPhase ?? 'ACTIVE',
           priority: dto.priority ?? 'MEDIUM',
@@ -437,6 +510,7 @@ export class ProjectsService {
     //      persisted as a reusable org-wide ProjectTemplate when `save` is set,
     //   3. a saved org ProjectTemplate value.
     const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
+    const technologyDomain = await this.resolveDomain(organizationId, creator.id, dto);
 
     // ── Patent linkage (Phase 1) — the client is DERIVED from the patents, never picked.
     // Only patent.view holders (Super Admin by default, or anyone granted it) may attach
@@ -485,6 +559,7 @@ export class ProjectsService {
           title: dto.title,
           description: dto.description,
           projectType: effectiveType,
+          technologyDomain,
           clientId: derivedClientId,
           projectPhase: 'ACTIVE',
           // The owning office decides whether this PID can later hold more projects. Taken from
@@ -763,6 +838,8 @@ export class ProjectsService {
       select: {
         id: true, code: true, roundSeq: true, office: true,
         title: true, description: true, projectPhase: true, projectType: true,
+        // The ledger is searched by domain too ("show me our source-code PIDs").
+        technologyDomain: true,
         priority: true, startDate: true, dueDate: true, clientDueDate: true,
         completionPercentage: true, createdBy: true, createdAt: true,
         completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
@@ -817,6 +894,9 @@ export class ProjectsService {
       description: p.description ?? null,
       phase: p.projectPhase,
       type: p.projectType ?? null,
+      /** Technology domain slug + its label, so the ledger can show and filter on it. */
+      domain: p.technologyDomain ?? null,
+      domainLabel: domainLabel(p.technologyDomain),
       priority: p.priority ?? null,
       office: p.office ?? null,
       startDate: p.startDate ?? null,
@@ -1084,7 +1164,7 @@ export class ProjectsService {
     return admins.map(a => a.id);
   }
 
-  async list(organizationId: string, opts: { phase?: string } = {}) {
+  async list(organizationId: string, opts: { phase?: string; technologyDomain?: string; sort?: string } = {}) {
     // Scope to the projects the actor may see: a delivery lead sees every org project,
     // everyone else sees only the matters they are staffed on (conflict wall).
     const actorId = getActorId();
@@ -1096,8 +1176,13 @@ export class ProjectsService {
         deletedAt: null,
         ...scope,
         projectPhase: opts.phase,
+        ...(opts.technologyDomain ? { technologyDomain: opts.technologyDomain } : {}),
       },
-      orderBy: { createdAt: 'desc' },
+      // Newest first by default: a PID's later rounds are what somebody is looking for, and a
+      // long-running client's first engagement is rarely the one being asked about. The other
+      // orders are offered because "what is due next" and "what is this client called" are
+      // different questions from "what happened most recently".
+      orderBy: PROJECT_SORTS[opts.sort ?? ''] ?? PROJECT_SORTS.NEWEST,
       select: {
         id: true,
         code: true, // P1: the PID (SQ_26_27_nnn) — so cards/rows/search can show & match it
@@ -1109,6 +1194,8 @@ export class ProjectsService {
         // this as a tag — it was missing from this projection, so the tag silently never rendered
         // no matter what the card code did.
         projectType: true,
+        // The FIELD the work is in (Medical, Automobile …) — cards, filters and search read it.
+        technologyDomain: true,
         projectPhase: true,
         priority: true,
         completionPercentage: true,
@@ -1118,6 +1205,9 @@ export class ProjectsService {
         clientDueDate: true,
         completedAt: true,
         closedAt: true,
+        // The cards show when a project was created and the client sorts on it — it was never
+        // selected, so `createdAt` arrived undefined and the card fell back to an empty string.
+        createdAt: true,
         currentStatus: { select: { id: true, name: true, colorHex: true } },
         members: {
           where: { isActive: true },
@@ -1131,7 +1221,13 @@ export class ProjectsService {
         _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
       },
     });
-    return this.deadlines.redactProjects(projects, await this.deadlines.scope());
+    // Postgres orders text by byte value, which puts "Zebra" before "apple". Nobody reading an
+    // A–Z list means that, so the by-name order is settled here instead. Safe to do in code
+    // because this list is not paginated — every row the caller will see is already in hand.
+    const ordered = opts.sort === 'NAME'
+      ? [...projects].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }))
+      : projects;
+    return this.deadlines.redactProjects(ordered, await this.deadlines.scope());
   }
 
   /**

@@ -214,6 +214,9 @@ export type ApiTask = {
 };
 
 /** A selectable project type + its auto-created task template (from GET /projects/types). */
+/** A technology domain — the FIELD a project is in (Medical, Automobile …), not its type. */
+export type TechnologyDomainDef = { value: string; label: string; custom?: boolean };
+
 export type ProjectTypeDef = {
   value: string; label: string; description: string;
   comingSoon?: boolean; taskListName?: string; tasks?: string[]; custom?: boolean;
@@ -306,7 +309,10 @@ export type ReportProject = {
 export type PidRound = {
   id: string; code: string | null; roundSeq: number; office: string | null;
   title: string; description: string | null;
-  projectType: string | null; projectPhase: string; priority: string;
+  projectType: string | null;
+  /** Technology domain slug — the FIELD the work is in (Medical, Automobile …). */
+  technologyDomain?: string | null;
+  projectPhase: string; priority: string;
   completionPercentage: number;
   startDate: string | null; dueDate: string | null; clientDueDate: string | null;
   completedAt: string | null; closedAt: string | null;
@@ -326,6 +332,8 @@ export type PidRounds = { pid: string | null; multiRound: boolean; rounds: PidRo
 export type PidLedgerRound = {
   id: string; round: number; title: string; description?: string | null;
   phase: string | null; type?: string | null; priority?: string | null; office?: string | null;
+  /** Technology domain: the stored slug plus its human label. */
+  domain?: string | null; domainLabel?: string | null;
   startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
   completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
   workingHours?: number | null; actualHours?: number | null;
@@ -377,6 +385,8 @@ export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
   /** The kind of patent-analysis matter (HML, CC_NEW, FTO, …); null for a general project. */
   projectType?: string | null;
+  /** The FIELD the work is in (Medical, Automobile, Source Code …) — separate from the type. */
+  technologyDomain?: string | null;
   /** The PID, e.g. SQ_26_27_001 (globally unique; also searchable). */
   code?: string | null;
   /** The client/matter this project is for. */
@@ -557,7 +567,7 @@ export type ChannelMembers = {
 // Global-search results, each set permission-scoped server-side.
 export type SearchResults = {
   people: { id: string; firstName: string; lastName?: string | null; email: string; profilePhoto?: string | null; designation?: string | null }[];
-  projects: { id: string; title: string; code?: string | null; projectPhase: string }[];
+  projects: { id: string; title: string; code?: string | null; projectPhase: string; technologyDomain?: string | null }[];
   tasks: { id: string; title: string; status: string | null; projectId: string | null }[];
   channels: { id: string; name: string }[];
   messages: { id: string; channelId: string; channelName: string; author: string; content: string; createdAt: string }[];
@@ -862,7 +872,7 @@ export type LeaveRequestItem = {
    *  numDays is always a multiple of 0.5 — leave is counted in whole and half days only. */
   dayType?: string; halfPeriod?: string | null;
   alternateEmployeeId?: string | null; alternateNumber?: string | null; alternateAddress?: string | null;
-  encashmentDays?: number | null; supportingDocId?: string | null;
+  supportingDocId?: string | null;
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
   createdAt: string; user?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'>;
   alternateEmployee?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> | null;
@@ -988,14 +998,18 @@ export const api = {
   },
 
   projects: {
-    list: (orgId: string, phase?: string) => {
+    list: (orgId: string, phase?: string, opts?: { technologyDomain?: string; sort?: string }) => {
       const params = new URLSearchParams({ organizationId: orgId });
       if (phase && phase !== 'ALL') params.set('phase', phase);
+      if (opts?.technologyDomain) params.set('technologyDomain', opts.technologyDomain);
+      if (opts?.sort) params.set('sort', opts.sort);
       return req<ApiProject[]>(`/projects?${params}`);
     },
     get: (id: string) => req<ApiProject>(`/projects/${id}`),
     /** The catalog of project types + their auto-created task templates (for the create form). */
     types: () => req<ProjectTypeDef[]>('/projects/types'),
+    /** Built-in technology domains + the org's saved custom ones, alphabetical. */
+    technologyDomains: () => req<TechnologyDomainDef[]>('/projects/technology-domains'),
     /** Non-binding preview of the PID the next created project would get. */
     nextPid: () => req<{ pid: string | null }>('/projects/next-pid'),
     create: (data: {
@@ -1006,6 +1020,10 @@ export const api = {
       /** GURGAON | JAIPUR — decides whether this project's PID may later hold more projects. */
       office?: string;
       customType?: { label: string; tasks: string[]; save?: boolean };
+      /** Technology domain slug — a built-in or one the org saved. */
+      technologyDomain?: string;
+      /** A domain somebody typed; `save` adds it to the org's list for next time. */
+      customDomain?: { label: string; save?: boolean };
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
     generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string }>('/projects/generate-pid', { method: 'POST' }),
@@ -1024,6 +1042,10 @@ export const api = {
       startDate?: string | null; endDate?: string | null; clientDueDate?: string | null;
       members?: { userId: string; projectRole?: string }[];
       customType?: { label: string; tasks: string[]; save?: boolean };
+      /** Technology domain slug — a built-in or one the org saved. */
+      technologyDomain?: string;
+      /** A domain somebody typed; `save` adds it to the org's list for next time. */
+      customDomain?: { label: string; save?: boolean };
     }) => req<ApiProject>(`/projects/${id}/rounds`, { method: 'POST', body: JSON.stringify(body) }),
     /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */
     attachPid: (id: string, pid?: string) =>
@@ -1195,7 +1217,15 @@ export const api = {
     calendar: (year: number, month: number) =>
       req<TimesheetCalendar>(`/timesheets/calendar?year=${year}&month=${month}`),
     // taskId is optional: omit it to log a "buffer" entry whose PID (task) is assigned later.
-    create: (data: { userId?: string; taskId?: string; category?: 'OTHER'; title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string }) =>
+    create: (data: {
+      userId?: string; taskId?: string;
+      /** OTHER = non-project time. CLIENT_CALL = a call booked to a PID, no task needed and
+       *  allowed whether the matter is open or finished. */
+      category?: 'OTHER' | 'CLIENT_CALL';
+      /** Required for CLIENT_CALL — which PID the call was about. */
+      projectId?: string;
+      title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string;
+    }) =>
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { hoursLogged?: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>(`/timesheets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -1557,7 +1587,7 @@ export const api = {
       leaveType: string; startDate: string; endDate: string; reason?: string;
       dayType?: 'FULL' | 'HALF'; halfPeriod?: 'FIRST' | 'SECOND';
       alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
-      encashmentDays?: number; supportingDocId?: string | null;
+      supportingDocId?: string | null;
       /** Pencil it in for later instead of submitting it — shows on the Leave Planner. */
       plan?: boolean;
     }) =>

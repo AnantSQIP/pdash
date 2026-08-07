@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { TechnologyDomainPicker, domainPayload } from './TechnologyDomainPicker';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { X, Loader, FolderPlus, Check } from 'lucide-react';
@@ -40,6 +41,11 @@ export function AddRoundModal({ fromProjectId, pid, onClose, onCreated }: {
 
   const [title, setTitle] = useState('');
   const [projectType, setProjectType] = useState('');
+  // A new round asks for its own technology domain: a returning client's next brief is often
+  // in a different field from the last one, so inheriting it silently would be wrong.
+  const [techDomain, setTechDomain] = useState('');
+  const [customDomainLabel, setCustomDomainLabel] = useState('');
+  const [saveDomain, setSaveDomain] = useState(false);
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<string>('MEDIUM');
   const [projectPhase, setProjectPhase] = useState<string>('ACTIVE');
@@ -60,6 +66,7 @@ export function AddRoundModal({ fromProjectId, pid, onClose, onCreated }: {
     mutationFn: () => api.projects.addRound(fromProjectId, {
       title: title.trim(),
       projectType: projectType || undefined,
+      ...domainPayload(techDomain, customDomainLabel, saveDomain),
       description: description.trim() || undefined,
       priority,
       projectPhase,
@@ -139,6 +146,14 @@ export function AddRoundModal({ fromProjectId, pid, onClose, onCreated }: {
                 </div>
               </div>
             )}
+          </div>
+
+          <div>
+            <TechnologyDomainPicker
+              value={techDomain} onChange={setTechDomain}
+              customLabel={customDomainLabel} onCustomLabel={setCustomDomainLabel}
+              save={saveDomain} onSave={setSaveDomain}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

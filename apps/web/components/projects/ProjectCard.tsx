@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { CheckSquare, Users, Calendar, ArrowUpRight } from 'lucide-react';
 import clsx from 'clsx';
 import { MockProject, PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel } from '@/lib/mock-data';
+import { domainLabelOf } from './TechnologyDomainPicker';
 import { progressColor, progressTrack } from '@/lib/progress';
 import { formatDate } from '@/lib/date';
 
@@ -50,6 +51,14 @@ export function ProjectCard({ project }: ProjectCardProps) {
                 <span title={`Project type: ${projectTypeLabel(project.projectType)}`}
                   className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
                   {projectTypeLabel(project.projectType)}
+                </span>
+              )}
+              {/* The domain is a different fact from the type, so it gets its own tag and its
+                  own colour — a Medical FTO should read as both, not as one blurred label. */}
+              {project.technologyDomain && (
+                <span title={`Technology domain: ${domainLabelOf(project.technologyDomain)}`}
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-50 text-teal-700 border border-teal-100">
+                  {domainLabelOf(project.technologyDomain)}
                 </span>
               )}
               <span className={clsx('text-[11px] font-semibold ml-0.5', priority.color)}>

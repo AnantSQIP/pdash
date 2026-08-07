@@ -38,6 +38,15 @@ export class CustomTypeDto {
   save?: boolean;
 }
 
+/** A technology domain somebody typed instead of picking. `save` adds it to the org's list. */
+export class CustomDomainDto {
+  @IsOptional() @IsString() @MaxLength(60)
+  label?: string;
+
+  @IsOptional() @IsBoolean()
+  save?: boolean;
+}
+
 // Task/project priority is a fixed set — free-text used to be stored verbatim.
 export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 // The project lifecycle phases (free-text before — any string was accepted).
@@ -61,12 +70,19 @@ export class CreateProjectDto {
   @MaxLength(60)
   projectType?: string;
 
+  /** Technology domain slug — a built-in or one this org saved. */
+  @IsOptional() @IsString() @MaxLength(60)
+  technologyDomain?: string;
+
   /** Inline custom type (the "+ Create new type" option): a one-off type name + its task list.
    *  When `save` is true it is ALSO persisted as an org-wide reusable ProjectTemplate. */
   @IsOptional()
   @ValidateNested()
   @Type(() => CustomTypeDto)
   customType?: CustomTypeDto;
+
+  @IsOptional() @ValidateNested() @Type(() => CustomDomainDto)
+  customDomain?: CustomDomainDto;
 
   /** The client/matter (drives the "{Type} - {Client}" title + the confidential patent picker). */
   @IsOptional()
@@ -224,6 +240,10 @@ export class ReviewPidProjectDto {
   @IsIn(PROJECT_TYPE_VALUES)
   projectType?: string;
 
+  /** Technology domain slug — a built-in or one this org saved. */
+  @IsOptional() @IsString() @MaxLength(60)
+  technologyDomain?: string;
+
   /** The project manager (userId) — the reviewer assigns the owner. */
   @IsOptional()
   @IsString()
@@ -290,11 +310,18 @@ export class AddProjectRoundDto {
   @MaxLength(60)
   projectType?: string;
 
+  /** Technology domain slug — a built-in or one this org saved. */
+  @IsOptional() @IsString() @MaxLength(60)
+  technologyDomain?: string;
+
   /** Inline one-off custom type, same shape as project creation. */
   @IsOptional()
   @ValidateNested()
   @Type(() => CustomTypeDto)
   customType?: CustomTypeDto;
+
+  @IsOptional() @ValidateNested() @Type(() => CustomDomainDto)
+  customDomain?: CustomDomainDto;
 
   @IsOptional()
   @IsString()

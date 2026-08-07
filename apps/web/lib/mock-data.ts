@@ -9,6 +9,8 @@ export interface MockProject {
   title: string;
   description: string;
   projectType?: string | null; // e.g. HML, Novelty, FTO — shown as a tag on the card
+  // The FIELD the work is in (Medical, Automobile …) — a second tag beside the type.
+  technologyDomain?: string | null;
   /** Which project this is under its PID (1 for the first). A PID may hold several. */
   roundSeq?: number;
   projectPhase: Phase;
