@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  ArrowLeft, Mail, Briefcase, MapPin, CalendarCheck, Clock, AlertTriangle, ExternalLink, Loader,
+  ArrowLeft, Mail, Briefcase, MapPin, CalendarCheck, Clock, AlertTriangle, ExternalLink, Loader, ShieldCheck,
 } from 'lucide-react';
 import { api, type UserSummary, type TeamCapacity, type CapacityRow } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
@@ -41,8 +41,11 @@ export default function UserDetailPage() {
   // The capacity board already computes everybody's load and open work — reuse it rather than
   // asking for a second, slightly different version of the same answer. It is permission-gated,
   // so somebody without capacity.view gets told that, not a blank "no work" that reads as fact.
-  const { can } = usePermissions();
+  const { can, isSuperAdmin } = usePermissions();
   const canSeeLoad = can('capacity.view');
+  // Access administration lives on its own screen. This page is about the work; linking across
+  // stops the two feeling like unrelated halves to whoever can see both.
+  const canManageAccess = isSuperAdmin || can('user.manage_access');
   const { data: capacity } = useQuery<TeamCapacity>({
     queryKey: ['capacity-team', 14], queryFn: () => api.capacity.team(14),
     enabled: canSeeLoad, staleTime: 60_000,
@@ -84,6 +87,11 @@ export default function UserDetailPage() {
               {user.designation && <span className="inline-flex items-center gap-1.5"><Briefcase size={13} className="text-gray-400" /> {user.designation}</span>}
               <a href={`mailto:${user.email}`} className="inline-flex items-center gap-1.5 hover:text-brand-600"><Mail size={13} className="text-gray-400" /> {user.email}</a>
               {row?.office && <span className="inline-flex items-center gap-1.5"><MapPin size={13} className="text-gray-400" /> {row.office}</span>}
+              {canManageAccess && (
+                <Link href={`/admin/users/${id}`} className="inline-flex items-center gap-1.5 text-brand-700 hover:underline">
+                  <ShieldCheck size={13} /> Roles &amp; permissions
+                </Link>
+              )}
             </div>
           </div>
         </div>
