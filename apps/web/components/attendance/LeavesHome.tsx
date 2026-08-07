@@ -44,20 +44,17 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
+/** Leave only ever comes in half-day steps, so this needs one decimal place at most. */
 function fmtDays(n: number): string {
   if (n === 0) return '0 days';
   if (n === 0.5) return 'half a day';
-  const s = Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2)));
+  const s = Number.isInteger(n) ? String(n) : n.toFixed(1);
   return `${s} day${n === 1 ? '' : 's'}`;
 }
 
-/** "half day (morning)" / "10:00–13:00" / "3 days" for one request row. */
-export function describeLeaveDays(r: {
-  numDays: number; dayType?: string; halfPeriod?: string | null;
-  startTime?: string | null; endTime?: string | null;
-}): string {
+/** "half day (morning)" / "1.5 days" for one request row. */
+export function describeLeaveDays(r: { numDays: number; dayType?: string; halfPeriod?: string | null }): string {
   if (r.dayType === 'HALF') return `half day (${r.halfPeriod === 'SECOND' ? 'afternoon' : 'morning'})`;
-  if (r.dayType === 'HOURLY' && r.startTime && r.endTime) return `${r.startTime}–${r.endTime}`;
   return fmtDays(r.numDays);
 }
 
@@ -434,8 +431,7 @@ function ApplicationStatusTable({ rows, busy, onCancel }: {
 function LeaveDetail({ r }: { r: LeaveRequestItem }) {
   const alt = r.alternateEmployee;
   const items: [string, string][] = [
-    ['Leave choice', r.dayType === 'HALF' ? `Half day — ${r.halfPeriod === 'SECOND' ? 'second half' : 'first half'}`
-      : r.dayType === 'HOURLY' ? `Hourly — ${r.startTime}–${r.endTime}` : 'Full day'],
+    ['Leave choice', r.dayType === 'HALF' ? `Half day — ${r.halfPeriod === 'SECOND' ? 'second half' : 'first half'}` : 'Full day'],
     ['Days', fmtDays(r.numDays)],
     ...(r.encashmentDays ? [['Encashment', fmtDays(r.encashmentDays)] as [string, string]] : []),
     ['Alternate employee', alt ? `${alt.firstName ?? ''} ${alt.lastName ?? ''}`.trim() || alt.email : '—'],
@@ -510,7 +506,10 @@ function PlannerTable({ rows, busy, onSubmit, onDrop, onPlan }: {
 }
 
 // ── Apply for Leave / Plan Your Leave ─────────────────────────────────────────
-type LeaveChoice = 'FULL' | 'HALF' | 'HOURLY';
+// Leave is taken as a whole day or a half day. There is no smaller unit — an hourly option
+// existed briefly and was withdrawn, because charging it pro-rata put fractions like 0.375 of
+// a day into people's balances.
+type LeaveChoice = 'FULL' | 'HALF';
 
 function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
   plan: boolean; leaveTypes: LeaveType[]; balances: LeaveBalance[];
@@ -518,7 +517,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
 }) {
   const [f, setF] = useState({
     leaveType: '', choice: 'FULL' as LeaveChoice, startDate: '', endDate: '',
-    halfPeriod: 'FIRST' as 'FIRST' | 'SECOND', startTime: '', endTime: '',
+    halfPeriod: 'FIRST' as 'FIRST' | 'SECOND',
     encashmentDays: '', alternateEmployeeId: '', alternateNumber: '', alternateAddress: '', reason: '',
     // Comp-off is two opposite things sharing one leave type, and they are named the way a
     // ledger names them: CREDIT puts a day in (you worked a weekend), DEBIT takes one out
@@ -546,9 +545,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
 
   const valid = isClaim
     ? !!f.compOffDate && !!f.reason.trim() && !!f.projectRef.trim()
-    : !!f.leaveType && !!f.startDate
-      && (single || !!f.endDate)
-      && (f.choice !== 'HOURLY' || (!!f.startTime && !!f.endTime));
+    : !!f.leaveType && !!f.startDate && (single || !!f.endDate);
 
   async function save() {
     if (!valid || saving) return;
@@ -574,8 +571,6 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
         reason: f.reason.trim() || undefined,
         dayType: f.choice,
         halfPeriod: f.choice === 'HALF' ? f.halfPeriod : undefined,
-        startTime: f.choice === 'HOURLY' ? f.startTime : undefined,
-        endTime: f.choice === 'HOURLY' ? f.endTime : undefined,
         encashmentDays: f.encashmentDays ? Number(f.encashmentDays) : undefined,
         alternateEmployeeId: f.alternateEmployeeId || null,
         alternateNumber: f.alternateNumber.trim() || undefined,
@@ -630,10 +625,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
                 {isClaim ? 'How much did you work?' : 'Leave Choice'} <span className="text-red-500">*</span>
               </label>
               <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-                {(isClaim
-                  ? ([['FULL', 'Full Day'], ['HALF', 'Half Day']] as const)
-                  : ([['FULL', 'Full Day'], ['HALF', 'Half Day'], ['HOURLY', 'Hourly']] as const)
-                ).map(([v, l]) => (
+                {([['FULL', 'Full Day'], ['HALF', 'Half Day']] as const).map(([v, l]) => (
                   <button key={v} type="button" onClick={() => setF(s => ({ ...s, choice: v }))}
                     className={clsx('flex-1 px-2 py-2 text-xs font-medium transition-colors',
                       f.choice === v ? 'bg-brand-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}>
@@ -712,18 +704,6 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
                     ))}
                   </div>
                   <p className="text-[11px] text-gray-400 mt-1">Uses half a day of your balance.</p>
-                </div>
-              )}
-              {f.choice === 'HOURLY' && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={label}>Start Time <span className="text-red-500">*</span></label>
-                    <input type="time" value={f.startTime} onChange={e => setF(v => ({ ...v, startTime: e.target.value }))} className={input} />
-                  </div>
-                  <div>
-                    <label className={label}>End Time <span className="text-red-500">*</span></label>
-                    <input type="time" value={f.endTime} onChange={e => setF(v => ({ ...v, endTime: e.target.value }))} className={input} />
-                  </div>
                 </div>
               )}
             </div>

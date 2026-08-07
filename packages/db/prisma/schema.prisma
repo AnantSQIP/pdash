@@ -1210,19 +1210,17 @@ model LeaveRequest {
   leaveType      String // LeaveType.code
   startDate      DateTime
   endDate        DateTime
-  // FULL, HALF or HOURLY. A HALF-day leave covers a single date and consumes 0.5 of the balance;
-  // an HOURLY one covers part of a single date, between startTime and endTime.
+  // FULL or HALF. A HALF-day leave covers a single date and consumes 0.5 of the balance.
+  // There is no smaller unit: leave is counted in whole and half days only, so numDays is
+  // always a multiple of 0.5 (enforced by a CHECK constraint, not just by the service).
   dayType        String    @default("FULL")
   // Which half of the day a HALF leave covers — FIRST (morning) or SECOND (afternoon).
   halfPeriod     String?
-  // HH:mm bounds for an HOURLY leave. Null for FULL and HALF.
-  startTime      String?
-  endTime        String?
   // Who to reach while this person is away, so the team is not left guessing.
   alternateEmployeeId String?
   alternateNumber     String?
   alternateAddress    String?
-  // Days of accrued leave being encashed rather than taken.
+  // Days of accrued leave being encashed rather than taken. Same half-day rule as numDays.
   encashmentDays      Float?
   // Proof attached to the request (medical certificate, travel document …). Uses the shared
   // Document store, so it inherits its size limits, storage driver and access rules.

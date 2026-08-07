@@ -858,10 +858,9 @@ export type OrgAttendanceReport = {
 export type LeaveRequestItem = {
   id: string; userId: string; organizationId?: string; leaveType: string;
   startDate: string; endDate: string; numDays: number; reason?: string | null;
-  /** FULL, HALF or HOURLY; halfPeriod is FIRST (morning) / SECOND (afternoon) on a HALF request. */
+  /** FULL or HALF; halfPeriod is FIRST (morning) / SECOND (afternoon) on a HALF request.
+   *  numDays is always a multiple of 0.5 — leave is counted in whole and half days only. */
   dayType?: string; halfPeriod?: string | null;
-  /** "HH:mm" bounds, present only on an HOURLY request. */
-  startTime?: string | null; endTime?: string | null;
   alternateEmployeeId?: string | null; alternateNumber?: string | null; alternateAddress?: string | null;
   encashmentDays?: number | null; supportingDocId?: string | null;
   status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
@@ -1556,8 +1555,7 @@ export const api = {
     },
     create: (data: {
       leaveType: string; startDate: string; endDate: string; reason?: string;
-      dayType?: 'FULL' | 'HALF' | 'HOURLY'; halfPeriod?: 'FIRST' | 'SECOND';
-      startTime?: string; endTime?: string;
+      dayType?: 'FULL' | 'HALF'; halfPeriod?: 'FIRST' | 'SECOND';
       alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
       encashmentDays?: number; supportingDocId?: string | null;
       /** Pencil it in for later instead of submitting it — shows on the Leave Planner. */

@@ -84,20 +84,22 @@ const ESCALATION_EMAIL = 'yash@squarkip.com';
 // A day is a full "present" only if at least this many hours were worked; below it,
 // the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
 const HALF_DAY_HOURS = 4;
-// A standard working day. An hourly leave is charged against this, so 4 hours off = half a day.
-const FULL_DAY_HOURS = 8;
 
-/** "HH:mm" on a 24-hour clock, or a clear error. Used for part-day leave bounds. */
-function parseClock(v: unknown, field: string): string {
-  const s = typeof v === 'string' ? v.trim() : '';
-  const m = /^(\d{1,2}):(\d{2})$/.exec(s);
-  if (!m) throw new BadRequestException(`${field} must be a time like 14:30.`);
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (h > 23 || min > 59) throw new BadRequestException(`${field} is not a real time.`);
-  return `${String(h).padStart(2, '0')}:${m[2]}`;
+/**
+ * Leave is only ever counted in WHOLE or HALF days — 0.5, 1, 1.5, 2 … and nothing between.
+ *
+ * The smallest unit anybody can actually request is half a day, so any other fraction (0.375,
+ * 1.8) could only come from arithmetic, never from a person. Rounding such a number would
+ * quietly move somebody's balance, so it is refused instead. The database carries the same
+ * rule as a CHECK constraint, because a balance is not the sort of thing that should depend
+ * on every future caller remembering to be careful.
+ */
+const isHalfDayStep = (n: number) => Number.isFinite(n) && n >= 0 && Math.round(n * 2) === n * 2;
+function assertHalfDayStep(n: number, field: string): void {
+  if (!isHalfDayStep(n)) {
+    throw new BadRequestException(`${field} must be a whole or half day (0.5, 1, 1.5 …), not ${n}.`);
+  }
 }
-const clockMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 
 /**
  * A contact number somebody can actually be reached on while they are away. Punctuation people
@@ -125,13 +127,9 @@ function statusForHours(totalHours: number): string {
   return totalHours >= HALF_DAY_HOURS ? 'PRESENT' : 'HALF_DAY';
 }
 
-/** Human wording for a leave length — "half day (morning)", "10:00–13:00", "1 day", "3 days". */
-function describeDays(
-  numDays: number, dayType?: string | null, halfPeriod?: string | null,
-  startTime?: string | null, endTime?: string | null,
-): string {
+/** Human wording for a leave length — "half day (morning)", "1 day", "1.5 days". */
+function describeDays(numDays: number, dayType?: string | null, halfPeriod?: string | null): string {
   if (dayType === 'HALF') return `half day (${halfPeriod === 'SECOND' ? 'afternoon' : 'morning'})`;
-  if (dayType === 'HOURLY' && startTime && endTime) return `${startTime}–${endTime}`;
   return `${numDays} day${numDays === 1 ? '' : 's'}`;
 }
 
@@ -928,7 +926,6 @@ export class LeaveService {
   async create(userId: string, dto: {
     leaveType: string; startDate: string; endDate: string; reason?: string;
     dayType?: string; halfPeriod?: string;
-    startTime?: string; endTime?: string;
     alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
     encashmentDays?: number; supportingDocId?: string | null;
     /** A PLAN — pencilled in for later, not submitted to an approver yet. */
@@ -961,31 +958,24 @@ export class LeaveService {
     if (clash) throw new BadRequestException('You already have a leave (pending or approved) on one or more of these days — only one leave can apply to a day.');
     // A HALF day is exactly that: half of ONE working day. Allowing a range would make
     // "half day" mean "half of each of five days", which is not a thing anyone can take.
-    const dayType = dto.dayType === 'HALF' ? 'HALF' : dto.dayType === 'HOURLY' ? 'HOURLY' : 'FULL';
-    const halfPeriod = dayType === 'HALF' ? (dto.halfPeriod === 'SECOND' ? 'SECOND' : 'FIRST') : null;
-    if (dayType !== 'FULL' && dayKey(start) !== dayKey(end)) {
-      throw new BadRequestException(
-        `A ${dayType === 'HALF' ? 'half-day' : 'part-day'} leave covers a single date — pick the same start and end date.`,
-      );
+    // FULL or HALF, and nothing else. An hourly leave used to be allowed here and was charged
+    // pro-rata, which is exactly what put arbitrary fractions (0.375 of a day) into balances.
+    if (dto.dayType && !['FULL', 'HALF'].includes(dto.dayType)) {
+      throw new BadRequestException('Leave is taken as a full day or a half day.');
     }
-    // An hourly leave is bounded by a start and end time on that one date. Without both we
-    // cannot say how much of the day is being taken, so we cannot debit the balance either.
-    let startTime: string | null = null;
-    let endTime: string | null = null;
-    let hourlyDays = 0;
-    if (dayType === 'HOURLY') {
-      startTime = parseClock(dto.startTime, 'Start Time');
-      endTime = parseClock(dto.endTime, 'End Time');
-      const mins = clockMinutes(endTime) - clockMinutes(startTime);
-      if (mins <= 0) throw new BadRequestException('End Time must be after Start Time.');
-      if (mins > FULL_DAY_HOURS * 60) throw new BadRequestException(`An hourly leave cannot exceed ${FULL_DAY_HOURS} hours — apply for a full day instead.`);
-      // Debit the balance in proportion to a standard working day, so 4 hours costs half a day.
-      hourlyDays = Math.round((mins / 60 / FULL_DAY_HOURS) * 100) / 100;
+    const dayType = dto.dayType === 'HALF' ? 'HALF' : 'FULL';
+    const halfPeriod = dayType === 'HALF' ? (dto.halfPeriod === 'SECOND' ? 'SECOND' : 'FIRST') : null;
+    if (dayType === 'HALF' && dayKey(start) !== dayKey(end)) {
+      throw new BadRequestException('A half-day leave covers a single date — pick the same start and end date.');
     }
     // Count business days only — weekends and holidays do not consume leave balance.
     const workingDays = await this.businessDays(organizationId, start, end);
     if (workingDays.length === 0) throw new BadRequestException('Selected dates contain no working days');
-    const numDays = dayType === 'HALF' ? 0.5 : dayType === 'HOURLY' ? hourlyDays : workingDays.length;
+    const numDays = dayType === 'HALF' ? 0.5 : workingDays.length;
+    // Belt and braces: whole days come from a count and a half day is 0.5, so this cannot fail
+    // today — but it is the one place every leave length passes through, and the guarantee is
+    // worth more than the line costs if somebody adds a third day type later.
+    assertHalfDayStep(numDays, 'Leave length');
 
     // Who covers the work while they are out. It has to be a real, active colleague in the
     // same organisation — and not themselves, which would defeat the point of asking.
@@ -1009,7 +999,7 @@ export class LeaveService {
     if (dto.encashmentDays != null && dto.encashmentDays !== 0) {
       const enc = Number(dto.encashmentDays);
       if (!Number.isFinite(enc) || enc < 0) throw new BadRequestException('Leave encashment days must be a positive number.');
-      if (Math.round(enc * 2) !== enc * 2) throw new BadRequestException('Leave encashment days must be in steps of half a day.');
+      assertHalfDayStep(enc, 'Leave encashment days');
       encashmentDays = enc || null;
     }
 
@@ -1058,7 +1048,7 @@ export class LeaveService {
     const created = await this.prisma.leaveRequest.create({
       data: {
         userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end,
-        numDays, dayType, halfPeriod, startTime, endTime,
+        numDays, dayType, halfPeriod,
         alternateEmployeeId, alternateNumber, alternateAddress, encashmentDays, supportingDocId,
         reason: dto.reason ?? null, status: dto.plan ? 'DRAFT' : 'PENDING',
       },
@@ -1084,7 +1074,7 @@ export class LeaveService {
     await this.notifications.notify(await this.leaveApprovers(organizationId), {
       type: 'leave.requested',
       title: 'Leave request to review',
-      message: `${name} requested ${dto.leaveType} leave (${describeDays(numDays, dayType, halfPeriod, startTime, endTime)}) for ${range}.`,
+      message: `${name} requested ${dto.leaveType} leave (${describeDays(numDays, dayType, halfPeriod)}) for ${range}.`,
       link: '/attendance',
     });
     return created;
@@ -1101,7 +1091,7 @@ export class LeaveService {
     if (plan.userId !== actorId) throw new ForbiddenException('You can only submit your own leave plans');
     if (plan.status !== 'DRAFT') throw new BadRequestException('Only a planned leave can be submitted.');
     const p = plan as typeof plan & {
-      startTime?: string | null; endTime?: string | null; alternateEmployeeId?: string | null;
+      alternateEmployeeId?: string | null;
       alternateNumber?: string | null; alternateAddress?: string | null;
       encashmentDays?: number | null; supportingDocId?: string | null; halfPeriod?: string | null; dayType?: string;
     };
@@ -1112,8 +1102,6 @@ export class LeaveService {
       reason: plan.reason ?? undefined,
       dayType: p.dayType,
       halfPeriod: p.halfPeriod ?? undefined,
-      startTime: p.startTime ?? undefined,
-      endTime: p.endTime ?? undefined,
       alternateEmployeeId: p.alternateEmployeeId ?? null,
       alternateNumber: p.alternateNumber ?? undefined,
       alternateAddress: p.alternateAddress ?? undefined,
@@ -1139,11 +1127,8 @@ export class LeaveService {
     // not ON_LEAVE — marking it ON_LEAVE would excuse the whole day from the attendance rate
     // and zero the timesheet target for hours they are still expected to log.
     const isHalf = (req as { dayType?: string }).dayType === 'HALF';
-    // An HOURLY leave is a few hours out of a day the person otherwise works, so their punches
-    // remain the truth for that day — writing an attendance row here would overwrite them.
-    const isHourly = (req as { dayType?: string }).dayType === 'HOURLY';
     const half = (req as { halfPeriod?: string }).halfPeriod === 'SECOND' ? 'afternoon' : 'morning';
-    const rows = (isHourly ? [] : days).map(date => ({
+    const rows = days.map(date => ({
       userId: req.userId, organizationId: req.organizationId, date,
       status: isHalf ? 'HALF_DAY' : 'ON_LEAVE',
       totalHours: isHalf ? HALF_DAY_HOURS : null,
@@ -1164,7 +1149,7 @@ export class LeaveService {
       await this.prisma.calendarEvent.create({
         data: {
           organizationId: req.organizationId,
-          title: `${name} — ${req.leaveType} ${isHalf ? `half-day leave (${half})` : isHourly ? `leave (${(req as { startTime?: string }).startTime}–${(req as { endTime?: string }).endTime})` : 'leave'}`,
+          title: `${name} — ${req.leaveType} ${isHalf ? `half-day leave (${half})` : 'leave'}`,
           type: 'LEAVE',
           startDate: req.startDate,
           endDate: req.endDate,
@@ -1178,7 +1163,7 @@ export class LeaveService {
     await this.notifications.notify(req.userId, {
       type: 'leave.approved',
       title: 'Leave approved',
-      message: `Your ${req.leaveType} leave (${describeDays(req.numDays, (req as { dayType?: string }).dayType, (req as { halfPeriod?: string }).halfPeriod, (req as { startTime?: string }).startTime, (req as { endTime?: string }).endTime)}) was approved.`,
+      message: `Your ${req.leaveType} leave (${describeDays(req.numDays, (req as { dayType?: string }).dayType, (req as { halfPeriod?: string }).halfPeriod)}) was approved.`,
     });
 
     // Emergency-leave coverage: if this is short-notice leave and the person holds
@@ -1712,7 +1697,7 @@ class LeaveController {
   @RequirePermission('leave.request')
   create(@Actor() actorId: string | null, @Body() body: {
     leaveType: string; startDate: string; endDate: string; reason?: string;
-    dayType?: string; halfPeriod?: string; startTime?: string; endTime?: string;
+    dayType?: string; halfPeriod?: string;
     alternateEmployeeId?: string | null; alternateNumber?: string; alternateAddress?: string;
     encashmentDays?: number; supportingDocId?: string | null; plan?: boolean;
   }) {
