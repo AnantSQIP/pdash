@@ -24,16 +24,14 @@ import { designationRank } from './seniority';
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /**
- * Offices whose PIDs may hold MORE THAN ONE project.
+ * Every Project ID may hold MORE THAN ONE project.
  *
- * A returning client keeps the Project ID they already know, and each new piece of work for them
- * becomes another project under that same PID (a "round"). Jaipur works this way; Gurgaon keeps
- * the original one-PID-one-project behaviour untouched. Adding an office here is the only change
- * needed to switch it on for them.
+ * A returning client keeps the number they already know, and each new piece of work for them
+ * becomes another project under that same PID. This started as one office's way of working and is
+ * now how the whole organisation operates, so there is no gate left — the only requirement is
+ * that the project actually HAS a PID to hang the next one from.
  */
-const MULTI_ROUND_OFFICES = new Set(['JAIPUR']);
-export const supportsRounds = (office?: string | null): boolean =>
-  !!office && MULTI_ROUND_OFFICES.has(office);
+export const supportsRounds = (_office?: string | null): boolean => true;
 
 @Injectable()
 export class ProjectsService {
@@ -174,7 +172,7 @@ export class ProjectsService {
    * know; every round keeps its own tasks, time, files, issues and dates; and every module that
    * already works per-project keeps working with no rewiring.
    *
-   * Only offices in MULTI_ROUND_OFFICES may do this — a Gurgaon PID stays one project.
+   * Any project with a PID may do this — the number is what the client knows.
    */
   async addRound(fromProjectId: string, dto: AddProjectRoundDto) {
     const actorId = getActorId();
@@ -192,11 +190,7 @@ export class ProjectsService {
     if (!source.code) {
       throw new BadRequestException('This project has no Project ID yet. Attach a PID before adding another project under it.');
     }
-    if (!supportsRounds(source.office)) {
-      throw new BadRequestException(
-        'This PID holds a single project. Adding further projects under one PID is enabled for the Jaipur office.',
-      );
-    }
+
     const organizationId = creator.organizationId;
 
     // The next round number is derived from what already exists, INCLUDING soft-deleted rounds, so
@@ -326,7 +320,8 @@ export class ProjectsService {
       _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: { where: { isActive: true } } } },
     } as const;
 
-    if (!self.code || !supportsRounds(self.office)) {
+    // Without a PID there is nothing to group under, so such a project stands alone.
+    if (!self.code) {
       const one = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
       return {
         pid: self.code, multiRound: false,
@@ -810,8 +805,9 @@ export class ProjectsService {
       if (!phases.length) return resStatus === 'RESERVED' ? 'RESERVED' : 'DISCONTINUED';
       const TERMINAL = ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
       if (phases.some(p => !TERMINAL.includes(p))) return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD
-      if (phases.includes('COMPLETED')) return 'COMPLETED';          // done, not yet archived
-      if (phases.includes('CLOSED')) return 'CLOSED';
+      // COMPLETED is the end state. Legacy CLOSED rows read as completed too — they mean the
+      // same thing, which is precisely why the second step was removed.
+      if (phases.some(p => p === 'COMPLETED' || p === 'CLOSED')) return 'COMPLETED';
       return 'DISCONTINUED';
     };
     const shapeRound = (p: (typeof projects)[number]) => ({
@@ -859,7 +855,7 @@ export class ProjectsService {
         roundCount: rounds.length,
         /** Every hour logged across every round of this PID. */
         totalLoggedHours: round1(rounds.reduce((n, p) => n + (loggedByProject.get(p.id) ?? 0), 0)),
-        multiRound: supportsRounds(latest?.office),
+        multiRound: rounds.length > 0,
         /** The latest round, kept so existing single-project consumers keep working unchanged. */
         project: latest ? shapeRound(latest) : null,
         createdAt: r.createdAt, expiresAt: r.expiresAt, resolvedAt: r.resolvedAt,

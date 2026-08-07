@@ -17,16 +17,15 @@ import { projectTypeLabel } from '@/lib/mock-data';
 export const STATE_META: Record<PidLedgerState, { label: string; cls: string }> = {
   WORKING:      { label: 'Working',      cls: 'bg-brand-100 text-brand-700' },
   COMPLETED:    { label: 'Completed',    cls: 'bg-green-100 text-green-700' },
-  CLOSED:       { label: 'Closed',       cls: 'bg-slate-200 text-slate-600' },
   RESERVED:     { label: 'Reserved',     cls: 'bg-amber-100 text-amber-700' },
   DISCONTINUED: { label: 'Discontinued', cls: 'bg-red-100 text-red-700' },
 };
 
-type FilterKey = 'All' | 'Working' | 'Completed' | 'Closed' | 'Reserved' | 'Discontinued';
-const FILTERS: FilterKey[] = ['All', 'Working', 'Completed', 'Closed', 'Reserved', 'Discontinued'];
+type FilterKey = 'All' | 'Working' | 'Completed' | 'Reserved' | 'Discontinued';
+const FILTERS: FilterKey[] = ['All', 'Working', 'Completed', 'Reserved', 'Discontinued'];
 // Which derived state each non-"All" filter keeps.
 const FILTER_STATE: Record<Exclude<FilterKey, 'All'>, PidLedgerState> = {
-  Working: 'WORKING', Completed: 'COMPLETED', Closed: 'CLOSED', Reserved: 'RESERVED', Discontinued: 'DISCONTINUED',
+  Working: 'WORKING', Completed: 'COMPLETED', Reserved: 'RESERVED', Discontinued: 'DISCONTINUED',
 };
 
 const stateLabel = (s: PidLedgerState) => STATE_META[s]?.label ?? s;
@@ -142,7 +141,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
   }, [rows, filter, search]);
 
   const counts = useMemo(() => {
-    const c: Record<PidLedgerState, number> = { WORKING: 0, COMPLETED: 0, CLOSED: 0, RESERVED: 0, DISCONTINUED: 0 };
+    const c: Record<PidLedgerState, number> = { WORKING: 0, COMPLETED: 0, RESERVED: 0, DISCONTINUED: 0 };
     for (const r of rows) c[r.state] = (c[r.state] ?? 0) + 1;
     return { ...c, total: rows.length };
   }, [rows]);
@@ -151,7 +150,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
     <div className="flex flex-col min-h-0">
       <div className="flex items-center justify-between gap-3 flex-wrap shrink-0">
         <p className="text-sm text-gray-500">
-          {counts.WORKING} working · {counts.COMPLETED} completed · {counts.CLOSED} closed · {counts.DISCONTINUED} discontinued · {counts.total} total
+          {counts.WORKING} working · {counts.COMPLETED} completed · {counts.DISCONTINUED} discontinued · {counts.total} total
         </p>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -309,7 +308,9 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 font-medium">
                                     <ExternalLink size={13} /> Open {(r.roundCount ?? 0) > 1 ? 'latest project' : 'project'}
                                   </Link>
-                                  {canReinit && !r.multiRound && (r.state === 'CLOSED' || r.state === 'COMPLETED') && (
+                                  {/* A finished matter is brought back from HERE — the ledger is where
+                                      somebody looks up the number a returning client quotes. */}
+                                  {canReinit && r.state === 'COMPLETED' && (
                                     <button
                                       onClick={e => { e.stopPropagation(); reinitialize(r.project!.id, r.project!.title); }}
                                       disabled={reinitId === r.project!.id}
@@ -319,13 +320,11 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                       Re-initialize
                                     </button>
                                   )}
-                                  {r.multiRound && (
+                                  {r.state === 'COMPLETED' && (
                                     <span className="text-[11px] text-gray-400">
-                                      A returning client gets a NEW project under {r.pid} — open the project and use “New project”.
+                                      Re-initialize reopens this project under {r.pid}. For genuinely new work, open the
+                                      project and use “New project” to add another under the same number.
                                     </span>
-                                  )}
-                                  {!r.multiRound && (r.state === 'CLOSED' || r.state === 'COMPLETED') && (
-                                    <span className="text-[11px] text-gray-400">Reuses {r.pid} — the client keeps the number they already have.</span>
                                   )}
                                 </div>
                               </div>

@@ -68,13 +68,12 @@ export function ProjectDetailClient({ projectId }: Props) {
   // Lifecycle: Complete → Close → Reopen. Completing goes through its own form (it has to capture
   // the client delivery date and the hours), so it is NOT a plain confirm like the others.
   async function runLifecycle(
-    action: 'complete' | 'close' | 'reopen' | 'reinitialize',
+    action: 'complete' | 'reopen' | 'reinitialize',
     completion?: { clientDeliveryDate: string; workingHours: number; actualHours?: number },
   ) {
     if (lifecycleBusy) return;
     const confirms: Record<typeof action, string | null> = {
       complete: null, // asked for in the modal instead
-      close: 'Close this project? It moves to the Closed section (its Project ID shows as discontinued until you reopen it).',
       reopen: null,
       reinitialize: 'Re-initialize this project for a returning client? It reopens with the SAME Project ID and reuses all the existing data.',
     };
@@ -86,7 +85,7 @@ export function ProjectDetailClient({ projectId }: Props) {
       else await api.projects[action](projectId);
       qc.invalidateQueries({ queryKey: ['project', projectId] });
       qc.invalidateQueries({ queryKey: ['projects'] });
-      toast(action === 'complete' ? 'Project marked complete' : action === 'close' ? 'Project closed' : action === 'reinitialize' ? 'Project re-initialized (same PID)' : 'Project reopened', 'success');
+      toast(action === 'complete' ? 'Project marked complete' : action === 'reinitialize' ? 'Project re-initialized (same PID)' : 'Project reopened', 'success');
       if (action === 'complete') setCompleting(false);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
@@ -382,16 +381,6 @@ export function ProjectDetailClient({ projectId }: Props) {
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 border border-green-200 bg-green-50 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-50"
                 >
                   <CheckCircle2 size={14} /> Mark complete
-                </button>
-              )}
-              {can('project.update') && project.projectPhase === 'COMPLETED' && (
-                <button
-                  onClick={() => runLifecycle('close')}
-                  disabled={lifecycleBusy}
-                  title="Close and archive this project to the Closed section"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-700 border border-slate-200 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors disabled:opacity-50"
-                >
-                  <Archive size={14} /> Close
                 </button>
               )}
               {/* On a SINGLE-project PID this is the returning-client action: reopen in place,

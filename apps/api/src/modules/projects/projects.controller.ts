@@ -147,10 +147,6 @@ export class ProjectsController {
   }
 
 
-  @Post(':id/close') @RequirePermission('project.update')
-  close(@Param('id') id: string) {
-    return this.projects.close(id);
-  }
 
   @Post(':id/reopen') @RequirePermission('project.update')
   reopen(@Param('id') id: string) {

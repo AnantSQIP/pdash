@@ -336,7 +336,7 @@ export type PidLedgerRound = {
   patents?: string[]; members?: { name: string; role: string }[];
 };
 
-export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'CLOSED' | 'RESERVED' | 'DISCONTINUED';
+export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'RESERVED' | 'DISCONTINUED';
 export type PidLedgerEntry = {
   id: string; pid: string; fyLabel: string; serial: number;
   status: 'RESERVED' | 'ATTACHED' | 'DISCONTINUED';
@@ -1051,7 +1051,6 @@ export const api = {
     // Lifecycle: Complete → Close → Reopen (distinct from delete).
     complete: (id: string, body?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) =>
       req<ApiProject>(`/projects/${id}/complete`, { method: 'POST', body: JSON.stringify(body ?? {}) }),
-    close: (id: string) => req<ApiProject>(`/projects/${id}/close`, { method: 'POST' }),
     reopen: (id: string) => req<ApiProject>(`/projects/${id}/reopen`, { method: 'POST' }),
     /** Re-initialize a COMPLETED project (returning client) — same PID, existing data reused. */
     reinitialize: (id: string) => req<ApiProject>(`/projects/${id}/reinitialize`, { method: 'POST' }),

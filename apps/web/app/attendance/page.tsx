@@ -20,6 +20,10 @@ import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
 // ── status styling ──────────────────────────────────────────────────────────────
 const STATUS_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
   PRESENT:  { bg: 'bg-green-50 border-green-200 text-green-700',  dot: 'bg-green-500',  label: 'Present' },
+  // A day WORKED FROM HOME is still a present day, but it reads as its own thing — the calendar
+  // used to paint it plain green and put a small cyan dot on it while the legend called it purple,
+  // so the same fact had three different colours depending where you looked.
+  WFH:      { bg: 'bg-cyan-50 border-cyan-200 text-cyan-800',     dot: 'bg-cyan-600',   label: 'Work from home' },
   ABSENT:   { bg: 'bg-red-50 border-red-200 text-red-700',        dot: 'bg-red-500',    label: 'Absent' },
   HALF_DAY: { bg: 'bg-amber-50 border-amber-200 text-amber-700',  dot: 'bg-amber-500',  label: 'Half day' },
   ON_LEAVE: { bg: 'bg-blue-50 border-blue-200 text-blue-700',     dot: 'bg-blue-500',   label: 'On leave' },
@@ -135,7 +139,7 @@ export default function AttendancePage() {
                   <div>
                     <p className="text-xs text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
                       Today · {format(new Date(), 'EEE, MMM d')}
-                      {(today?.workMode === 'WFH' || wfhApprovedToday) && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full" title="You have approved work-from-home today"><Home size={10} /> WFH approved</span>}
+                      {(today?.workMode === 'WFH' || wfhApprovedToday) && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-cyan-800 bg-cyan-100 px-1.5 py-0.5 rounded-full" title="You have approved work-from-home today"><Home size={10} /> WFH approved</span>}
                     </p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{clockedIn ? fmtElapsed(elapsed) : (today?.checkOut ? 'Day complete' : 'Not clocked in')}</p>
                     <p className="text-xs text-gray-500 mt-1">In {timeOf(today?.checkIn)} · Out {timeOf(today?.checkOut)}{today?.totalHours != null ? ` · ${today.totalHours}h` : ''}</p>
@@ -223,7 +227,7 @@ export default function AttendancePage() {
                         </span>
                       ))}
                       <span className="inline-flex items-center gap-2 text-[11px] text-gray-500">
-                        <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />Worked from home
+                        <span className={clsx('w-2.5 h-2.5 rounded-sm', STATUS_STYLE.WFH.dot)} />{STATUS_STYLE.WFH.label}
                       </span>
                       <span className="inline-flex items-center gap-2 text-[11px] text-gray-500">
                         <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />Regularised
@@ -395,7 +399,11 @@ function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth;
       {cells.map((c, i) => {
         if (!c) return <div key={i} />;
         const rec = byDate.get(c.key);
-        const st = STATUS_STYLE[rec?.status ?? 'FUTURE'] ?? STATUS_STYLE.FUTURE;
+        // Worked-from-home wins over the plain PRESENT/HALF_DAY colour so the day is readable at
+        // a glance; the hours and the half-day marker still show inside the cell.
+        const worked = rec?.status === 'PRESENT' || rec?.status === 'HALF_DAY' || rec?.status === 'LATE';
+        const styleKey = worked && rec?.workMode === 'WFH' ? 'WFH' : (rec?.status ?? 'FUTURE');
+        const st = STATUS_STYLE[styleKey] ?? STATUS_STYLE.FUTURE;
         const pend = rec?.pending;
         const title = rec
           ? `${c.key}: ${STATUS_STYLE[rec.status]?.label ?? rec.status}${rec.workMode === 'WFH' ? ' · WFH' : ''}${rec.totalHours ? ` · ${rec.totalHours}h` : ''}${rec.note ? ` · ${rec.note}` : ''}${pend ? ` · ${pend.label} (awaiting approval)` : ''}`
@@ -411,7 +419,7 @@ function MonthGrid({ month, year, monthNum, onPick }: { month?: AttendanceMonth;
             <span className="text-[13px] font-semibold">{c.day}</span>
             {rec?.totalHours != null && <span className="text-[10px] opacity-70 mt-1 tabular-nums">{rec.totalHours}h</span>}
             {rec?.isRegularized && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400" title="Regularised" />}
-            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-cyan-600" title="Worked from home" />}
+            {rec?.workMode === 'WFH' && <span className="absolute top-1 left-1 w-1.5 h-1.5 rounded-full bg-cyan-700" title="Worked from home" />}
             {pend && <span className="absolute bottom-0.5 text-[8px] font-semibold text-amber-600 uppercase tracking-tight">req</span>}
           </>
         );

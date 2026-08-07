@@ -22,7 +22,6 @@ const PHASES: { value: Phase | 'ALL'; label: string }[] = [
   { value: 'PLANNING',  label: 'Planning' },
   { value: 'ON_HOLD',   label: 'On Hold' },
   { value: 'COMPLETED', label: 'Completed' },
-  { value: 'CLOSED',    label: 'Closed' },
 ];
 
 const PHASE_COLOR: Record<string, string> = {
@@ -133,17 +132,15 @@ export function ProjectsClient() {
   const filtered = projects.filter(p => {
     // Closed projects live in their own section — keep them out of every other view
     // (including "All Projects"); they only appear under the Closed filter.
-    if (phase === 'ALL') { if (p.projectPhase === 'CLOSED') return false; }
-    else if (p.projectPhase !== phase) return false;
+    if (phase !== 'ALL' && p.projectPhase !== phase) return false;
     if (search && !`${p.title} ${p.code ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
   const stats = {
-    total: projects.filter(p => p.projectPhase !== 'CLOSED').length,
+    total: projects.length,
     active: projects.filter(p => p.projectPhase === 'ACTIVE').length,
     completed: projects.filter(p => p.projectPhase === 'COMPLETED').length,
-    closed: projects.filter(p => p.projectPhase === 'CLOSED').length,
     onHold: projects.filter(p => p.projectPhase === 'ON_HOLD').length,
   };
 
@@ -229,7 +226,6 @@ export function ProjectsClient() {
         <StatPill label="Active"    value={stats.active}    color="text-brand-500"  dot="bg-brand-500" />
         <StatPill label="Completed" value={stats.completed} color="text-green-600"  dot="bg-green-500" />
         <StatPill label="On Hold"   value={stats.onHold}    color="text-orange-600" dot="bg-orange-400" />
-        <StatPill label="Closed"    value={stats.closed}    color="text-slate-600"  dot="bg-slate-400" />
       </div>
 
       {/* Filters + search row. NOTE: no `overflow-x-auto` here — it silently forces overflow-y
