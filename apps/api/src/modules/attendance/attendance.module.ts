@@ -8,6 +8,7 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
+import { PermissionService } from '../permissions/permission.service';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -877,6 +878,7 @@ export class LeaveService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly capacity: CapacityService,
+    private readonly permissions: PermissionService,
   ) {}
 
   private async orgOf(userId: string): Promise<string | null> {
@@ -1181,11 +1183,35 @@ export class LeaveService {
     return updated;
   }
 
+  /**
+   * Cancel a leave request — including one already APPROVED, which is the case that matters:
+   * someone is off on Thursday, and on Thursday morning decides to work after all.
+   *
+   * WHO: the person whose leave it is, or anyone holding `leave.approve` (HR / Admin /
+   * Super Admin) acting on their behalf — because the person who changes their mind is
+   * often the one who phones HR rather than opening the app.
+   *
+   * Cancelling an APPROVED leave deletes the attendance rows the approval generated, so the
+   * day stops reading as "on leave" and the person can simply punch in. The balance needs no
+   * separate refund: it is derived from requests in APPROVED status, so moving to CANCELLED
+   * returns the days by itself.
+   */
   async cancel(id: string, actorId: string) {
     const req = await this.prisma.leaveRequest.findUnique({ where: { id } });
     if (!req) throw new NotFoundException(`Leave request ${id} not found`);
-    if (req.userId !== actorId) throw new ForbiddenException('You can only cancel your own leave requests');
+    const isOwner = req.userId === actorId;
+    // An approver may cancel for someone else, but only inside their own organisation.
+    const canCancelForOthers = !isOwner
+      && (await this.permissions.check(actorId, 'leave.approve'))
+      && req.organizationId != null
+      && req.organizationId === (await this.orgOf(actorId));
+    if (!isOwner && !canCancelForOthers) {
+      throw new ForbiddenException('You can only cancel your own leave requests');
+    }
     if (!['DRAFT', 'PENDING', 'APPROVED'].includes(req.status)) throw new BadRequestException('Cannot cancel this request');
+    // A DRAFT belongs to its author alone — an approver has no business deleting a plan
+    // that was never submitted to them.
+    if (req.status === 'DRAFT' && !isOwner) throw new ForbiddenException('That leave plan has not been submitted yet.');
     // A plan was never submitted to anybody, so dropping it should leave no trace.
     if (req.status === 'DRAFT') {
       await this.prisma.leaveRequest.delete({ where: { id } });
@@ -1204,7 +1230,28 @@ export class LeaveService {
         });
       }
     }
-    return this.prisma.leaveRequest.update({ where: { id }, data: { status: 'CANCELLED' }, include: { user: this.userSelect } });
+    const updated = await this.prisma.leaveRequest.update({
+      where: { id }, data: { status: 'CANCELLED' }, include: { user: this.userSelect },
+    });
+    // Someone whose leave was cancelled FOR them must be told — they are expected at work.
+    if (!isOwner) {
+      await this.notifications.notify(req.userId, {
+        type: 'leave.cancelled',
+        title: 'Your leave was cancelled',
+        message: `Your leave from ${utcDay(req.startDate).toISOString().slice(0, 10)} to ${utcDay(req.endDate).toISOString().slice(0, 10)} has been cancelled. The days are back on your balance, and you can punch in as normal.`,
+        link: '/attendance',
+      });
+    }
+    // The approvers' queue and the capacity board both read this leave.
+    if (req.status === 'PENDING' && !isOwner) {
+      await this.notifications.notify(await this.leaveApprovers(req.organizationId), {
+        type: 'leave.cancelled',
+        title: 'Leave request cancelled',
+        message: `A pending leave request from ${updated.user?.firstName ?? 'a team member'} was cancelled.`,
+        link: '/attendance',
+      });
+    }
+    return updated;
   }
 
   // ── leave types & balances ──────────────────────────────────────────────────

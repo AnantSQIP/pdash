@@ -843,7 +843,37 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   const [busyId, setBusyId] = useState('');
   const qc = useQueryClient();
   const { can } = usePermissions();
+  const { org: teamOrg } = useOrg();
+  const orgId = teamOrg?.id;
   const todayKey = new Date().toISOString().slice(0, 10);
+  // Approved leave that has not finished yet — the list HR/Admin need when someone rings in
+  // to say they will work after all. Past leave is left alone: cancelling it would silently
+  // rewrite an attendance record that has already been counted.
+  const canCancelLeave = can('leave.approve');
+  const { data: approvedLeave = [] } = useQuery<LeaveRequestItem[]>({
+    queryKey: ['leave-approved-org'],
+    queryFn: () => api.leave.orgRequests(orgId ?? '', 'APPROVED'),
+    enabled: !!orgId && canCancelLeave,
+    staleTime: 15_000,
+  });
+  const liveLeave = approvedLeave
+    .filter(r => r.endDate.slice(0, 10) >= todayKey)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  async function cancelLeaveFor(r: LeaveRequestItem) {
+    const who = `${r.user?.firstName ?? ''} ${r.user?.lastName ?? ''}`.trim() || 'this person';
+    if (!window.confirm(`Cancel ${who}'s leave?\n\nThe days go back on their balance and they can punch in as normal. They will be notified.`)) return;
+    setBusyId(r.id);
+    try {
+      await api.leave.cancel(r.id);
+      qc.invalidateQueries({ queryKey: ['leave-approved-org'] });
+      qc.invalidateQueries({ queryKey: ['leave-pending'] });
+      qc.invalidateQueries({ queryKey: ['attn-org'] });
+      qc.invalidateQueries({ queryKey: ['capacity'] });
+      onReviewed();
+    } catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel the leave.'); }
+    finally { setBusyId(''); }
+  }
   const yearAgoKey = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
   // Punch-in/out locations for every member on a chosen day (HR/Admin only) — pick any day in the
   // last year. Full data is exportable to CSV over a range.
@@ -1010,6 +1040,40 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
           ))}
         </ul>
       </div>
+
+      {/* Approved leave that can still be called off */}
+      {canCancelLeave && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-gray-700">Approved leave — current &amp; upcoming</h3>
+            {liveLeave.length > 0 && <span className="text-[11px] bg-green-100 text-green-700 rounded-full px-2 py-0.5 font-medium">{liveLeave.length}</span>}
+          </div>
+          <ul className="divide-y divide-gray-50">
+            {liveLeave.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">Nobody is on approved leave right now</li>}
+            {liveLeave.map(r => {
+              const onToday = r.startDate.slice(0, 10) <= todayKey && todayKey <= r.endDate.slice(0, 10);
+              return (
+                <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Avatar user={r.user} size={32} />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">
+                        {r.user?.firstName} {r.user?.lastName} · {r.leaveType} · {r.numDays}d
+                        {onToday && <span className="ml-2 text-[10px] font-semibold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded-full">on leave today</span>}
+                      </p>
+                      <p className="text-xs text-gray-400">{format(new Date(r.startDate), 'MMM d')} – {format(new Date(r.endDate), 'MMM d')}{r.reason ? ` · ${r.reason}` : ''}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => cancelLeaveFor(r)} disabled={!!busyId}
+                    className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50 shrink-0">
+                    <X size={13} /> Cancel leave
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {/* Pending regularisation requests */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
