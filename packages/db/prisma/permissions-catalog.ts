@@ -130,7 +130,7 @@ const MANAGER_CODES = [
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
   code('channel', 'create'),
   code('report', 'export'),
-  code('analytics', 'view.organization'),
+  code('analytics', 'view.own'), code('analytics', 'view.organization'),
   // Matrix 2026-07-28: Manager keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
   // Delivery oversight: see who is free/overloaded, and the client-facing dates.
@@ -138,9 +138,9 @@ const MANAGER_CODES = [
   // Managers see team attendance but do NOT review regularisations — those route to
   // HR + Yash only (see AttendanceService.regularizationApproverIds).
   code('attendance', 'view.organization'),
-  code('leave', 'view.organization'), code('leave', 'approve'), code('leave', 'request'),
-  // Matrix 2026-07-28: expense approval + holiday management move to HR/Admin (removed from Manager).
-  code('expense', 'view.organization'),
+  // Matrix 2026-08-11: leave APPROVAL moves to HR/Admin — a Manager sees the team's leave
+  // but no longer decides it.
+  code('leave', 'view.organization'), code('leave', 'request'),
   code('reward', 'give'),
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
@@ -160,13 +160,18 @@ const EMPLOYEE_CODES = [
   code('timesheet', 'delete'), // matrix: everyone may delete their own time entry
   code('issue', 'create'), code('issue', 'update'), code('issue', 'delete'),
   code('comment', 'create'),
-  code('document', 'create'),
+  // Matrix 2026-08-11: everyone may remove a file they attached, and export a report.
+  code('document', 'create'), code('document', 'delete'),
+  code('report', 'export'),
   code('channel', 'create'),
   // Everyone manages their OWN calendar entries (feeds the org Team Calendar).
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
   code('analytics', 'view.own'),
   code('performance', 'view.own'),
-  code('leave', 'request'),
+  // Matrix 2026-08-11: the team directory and who is on leave are open to everyone —
+  // they are what the Team Calendar and People pages are built on.
+  code('leave', 'request'), code('leave', 'view.organization'),
+  code('user', 'view'), code('department', 'view'),
 ];
 
 // Senior Research Associate: a SENIOR INDIVIDUAL CONTRIBUTOR in the research/analysis
@@ -205,12 +210,13 @@ const SENIOR_CONSULTANT_CODES = [
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
   code('channel', 'create'),
   code('report', 'export'),
-  code('analytics', 'view.organization'),
+  // Matrix 2026-08-11: own analytics only — org-wide analytics moves up to Manager/Admin.
+  code('analytics', 'view.own'),
   // Matrix 2026-07-28: keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
   // Delivery oversight: see who is free/overloaded, and the client-facing dates.
   code('capacity', 'view'), code('deadline', 'view.client'),
-  code('leave', 'request'),
+  code('leave', 'request'), code('leave', 'view.organization'),
   // Matrix 2026-07-28: recognition-giving (reward.give) stays with Manager/HR/Admin — removed here.
   code('user', 'view'), code('department', 'view'),
   // Directory tier only — a manager never receives someone's home address or DOB.
@@ -228,13 +234,16 @@ const CONSULTANT_CODES = [
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
   code('issue', 'create'), code('issue', 'update'), code('issue', 'delete'),
   code('comment', 'create'),
-  code('document', 'create'),
+  // Matrix 2026-08-11: may remove a file they attached.
+  code('document', 'create'), code('document', 'delete'),
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
   code('channel', 'create'),
   code('report', 'export'),
   code('analytics', 'view.own'),
   code('performance', 'view.own'),
-  code('leave', 'request'),
+  // Matrix 2026-08-11: the team directory and who is on leave are open to everyone.
+  code('leave', 'request'), code('leave', 'view.organization'),
+  code('user', 'view'), code('department', 'view'),
 ];
 
 // HR: people operations — attendance, leave, holidays, user & department
@@ -245,7 +254,8 @@ const CONSULTANT_CODES = [
 const HR_CODES = [
   code('dashboard', 'view'),
   code('comment', 'view'), code('comment', 'create'),
-  code('document', 'view'), code('document', 'create'),
+  // Matrix 2026-08-11: may remove a file they attached.
+  code('document', 'view'), code('document', 'create'), code('document', 'delete'),
   code('calendar', 'view'), code('channel', 'view'),
   // matrix: HR manages their own calendar + logs/deletes their own time.
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),

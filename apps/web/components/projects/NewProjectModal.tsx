@@ -44,7 +44,9 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [patentSearch, setPatentSearch] = useState('');
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
-  // The office that owns the matter. Not cosmetic: a Jaipur PID may later hold several projects
+  // The office that owns the matter. No longer asked for on the form — every PID can hold
+  // several rounds now (supportsRounds() is unconditional), so it is inherited from the
+  // creator and kept only for reporting.
   // for a returning client, while a Gurgaon PID stays one project.
   const [office, setOffice] = useState('');
   // Default to the creator's own office as soon as we know it, without stamping on a manual pick.
@@ -450,23 +452,6 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               </p>
             </div>
           )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Office</label>
-            <select
-              value={office}
-              onChange={e => setOffice(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
-            >
-              <option value="GURGAON">Gurgaon</option>
-              <option value="JAIPUR">Jaipur</option>
-            </select>
-            <p className="mt-1 text-xs text-gray-400">
-              {office === 'JAIPUR'
-                ? 'A Jaipur Project ID can hold several projects — when this client returns, their next piece of work is added under the same PID.'
-                : 'A Gurgaon Project ID holds one project.'}
-            </p>
-          </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>

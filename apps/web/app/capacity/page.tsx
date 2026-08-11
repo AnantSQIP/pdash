@@ -37,6 +37,7 @@ import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
 import { pidLabel } from '@/lib/mock-data';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 
 export default function CapacityPage() {
   const { org } = useOrg();
@@ -401,8 +402,7 @@ export default function CapacityPage() {
           onClose={() => setAssignTo(null)}
           onDone={() => {
             setAssignTo(null);
-            qc.invalidateQueries({ queryKey: ['capacity'] });
-            qc.invalidateQueries({ queryKey: ['tasks'] });
+            invalidateTaskCaches(qc);
           }}
         />
       )}
@@ -440,9 +440,8 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
   const [busy, setBusy] = useState('');
 
   function refresh() {
+    invalidateTaskCaches(qc);
     qc.invalidateQueries({ queryKey: ['coverage-risks'] });
-    qc.invalidateQueries({ queryKey: ['capacity'] });
-    qc.invalidateQueries({ queryKey: ['tasks'] });
   }
 
   async function reassign(taskId: string, fromUserId: string, toUserId: string) {

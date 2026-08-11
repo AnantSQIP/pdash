@@ -7,6 +7,7 @@ import { Plus, Pencil, Check, X, Loader, Trash2, ChevronDown, LayoutList } from 
 import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { TaskListView } from './views';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 
 type Group = { id: string; name: string; isDefault: boolean; sequence: number };
 
@@ -45,9 +46,8 @@ export function TaskGroups({ projectId, tasks, loading, statuses, canEdit, onTas
   });
 
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['task-groups', projectId] });
-    qc.invalidateQueries({ queryKey: ['tasks', projectId] });
-    qc.invalidateQueries({ queryKey: ['project-rounds'] });
+    // Was project-scoped only, so My Tasks kept showing the previous status.
+    invalidateTaskCaches(qc);
   };
 
   const rename = useMutation({

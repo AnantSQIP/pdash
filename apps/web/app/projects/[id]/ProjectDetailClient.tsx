@@ -34,7 +34,8 @@ import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
-import { formatDate, formatDateTimeIST } from '@/lib/date';
+import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 // Timesheets is a core, frequently-used tab, so it sits up front (3rd) rather than buried.
@@ -166,12 +167,8 @@ export function ProjectDetailClient({ projectId }: Props) {
     // Invalidate broadly (M36 + L14): a task can appear in other projects/lists and
     // feeds the project cards + home dashboard analytics, so refresh them all — not
     // just the list this change was made from.
-    qc.invalidateQueries({ queryKey: ['tasks'] });
-    qc.invalidateQueries({ queryKey: ['project', projectId] });
-    qc.invalidateQueries({ queryKey: ['projects'] });
-    qc.invalidateQueries({ queryKey: ['tasks-me'] });
-    qc.invalidateQueries({ queryKey: ['analytics-dashboard'] });
-    qc.invalidateQueries({ queryKey: ['activity'] }); // L29: refresh activity feeds after a change
+    // Every cache that renders this task, not just the ones on this screen.
+    invalidateTaskCaches(qc);
   }
 
   // A reopened (or otherwise pending) project needs a fresh PID — an authority attaches one
@@ -470,7 +467,7 @@ export function ProjectDetailClient({ projectId }: Props) {
             {project.clientDeliveryDate && (
               <div className="flex items-center gap-1.5 text-green-700 bg-green-50 border border-green-100 px-2 py-0.5 rounded-full" title="When the work reached the client">
                 <Truck size={12} />
-                <span>Delivered <span className="font-semibold">{formatDateTimeIST(project.clientDeliveryDate)}</span></span>
+                <span>Delivered <span className="font-semibold">{formatDateIST(project.clientDeliveryDate)}</span></span>
               </div>
             )}
             {(project.workingHours != null || project.actualHours != null) && (

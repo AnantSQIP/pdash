@@ -6,7 +6,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { Loader, Download, ChevronRight, ChevronDown, Search, RotateCcw, ExternalLink } from 'lucide-react';
 import { api, type PidLedgerEntry, type PidLedgerState } from '@/lib/api';
-import { formatDate, formatDateTimeIST } from '@/lib/date';
+import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { projectTypeLabel } from '@/lib/mock-data';
@@ -65,7 +65,7 @@ function exportCsv(rows: PidLedgerEntry[]) {
       rd.startDate ? formatDate(rd.startDate) : '',
       rd.dueDate ? formatDate(rd.dueDate) : '',
       rd.clientDueDate ? formatDate(rd.clientDueDate) : '',
-      rd.clientDeliveryDate ? formatDateTimeIST(rd.clientDeliveryDate) : '',
+      rd.clientDeliveryDate ? formatDateIST(rd.clientDeliveryDate) : '',
       rd.loggedHours ?? 0, r.totalLoggedHours ?? 0,
       rd.workingHours ?? '', rd.actualHours ?? '',
       rd.actualHours != null && rd.workingHours != null
@@ -279,7 +279,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                       <div><span className="text-gray-400">Start</span><p className="text-gray-800">{rd.startDate ? formatDate(rd.startDate) : '—'}</p></div>
                                       <div><span className="text-gray-400">End / deadline</span><p className="text-gray-800">{rd.dueDate ? formatDate(rd.dueDate) : '—'}</p></div>
                                       <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{rd.clientDueDate ? formatDate(rd.clientDueDate) : '—'}</p></div>
-                                      <div><span className="text-gray-400">Delivered</span><p className="text-gray-800">{rd.clientDeliveryDate ? formatDateTimeIST(rd.clientDeliveryDate) : '—'}</p></div>
+                                      <div><span className="text-gray-400">Delivered</span><p className="text-gray-800">{rd.clientDeliveryDate ? formatDateIST(rd.clientDeliveryDate) : '—'}</p></div>
                                       <div><span className="text-gray-400">Logged hrs</span><p className="text-gray-800">{rd.loggedHours ?? 0}h</p></div>
                                       <div><span className="text-gray-400">Working hrs</span><p className="text-gray-800">{rd.workingHours != null ? `${rd.workingHours}h` : '—'}</p></div>
                                       <div><span className="text-gray-400">Actual hrs</span><p className="text-gray-800">{rd.actualHours != null ? `${rd.actualHours}h` : '—'}</p></div>

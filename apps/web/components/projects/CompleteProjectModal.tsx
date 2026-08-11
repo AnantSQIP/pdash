@@ -10,8 +10,9 @@ import { api } from '@/lib/api';
  * work out for itself: WHEN it reached the client, and what it REALLY cost. So the button asks
  * instead of guessing.
  *
- *  • Client delivery date/time — when the work was handed over. Defaults to now (you are signing
- *    it off), but is editable because sign-off often lags delivery by a day or two.
+ *  • Client delivery date — the DAY the work was handed over. Defaults to today (you are signing
+ *    it off), but is editable because sign-off often lags delivery by a day or two. Date only:
+ *    the hour a report went out is not something anyone reliably records.
  *  • Working hours — prefilled from logged timesheets, falling back to the sum of task estimates
  *    when nobody logged time. Editable: the number on paper is not always the number to keep.
  *  • Actual hours — typed by hand. Deliberately not derived; it exists precisely to capture the
@@ -24,13 +25,14 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
   onConfirm: (v: { clientDeliveryDate: string; workingHours: number; actualHours?: number }) => void;
   busy?: boolean;
 }) {
-  // datetime-local wants the LOCAL wall clock, not an ISO instant.
-  const nowLocal = () => {
+  // A date input wants the LOCAL calendar day, not a UTC instant (which rolls over at
+  // 05:30 IST and would offer "yesterday" to anyone signing off late in the evening).
+  const todayLocal = () => {
     const d = new Date();
     d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 16);
+    return d.toISOString().slice(0, 10);
   };
-  const [delivery, setDelivery] = useState(nowLocal);
+  const [delivery, setDelivery] = useState(todayLocal);
   const [working, setWorking] = useState('');
   const [actual, setActual] = useState('');
   const [touchedWorking, setTouchedWorking] = useState(false);
@@ -77,10 +79,10 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
         <div className="px-6 py-5 space-y-4">
           <div>
             <label className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
-              <Truck size={14} className="text-gray-400" /> Client delivery date &amp; time <span className="text-red-500">*</span>
+              <Truck size={14} className="text-gray-400" /> Client delivery date <span className="text-red-500">*</span>
             </label>
             <input
-              type="datetime-local" value={delivery} onChange={e => setDelivery(e.target.value)}
+              type="date" value={delivery} onChange={e => setDelivery(e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
             />
             <p className="text-[11px] text-gray-400 mt-1">When the work actually reached the client — not necessarily today.</p>
@@ -124,8 +126,9 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
         <div className="flex gap-2 px-6 py-4 border-t border-gray-100">
           <button
             onClick={() => onConfirm({
-              // datetime-local has no zone; the browser is IST, so build a real instant from it.
-              clientDeliveryDate: new Date(delivery).toISOString(),
+              // Store the chosen DAY. Noon UTC, so the date can never slide backwards or
+              // forwards a day when it is later read in another timezone.
+              clientDeliveryDate: new Date(`${delivery}T12:00:00.000Z`).toISOString(),
               workingHours: workingNum,
               ...(actualNum !== undefined ? { actualHours: actualNum } : {}),
             })}

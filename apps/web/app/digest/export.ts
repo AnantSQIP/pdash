@@ -26,7 +26,7 @@ const PROJECT_COLUMNS = [
 const projectRow = (p: DigestProject) => [
   p.pid ?? 'PID pending', p.roundSeq ?? 1, p.title, p.type ?? '', p.phase, p.priority, p.client ?? '',
   p.progress, p.taskCount,
-  d(p.startDate), d(p.dueDate), d(p.clientDueDate), dt(p.clientDeliveryDate), dt(p.completedAt),
+  d(p.startDate), d(p.dueDate), d(p.clientDueDate), d(p.clientDeliveryDate), dt(p.completedAt),
   p.workingHours ?? '', p.actualHours ?? '',
   p.actualHours != null && p.workingHours != null
     ? Math.round((p.actualHours - p.workingHours) * 10) / 10 : '',

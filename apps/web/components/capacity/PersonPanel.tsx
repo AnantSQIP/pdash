@@ -15,6 +15,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 
 // Extending a deadline spreads the same remaining work over more days, which lowers the
 // assignee's daily occupancy — the lever to relieve someone who is overloaded or on leave.
@@ -109,10 +110,8 @@ export function PersonPanel({ row, onClose, onAssign }: { row: CapacityRow; onCl
       } else {
         await api.tasks.update(task.id, { dueDate: iso });
       }
-      qc.invalidateQueries({ queryKey: ['capacity'] });
+      invalidateTaskCaches(qc);
       qc.invalidateQueries({ queryKey: ['coverage-risks'] });
-      qc.invalidateQueries({ queryKey: ['tasks'] });
-      qc.invalidateQueries({ queryKey: ['project', task.projectId] });
       toast(`Deadline extended to ${formatDate(iso)}`, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');

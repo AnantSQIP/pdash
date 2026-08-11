@@ -18,6 +18,7 @@ import { isTaskClosed, taskAssigneeIds, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYP
 import { formatDate, toUtcDay, isPastDue, formatDateTimeIST } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 import { TaskStaffing } from './TaskStaffing';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 
 // 'staffing' replaces the old 'assignees' tab. 'subtasks' | 'comments' | 'activity' remain in the
 // type (their code below is preserved) but are hidden from the tab bar per the new task flow.
@@ -322,8 +323,7 @@ function TaskDetailPanelInner({
     try {
       const updated = await api.tasks.update(forId, patch);
       emitUpdated(forId, updated);
-      qc.invalidateQueries({ queryKey: ['tasks'] });
-      qc.invalidateQueries({ queryKey: ['capacity'] }); // the board is computed from these
+      invalidateTaskCaches(qc); // incl. capacity — the board is computed from these
     } catch (e) {
       setPlan(planOf(task)); // snap back to what the server still believes
       toast(e instanceof Error ? e.message : 'Could not save', 'error');
@@ -420,7 +420,8 @@ function TaskDetailPanelInner({
     setSavingAssignees(true);
     try {
       const updated = await api.tasks.setAssignees(savingTaskId, ids);
-      qc.invalidateQueries({ queryKey: ['tasks', projectId] });
+      // Assignees drive My Tasks and the capacity board too, not just this project.
+      invalidateTaskCaches(qc);
       if (mountedRef.current && currentTaskId.current === savingTaskId) onUpdated?.(updated);
     } catch (e) {
       if (mountedRef.current && currentTaskId.current === savingTaskId) setAssigneeIds(taskAssigneeIds(task));

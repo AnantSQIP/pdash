@@ -13,6 +13,7 @@ import ActivityTab from './ActivityTab';
 import TimesheetsTab from './TimesheetsTab';
 import FilesTab from './FilesTab';
 import { ProjectCapacityTab } from './ProjectCapacityTab';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 
 export type ProjectTab =
   | 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Capacity'
@@ -60,9 +61,7 @@ export function RoundTabContent({ round, tab, statuses, canEdit, onTaskClick, on
         : t));
     try {
       await api.tasks.setStatus(taskId, statusId);
-      qc.invalidateQueries({ queryKey: ['tasks'] });
-      qc.invalidateQueries({ queryKey: ['project-rounds'] });
-      qc.invalidateQueries({ queryKey: ['projects'] });
+      invalidateTaskCaches(qc);
     } catch (e) {
       if (snapshot) qc.setQueryData(key, snapshot); // the move was rejected — put it back
       toast(e instanceof Error ? e.message : 'Could not move the task', 'error');

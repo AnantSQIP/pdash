@@ -10,6 +10,7 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
+import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
 
 const PRIORITY_META = {
@@ -93,7 +94,9 @@ export default function TasksPage() {
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update status', 'error');
     } finally {
-      qc.invalidateQueries({ queryKey: meKey });
+      // The same task is on screen in the project view too — refresh every cache
+      // that renders it, not just this page's.
+      invalidateTaskCaches(qc);
     }
   }
 
@@ -105,7 +108,7 @@ export default function TasksPage() {
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update progress', 'error');
     } finally {
-      qc.invalidateQueries({ queryKey: meKey });
+      invalidateTaskCaches(qc);
     }
   }
 

@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, ChevronRight, Edit3, Check, X, Search, Download, ExternalLink } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type DashboardStats, type ReportProject } from '@/lib/api';
-import { formatDate, formatDateTimeIST } from '@/lib/date';
+import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
 import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
@@ -152,7 +152,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
                 <div><span className="text-gray-400">Start</span><p className="text-gray-800">{project.startDate ? formatDate(project.startDate) : '—'}</p></div>
                 <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{project.dueDate ? formatDate(project.dueDate) : '—'}</p></div>
                 <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{project.clientDueDate ? formatDate(project.clientDueDate) : '—'}</p></div>
-                <div><span className="text-gray-400">Delivered to client</span><p className="text-gray-800">{project.clientDeliveryDate ? formatDateTimeIST(project.clientDeliveryDate) : '—'}</p></div>
+                <div><span className="text-gray-400">Delivered to client</span><p className="text-gray-800">{project.clientDeliveryDate ? formatDateIST(project.clientDeliveryDate) : '—'}</p></div>
                 <div><span className="text-gray-400">Completed</span><p className="text-gray-800">{project.completedAt ? formatDateTimeIST(project.completedAt) : '—'}</p></div>
                 <div><span className="text-gray-400">Working hours</span><p className="text-gray-800">{hrs(project.workingHours)}</p></div>
                 <div><span className="text-gray-400">Actual hours</span><p className="text-gray-800">{hrs(project.actualHours)}</p></div>

@@ -100,6 +100,19 @@ export function formatDateTimeIST(value: string | Date | null | undefined): stri
   });
 }
 
+/** A short date with NO time-of-day, read in the org timezone (IST), e.g. "25 Jul 2026".
+ *  For values that are a calendar DAY rather than an instant — the client delivery date is
+ *  captured as a date only, so rendering an hour beside it would invent precision. Formatting
+ *  in IST (not UTC) keeps a day stored near midnight from displaying as the day before. */
+export function formatDateIST(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric', timeZone: ORG_TZ,
+  });
+}
+
 /** Long, human date in the org timezone (IST), e.g. "Friday, 25 July 2026". */
 export function longDateIST(now: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-IN', {

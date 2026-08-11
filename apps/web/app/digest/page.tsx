@@ -12,7 +12,7 @@ import {
 import { api, type DigestDetail, type DigestProject, type DigestTask, type DigestPersonHours } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
-import { formatDate, formatDateTimeIST } from '@/lib/date';
+import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { digestCsv } from './export';
 
@@ -80,7 +80,7 @@ function ProjectCardRow({ p }: { p: DigestProject }) {
         <div><span className="text-gray-400">Start</span><p className="text-gray-800">{p.startDate ? formatDate(p.startDate) : '—'}</p></div>
         <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{p.dueDate ? formatDate(p.dueDate) : '—'}</p></div>
         <div><span className="text-gray-400">Client deadline</span><p className="text-gray-800">{p.clientDueDate ? formatDate(p.clientDueDate) : '—'}</p></div>
-        <div><span className="text-gray-400">Delivered</span><p className="text-gray-800">{p.clientDeliveryDate ? formatDateTimeIST(p.clientDeliveryDate) : '—'}</p></div>
+        <div><span className="text-gray-400">Delivered</span><p className="text-gray-800">{p.clientDeliveryDate ? formatDateIST(p.clientDeliveryDate) : '—'}</p></div>
         <div><span className="text-gray-400">Working hrs</span><p className="text-gray-800">{hrs(p.workingHours)}</p></div>
         <div><span className="text-gray-400">Actual hrs</span><p className="text-gray-800">{hrs(p.actualHours)}</p></div>
       </div>

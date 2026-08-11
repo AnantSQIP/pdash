@@ -38,7 +38,7 @@ export const projectRow = (p: ReportProject) => [
   p.pid ?? 'PID pending', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '', p.phase, p.status ?? '',
   p.priority, p.client ?? '', p.billable ? 'Yes' : 'No',
   p.progress, p.taskCount, p.tasksClosed, p.tasksOpen, p.memberCount,
-  d(p.startDate), d(p.dueDate), d(p.clientDueDate), dt(p.clientDeliveryDate), dt(p.completedAt), dt(p.closedAt),
+  d(p.startDate), d(p.dueDate), d(p.clientDueDate), d(p.clientDeliveryDate), dt(p.completedAt), dt(p.closedAt),
   p.workingHours ?? '', p.actualHours ?? '', variance(p), p.loggedHours, p.estimatedHours,
   p.managers.map(m => m.name).join('; '),
   p.members.map(m => `${m.name} (${m.role}${m.designation ? `, ${m.designation}` : ''})`).join('; '),

@@ -66,7 +66,13 @@ export default function ExpensesPage() {
 
 function MyExpenses() {
   const qc = useQueryClient();
-  const { data: rows = [] } = useQuery<Expense[]>({ queryKey: ['expenses-mine'], queryFn: () => api.expenses.mine(), staleTime: 20_000 });
+  // refetchOnWindowFocus: an approval happens in someone ELSE's session, so this list must
+  // re-read when the claimant comes back to the tab — otherwise it shows PENDING for 20s
+  // after the money was already agreed.
+  const { data: rows = [] } = useQuery<Expense[]>({
+    queryKey: ['expenses-mine'], queryFn: () => api.expenses.mine(),
+    staleTime: 20_000, refetchOnWindowFocus: true,
+  });
   const [show, setShow] = useState(false);
   const year = new Date().getFullYear();
 
@@ -280,6 +286,54 @@ function NewExpenseModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   );
 }
 
+/** Org-wide totals for approvers. The cards on "My expenses" count only the viewer's own
+ *  claims, so an admin who approves everyone else's saw nothing change after approving. */
+function OrgExpenseSummary() {
+  const { data: all = [] } = useQuery<Expense[]>({
+    queryKey: ['expenses-org', ''], queryFn: () => api.expenses.forOrg(undefined),
+    staleTime: 15_000, refetchOnWindowFocus: true,
+  });
+  const year = new Date().getFullYear();
+  const thisYear = useMemo(() => all.filter(r => inYear(r.createdAt, year)), [all, year]);
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const r of thisYear) c[r.status] = (c[r.status] ?? 0) + 1;
+    return c;
+  }, [thisYear]);
+  const approvedTotal = useMemo(
+    () => thisYear.filter(r => r.status === 'APPROVED' || r.status === 'REIMBURSED').reduce((s, r) => s + r.amount, 0),
+    [thisYear],
+  );
+  const awaitingPayout = useMemo(
+    () => thisYear.filter(r => r.status === 'APPROVED').reduce((s, r) => s + r.amount, 0),
+    [thisYear],
+  );
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="px-5 py-3 border-b border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-700">Everyone&apos;s expenses in {year}</h3>
+      </div>
+      <div className="p-5 grid grid-cols-2 sm:grid-cols-6 gap-3">
+        {BUCKETS.map(b => (
+          <div key={b.key} className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3 text-center">
+            <p className="text-2xl font-bold tabular-nums" style={{ color: b.tone }}>{counts[b.key] ?? 0}</p>
+            <p className="text-[11px] font-medium text-gray-500 mt-0.5">{b.label}</p>
+          </div>
+        ))}
+        <div className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3 text-center">
+          <p className="text-lg font-bold text-gray-900 tabular-nums">₹{approvedTotal.toLocaleString('en-IN')}</p>
+          <p className="text-[11px] font-medium text-gray-500 mt-0.5">Approved value</p>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3 text-center">
+          <p className="text-lg font-bold text-amber-600 tabular-nums">₹{awaitingPayout.toLocaleString('en-IN')}</p>
+          <p className="text-[11px] font-medium text-gray-500 mt-0.5">Awaiting payout</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReviewExpenses() {
   const qc = useQueryClient();
   const { can } = usePermissions();
@@ -290,13 +344,21 @@ function ReviewExpenses() {
 
   async function act(fn: () => Promise<unknown>) {
     setBusyId('working');
-    try { await fn(); qc.invalidateQueries({ queryKey: ['expenses-org'] }); }
+    try {
+      await fn();
+      // Both lists render the same expense — refresh the personal one too, or the
+      // overview cards keep the pre-approval counts.
+      qc.invalidateQueries({ queryKey: ['expenses-org'] });
+      qc.invalidateQueries({ queryKey: ['expenses-mine'] });
+      qc.invalidateQueries({ queryKey: ['notifications-unread'] });
+    }
     catch (e) { alert(e instanceof Error ? e.message : 'Action failed'); }
     finally { setBusyId(''); }
   }
 
   return (
     <div className="space-y-4">
+      <OrgExpenseSummary />
       <div className="flex items-center gap-1.5 flex-wrap">
         {['PENDING', 'APPROVED', 'REJECTED', 'REIMBURSED', ''].map(s => (
           <button key={s || 'ALL'} onClick={() => setFilter(s)} className={clsx('text-xs font-medium px-2.5 py-1.5 rounded-lg', filter === s ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')}>{s ? title(s) : 'All'}</button>
