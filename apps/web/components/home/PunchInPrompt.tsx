@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Home, LogIn, Loader, Clock } from 'lucide-react';
 import { usePunch } from './usePunch';
+import { hourIST } from '@/lib/date';
 
 /**
  * First-login-of-the-day punch-in prompt. When someone opens the app and hasn't clocked in yet
@@ -10,8 +11,10 @@ import { usePunch } from './usePunch';
  * (dismissed for the rest of the day, per-device). It disappears automatically once they've
  * punched in.
  *
- * Deliberately just those two choices. Working from home is arranged through the WFH request in
- * the Leaves section, not decided at the moment of clocking in.
+ * Three choices, and this is the ONLY place work-from-home is offered: starting the day is when
+ * "office or home?" is a natural question, whereas a button sitting beside the clock all day
+ * invites a mis-click that someone then has to get corrected. The WFH request in the Leaves
+ * section still exists for arrangements agreed in advance, and an approved one wins on its own.
  */
 export function PunchInPrompt() {
   const { allowed, ready, att, dayComplete, busy, punch } = usePunch();
@@ -29,7 +32,10 @@ export function PunchInPrompt() {
   if (!show) return null;
 
   const later = () => { try { localStorage.setItem(storageKey, '1'); } catch { /* ignore */ } setDismissed(true); };
-  const hour = new Date().getHours();
+  // hourIST(), not the browser clock — the banner greeting a few pixels above uses IST, and
+  // the two contradicted each other ("Good afternoon, Mohit" beside "Good morning!") for
+  // anyone whose machine was not on India time.
+  const hour = hourIST();
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
   return (

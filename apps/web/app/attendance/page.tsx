@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { format } from 'date-fns';
@@ -63,7 +64,15 @@ export default function AttendancePage() {
   const qc = useQueryClient();
   const canTeam = can('attendance.view.organization');
 
-  const [tab, setTab] = useState<Tab>('overview');
+  // Honour ?tab= from the URL. Home links straight to /attendance?tab=team from the leave
+  // and comp-off cards; without this the link silently landed on Overview and the approver
+  // had to go looking for the queue they had just clicked through to.
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [tab, setTab] = useState<Tab>(
+    (['overview', 'leaves', 'holidays', 'team'] as const).includes(requestedTab as Tab)
+      ? (requestedTab as Tab) : 'overview',
+  );
   const [cursor, setCursor] = useState(() => { const d = new Date(); return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 }; });
   const [busy, setBusy] = useState(false);
   const [regDate, setRegDate] = useState<string | null>(null);

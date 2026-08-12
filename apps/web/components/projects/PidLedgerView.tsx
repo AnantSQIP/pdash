@@ -286,7 +286,15 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
                                           "Working hrs" was the completion snapshot and only ever duplicated one
                                           of the other two, so it is gone. Actual hours win where somebody
                                           recorded them by hand; otherwise the timesheet total stands. */}
-                                      <div><span className="text-gray-400">Alloted</span><p className="text-gray-800">{rd.allottedHours ? `${rd.allottedHours}h` : '—'}</p></div>
+                                      <div>
+                                        <span className="text-gray-400">Alloted</span>
+                                        {/* Blank means nobody put estimated hours on the tasks — say so, rather
+                                            than showing a dash that reads like the number failed to load. */}
+                                        <p className="text-gray-800">
+                                          {rd.allottedHours ? `${rd.allottedHours}h`
+                                            : <span className="text-gray-400 text-[11px]">no task estimates set</span>}
+                                        </p>
+                                      </div>
                                       <div>
                                         <span className="text-gray-400">Logged / Actual</span>
                                         <p className="text-gray-800">
