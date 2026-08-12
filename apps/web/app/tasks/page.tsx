@@ -104,7 +104,7 @@ export default function TasksPage() {
     if (pct === task.completionPercentage) return;
     patchTask(task.id, { completionPercentage: pct });
     try {
-      await api.tasks.update(task.id, { completionPercentage: pct });
+      await api.tasks.setProgress(task.id, pct);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update progress', 'error');
     } finally {

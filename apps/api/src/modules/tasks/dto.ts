@@ -125,6 +125,14 @@ export class SetStatusDto {
   statusId!: string;
 }
 
+/** Progress-only edit: reporting how far your own work has got, nothing else. */
+export class SetProgressDto {
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  completionPercentage!: number;
+}
+
 export class SetAssigneesDto {
   @IsArray()
   @IsString({ each: true })

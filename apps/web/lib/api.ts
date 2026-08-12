@@ -1162,6 +1162,9 @@ export const api = {
     }) => req<ApiTask>('/tasks', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<ApiTask, 'title' | 'description' | 'priority' | 'completionPercentage' | 'startDate' | 'dueDate' | 'estimatedHours'>>) =>
       req<ApiTask>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Progress-only — needs task.view, not task.update (reporting your own work). */
+    setProgress: (id: string, completionPercentage: number) =>
+      req<ApiTask>(`/tasks/${id}/progress`, { method: 'PUT', body: JSON.stringify({ completionPercentage }) }),
     setStatus: (id: string, statusId: string) =>
       req<ApiTask>(`/tasks/${id}/status`, { method: 'PUT', body: JSON.stringify({ statusId }) }),
     setAssignees: (id: string, assigneeIds: string[]) =>

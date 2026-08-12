@@ -19,6 +19,8 @@ export const homeKeys = {
   holidays: (orgId?: string, year?: number) => ['holidays', orgId, year] as const,
   capacity: (orgId?: string, days?: number) => ['capacity', orgId, days] as const,
   tasksMe: (userId?: string) => ['tasks-me', userId] as const,
+  // Must match the Expenses page's own key, or approving there leaves this card stale.
+  expensesMine: () => ['expenses-mine'] as const,
   pidRequests: (orgId?: string) => ['pid-requests', orgId] as const,
 };
 

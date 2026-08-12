@@ -10,6 +10,7 @@
 // masonry auto-distributes whatever cards render so both/all columns stay balanced.
 import {
   PersonaBanner, WorkspaceErrorBanner, OrgStatsRow, MyPerformanceCard,
+  MyExpensesCard,
   MyTasksCard, MyProjectsCard, ProjectStatusCard, QuickStatsCard,
   OrgPerformanceCard, TeamAttendanceCard, LeaveApprovalsCard, PeopleOpsCard,
   AdminShortcutsCard, QuickAccessCard, PidRequestsCard, TeamAvailabilityCard,
@@ -33,6 +34,7 @@ export default function HomeDashboardPage() {
           <LeaveApprovalsCard />
           <PendingRequestsCard />
           <MyTasksCard />
+          <MyExpensesCard />
           <TeamAttendanceCard />
           <OrgPerformanceCard />
           <MyProjectsCard />

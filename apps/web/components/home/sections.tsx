@@ -13,8 +13,7 @@ import {
   api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance,
   type OrgPerformance, type OrgAttendanceSummary, type LeaveRequestItem,
   type Holiday, type RoleSummary, type UserSummary, type TeamCapacity, type PidRequestItem,
-  type RegularizationRequest, type CompOffRequest,
-} from '@/lib/api';
+  type RegularizationRequest, type CompOffRequest, type Expense } from '@/lib/api';
 import { formatDate, fmtHours, fmtNum, fmtPct, plural, longDateIST, hourIST, todayUtc, isPastDue, relativePast } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -369,6 +368,38 @@ export function QuickStatsCard() {
         { label: 'Overdue',         value: fmtNum(stats?.overdueCount),  badge: BADGE.danger },
         { label: 'Active projects', value: fmtNum(stats?.activeProjects), badge: BADGE.good },
         { label: 'Hours this week', value: fmtHours(stats?.hoursLoggedThisWeek), badge: BADGE.info },
+      ]} />
+    </Card>
+  );
+}
+
+// ── My expenses (expense.view.own) ───────────────────────────────────────────
+// Home showed only a link tile to Expenses, so an approved claim was invisible until you
+// opened the module. Approved here means the money is agreed, paid out or not — the same
+// definition the Expenses page uses, so the two never read differently.
+export function MyExpensesCard() {
+  const { can } = usePermissions();
+  const allowed = can('expense.view.own');
+  const { data: rows = [], isLoading, isError, refetch } = useQuery<Expense[]>({
+    queryKey: homeKeys.expensesMine(),
+    queryFn: () => api.expenses.mine(),
+    enabled: allowed, staleTime: 30_000, refetchOnWindowFocus: true, placeholderData: keepPreviousData,
+  });
+  if (!allowed) return null;
+  const year = new Date().getFullYear();
+  const thisYear = rows.filter(r => new Date(r.createdAt).getFullYear() === year);
+  const n = (st: string) => thisYear.filter(r => r.status === st).length;
+  const approvedValue = thisYear
+    .filter(r => r.status === 'APPROVED' || r.status === 'REIMBURSED')
+    .reduce((sum, r) => sum + r.amount, 0);
+  return (
+    <Card>
+      <CardHeader title="My Expenses" icon={Receipt} iconColor="text-rose-600" href="/expenses" linkLabel="View all" />
+      <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
+        { label: 'Awaiting approval', value: fmtNum(n('PENDING')),    badge: BADGE.warn },
+        { label: 'Approved',          value: fmtNum(n('APPROVED')),   badge: BADGE.good },
+        { label: 'Reimbursed',        value: fmtNum(n('REIMBURSED')), badge: BADGE.info },
+        { label: `Approved value ${year}`, value: `₹${approvedValue.toLocaleString('en-IN')}`, badge: BADGE.good },
       ]} />
     </Card>
   );
