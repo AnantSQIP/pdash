@@ -41,7 +41,6 @@ export const PROJECT_SORTS: Record<string, { [k: string]: 'asc' | 'desc' }[]> = 
 export const PROJECT_SORT_VALUES = Object.keys(PROJECT_SORTS);
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { financialYear, formatPid, pidScope } from '../../common/financial-year';
-import { designationRank } from './seniority';
 
 /** Hours to one decimal — the precision timesheets are logged at. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -74,26 +73,30 @@ export class ProjectsService {
    * themselves, sorted alphabetically. This is independent of PID authority — the manager
    * owns the project; a (possibly different) PID authority assigns the Project ID.
    */
+  /**
+   * Who can be nominated as a project's Manager: holders of `project.approve` — which the
+   * permission matrix gives to Super Admin, Admin, Manager and Senior Consultant.
+   *
+   * This used to be judged by DESIGNATION seniority, which drifted from the matrix as soon as
+   * anyone's job title changed: a "Senior Research Associate" outranked a Consultant on the
+   * designation ladder and appeared here despite holding no delivery authority at all. Reading
+   * the permission instead means this list and the matrix cannot disagree — change the matrix
+   * and this follows.
+   *
+   * Self is still excluded: the field exists to name someone ELSE as accountable for the work.
+   */
   async eligibleManagers(organizationId: string) {
     const actorId = getActorId();
-    const me = actorId
-      ? await this.prisma.user.findFirst({ where: { id: actorId }, select: { designation: true } })
-      : null;
-    const myRank = designationRank(me?.designation);
-    // A PID authority (admin) can delegate the project to ANYONE in the org — no seniority
-    // restriction. A regular requester may only nominate someone of equal-or-higher seniority.
-    const canGeneratePid = actorId ? await this.permissions.check(actorId, 'project.generate_pid') : false;
     const users = await this.prisma.user.findMany({
       where: {
         organizationId, deletedAt: null, status: 'ACTIVE',
         ...(actorId ? { id: { not: actorId } } : {}),
+        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'project.approve' } } } } } },
       },
       select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true },
     });
-    return users
-      .filter(u => canGeneratePid || designationRank(u.designation) >= myRank)
-      .sort((a, b) =>
-        `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase()));
+    return users.sort((a, b) =>
+      `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase()));
   }
 
   /**
@@ -455,9 +458,13 @@ export class ProjectsService {
         throw new BadRequestException('The selected person cannot assign a PID. Choose someone with PID authority.');
       }
 
-      // (b) Project Manager — a SEPARATE choice: anyone of equal-or-higher seniority than the
-      //     creator. This person owns the project (becomes its MANAGER); they need not have PID
-      //     authority.
+      // (b) Project Manager — a SEPARATE choice: someone who holds project.approve (Super Admin,
+      //     Admin, Manager, Senior Consultant per the matrix). This person owns the project
+      //     (becomes its MANAGER); they need not have PID authority.
+      //
+      //     Checked against the same permission the picker lists, NOT against designation
+      //     seniority as before — otherwise a name offered by the dropdown could still be
+      //     refused here the moment someone's job title and their role disagreed.
       managerId = dto.managerId?.trim() || '';
       if (!managerId) throw new BadRequestException('Select a Project Manager for this project.');
       if (managerId === creator.id) throw new BadRequestException('Choose a Project Manager other than yourself.');
@@ -466,8 +473,8 @@ export class ProjectsService {
         select: { id: true, designation: true },
       });
       if (!manager) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
-      if (designationRank(manager.designation) < designationRank(creator.designation)) {
-        throw new BadRequestException('The Project Manager must be of equal or higher seniority than you.');
+      if (!(await this.permissions.check(manager.id, 'project.approve'))) {
+        throw new BadRequestException('That person cannot be a Project Manager — choose a Manager, Senior Consultant or Admin.');
       }
     }
 

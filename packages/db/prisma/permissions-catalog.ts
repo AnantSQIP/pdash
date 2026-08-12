@@ -111,6 +111,9 @@ const VIEW_BASICS = [
   code('tasklist', 'view'), code('timesheet', 'view'),
   code('issue', 'view'), code('comment', 'view'), code('document', 'view'),
   code('calendar', 'view'),
+  // Matrix 2026-08-12: the capacity board is open to the whole organisation — knowing who is
+  // free this week is not privileged information, and hiding it just meant people asked around.
+  code('capacity', 'view'),
   code('channel', 'view'), code('report', 'view'),
   code('attendance', 'view.own'), code('leave', 'view.own'), code('holiday', 'view'),
   // Everyone can record their own business expenses and see them.
@@ -120,7 +123,9 @@ const VIEW_BASICS = [
 // Manager: full operational control over delivery work + org analytics, no system admin.
 const MANAGER_CODES = [
   ...VIEW_BASICS,
-  code('project', 'create'), code('project', 'update'), code('project', 'approve'), code('project', 'generate_pid'),
+  // Matrix 2026-08-12: minting a Project ID moves up to Super Admin / Admin only. A Manager
+  // still REQUESTS a PID like anyone else; they no longer issue one.
+  code('project', 'create'), code('project', 'update'), code('project', 'approve'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
@@ -256,7 +261,7 @@ const HR_CODES = [
   code('comment', 'view'), code('comment', 'create'),
   // Matrix 2026-08-11: may remove a file they attached.
   code('document', 'view'), code('document', 'create'), code('document', 'delete'),
-  code('calendar', 'view'), code('channel', 'view'),
+  code('calendar', 'view'), code('channel', 'view'), code('capacity', 'view'),
   // matrix: HR manages their own calendar + logs/deletes their own time.
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
   code('timesheet', 'view'), code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
