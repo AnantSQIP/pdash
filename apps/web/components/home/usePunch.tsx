@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Check, LogIn, LogOut, Loader, Home } from 'lucide-react';
+import { Check, LogIn, LogOut, Loader } from 'lucide-react';
 import { api, type Attendance, type LeaveBalance } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -127,23 +127,6 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
     </button>
   );
 
-  // "Punch in — Work from home": the same clock-in, recording the day as WFH. Only offered
-  // before clocking in; afterwards the day's work mode is already set, and punching out must
-  // stay a single unambiguous action.
-  const wfhButton = !clockedIn && !dayComplete ? (
-    <button
-      onClick={() => doPunch('WFH')}
-      disabled={disabled}
-      aria-busy={busy}
-      aria-label="Punch in and record today as work from home"
-      title="Clock in and mark today as work from home"
-      className={clsx('inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-90 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-cyan-400',
-        'bg-cyan-50 text-cyan-800 hover:bg-cyan-100 ring-1 ring-cyan-200',
-        variant === 'card' && 'mt-2 w-full')}
-    >
-      <Home size={15} />{busy ? 'Saving…' : 'Punch In (WFH)'}
-    </button>
-  ) : null;
 
   const statusLine = (
     <>
@@ -167,7 +150,6 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
           <div className="min-w-0">{statusLine}</div>
         </div>
         {button}
-        {wfhButton}
       </div>
     );
   }
@@ -175,7 +157,6 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
   return (
     <div className="flex items-center gap-3">
       <div className="text-right hidden sm:block">{statusLine}</div>
-      {wfhButton}
       {button}
     </div>
   );

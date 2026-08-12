@@ -42,15 +42,17 @@ export function PunchInPrompt() {
           </div>
           <h2 className="text-lg font-semibold text-gray-900">{greeting}! Ready to start your day?</h2>
           <p className="text-sm text-gray-500 mt-1.5">Punch in to record your attendance for today. Your location is captured on punch.</p>
+          {/* The ONLY place work-from-home is offered. It belongs to the once-a-day moment of
+              starting work — asking "office or home?" here is natural, whereas a permanent
+              button beside the clock invites a mis-click on a day nobody meant to change. */}
           <div className="flex flex-col gap-2 mt-5">
             <button onClick={() => punch.mutate(undefined)} disabled={busy}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
               {busy ? <Loader size={16} className="animate-spin" /> : <LogIn size={16} />} {busy ? 'Punching in…' : 'Punch In'}
             </button>
-            {/* Working from home today is a choice made here, at the moment of clocking in. */}
             <button onClick={() => punch.mutate('WFH')} disabled={busy}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-cyan-800 bg-cyan-50 ring-1 ring-cyan-200 hover:bg-cyan-100 disabled:opacity-60">
-              <Home size={16} /> {busy ? 'Punching in…' : 'Punch In (WFH)'}
+              <Home size={16} /> {busy ? 'Punching in…' : 'Punch In — Working from home'}
             </button>
             <button onClick={later} disabled={busy} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-50">
               Punch in later
