@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { LogIn, Loader, Clock } from 'lucide-react';
+import { Home, LogIn, Loader, Clock } from 'lucide-react';
 import { usePunch } from './usePunch';
 
 /**
@@ -43,9 +43,14 @@ export function PunchInPrompt() {
           <h2 className="text-lg font-semibold text-gray-900">{greeting}! Ready to start your day?</h2>
           <p className="text-sm text-gray-500 mt-1.5">Punch in to record your attendance for today. Your location is captured on punch.</p>
           <div className="flex flex-col gap-2 mt-5">
-            <button onClick={() => punch.mutate()} disabled={busy}
+            <button onClick={() => punch.mutate(undefined)} disabled={busy}
               className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
               {busy ? <Loader size={16} className="animate-spin" /> : <LogIn size={16} />} {busy ? 'Punching in…' : 'Punch In'}
+            </button>
+            {/* Working from home today is a choice made here, at the moment of clocking in. */}
+            <button onClick={() => punch.mutate('WFH')} disabled={busy}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-cyan-800 bg-cyan-50 ring-1 ring-cyan-200 hover:bg-cyan-100 disabled:opacity-60">
+              <Home size={16} /> {busy ? 'Punching in…' : 'Punch In (WFH)'}
             </button>
             <button onClick={later} disabled={busy} className="px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-50">
               Punch in later

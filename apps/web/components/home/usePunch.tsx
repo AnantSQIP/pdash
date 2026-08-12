@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Check, LogIn, LogOut, Loader } from 'lucide-react';
+import { Check, LogIn, LogOut, Loader, Home } from 'lucide-react';
 import { api, type Attendance, type LeaveBalance } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -46,10 +46,10 @@ export function usePunch() {
   const punch = useMutation({
     // Location is mandatory — capture it first and block the punch if the browser denies it.
     // Reverse-geocode to a human area/landmark (best-effort; never blocks the punch).
-    mutationFn: async () => {
+    mutationFn: async (workMode?: 'WFH' | 'OFFICE') => {
       const loc = await getCurrentLocation();
       const area = await reverseGeocode(loc.lat, loc.lng);
-      return api.attendance.punch({ ...loc, area });
+      return api.attendance.punch({ ...loc, area, ...(workMode ? { workMode } : {}) });
     },
     onSuccess: (row) => {
       // The overnight-close path returns YESTERDAY's row (it closed the forgotten shift
@@ -93,12 +93,12 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
   if (!allowed) return null;
 
   const statusLabel = dayComplete ? 'Day complete' : clockedIn ? 'Clocked in' : !ready ? 'Loading…' : 'Not clocked in';
-  const doPunch = () => {
+  const doPunch = (workMode?: 'WFH' | 'OFFICE') => {
     if (!ready || busy || dayComplete) return;
     // Punching out ends and locks the day — require a confirm so a misclick can't do it.
     if (clockedIn && !confirmingOut) { setConfirmingOut(true); setTimeout(() => setConfirmingOut(false), 3000); return; }
     setConfirmingOut(false);
-    punch.mutate();
+    punch.mutate(workMode);
   };
   const label = busy ? 'Saving…'
     : dayComplete ? 'Completed for today'
@@ -115,7 +115,7 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
 
   const button = (
     <button
-      onClick={doPunch}
+      onClick={() => doPunch()}
       disabled={disabled}
       aria-busy={busy}
       aria-label={clockedIn ? 'Punch out for the day' : dayComplete ? 'Attendance complete for today' : 'Punch in for the day'}
@@ -126,6 +126,24 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
       {icon}{label}
     </button>
   );
+
+  // "Punch in — Work from home": the same clock-in, recording the day as WFH. Only offered
+  // before clocking in; afterwards the day's work mode is already set, and punching out must
+  // stay a single unambiguous action.
+  const wfhButton = !clockedIn && !dayComplete ? (
+    <button
+      onClick={() => doPunch('WFH')}
+      disabled={disabled}
+      aria-busy={busy}
+      aria-label="Punch in and record today as work from home"
+      title="Clock in and mark today as work from home"
+      className={clsx('inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-90 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-cyan-400',
+        'bg-cyan-50 text-cyan-800 hover:bg-cyan-100 ring-1 ring-cyan-200',
+        variant === 'card' && 'mt-2 w-full')}
+    >
+      <Home size={15} />{busy ? 'Saving…' : 'Punch In (WFH)'}
+    </button>
+  ) : null;
 
   const statusLine = (
     <>
@@ -149,6 +167,7 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
           <div className="min-w-0">{statusLine}</div>
         </div>
         {button}
+        {wfhButton}
       </div>
     );
   }
@@ -156,6 +175,7 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
   return (
     <div className="flex items-center gap-3">
       <div className="text-right hidden sm:block">{statusLine}</div>
+      {wfhButton}
       {button}
     </div>
   );

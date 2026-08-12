@@ -181,15 +181,21 @@ export class AttendanceService {
 
   /**
    * Daily punch with exactly ONE check-in and ONE check-out:
-   *   1. no check-in yet        → clock in. workMode is DERIVED, never chosen at punch
-   *      time: WFH only when an APPROVED WfhRequest covers today, else OFFICE. Working
-   *      from home is agreed in advance (request → HR/Admin approval), not self-declared.
+   *   1. no check-in yet        → clock in. WFH is set either by the person choosing
+   *      "Punch in — Work from home" at this moment, or by an APPROVED WfhRequest that
+   *      already covers today; otherwise OFFICE. Self-declaring it is deliberate: the
+   *      approval route still exists for arrangements agreed in advance, but somebody
+   *      working from home for a single day should not need a request to record the fact.
    *   2. clocked in, not out    → clock out; status is DERIVED from hours worked
    *      (< HALF_DAY_HOURS ⇒ HALF_DAY) so an immediate in→out is not a full present day
    *   3. already clocked out    → REJECT — the day is locked so a stray third
    *      punch can never overwrite/erase the real check-out time.
    */
-  async punch(userId: string, coords: { lat: number; lng: number; accuracy?: number; area?: string }) {
+  async punch(
+    userId: string,
+    coords: { lat: number; lng: number; accuracy?: number; area?: string },
+    opts: { workMode?: string } = {},
+  ) {
     // The day a punch belongs to is the IST CALENDAR day, not the UTC one. utcDay() put every
     // punch made between 00:00 and 05:29 IST onto the PREVIOUS day's row — so an early-morning
     // punch silently marked yesterday present.
@@ -230,8 +236,14 @@ export class AttendanceService {
         where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } },
       });
       const organizationId = await this.orgOf(userId);
-      // WFH is decided by an APPROVED request, not at the moment of punching.
-      const workMode = approvedWfh ? 'WFH' : 'OFFICE';
+      // Chosen at the button ("Punch in — Work from home"), or inherited from an approved
+      // request covering today. Anything else is an office day. Only these two values are
+      // accepted, so a stray string cannot invent a third work mode.
+      const asked = (opts.workMode ?? '').toUpperCase();
+      if (asked && asked !== 'WFH' && asked !== 'OFFICE') {
+        throw new BadRequestException('workMode must be WFH or OFFICE.');
+      }
+      const workMode = asked === 'WFH' || approvedWfh ? 'WFH' : 'OFFICE';
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
         create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode, ...inLoc },
@@ -1551,7 +1563,7 @@ class AttendanceController {
   // Location is MANDATORY on every punch (in and out). `mode` is still accepted but ignored
   // (workMode is derived server-side from an approved WFH request, never client-chosen).
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string; workMode?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     const lat = Number(body?.lat), lng = Number(body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -1559,7 +1571,7 @@ class AttendanceController {
     }
     const accuracy = Number.isFinite(Number(body?.accuracy)) ? Number(body.accuracy) : undefined;
     const area = typeof body?.area === 'string' ? body.area : undefined;
-    return this.svc.punch(actorId, { lat, lng, accuracy, area });
+    return this.svc.punch(actorId, { lat, lng, accuracy, area }, { workMode: body?.workMode });
   }
 
   // ── work-from-home requests ────────────────────────────────────────────────────

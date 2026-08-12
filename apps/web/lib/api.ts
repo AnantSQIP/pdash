@@ -895,7 +895,8 @@ export type CompOffEvidence = {
   attendance: { checkIn?: string | null; checkOut?: string | null; totalHours?: number | null } | null;
 };
 // WFH is agreed in advance: request a date range → HR/Admin (attendance.manage) approves →
-// punching on a covered day records workMode WFH automatically. No WFH button on punch.
+// punching on a covered day records workMode WFH automatically; a person can also choose WFH
+// at punch time for a single day, without raising a request first.
 export type WfhRequestItem = {
   id: string; userId: string; organizationId?: string | null;
   startDate: string; endDate: string; reason: string;
@@ -1542,7 +1543,8 @@ export const api = {
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
     // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
-    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string }) =>
+    /** `workMode: 'WFH'` records the day as work-from-home without a prior request. */
+    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string; workMode?: 'WFH' | 'OFFICE' }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
     // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
     requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
