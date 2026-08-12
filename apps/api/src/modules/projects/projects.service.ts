@@ -860,6 +860,21 @@ export class ProjectsService {
       : [];
     const loggedByProject = new Map(loggedRows.map(l => [l.projectId, round1(l._sum.hoursLogged ?? 0)]));
 
+    // Hours ALLOTTED to each round — the sum of its tasks' estimates. This is the number the
+    // ledger is read against ("we gave this matter 40 hours"), and unlike workingHours it
+    // exists from the moment the project is staffed rather than only once it is completed.
+    const estimateRows = projects.length
+      ? await this.prisma.projectTask.findMany({
+          where: { projectId: { in: projects.map(p => p.id) }, task: { deletedAt: null } },
+          select: { projectId: true, task: { select: { estimatedHours: true } } },
+        })
+      : [];
+    const allottedByProject = new Map<string, number>();
+    for (const row of estimateRows) {
+      allottedByProject.set(row.projectId, (allottedByProject.get(row.projectId) ?? 0) + (row.task.estimatedHours ?? 0));
+    }
+    for (const [id, v] of allottedByProject) allottedByProject.set(id, round1(v));
+
     const userIds = [...new Set([...rows.map(r => r.generatedById), ...projects.map(p => p.createdBy)])];
     const users = userIds.length ? await this.prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, firstName: true, lastName: true } }) : [];
     const userById = new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
@@ -910,6 +925,7 @@ export class ProjectsService {
       actualHours: p.actualHours ?? null,
       /** Hours logged on THIS round — reconciles against the timesheets. */
       loggedHours: loggedByProject.get(p.id) ?? 0,
+      allottedHours: allottedByProject.get(p.id) ?? 0,
       progress: p.completionPercentage ?? null,
       client: p.client?.name ?? p.client?.code ?? null,
       createdBy: p.createdBy ? (userById.get(p.createdBy) ?? null) : null,
@@ -935,6 +951,7 @@ export class ProjectsService {
         roundCount: rounds.length,
         /** Every hour logged across every round of this PID. */
         totalLoggedHours: round1(rounds.reduce((n, p) => n + (loggedByProject.get(p.id) ?? 0), 0)),
+        totalAllottedHours: round1(rounds.reduce((n, p) => n + (allottedByProject.get(p.id) ?? 0), 0)),
         multiRound: rounds.length > 0,
         /** The latest round, kept so existing single-project consumers keep working unchanged. */
         project: latest ? shapeRound(latest) : null,

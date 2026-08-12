@@ -339,6 +339,8 @@ export type PidLedgerRound = {
   workingHours?: number | null; actualHours?: number | null;
   /** Hours logged on THIS round — reconciles against timesheets. */
   loggedHours?: number;
+  /** Hours ALLOTTED to this round — the sum of its tasks' estimates. */
+  allottedHours?: number;
   progress?: number | null; client?: string | null;
   createdBy?: string | null; createdAt?: string | null;
   patents?: string[]; members?: { name: string; role: string }[];
@@ -356,6 +358,7 @@ export type PidLedgerEntry = {
   roundCount?: number;
   /** Every hour logged across every round of this PID. */
   totalLoggedHours?: number;
+  totalAllottedHours?: number;
   multiRound?: boolean;
   /** The LATEST round — kept so single-project consumers keep working unchanged. */
   project: {
