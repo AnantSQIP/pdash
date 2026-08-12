@@ -1,9 +1,11 @@
 // Roster alignment (2026-08) — the official list, applied to the database.
 //
-// Roles had drifted from designations: the seed gave Ankit the Manager role while his title
-// says Research Associate, and nobody could tell from the app which was intended. This script
-// makes the roster below the single source of truth for BOTH designation and role, so the
-// question "why can this person do that?" always has the same answer.
+// Two separate facts about each person, both written down here: their DESIGNATION (their job
+// title) and their ROLE (what the system lets them do). Neither follows from the other, and
+// nothing in this file infers one from the other — the seed once handed out roles that
+// happened to suit a title, which is how people ended up with rights nobody had granted them.
+// Every role below is here because it was decided, and it is the answer to "why can this
+// person do that?" on any environment this runs against.
 //
 // Idempotent — safe to run repeatedly. Run against any environment with:
 //   DATABASE_URL=... npx ts-node packages/db/prisma/roster-align-2026-08.ts
@@ -20,15 +22,11 @@ type Person = { designation: string; role: string };
 /**
  * The official roster, keyed by login email (stable — names carry middle names inconsistently).
  *
- * ROLE CHOICES worth knowing, because they decide what each person can do:
- *   • Senior Associate Consultant → Consultant. Creates and edits tasks, runs task lists,
- *     requests projects. Cannot assign tasks or approve a project.
- *   • Senior BD Executive → Consultant. Business development sits outside the research ladder;
- *     Consultant is the nearest band that is not a plain contributor.
- *   • Product Development & Research Associate → Senior Research Associate. A senior individual
- *     contributor: creates/edits tasks, triages issues, exports reports. No delivery authority.
- *   • Interns and Research Associates → Employee. They log time, raise issues, comment, and
- *     move their own work along; they do not create or edit tasks.
+ * DESIGNATION AND ROLE ARE NOT THE SAME THING and neither is derived from the other. The
+ * designation is the person's job title; the role is what the system lets them do. A "Senior
+ * BD Executive" and a "Research Associate" can both be Employees, and a title containing the
+ * word "Senior" grants nothing by itself. Every role below is stated because somebody decided
+ * it — not because a title was pattern-matched.
  *
  * Change a role here and re-run — that is the whole interface.
  */
@@ -39,10 +37,9 @@ const ROSTER: Record<string, Person> = {
   'nitin.goel@squarkip.com':          { designation: 'Manager (Delivery)',                     role: 'Manager' },
   'neha.shukla@squarkip.com':         { designation: 'Senior Consultant',                      role: 'Senior Consultant' },
 
-  // Not plain employees — see the note above.
   'ajay.sharma@squarkip.com':         { designation: 'Senior Associate Consultant',            role: 'Consultant' },
-  'ritik.sharma@squarkip.com':        { designation: 'Senior BD Executive',                    role: 'Consultant' },
-  'ankit.verma@squarkip.com':         { designation: 'Product Development & Research Associate', role: 'Senior Research Associate' },
+  'ritik.sharma@squarkip.com':        { designation: 'Senior BD Executive',                    role: 'Employee' },
+  'ankit.verma@squarkip.com':         { designation: 'Product Development & Research Associate', role: 'Employee' },
 
   'meetu.singh@squarkip.com':         { designation: 'Consultant',                             role: 'Consultant' },
   'vijay.mishra@squarkip.com':        { designation: 'Consultant',                             role: 'Consultant' },
