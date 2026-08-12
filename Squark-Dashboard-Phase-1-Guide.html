@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Squark Dashboard — Phase 1 User Guide</title>
+<style>
+  @page { size: A4; margin: 14mm 15mm 13mm 15mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: #22303c; font-size: 10pt; line-height: 1.5; margin: 0;
+  }
+
+  header { border-bottom: 3px solid #3d8de2; padding-bottom: 12px; margin-bottom: 18px; }
+  h1 { font-size: 21pt; margin: 0 0 5px; color: #16324f; letter-spacing: -.3px; }
+  .sub { color: #6b7785; font-size: 9.5pt; }
+
+  .intro {
+    background: #f5f8fc; border-left: 3px solid #3d8de2; padding: 12px 15px;
+    margin-bottom: 20px; font-size: 9.5pt; color: #3c4a57;
+  }
+
+  .toc { margin-bottom: 22px; break-inside: avoid; }
+  .toc h3 { font-size: 9.5pt; color: #6b7785; margin: 0 0 8px; text-transform: uppercase;
+            letter-spacing: .6px; font-weight: 600; }
+  .toc ol { columns: 2; column-gap: 26px; margin: 0; padding-left: 0; list-style: none;
+            counter-reset: toc; font-size: 9pt; }
+  .toc li { counter-increment: toc; padding: 2px 0 2px 22px; position: relative;
+            break-inside: avoid; color: #3c4a57; }
+  .toc li::before { content: counter(toc) "."; position: absolute; left: 0;
+                    color: #3d8de2; font-weight: 700; }
+
+  /* Sections are allowed to flow across a page break — forcing them to stay whole
+     pushed long sections wholesale onto the next page and left big gaps behind.
+     Instead, headings stay glued to the text that follows them. */
+  section { margin-bottom: 14px; }
+  h2 {
+    font-size: 11pt; margin: 0 0 7px; color: #fff; background: #3d8de2;
+    padding: 6px 11px; border-radius: 4px;
+    break-after: avoid; page-break-after: avoid;
+  }
+  h2 .n {
+    display: inline-block; background: rgba(255,255,255,.28); width: 19px; height: 19px;
+    line-height: 19px; text-align: center; border-radius: 3px; margin-right: 9px;
+    font-size: 9pt; font-weight: 700;
+  }
+  h3 {
+    font-size: 9.5pt; margin: 9px 0 3px; color: #16324f; font-weight: 600;
+    break-after: avoid; page-break-after: avoid;
+  }
+  p { margin: 0 0 6px; }
+  ul { margin: 0 0 6px; padding-left: 16px; }
+  ol.steps { margin: 0 0 6px; padding-left: 17px; }
+  li { padding: 1px 0; break-inside: avoid; }
+  strong { color: #16324f; font-weight: 600; }
+  code {
+    background: #eef3f9; padding: 1px 5px; border-radius: 3px;
+    font-family: Consolas, "Courier New", monospace; font-size: 8.5pt; color: #16324f;
+  }
+  .note {
+    background: #fffbeb; border-left: 3px solid #f5b642; padding: 7px 11px;
+    margin: 8px 0; font-size: 9pt; color: #6b5518;
+  }
+  .who { color: #6b7785; font-size: 8.5pt; font-style: italic; margin: -4px 0 8px; }
+
+  footer {
+    margin-top: 22px; padding-top: 10px; border-top: 1px solid #dde3ea;
+    color: #8a94a0; font-size: 8.5pt;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Squark Dashboard — Phase 1 User Guide</h1>
+  <div class="sub">How every module works and how to use it · August 2026</div>
+</header>
+
+<div class="intro">
+  This guide covers every part of the dashboard that is built and running. Each section explains
+  what the module is, what it is for, and the steps to use it. You will only see the modules your
+  role allows, so some parts of this guide may not apply to you.
+</div>
+
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li>Logging in and finding your way</li>
+    <li>Home</li>
+    <li>Projects</li>
+    <li>Project IDs (PID)</li>
+    <li>Patents and Clients</li>
+    <li>Tasks and Sub-tasks</li>
+    <li>My Tasks</li>
+    <li>Timesheets</li>
+    <li>Attendance</li>
+    <li>Leaves</li>
+    <li>Comp-off</li>
+    <li>Work From Home</li>
+    <li>Expenses</li>
+    <li>Team Capacity</li>
+    <li>Performance</li>
+    <li>Calendar</li>
+    <li>Reports</li>
+    <li>Daily Digest</li>
+    <li>People</li>
+    <li>Company</li>
+    <li>Appraisals</li>
+    <li>Admin</li>
+  </ol>
+</div>
+
+<section>
+  <h2><span class="n">1</span>Logging in and finding your way</h2>
+  <p>You sign in with your work email and your own password. If an admin has just created or reset
+  your account, the system asks you to set a new password before you can change anything.</p>
+  <p>The first time you log in, you are asked to <strong>complete your profile</strong> — contact
+  number, address, date of birth and emergency contact. You cannot skip this. Personal details are
+  visible only to Admin and HR, not to your colleagues.</p>
+  <p>The <strong>left sidebar</strong> is your main menu. It shows only the modules your role can
+  open, so two people may see different menus. Press <code>Ctrl + B</code> to collapse or expand it.
+  At the top of the sidebar you have <strong>Search</strong> (find any project, task or person) and
+  the <strong>bell icon</strong> for notifications. Clicking a notification takes you straight to
+  the item it is about.</p>
+  <p>Some actions — adding people, changing roles — ask for an extra <strong>org passcode</strong>
+  on top of your password. This is a safety check for changes that affect everyone. It is
+  remembered for a short while so you are not asked repeatedly.</p>
+  <p>If you leave the dashboard open and idle for a few hours, you are logged out automatically.</p>
+</section>
+
+<section>
+  <h2><span class="n">2</span>Home</h2>
+  <p>Home is your landing page and it changes to match your role — a manager sees approvals and
+  team numbers, an analyst sees their own tasks and hours.</p>
+  <p>On it you will find:</p>
+  <ul>
+    <li><strong>Punch In / Punch Out</strong> — mark your attendance without going to the Attendance page</li>
+    <li><strong>My Performance</strong> — completion rate, on-time rate, hours logged and overdue tasks</li>
+    <li><strong>My Tasks</strong> — what is due, split by open and completed</li>
+    <li><strong>Projects</strong> and <strong>Project Status</strong> — the projects you are on and how they are progressing</li>
+  </ul>
+  <p>Every card has a link in its corner that opens the full module.</p>
+</section>
+
+<section>
+  <h2><span class="n">3</span>Projects</h2>
+  <p>A project is one piece of client work — one search, one study, one report. Everything else in
+  the system hangs off it: tasks, hours, files and discussion.</p>
+
+  <h3>Creating a project</h3>
+  <ol class="steps">
+    <li>Go to <strong>Projects</strong> and click <strong>New Project</strong>.</li>
+    <li>Choose the <strong>Type</strong> — this is required. The nine types are Infringement Search,
+    Novelty Search, Invalidity Search, FTO Search, Landscape Search, Patent Monetization, Reverse
+    Engineering, Risk &amp; Strategy, and General/Other. You can also add a new type of your own and
+    type its task list, one task per line.</li>
+    <li>Pick the <strong>patent</strong> the work is about, if there is one. Search by patent ID.
+    The client is filled in from the patent, so you never have to type it.</li>
+    <li>Enter a <strong>Title</strong> and a short <strong>Description</strong>.</li>
+    <li>Choose the <strong>Technology domain</strong> — the field the work sits in (Medical,
+    Automobile, Source Code, Cloud/Server, Advertisement, or one your team has added).</li>
+    <li>Set the <strong>Priority</strong>, <strong>Start Date</strong> and
+    <strong>Deadline</strong>.</li>
+    <li>Save. The project is created straight away and its standard task list is added for you.</li>
+  </ol>
+  <div class="note">
+    The <strong>type</strong> and the <strong>technology domain</strong> are two different things.
+    The type is the kind of study (an FTO search). The domain is the subject (a medical device).
+    The same FTO search can be about a pacemaker or a gearbox.
+  </div>
+
+  <h3>Inside a project</h3>
+  <p>Open any project and you get these tabs:</p>
+  <ul>
+    <li><strong>Overview</strong> — dates, progress, team, and the project's PID</li>
+    <li><strong>Task List</strong> — all tasks, grouped, where most work happens</li>
+    <li><strong>Timesheets</strong> — every hour logged against this project</li>
+    <li><strong>Board</strong> — the same tasks as a drag-and-drop Kanban board</li>
+    <li><strong>Gantt</strong> — the timeline view, with today marked</li>
+    <li><strong>Capacity</strong> — who on the team is free or busy (if your role allows)</li>
+    <li><strong>Files</strong> — documents and images attached to the project</li>
+    <li><strong>Issues</strong> — problems raised during the work</li>
+    <li><strong>Activity</strong> — a history of who changed what</li>
+    <li><strong>Discussions</strong> — the project chat</li>
+  </ul>
+
+  <h3>Finding and finishing projects</h3>
+  <p>The Projects list can be sorted and filtered by technology domain and phase. When work is
+  done, use <strong>Complete</strong> — you are asked for the date you delivered to the client, the
+  working hours and the actual hours it really took. Hours are suggested from the timesheets, and
+  you can correct them. <strong>Close</strong> moves a project into the Closed section to get it out
+  of the way, and <strong>Reopen</strong> brings it back if the client returns.</p>
+</section>
+
+<section>
+  <h2><span class="n">4</span>Project IDs (PID)</h2>
+  <p>Every project carries a PID such as <code>SQ_26_27_001</code>. <code>SQ</code> is the company,
+  <code>26_27</code> is the financial year, and <code>001</code> is the serial number. The PID is
+  how the team refers to a matter in conversation, in timesheets and in reports.</p>
+  <p>An important rule: <strong>a returning client keeps the same PID</strong>. New work for the
+  same client becomes a new round under that same PID rather than a fresh number, so all the work
+  for one client stays together.</p>
+  <p>How you get a PID depends on your role. If you have permission, you click
+  <strong>Generate PID</strong> and one is reserved for you. If you do not, you submit a
+  <strong>PID request</strong>; the person who handles PIDs sees it in their queue, assigns the
+  number, and you are notified.</p>
+  <p>Admins have a <strong>PID Ledger</strong> in the sidebar listing every PID ever issued and its
+  state: Working, Completed, Reserved or Discontinued. Use it to check whether a client already has
+  a number before creating anything new.</p>
+</section>
+
+<section>
+  <h2><span class="n">5</span>Patents and Clients</h2>
+  <p class="who">Super Admin only.</p>
+  <p>This is the confidential area. Client names and real patent numbers are commercially sensitive,
+  so the system keeps them apart from everyday project work.</p>
+  <p>Each patent is stored under a short code such as <code>Pat_MLK_001</code>. That code is what
+  everyone else sees in project screens. The <strong>real patent number is hidden</strong> and is
+  shown only when you click to reveal it and enter the passcode.</p>
+  <p>To add patents, either enter the numbers directly (one per line) or upload the patent document
+  — the file name is read and the patent record is created from it. You can attach PDFs and other
+  media to a patent, and replace a document later. Client codes can be renamed if a client's short
+  code changes.</p>
+</section>
+
+<section>
+  <h2><span class="n">6</span>Tasks and Sub-tasks</h2>
+  <p>Tasks are the steps of the work. When you create a project from a type, its standard tasks are
+  already there; you add, rename or remove as the matter needs.</p>
+  <p>Click any task to open its panel on the right. Changes there <strong>save
+  automatically</strong> — there is no Save button. In the panel you set:</p>
+  <ul>
+    <li><strong>Description</strong> — what has to be done</li>
+    <li><strong>Staffing</strong> — who is doing the work. Each person is added with a role:
+    <strong>PM</strong>, <strong>Reviewer</strong> or <strong>Analyst</strong>, and with estimated
+    hours. Hours are optional, so a reviewer can be added at zero hours.</li>
+    <li><strong>Status, priority and deadline</strong></li>
+    <li><strong>Sub-tasks</strong> — smaller steps inside the task, which you can add, rename,
+    tick off and delete</li>
+    <li><strong>Comments and activity</strong> — discussion and a record of changes</li>
+  </ul>
+  <p>The panel also shows <strong>Assigned by</strong>, so it is always clear who handed the work
+  over.</p>
+</section>
+
+<section>
+  <h2><span class="n">7</span>My Tasks</h2>
+  <p>My Tasks collects your work from every project into one list, so you do not have to open
+  projects one by one to see what is due.</p>
+  <p>Filter by <strong>All</strong>, <strong>In Progress</strong> or <strong>Completed</strong>.
+  Each row shows the project, the deadline and a coloured dot for priority (Low, Medium, High,
+  Critical). Click <strong>Mark complete</strong> to finish a task, and click a completed task again
+  to reopen it if it was closed too early.</p>
+</section>
+
+<section>
+  <h2><span class="n">8</span>Timesheets</h2>
+  <p>Timesheets record where your hours went. They feed project costing, the performance figures
+  and the daily digest, so they need to be filled in honestly and on time.</p>
+
+  <h3>Logging time</h3>
+  <ol class="steps">
+    <li>Open <strong>Timesheets</strong> and click <strong>Log Time</strong>.</li>
+    <li>Select the <strong>project</strong> by its PID, then the <strong>task</strong> you worked on.
+    Only tasks assigned to you are listed.</li>
+    <li>Enter the <strong>hours</strong> — anything from 0.25 to 24 — and the date.</li>
+    <li>Mark it <strong>Billable</strong> or <strong>Non-bill</strong>. This is your own choice on
+    your own time.</li>
+    <li>Add a short note if it helps, and save.</li>
+  </ol>
+  <p>For time that is not against a project task, choose <strong>Client call</strong> (then pick the
+  PID the call was about) or <strong>Other</strong> for non-project time.</p>
+
+  <h3>The calendar and catching up</h3>
+  <p>Your month is shown as a colour calendar so gaps are obvious at a glance:
+  <strong>green</strong> for a full day logged, <strong>amber</strong> for a partial day, and
+  <strong>red</strong> where too little or nothing is recorded. Click any day to see or add entries.
+  The system also reminds you when time has not been filled in.</p>
+
+  <h3>Backdating rules</h3>
+  <ul>
+    <li>Up to <strong>1 month</strong> old — log it freely.</li>
+    <li><strong>1 to 3 months</strong> old — allowed, but it goes to a Super Admin for approval.</li>
+    <li>Over <strong>3 months</strong> old — closed; it cannot be logged.</li>
+  </ul>
+  <p>The <strong>Backfill</strong> card on the Timesheets page is where you raise and track those
+  approval requests.</p>
+</section>
+
+<section>
+  <h2><span class="n">9</span>Attendance</h2>
+  <p>Attendance records the days you worked. It has four tabs: <strong>Overview</strong>,
+  <strong>Leaves</strong>, <strong>Holidays</strong>, and <strong>Team</strong> for those who manage
+  people.</p>
+
+  <h3>Punching in and out</h3>
+  <p>Click <strong>Punch In</strong> when you start and <strong>Punch Out</strong> when you finish.
+  You can do this from Attendance or straight from Home. Your <strong>location is recorded</strong>
+  with the punch and shown as an area name, so location access must be allowed in your browser.</p>
+  <p>A day of under four hours is counted as a <strong>Half Day</strong> automatically. If you
+  forget to punch out, the system closes the day for you.</p>
+
+  <h3>Your calendar</h3>
+  <p>The month view marks each day as Present, Half Day, Absent, On Leave, Holiday, Weekly Off,
+  Work From Home or Not Marked, with late arrivals flagged. Below it, the
+  <strong>Attendance Log</strong> lists your in and out times day by day. You can view a full year
+  of history and export it to CSV.</p>
+
+  <h3>Fixing a wrong day (regularisation)</h3>
+  <p>If a day is wrong — you forgot to punch, you were late for a genuine reason, or you were out on
+  client work — click that day and raise a <strong>regularisation</strong>. Pick the reason:
+  Missed punch, Late, On duty, Work from home, Past midnight or Other, and explain briefly. It goes
+  to HR, who approve or reject it. Your own pending requests are listed so you can track or cancel
+  them.</p>
+</section>
+
+<section>
+  <h2><span class="n">10</span>Leaves</h2>
+  <p>Leave is taken in <strong>whole days and half days only</strong> — there is no hourly leave.
+  A half day is either the <strong>First Half</strong> or the <strong>Second Half</strong> of one
+  date.</p>
+  <ol class="steps">
+    <li>Open <strong>Attendance → Leaves</strong> and click <strong>Apply for Leave</strong>.</li>
+    <li>Choose the leave type and the dates.</li>
+    <li>Choose <strong>Full Day</strong> or <strong>Half Day</strong>. For a half day, say which
+    half.</li>
+    <li>Give a reason. Depending on the leave, you may be asked for an alternate contact, an
+    alternate address, and the colleague covering for you.</li>
+    <li>Attach a file if one is needed, then submit.</li>
+  </ol>
+  <p>Your request goes to the right approver and you are notified when it is decided. You can
+  <strong>cancel</strong> a request you no longer need.</p>
+  <p>The <strong>balance card</strong> shows what you have, written plainly as
+  <strong>Credit</strong> (what was added) and <strong>Debit</strong> (what you have used), so the
+  number is easy to check. Only one leave request can cover a given day. The
+  <strong>Leave Planner</strong> lets you map out time off in advance.</p>
+</section>
+
+<section>
+  <h2><span class="n">11</span>Comp-off</h2>
+  <p>Comp-off is time off earned by working on a weekend or a public holiday.</p>
+  <p>On your attendance calendar, weekend and holiday cells are clickable. Click the day you worked
+  and choose <strong>Claim comp-off</strong>. Say how much you worked — a
+  <strong>half day</strong> or a <strong>full day</strong> — and attach evidence of the work. HR
+  reviews the claim, and once approved the balance is <strong>credited</strong> to you. When you
+  later take that time off, it appears as a <strong>debit</strong> on the same balance card.</p>
+</section>
+
+<section>
+  <h2><span class="n">12</span>Work From Home</h2>
+  <p>Working from home is requested in advance, not decided at the moment you punch in.</p>
+  <p>Raise a <strong>WFH request</strong> with the start and end dates and a reason. It goes to HR
+  or an Admin to approve. Once approved, when you punch in on those dates your day is automatically
+  marked <strong>Work From Home</strong> — you do not have to do anything else.</p>
+  <p>A single request can cover up to 31 days; longer arrangements are made with HR directly. You
+  cannot have approved leave and work from home on the same day — you are either off or working.</p>
+</section>
+
+<section>
+  <h2><span class="n">13</span>Expenses</h2>
+  <p>Expenses are work costs you paid for yourself and want reimbursed.</p>
+  <ol class="steps">
+    <li>Open <strong>Expenses</strong> and start a new claim.</li>
+    <li>Pick the category: Travel, Accommodation, Meals, Software, Supplies, Client or Other.</li>
+    <li>Enter the <strong>amount</strong> and a short description of what it was for.</li>
+    <li><strong>Attach the bill or receipt.</strong></li>
+    <li>Submit.</li>
+  </ol>
+  <p>The claim sits as <strong>Pending</strong> until an approver acts, then becomes
+  <strong>Approved</strong> or <strong>Rejected</strong>, and finally
+  <strong>Reimbursed</strong> once paid. Admins and HR are notified when a new claim arrives.
+  <strong>My expenses</strong> shows your own claims and you can cancel one that is still pending.</p>
+</section>
+
+<section>
+  <h2><span class="n">14</span>Team Capacity</h2>
+  <p class="who">For managers and delivery leads.</p>
+  <p>Capacity answers one question: <strong>who is free and who is loaded?</strong> It is a grid of
+  people against dates, and each day is marked <strong>Free</strong>, <strong>Busy</strong>,
+  <strong>Leave</strong>, <strong>Pending leave</strong>, <strong>Holiday</strong>,
+  <strong>Comp-off</strong> or <strong>Absent</strong>.</p>
+  <p>You can:</p>
+  <ul>
+    <li>Filter by project team to look at one matter's people only</li>
+    <li>Change the date range, or look back at <strong>actual attendance over the past 30
+    days</strong> instead of the plan</li>
+    <li>Click a person to see their tasks and load in detail</li>
+    <li><strong>Extend a deadline</strong> or <strong>reassign a task</strong> directly from the
+    board when someone is unexpectedly out</li>
+  </ul>
+  <p>A strip at the top lists who is on leave and which holidays fall inside the window you are
+  looking at, so a plan is not made on top of days nobody is working.</p>
+</section>
+
+<section>
+  <h2><span class="n">15</span>Performance</h2>
+  <p>Performance turns the work already recorded — tasks finished, deadlines met, hours logged —
+  into a picture of how things are going. Nothing is typed in by hand here; it is all worked out
+  from the system.</p>
+  <p>Your own view shows your <strong>completion rate</strong>, <strong>on-time rate</strong>,
+  <strong>hours logged</strong> and <strong>activity</strong>, with a trend over time and a
+  contribution heat map showing your busy and quiet periods.</p>
+  <p>Leadership additionally gets the <strong>organisation view</strong>: project progress, top
+  contributors, and rankings, as charts with clear labels and colour keys.</p>
+  <p>Every metric has an information icon next to it explaining exactly how the number is worked
+  out, so there is no guessing about what a score means. You can change the time window to look at a
+  longer or shorter period.</p>
+</section>
+
+<section>
+  <h2><span class="n">16</span>Calendar</h2>
+  <p>The Calendar brings your deadlines, meetings, approved leave and company holidays into one
+  month view, so you can see what is coming without opening each module.</p>
+  <p>The <strong>Team Calendar</strong> tab shows the whole team together — useful before promising a
+  date or planning a review. It runs as a scrollable timeline covering one month back and three
+  months ahead, with holidays marked, and weeks starting on Monday.</p>
+</section>
+
+<section>
+  <h2><span class="n">17</span>Reports</h2>
+  <p>Reports is the read-only summary of delivery across all projects, for sharing outside the
+  dashboard.</p>
+  <p>It lists projects with their phase (Planning, Active, On Hold, Completed, Archived), priority,
+  progress and average completion, and you can filter on any of these. Task-level detail sits under
+  each project. Use the export menu to download as <strong>CSV</strong> for a spreadsheet or
+  <strong>PDF</strong> to send on.</p>
+</section>
+
+<section>
+  <h2><span class="n">18</span>Daily Digest</h2>
+  <p class="who">Super Admin only.</p>
+  <p>The digest is an end-of-day summary of the whole organisation, produced automatically at
+  <strong>10 pm</strong>. It covers the day's projects, the hours each person logged, and the
+  deadlines coming up.</p>
+  <p>Open the <strong>Daily Digest</strong> page to read it, click through to a full detail screen
+  for any line, and export it. The time it runs can be changed in settings.</p>
+</section>
+
+<section>
+  <h2><span class="n">19</span>People</h2>
+  <p>People is the team directory. The <strong>All Members</strong> tab lists everyone with their
+  photo, role and designation; the <strong>Departments</strong> tab groups them by department —
+  Leadership, Management, Consulting, Research, Product and Human Resources.</p>
+  <p>Click a person to open their page: their designation, their reporting line, the projects they
+  are on, and a link to their roles and permissions. Everyone can upload their own profile photo.</p>
+  <p><strong>Personal details</strong> — home address, date of birth, next of kin — are shown only
+  to Admin, Super Admin and HR. Other colleagues do not receive that information at all.</p>
+</section>
+
+<section>
+  <h2><span class="n">20</span>Company</h2>
+  <p>Company is the shared, non-project side of the organisation. It has four tabs:</p>
+  <ul>
+    <li><strong>Feed</strong> — company announcements. Anyone can read them; those with permission
+    can post, edit and attach a document.</li>
+    <li><strong>Recognition</strong> — appreciation given to colleagues, such as Above &amp; Beyond,
+    with the reason recorded.</li>
+    <li><strong>Policies</strong> — the HR policy library. Open a policy to read it and acknowledge
+    it; HR can see who has and has not read each one.</li>
+    <li><strong>Directory</strong> — the org chart and reporting lines, plus upcoming birthdays and
+    work anniversaries.</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="n">21</span>Appraisals</h2>
+  <p>Appraisals are the structured performance reviews. HR opens a <strong>cycle</strong> covering a
+  period, and everyone in it goes through the same three steps.</p>
+  <ol class="steps">
+    <li><strong>Self-assessment</strong> — you write your own review against your goals and submit
+    it. Until you do, your review shows as awaiting self-assessment.</li>
+    <li><strong>Manager review</strong> — your reviewer reads it, adds their assessment and submits.</li>
+    <li><strong>Acknowledge</strong> — you read the manager's review and acknowledge it, which
+    closes the appraisal.</li>
+  </ol>
+  <p><strong>My reviews</strong> shows your own appraisals past and present. Managers see the
+  reviews waiting on them, and HR sees the full roster for the cycle and who is holding it up.</p>
+</section>
+
+<section>
+  <h2><span class="n">22</span>Admin</h2>
+  <p class="who">For Admins and Super Admins.</p>
+  <p>The Admin area is where the system itself is managed.</p>
+  <ul>
+    <li><strong>Users</strong> — create a team member (work email required), deactivate someone who
+    has left, and reset a password. A user whose password was reset must set a new one before they
+    can change anything.</li>
+    <li><strong>Roles and permissions</strong> — a matrix screen showing every role against every
+    permission. There are eight roles: Super Admin, Admin, Manager, Senior Consultant, Consultant,
+    Senior Research Associate, HR and Employee. You can create roles, edit what each one can do, and
+    grant an individual an exception.</li>
+    <li><strong>PID Ledger</strong> — every PID issued, with its state and the project it belongs
+    to.</li>
+    <li><strong>Audit Log</strong> — a permanent record of who changed what and when. It cannot be
+    edited or deleted, and it is the place to look when something needs explaining.</li>
+  </ul>
+  <div class="note">
+    Changes here affect everyone, so most of them ask for the org passcode as well as your password.
+  </div>
+</section>
+
+<footer>
+  Squark Dashboard · Phase 1 user guide · August 2026. All modules described are live. What you can
+  see and do depends on the role assigned to your account.
+</footer>
+
+</body>
+</html>

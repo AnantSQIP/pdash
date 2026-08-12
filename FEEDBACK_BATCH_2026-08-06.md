@@ -6,7 +6,7 @@
 > 2026-08-07: `MAX_HOURS_PER_DAY = 16` (D1), `PAST_MIDNIGHT` regularization (A1), IDEA phase
 > removed (F3), `project.generate_pid` explicit (F4), re-initialize from the PID ledger (F5,
 > tested), the complete-gate on open tasks (F6), `Project.clientDeliveryDate` (F7), Monday-start
-> calendars (E1), holidays and leaves across calendar surfaces (E2/E3), project type on tiles
+> calendars (E1), holidays and leaves calendar surfaces (E2/E3), project type on tiles
 > (F1/F2), the Daily Digest module with everything clickable (G1–G4), and Reports with the
 > spotlight, type column, PID search, per-project CSV and no activity digest (H1–H6).
 >

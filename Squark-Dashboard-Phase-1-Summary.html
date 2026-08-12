@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Squark Dashboard — Phase 1 Summary</title>
+<style>
+  @page { size: A4; margin: 15mm 14mm 14mm 14mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    color: #22303c; font-size: 10pt; line-height: 1.5; margin: 0;
+  }
+
+  header { border-bottom: 3px solid #3d8de2; padding-bottom: 11px; margin-bottom: 16px; }
+  h1 { font-size: 20pt; margin: 0 0 5px; color: #16324f; letter-spacing: -.2px; }
+  .sub { color: #6b7785; font-size: 9.5pt; }
+
+  .intro {
+    background: #f5f8fc; border-left: 3px solid #3d8de2; padding: 11px 14px;
+    margin-bottom: 20px; font-size: 9.5pt; color: #3c4a57; line-height: 1.55;
+  }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 16px; }
+
+  .card { break-inside: avoid; page-break-inside: avoid; }
+  .card h2 {
+    font-size: 10pt; margin: 0 0 6px; color: #16324f;
+    border-bottom: 1.5px solid #e2e8f0; padding-bottom: 4px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .card h2 .n {
+    display: inline-block; background: #3d8de2; color: #fff; min-width: 17px; height: 17px;
+    line-height: 17px; text-align: center; border-radius: 3px;
+    font-size: 8pt; font-weight: 700; flex-shrink: 0;
+  }
+  ul { margin: 0; padding-left: 14px; }
+  li { padding: 1.5px 0; color: #3c4a57; font-size: 9pt; line-height: 1.45; }
+  li strong { color: #22303c; font-weight: 600; }
+
+  .full { grid-column: 1 / -1; }
+
+  footer {
+    margin-top: 20px; padding-top: 10px; border-top: 1px solid #dde3ea;
+    color: #8a94a0; font-size: 8.5pt; break-inside: avoid;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Squark Dashboard — Phase 1</h1>
+  <div class="sub">Summary of everything built and running to date · August 2026</div>
+</header>
+
+<div class="intro">
+  The Squark Dashboard is one place for the whole team to run their day — the patent work we
+  deliver, the hours we spend on it, and the people side (attendance, leave, expenses and
+  reviews). Everything listed below is <strong>built, tested and in use</strong>. Each person
+  only sees the parts their role allows, so the screen stays relevant to their job.
+</div>
+
+<div class="grid">
+
+  <div class="card">
+    <h2><span class="n">1</span>Logging In &amp; Access</h2>
+    <ul>
+      <li>Secure login with your own password; sessions time out when idle</li>
+      <li><strong>8 roles</strong> — Super Admin, Admin, Manager, Senior Consultant, Consultant, Senior Research Associate, HR and Employee</li>
+      <li>Menus and pages appear only if your role allows them</li>
+      <li>Sensitive changes (people, roles) ask for an extra org passcode</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span>Home Screen</h2>
+    <ul>
+      <li>Changes to suit your role — a manager and an analyst see different things</li>
+      <li>Your tasks, your projects and your key numbers at a glance</li>
+      <li>Punch In / Punch Out button right on the home page</li>
+      <li>Notifications with a click-through to the item</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span>Projects</h2>
+    <ul>
+      <li>Every project gets a <strong>PID</strong> such as <strong>SQ_26_27_001</strong>; a returning client keeps the same PID across new rounds of work</li>
+      <li><strong>9 project types</strong> — Infringement, Novelty, Invalidity, FTO, Landscape, Monetization, Reverse Engineering, Risk &amp; Strategy, General</li>
+      <li>Picking a type creates that type's standard task list automatically</li>
+      <li>A <strong>technology domain</strong> too (Medical, Automobile, Source Code, Cloud/Server, Advertisement) — your own can be added</li>
+      <li>View work as a list, a Kanban board or a Gantt chart</li>
+      <li>Files, discussion, issues and activity history on each project</li>
+      <li>Complete, close and reopen a project when work finishes</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span>Patents &amp; Clients</h2>
+    <ul>
+      <li>Confidential area — <strong>Super Admin only</strong></li>
+      <li>Real patent numbers are hidden behind short codes like <strong>Pat_MLK_001</strong></li>
+      <li>The real number is shown only after entering the passcode</li>
+      <li>Client codes and patent documents stored together</li>
+      <li>Projects link to patents, so the client is always correct</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">5</span>Tasks</h2>
+    <ul>
+      <li>Tasks and sub-tasks under each project</li>
+      <li>Assign people with a role — PM, Reviewer or Analyst — and estimated hours</li>
+      <li>Deadlines, priority, status and progress on every task</li>
+      <li>"My Tasks" gathers your work across all projects in one list</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">6</span>Timesheets</h2>
+    <ul>
+      <li>Log hours against a project PID and then the task</li>
+      <li>Colour calendar shows each day at a glance — green, amber or red by hours logged</li>
+      <li>Mark your own time billable or non-billable</li>
+      <li>Backdating rules: under a month is free, 1–3 months needs approval, over 3 months is closed</li>
+      <li>Reminders if time has not been filled in</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">7</span>Attendance</h2>
+    <ul>
+      <li>Punch in and out; location is recorded with the punch</li>
+      <li>Under 4 hours is counted as a half day automatically</li>
+      <li>Work from home goes through a request and HR approval</li>
+      <li>Missed or wrong punches can be sent to HR to correct</li>
+      <li>Monthly view, one-year history and CSV export</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">8</span>Leaves &amp; Comp-off</h2>
+    <ul>
+      <li>Apply for leave as a <strong>full day or half day</strong></li>
+      <li>Goes to the right approver, with balance shown before you apply</li>
+      <li>Comp-off for weekend and holiday work — claim, HR approves, balance credited</li>
+      <li>Balance card shows clearly what was credited and what was used</li>
+      <li>Company holidays are built in</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">9</span>Expenses</h2>
+    <ul>
+      <li>Submit an expense with the receipt attached</li>
+      <li>Goes for approval, then is marked reimbursed</li>
+      <li>Admins and HR are notified of new claims</li>
+      <li>You see your own; approvers see the queue</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">10</span>Team Capacity</h2>
+    <ul>
+      <li>Board showing who is free and who is loaded, day by day</li>
+      <li>Leave, holidays and work-from-home shown on the same view</li>
+      <li>Look back over the past 30 days, or ahead at what is coming</li>
+      <li>Filter by project team to focus on one matter</li>
+      <li>Extend a deadline or reassign work when someone is suddenly out</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">11</span>Performance</h2>
+    <ul>
+      <li>Your own scores — completion rate, on-time rate, hours and activity</li>
+      <li>Organisation view for leadership: project progress, top contributors, rankings</li>
+      <li>Charts and a contribution heat map over time</li>
+      <li>Every number has a short note explaining how it is worked out</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">12</span>Reports &amp; Daily Digest</h2>
+    <ul>
+      <li>Project and task reports with filters</li>
+      <li>Export to CSV or PDF</li>
+      <li>Daily digest at <strong>10 pm</strong> — the day's projects, hours and deadlines</li>
+      <li>Digest is Super Admin only, with a full detail screen</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">13</span>Calendar</h2>
+    <ul>
+      <li>Your deadlines, meetings, leave and holidays in one calendar</li>
+      <li>Team Calendar to see everyone's month together</li>
+      <li>Scrollable timeline — one month back, three months ahead</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">14</span>People &amp; Profiles</h2>
+    <ul>
+      <li>Directory of the team with photos, roles and designations</li>
+      <li>Personal page for each person with their work and roles</li>
+      <li>Personal details (address, date of birth, next of kin) visible only to Admin and HR</li>
+      <li>New joiners complete their profile at first login</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">15</span>Company</h2>
+    <ul>
+      <li>Company announcements feed</li>
+      <li>HR policy library, with a record of who has read what</li>
+      <li>Org chart showing reporting lines</li>
+      <li>Birthdays and work anniversaries</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">16</span>Appraisals</h2>
+    <ul>
+      <li>Review cycles run by HR</li>
+      <li>Self review, then manager review, then you acknowledge</li>
+      <li>Goals recorded against each review</li>
+      <li>Recognition and rewards can be given to team members</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">17</span>Discussion &amp; Alerts</h2>
+    <ul>
+      <li>Discussion tab on every project</li>
+      <li><strong>@mention</strong> a project member and they are notified</li>
+      <li>Attach files and images to messages and comments</li>
+      <li>Search across projects, tasks and people from any screen</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">18</span>Admin Tools</h2>
+    <ul>
+      <li>Manage roles and permissions from one matrix screen</li>
+      <li>PID ledger — every PID issued, used or reserved</li>
+      <li>Audit log of who changed what and when</li>
+      <li>Add and manage team members</li>
+    </ul>
+  </div>
+
+</div>
+
+<footer>
+  Squark Dashboard · Phase 1 summary · prepared August 2026. All items listed are live in the
+  system. Access to any screen depends on the role assigned to each user.
+</footer>
+
+</body>
+</html>

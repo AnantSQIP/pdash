@@ -59,3 +59,6 @@ Thumbs.db
 SquarkIP-credentials.*
 kt-shots/
 .data/
+
+# Excel lock files (created while a workbook is open)
+~$*
