@@ -1339,7 +1339,8 @@ export const api = {
     detail: (date?: string) => req<DigestDetail>(`/daily-digest/detail${date ? `?date=${date}` : ''}`),
     getSchedule: () => req<{ hourIst: number }>('/daily-digest/schedule'),
     setSchedule: (hourIst: number) => req<{ hourIst: number }>('/daily-digest/schedule', { method: 'PATCH', body: JSON.stringify({ hourIst }) }),
-    send: () => req<{ sent: number }>('/daily-digest/send', { method: 'POST' }),
+    /** `admins` = how many qualify to receive it at all — lets the UI explain a zero. */
+    send: () => req<{ sent: number; admins: number; alreadySentToday: number }>('/daily-digest/send', { method: 'POST' }),
   },
 
   company: {

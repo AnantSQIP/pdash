@@ -274,7 +274,19 @@ export default function DigestPage() {
             {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{hh(i)} IST</option>)}
           </select>
           <button onClick={saveHour} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand-600 text-white hover:bg-brand-700">Save</button>
-          <button onClick={async () => { try { const r = await api.dailyDigest.send(); toast(`Digest sent to ${r.sent} admin(s)`, 'success'); } catch { toast('Could not send', 'error'); } }}
+          <button onClick={async () => {
+            try {
+              const r = await api.dailyDigest.send();
+              // A zero has two very different causes, and "sent to 0 admin(s)" hid both.
+              if (r.sent > 0) {
+                toast(`Digest sent to ${r.sent} admin${r.sent === 1 ? '' : 's'}`, 'success');
+              } else if (r.admins === 0) {
+                toast('Nobody can receive the digest — it goes to Super Admins and Admins, and none were found.', 'error');
+              } else {
+                toast(`Today's digest already went to all ${r.admins} admin(s).`, 'success');
+              }
+            } catch (e) { toast(e instanceof Error ? e.message : 'Could not send', 'error'); }
+          }}
             className="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Send now</button>
         </div>
 

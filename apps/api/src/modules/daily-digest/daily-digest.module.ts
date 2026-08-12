@@ -29,6 +29,9 @@ function istHour(): number {
  * Single in-process interval — the deployment is one API container. Set RUN_BACKGROUND_JOBS=false
  * on all but one replica (multi-replica AWS) to avoid duplicates.
  */
+/** What a digest send actually did — enough for the UI to explain a zero. */
+export type DigestSendResult = { sent: number; admins: number; alreadySentToday: number };
+
 @Injectable()
 export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('DailyDigest');
@@ -365,24 +368,32 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     return { title: `Daily report — ${r.projectsCompleted.length} completed · ${r.overdueCount} overdue`, message: lines.join('\n') };
   }
 
-  /** Send the digest to every admin who hasn't already got today's (DB-backed dedup). */
-  async sendDigests(now = new Date()): Promise<number> {
+  /**
+   * Send the digest to every admin who hasn't already got today's.
+   *
+   * The daily dedup exists so the half-hourly tick cannot post the same digest twice. It must
+   * NOT apply when a human presses "Send now": pressing a button and being told "sent to 0
+   * admin(s)" — with no way to tell whether nobody qualifies or everyone already had it — is
+   * indistinguishable from the feature being broken. So `force` re-sends, and the result says
+   * how many admins there were as well as how many were written.
+   */
+  async sendDigests(now = new Date(), opts: { force?: boolean } = {}): Promise<DigestSendResult> {
     const admins = await this.orgAdmins();
-    if (!admins.length) return 0;
+    if (!admins.length) return { sent: 0, admins: 0, alreadySentToday: 0 };
     const dayStart = startOfIstDay(now);
     const already = await this.prisma.notification.findMany({
       where: { type: 'admin.daily_digest', createdAt: { gte: dayStart }, userId: { in: admins } },
       select: { userId: true },
     });
     const sent = new Set(already.map(n => n.userId));
-    const recipients = admins.filter(id => !sent.has(id));
-    if (!recipients.length) return 0;
+    const recipients = opts.force ? admins : admins.filter(id => !sent.has(id));
+    if (!recipients.length) return { sent: 0, admins: admins.length, alreadySentToday: sent.size };
     const { title, message } = this.format(await this.buildReport(now));
     await this.prisma.notification.createMany({
       data: recipients.map(userId => ({ userId, type: 'admin.daily_digest', title, message, link: '/digest' })),
     });
     this.logger.log(`daily digest sent to ${recipients.length} admin(s)`);
-    return recipients.length;
+    return { sent: recipients.length, admins: admins.length, alreadySentToday: sent.size };
   }
 }
 
@@ -392,7 +403,11 @@ class DailyDigestController {
 
   /** Manual trigger (for testing / on-demand). Admin only. */
   @Post('send') @RequirePermission('user.manage_access')
-  async send() { await this.svc.assertSuperAdmin(); return { sent: await this.svc.sendDigests() }; }
+  async send() {
+    await this.svc.assertSuperAdmin();
+    // Pressed by a person, so it always sends — the dedup is there for the timer, not for them.
+    return this.svc.sendDigests(new Date(), { force: true });
+  }
 
   /** The detailed report for a day (defaults to today) — powers the digest detail screen. */
   @Get('report') @RequirePermission('user.manage_access')
