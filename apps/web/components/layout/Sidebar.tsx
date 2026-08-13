@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -55,6 +55,9 @@ const ADMIN_NAV: NavItem[] = [
   // deadline — so it is Super-Admin only, matching the server-side gate in daily-digest.module.
   { href: '/digest',      icon: ClipboardList,  label: 'Daily Digest', superAdminOnly: true },
   { href: '/pid-ledger',  icon: KeyRound,       label: 'PID Ledger', perm: 'user.manage_access' },
+  // What each client's work amounts to. Same gate as the patent portal (client identity is the
+  // Super-Admin-only fact), but a separate destination — it never reveals a patent number.
+  { href: '/client-ledger', icon: BookOpen,     label: 'Client Ledger', perm: 'patent.manage' },
   { href: '/admin/audit', icon: History,        label: 'Audit Log', perm: ['audit.view'] },
 ];
 

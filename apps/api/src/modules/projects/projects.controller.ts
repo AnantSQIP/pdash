@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, UpdateProjectDto } from './dto';
+import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, SetProjectClientDto, SetProjectPatentsDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -121,6 +121,26 @@ export class ProjectsController {
   @Patch(':id') @RequirePermission('project.update')
   update(@Param('id') id: string, @Body() dto: UpdateProjectDto) {
     return this.projects.update(id, dto);
+  }
+
+  /**
+   * Replace the project's tagged patents. `project.update` + project access is the whole gate —
+   * per the Phase 2 decision, tagging follows who may EDIT THE PROJECT, not who may see the
+   * confidential patent portal.
+   */
+  @Put(':id/patents') @RequirePermission('project.update')
+  setPatents(@Param('id') id: string, @Body() dto: SetProjectPatentsDto) {
+    return this.projects.setPatents(id, dto.patentIds ?? []);
+  }
+
+  /**
+   * Name the project's client directly. Only possible while the project has NO tagged patents —
+   * when it has them, they decide. The service additionally requires `patent.manage`, because a
+   * client's identity is confidential in a way a patent handle is not.
+   */
+  @Put(':id/client') @RequirePermission('project.update')
+  setClient(@Param('id') id: string, @Body() dto: SetProjectClientDto) {
+    return this.projects.setClient(id, dto.clientId ?? null);
   }
 
   @Post(':id/members') @RequirePermission('project.update')

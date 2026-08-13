@@ -24,6 +24,7 @@ import { RoundCard } from '@/components/projects/RoundCard';
 import { RoundTabContent } from '@/components/projects/RoundTabContent';
 import { TaskGroups } from '@/components/projects/TaskGroups';
 import { AddRoundModal } from '@/components/projects/AddRoundModal';
+import { PatentTagsEditor } from '@/components/projects/PatentTagsEditor';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -330,11 +331,9 @@ export function ProjectDetailClient({ projectId }: Props) {
                     {typeLabel}
                   </span>
                 )}
-                {project.client && (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 ring-1 ring-purple-100">
-                    {project.client.name}
-                  </span>
-                )}
+                {/* The client now lives on its own line below the title, where it can say where
+                    it came from and be changed. A second copy up here would only be a duplicate
+                    that quietly showed nothing for a code-only client (name is optional). */}
                 <span className={clsx('inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium', phase.bg, phase.text)}>
                   {phase.label}
                 </span>
@@ -344,19 +343,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               {project.description && (
                 <p className="text-sm text-gray-500 mt-1 max-w-xl line-clamp-2">{project.description}</p>
               )}
-              {project.patents && project.patents.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                  <span className="text-[11px] text-gray-400">Patents:</span>
-                  {project.patents
-                    .slice()
-                    .sort((a, b) => a.patent.serial - b.patent.serial)
-                    .map(({ patent }) => (
-                      <span key={patent.id} className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-100">
-                        {patent.handle}
-                      </span>
-                    ))}
-                </div>
-              )}
+              <PatentTagsEditor project={project} />
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {/* A returning client keeps this PID; their next piece of work becomes another

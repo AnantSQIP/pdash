@@ -5,13 +5,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { X, Plus, Lock, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock } from 'lucide-react';
 import clsx from 'clsx';
 
-import { api, type UserSummary, type ProjectTypeDef, type PatentOption } from '@/lib/api';
+import { api, type UserSummary, type ProjectTypeDef, type PatentOption, type ClientSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useAuth } from '@/lib/auth-context';
 import { TechnologyDomainPicker, domainPayload } from './TechnologyDomainPicker';
 import { DateField } from '@/components/ui/DateField';
 import { fullName } from '@/lib/avatar';
+import { patentMatches, matchedFormerHandle } from '@/lib/patent-search';
 
 interface NewProjectModalProps {
   onClose: () => void;
@@ -42,6 +43,16 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
   const [saveDomain, setSaveDomain] = useState(false);
   const [patentIds, setPatentIds] = useState<string[]>([]);
   const [patentSearch, setPatentSearch] = useState('');
+  // Naming a client outright needs patent.manage — the dropdown lists client NAMES, which are
+  // the confidential fact here. Everyone else attaches one indirectly, by picking a patent.
+  const canPickClient = can('patent.manage');
+  const [clientId, setClientId] = useState('');
+  const { data: clientList = [] } = useQuery<ClientSummary[]>({
+    queryKey: ['clients'], queryFn: () => api.clients.list(),
+    enabled: canPickClient, staleTime: 30_000,
+  });
+  // An archived client takes no new work, so it is not offered on a NEW project at all.
+  const clientOptions = useMemo(() => clientList.filter(c => !c.archivedAt), [clientList]);
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState('MEDIUM');
   // The office that owns the matter. No longer asked for on the form — every PID can hold
@@ -137,11 +148,12 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     queryKey: ['patent-options-all'], queryFn: () => api.patents.options(),
     enabled: canSeePatents, staleTime: 30_000,
   });
-  // Filter handles by the search box — needed when there are many patents.
-  const filteredPatents = useMemo(() => {
-    const q = patentSearch.trim().toLowerCase();
-    return q ? patentOptions.filter(p => p.handle.toLowerCase().includes(q)) : patentOptions;
-  }, [patentOptions, patentSearch]);
+  // Filter handles by the search box — needed when there are many patents. Matches retired IDs
+  // too, so searching the handle written on an old report still finds the patent.
+  const filteredPatents = useMemo(
+    () => patentOptions.filter(p => patentMatches(p, patentSearch)),
+    [patentOptions, patentSearch],
+  );
 
   function togglePatent(id: string) {
     setPatentIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
@@ -172,6 +184,9 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
           save: saveTemplate,
         } : undefined,
         patentIds: patentIds.length ? patentIds : undefined,
+        // Only meaningful with NO patents selected — with them, they decide the client and the
+        // server ignores this. Sending it anyway would be a lie about what was chosen.
+        clientId: (canPickClient && !patentIds.length && clientId) ? clientId : undefined,
         description: description || undefined,
         priority,
         office: office || undefined,
@@ -340,6 +355,31 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
             />
           </div>
 
+          {/* Client — only for those who may see client identities, and only in force when no
+              patents are picked. Tagging a patent below decides the client on its own, so the
+              dropdown disables itself rather than sitting there implying it still counts. */}
+          {canPickClient && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Client</label>
+              <select
+                value={patentIds.length ? '' : clientId}
+                onChange={e => setClientId(e.target.value)}
+                disabled={patentIds.length > 0}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500 disabled:bg-gray-50 disabled:text-gray-400"
+              >
+                <option value="">— none —</option>
+                {clientOptions.map(c => (
+                  <option key={c.id} value={c.id}>{c.name ? `${c.name} (${c.code})` : c.code}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">
+                {patentIds.length > 0
+                  ? 'Taken from the patents selected below.'
+                  : 'Without a client, this project\'s hours never reach the client ledger.'}
+              </p>
+            </div>
+          )}
+
           {/* Patent IDs — pick the handles to link. A search box helps when there are many. */}
           {canSeePatents && (
             <div>
@@ -372,6 +412,11 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                           className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
                         />
                         <span className="text-sm font-mono text-gray-700">{p.handle}</span>
+                        {/* Say WHY a patent matched when the live handle didn't — otherwise it
+                            looks like an unrelated result appearing for no reason. */}
+                        {matchedFormerHandle(p, patentSearch) && (
+                          <span className="text-[11px] text-gray-400">was {matchedFormerHandle(p, patentSearch)}</span>
+                        )}
                       </label>
                     ))}
                   </div>

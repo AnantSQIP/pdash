@@ -337,6 +337,20 @@ export class ProjectsService {
             : { taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } } }),
         },
       });
+      // The PID's patents carry over with the client. A round is the SAME matter for the same
+      // client, so inheriting the client but not the patents left the two rounds disagreeing
+      // about what the work is about: round 1 read "client from patents" and locked, round 2 read
+      // as directly-set and editable — and editing it silently split one PID across two clients.
+      const sourcePatents = await tx.projectPatent.findMany({
+        where: { projectId: source.id }, select: { patentId: true },
+      });
+      if (sourcePatents.length) {
+        await tx.projectPatent.createMany({
+          data: sourcePatents.map(p => ({ projectId: project.id, patentId: p.patentId, addedBy: creator.id })),
+          skipDuplicates: true,
+        });
+      }
+
       if (template) await this.seedTemplateTasks(tx, project.id, template, creator.id);
       return project;
     });
@@ -519,8 +533,8 @@ export class ProjectsService {
     const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
     const technologyDomain = await this.resolveDomain(organizationId, creator.id, dto);
 
-    // ── Patent linkage (Phase 1) — the client is DERIVED from the patents, never picked.
-    // Only patent.view holders (Super Admin by default, or anyone granted it) may attach
+    // ── Patent linkage — TAGGED PATENTS DECIDE THE CLIENT, and nothing else does while any
+    // exist. Only patent.view holders (Super Admin by default, or anyone granted it) may attach
     // patents; the field is hidden for everyone else and the API re-checks so it can't be forced.
     let patentIds: string[] = [];
     let derivedClientId: string | null = null;
@@ -542,6 +556,15 @@ export class ProjectsService {
         throw new BadRequestException('Selected patents belong to different clients — a project maps to one client.');
       }
       derivedClientId = clientIds[0] ?? null;
+    } else if (dto.clientId) {
+      // NO patents, but a client was named. This is the case the ledger used to lose entirely:
+      // an FTO study, a landscape, or a brand-new client whose patents are not registered yet
+      // produced billable hours that belonged to nobody. `clientId` was declared on this DTO and
+      // silently ignored, which was worse than not offering it at all.
+      //
+      // Only ever consulted when there are no patents, so the stored client can never contradict
+      // them. Client identity is confidential, so naming one requires patent.manage.
+      derivedClientId = await this.resolveNamedClient(organizationId, creator.id, dto.clientId);
     }
 
     // A PID is NEVER assigned automatically. Even an authority must have explicitly generated one
@@ -1458,18 +1481,22 @@ export class ProjectsService {
       delete redacted.client;
       delete redacted.clientId;
     } else {
-      // #C: derive the client from the CURRENTLY linked patents, so it can never go stale even
-      // if the project's patents are changed later (the stored clientId is just a hint).
+      // #C: while the project HAS patents they decide the client, recomputed here so it can
+      // never go stale if they change. With NO patents there is nothing to derive from, and the
+      // stored column is the answer — that is a client someone named directly, and returning
+      // null for it (as this used to) made the whole case invisible.
       const pids = (redacted.patents ?? []).map((x: any) => x.patent?.id).filter(Boolean);
-      const rows = pids.length
-        ? await this.prisma.patent.findMany({
-            where: { id: { in: pids }, deletedAt: null },
-            select: { client: { select: { id: true, name: true, code: true } } },
-          })
-        : [];
-      const uniq = [...new Map(rows.map(r => [r.client.id, r.client])).values()];
-      redacted.client = uniq.length === 1 ? uniq[0] : null;
+      if (pids.length) {
+        const rows = await this.prisma.patent.findMany({
+          where: { id: { in: pids }, deletedAt: null },
+          select: { client: { select: { id: true, name: true, code: true } } },
+        });
+        const uniq = [...new Map(rows.map(r => [r.client.id, r.client])).values()];
+        redacted.client = uniq.length === 1 ? uniq[0] : null;
+      }
       redacted.clientId = (redacted.client as any)?.id ?? null;
+      // Tells the UI whether the client is locked to the patents or editable on its own.
+      redacted.clientFromPatents = pids.length > 0;
     }
     return redacted;
   }
@@ -1881,6 +1908,146 @@ export class ProjectsService {
       this.prisma.projectMember.deleteMany({ where: { projectId, userId } }),
       ...(taskIds.length ? [this.prisma.taskAssignee.deleteMany({ where: { userId, taskId: { in: taskIds } } })] : []),
     ]);
+    return this.get(projectId);
+  }
+
+  // ── Client attribution (Phase 2) ─────────────────────────────────────────────
+  /**
+   * Validate a client named directly (rather than inferred from patents).
+   *
+   * Naming one requires `patent.manage`: a client's identity — that "MLK" is a particular
+   * company — is the confidential fact this system protects, and a dropdown of client names is
+   * exactly that fact. Everyone else attaches a client the indirect way, by tagging a patent
+   * handle, which reveals nothing about who the client is.
+   */
+  private async resolveNamedClient(organizationId: string, actorId: string, clientId: string): Promise<string> {
+    if (!(await this.permissions.check(actorId, 'patent.manage'))) {
+      throw new ForbiddenException('You are not permitted to set a project\'s client.');
+    }
+    const client = await this.prisma.client.findFirst({
+      where: { id: clientId, organizationId, deletedAt: null },
+      select: { id: true, code: true, archivedAt: true },
+    });
+    if (!client) throw new BadRequestException('That client does not exist.');
+    if (client.archivedAt) {
+      throw new BadRequestException(`Client ${client.code} is archived — restore it before assigning new work to it.`);
+    }
+    return client.id;
+  }
+
+  /**
+   * Set (or clear) a project's client directly.
+   *
+   * REFUSED while the project has tagged patents. That is the whole guarantee: a project's
+   * client is either inferred from its patents or stated on its own, never both, so the two can
+   * never end up disagreeing about who the work is for.
+   */
+  async setClient(projectId: string, clientId: string | null) {
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, projectId);
+    await this.access.assertProjectWritable(projectId);
+    if (!actorId) throw new ForbiddenException('Not signed in.');
+    const organizationId = await this.orgOfProject(projectId);
+
+    const tagged = await this.prisma.projectPatent.count({ where: { projectId } });
+    if (tagged) {
+      throw new BadRequestException(
+        'This project\'s client comes from its tagged patents. Change the patents to change the client.',
+      );
+    }
+    const resolved = clientId
+      ? await this.resolveNamedClient(organizationId ?? '', actorId, clientId)
+      : null;
+    // Clearing still needs the same authority as setting — otherwise anyone who can edit the
+    // project could quietly detach it from the client it is billed to.
+    if (!clientId && !(await this.permissions.check(actorId, 'patent.manage'))) {
+      throw new ForbiddenException('You are not permitted to change a project\'s client.');
+    }
+    await this.prisma.project.update({ where: { id: projectId }, data: { clientId: resolved } });
+    await this.events.emit({
+      action: 'project.client_changed', entityType: 'PROJECT', entityId: projectId,
+      ...(organizationId ? { organizationId } : {}),
+      metadata: { clientId: resolved },
+    });
+    return this.get(projectId);
+  }
+
+  // ── Patent tagging (Phase 2) ─────────────────────────────────────────────────
+  /**
+   * Replace the set of patents tagged to a project.
+   *
+   * Until now patents could only be chosen at creation, so a project tagged with the wrong
+   * patent — or created before its patents were registered — could never be corrected. Sending
+   * the WHOLE desired set rather than add/remove deltas makes the call idempotent: two people
+   * saving the same list twice land on the same state instead of stacking up duplicate links.
+   *
+   * Who may do this: anyone who can edit the project. It is deliberately NOT gated on
+   * `patent.manage` (the Super-Admin-only confidential surface) — tagging a handle to your own
+   * project needs no sight of the real patent number. `patent.view` sits in everyone's basics,
+   * so the check below only bites if a Super Admin has explicitly taken it away from a role.
+   */
+  async setPatents(projectId: string, patentIds: string[]) {
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, projectId);
+    await this.access.assertProjectWritable(projectId); // a completed/closed matter is settled
+    if (!actorId || !(await this.permissions.check(actorId, 'patent.view'))) {
+      throw new ForbiddenException('You are not permitted to tag patents.');
+    }
+    const organizationId = await this.orgOfProject(projectId);
+
+    const wanted = [...new Set(patentIds.filter(Boolean))];
+    const currentIds = new Set((await this.prisma.projectPatent.findMany({
+      where: { projectId }, select: { patentId: true },
+    })).map(l => l.patentId));
+    const added = wanted.filter(id => !currentIds.has(id));
+    const removed = [...currentIds].filter(id => !wanted.includes(id));
+    if (!added.length && !removed.length) return this.get(projectId);
+
+    // Validate the whole desired set, not just the additions — a patent deleted since the page
+    // loaded must not be silently re-linked by a save that was only meant to add one.
+    const found = wanted.length ? await this.prisma.patent.findMany({
+      where: { id: { in: wanted }, deletedAt: null, ...(organizationId ? { organizationId } : {}) },
+      select: { id: true, handle: true, clientId: true, client: { select: { code: true, archivedAt: true } } },
+    }) : [];
+    if (found.length !== wanted.length) {
+      throw new BadRequestException('One or more selected patents are invalid.');
+    }
+    // An archived client takes no NEW work. Patents already tagged stay tagged, so archiving a
+    // client never quietly rewrites a project that referenced it.
+    const fromArchived = found.filter(p => added.includes(p.id) && p.client.archivedAt);
+    if (fromArchived.length) {
+      throw new BadRequestException(
+        `${fromArchived.map(p => p.handle).join(', ')} ${fromArchived.length === 1 ? 'belongs' : 'belong'} to archived client ${fromArchived[0].client.code} — restore it first.`,
+      );
+    }
+    const clientIds = [...new Set(found.map(p => p.clientId))];
+    if (clientIds.length > 1) {
+      throw new BadRequestException('Selected patents belong to different clients — a project maps to one client.');
+    }
+    const derivedClientId = clientIds[0] ?? null;
+
+    await this.prisma.$transaction([
+      ...(removed.length ? [this.prisma.projectPatent.deleteMany({ where: { projectId, patentId: { in: removed } } })] : []),
+      ...(added.length ? [this.prisma.projectPatent.createMany({
+        data: added.map(patentId => ({ projectId, patentId, addedBy: actorId })),
+        skipDuplicates: true,
+      })] : []),
+      // Keep the stored client in step with the links — the column is what every other query
+      // (the client ledger above all) reads.
+      //
+      // Removing the LAST patent deliberately leaves the client alone rather than nulling it.
+      // "I tagged the wrong patent" is not "this is no longer that client's work", and wiping
+      // the attribution would silently drop the project out of the ledger. With no patents left
+      // the client becomes directly editable, so it can still be corrected on purpose.
+      ...(wanted.length ? [this.prisma.project.update({ where: { id: projectId }, data: { clientId: derivedClientId } })] : []),
+    ]);
+    // Counts only: which handles sit on which project is project-scoped information, and the
+    // audit log is read by people who are not on the project.
+    await this.events.emit({
+      action: 'project.patents_changed', entityType: 'PROJECT', entityId: projectId,
+      ...(organizationId ? { organizationId } : {}),
+      metadata: { added: added.length, removed: removed.length, total: wanted.length },
+    });
     return this.get(projectId);
   }
 

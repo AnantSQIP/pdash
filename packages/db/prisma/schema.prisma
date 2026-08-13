@@ -554,13 +554,62 @@ model Client {
   createdBy      String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  // ARCHIVED ≠ DELETED. Archiving retires a client from day-to-day work — no new patents, gone
+  // from the project picker — while every existing patent, handle and project link stays exactly
+  // as it was. It is reversible and needs no passcode, which is what makes it the safe answer to
+  // "we're done with this client": the destructive alternative (Remove) is refused outright while
+  // any patent or project still points here, because Patent.clientId cascades.
+  archivedAt     DateTime?
   deletedAt      DateTime?
   patents        Patent[]
   projects       Project[]
+  ledgerOverride ClientLedgerOverride?
 
   @@unique([organizationId, code])
   @@index([organizationId, deletedAt])
   @@map("client")
+}
+
+// A Super Admin's stated figure for a client, overriding what the ledger derives from live
+// project and timesheet data.
+//
+// The ledger's numbers are recomputed on every read and are right about the work; they cannot
+// be right about the commerce, because nothing in this system knows a rate or an agreed fee.
+// This row is where a person supplies what the data cannot. It never replaces the derived
+// figure in storage — the ledger returns both, so an override that has gone stale is visible
+// as a disagreement rather than passing silently as fact.
+//
+// One row per client (hence @unique), because this is a statement about the client relationship,
+// not about any one project.
+model ClientLedgerOverride {
+  id             String   @id @default(cuid())
+  organizationId String
+  clientId       String   @unique
+  // Supersedes the derived billable-hours total. Null = use the derived figure.
+  billableHours  Float?
+  // What the DERIVED billable-hours figure was at the moment this statement was made.
+  //
+  // Without it there is no way to tell a deliberate write-down from a figure the world has moved
+  // past: "you stated 1,980h" is silent about whether the data then said 2,000h or 400h. Holding
+  // the snapshot turns that into "the data has moved 520h since you said this", which is the
+  // difference between a number someone chose and a number quietly going wrong.
+  derivedHoursWhenSet Float?
+  // The commercial value of the relationship. Nothing derives this; it is stated or it is absent.
+  amount         Float?
+  currency       String   @default("INR")
+  // Why the stated figures differ from the derived ones. The point of the whole row: an override
+  // with no explanation is indistinguishable from a typo six months later.
+  note           String?
+  // WHO stated it and WHEN — the audit trail lives on the record itself, not only in the log,
+  // so the ledger can show it beside the figure without a second lookup.
+  updatedBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("client_ledger_override")
 }
 
 model Patent {
@@ -569,6 +618,11 @@ model Patent {
   clientId       String
   serial         Int       // 1..N within the client
   handle         String    // "Pat_MLK_1" — the non-secret, shareable identifier
+  // Handles this patent used to have. A client-code rename re-mints every handle under it, and
+  // the old ones are already out in the world — quoted in emails, written on reports we sent.
+  // Keeping them means an ID a client quotes back still resolves instead of returning nothing.
+  // Append-only, oldest first; the live handle is never in here.
+  formerHandles  String[]  @default([])
   // CONFIDENTIAL real patent number — never selected for a non-`patent.manage` actor.
   realNumber     String
   // Optional attached patent document (PDF/media), stored via the shared Document + blob table.

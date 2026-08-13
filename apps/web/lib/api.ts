@@ -394,6 +394,11 @@ export type ApiProject = {
   code?: string | null;
   /** The client/matter this project is for. */
   client?: { id: string; name: string; code: string } | null;
+  /**
+   * True when the client is INFERRED from the tagged patents (and so cannot be edited on its
+   * own); false when it was named directly. Only present for actors who may see clients.
+   */
+  clientFromPatents?: boolean;
   /** Linked patent handles — confidential real numbers are never included here. */
   patents?: { patent: PatentOption }[];
   // See ApiTask: `null` = unset (and clears on update); an ABSENT clientDueDate means the
@@ -423,11 +428,62 @@ export type ApiProject = {
 };
 
 // ─── Patent-analysis client codes + confidential coded patents ────────────────
-export type ClientSummary = { id: string; name?: string | null; code: string; _count?: { patents: number } };
-/** Non-secret patent handle (for the project picker + project detail). */
-export type PatentOption = { id: string; handle: string; serial: number; clientId?: string };
+export type ClientSummary = {
+  id: string; name?: string | null; code: string;
+  /** Set = retired from day-to-day work. Reversible; nothing about the data changes. */
+  archivedAt?: string | null;
+  _count?: { patents: number; projects: number };
+  /** Projects still running (PLANNING/ACTIVE/ON_HOLD) — what archiving would leave orphaned. */
+  activeProjects?: number;
+};
+// ─── Client ledger ───────────────────────────────────────────────────────────
+/** Recomputed from live projects and timesheets on every read — never stored. */
+export type LedgerDerived = {
+  projectCount: number; activeProjectCount: number; patentCount: number;
+  billableHours: number; nonBillableHours: number; totalHours: number;
+  contributorCount: number; firstLoggedAt?: string | null; lastLoggedAt?: string | null;
+};
+/** A Super Admin's stated figures. Null fields fall back to the derived ones. */
+export type LedgerOverride = {
+  billableHours: number | null; amount: number | null; currency: string;
+  note: string | null; updatedBy: string; updatedByName?: string | null; updatedAt: string;
+  /** The derived figure when the statement was made — the baseline drift is measured from. */
+  derivedHoursWhenSet?: number | null;
+};
+/** What to show: the override where one exists, the derived figure otherwise. */
+export type LedgerEffective = {
+  billableHours: number;
+  billableHoursSource: 'derived' | 'override';
+  amount: number | null;
+  currency: string;
+  /** How far the derived figure has moved since the statement. Null = nothing stated. */
+  driftHours?: number | null;
+  /** The statement is far enough behind the data to be worth revisiting. */
+  stale?: boolean;
+};
+/** Hours the ledger cannot attribute to any client, split by the reason. */
+export type LedgerUnattributed = {
+  totalHours: number; billableHours: number;
+  awaitingPid: number; onClientlessProjects: number; projectCount: number;
+};
+export type LedgerRow = {
+  id: string; code: string; name?: string | null; archivedAt?: string | null; createdAt: string;
+  derived: LedgerDerived; override: LedgerOverride | null; effective: LedgerEffective;
+};
+export type LedgerProject = {
+  id: string; code?: string | null; title: string; projectPhase: string; projectType?: string | null;
+  startDate?: string | null; dueDate?: string | null; completedAt?: string | null;
+  workingHours?: number | null; actualHours?: number | null;
+  billableHours: number; nonBillableHours: number; totalHours: number;
+};
+export type LedgerDetail = LedgerRow & { patentCount: number; projects: LedgerProject[] };
+
+/** Non-secret patent handle (for the project picker + project detail).
+ *  `formerHandles` = IDs this patent used to have, kept so an ID quoted from an old email
+ *  still finds it after a client-code rename. */
+export type PatentOption = { id: string; handle: string; serial: number; clientId?: string; formerHandles?: string[] };
 /** Portal OVERVIEW — patent IDs + serials, NO real number. */
-export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; documentId?: string | null; documentName?: string | null; client?: { id: string; name?: string | null; code: string } };
+export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; documentId?: string | null; documentName?: string | null; formerHandles?: string[]; client?: { id: string; name?: string | null; code: string } };
 /** Portal REVEAL — includes the confidential real number (passcode-gated). */
 export type PatentFull = PatentOverview & { realNumber: string; createdAt?: string };
 
@@ -1092,20 +1148,62 @@ export const api = {
     /** What the completion form should prefill "working hours" with (logged time, else estimates). */
     completionHours: (id: string) =>
       req<{ loggedHours: number; estimatedHours: number; suggested: number }>(`/projects/${id}/completion-hours`),
+    /**
+     * Replace the project's tagged patents — the COMPLETE set, not a delta, so an empty array
+     * clears them. Open to anyone who can edit the project; the server derives the client from
+     * whatever is left and refuses a mix of two clients.
+     */
+    setPatents: (id: string, patentIds: string[]) =>
+      req<ApiProject>(`/projects/${id}/patents`, { method: 'PUT', body: JSON.stringify({ patentIds }) }),
+    /**
+     * Name the project's client directly — only accepted while it has NO tagged patents, since
+     * patents decide the client whenever there are any. `null` detaches it. Needs patent.manage.
+     */
+    setClient: (id: string, clientId: string | null) =>
+      req<ApiProject>(`/projects/${id}/client`, { method: 'PUT', body: JSON.stringify({ clientId }) }),
     addMember: (id: string, userId: string, projectRole?: string) =>
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
       req<ApiProject>(`/projects/${id}/members/${userId}`, { method: 'DELETE' }),
   },
 
-  // Client codes (the "MLK" grouping). Create/remove need patent.manage + the org passcode.
+  // Client codes (the "MLK" grouping). Create/edit/remove need patent.manage + the org passcode;
+  // archive and restore need neither passcode nor any data change — they are reversible.
   clients: {
     list: () => req<ClientSummary[]>('/clients'),
+    /** Advisory code suggestion + look-alike clients for a typed name. Creates nothing. */
+    codeSuggestion: (name: string) =>
+      req<{ code: string; similar: { id: string; name?: string | null; code: string }[] }>(
+        `/clients/code-suggestion?name=${encodeURIComponent(name)}`),
     create: (data: { code: string; name?: string }) =>
       req<ClientSummary>('/clients', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { code?: string; name?: string }) =>
       req<ClientSummary>(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Retire a client: no new patents, gone from the project picker, everything kept. */
+    archive: (id: string) => req<ClientSummary>(`/clients/${id}/archive`, { method: 'POST' }),
+    restore: (id: string) => req<ClientSummary>(`/clients/${id}/restore`, { method: 'POST' }),
+    /** A REAL delete — the server refuses while any patent or project still points at it. */
     remove: (id: string) => req<{ ok: boolean }>(`/clients/${id}`, { method: 'DELETE' }),
+  },
+
+  /**
+   * The client ledger — what each client's work amounts to. A separate screen from the patent
+   * portal: this one never touches real patent numbers, so it needs no passcode, but it is keyed
+   * by client and so stays behind patent.manage (Super Admin).
+   */
+  clientLedger: {
+    list: (includeArchived = true) =>
+      req<LedgerRow[]>(`/client-ledger?includeArchived=${includeArchived}`),
+    detail: (clientId: string) => req<LedgerDetail>(`/client-ledger/${clientId}`),
+    /** Hours that reach no client — the PID buffer, and projects with no client set. */
+    unattributed: () => req<LedgerUnattributed>('/client-ledger/unattributed'),
+    /**
+     * State or clear the figures. An OMITTED field keeps its stored value; an explicit `null`
+     * clears it and hands the figure back to the derived calculation.
+     */
+    setOverride: (clientId: string, data: {
+      billableHours?: number | null; amount?: number | null; currency?: string; note?: string | null;
+    }) => req<LedgerDetail>(`/client-ledger/${clientId}/override`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 
   // Confidential coded patents. `list` is the passcode-free OVERVIEW (patent IDs, no real
@@ -1118,6 +1216,18 @@ export const api = {
       req<PatentFull[]>(`/patents/reveal${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
     options: (clientId?: string) =>
       req<PatentOption[]>(`/patents/options${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
+    /**
+     * Look up a patent ID that may be out of date — what a client quotes back from an email sent
+     * before their code was renamed. `current: false` means the ID asked for has been retired.
+     */
+    resolve: (handle: string) =>
+      req<{
+        id: string; handle: string; serial: number; formerHandles: string[];
+        current: boolean;
+        /** The ID is live for one patent and retired from another — genuinely ambiguous. */
+        ambiguous?: boolean;
+        searchedFor: string;
+      }>(`/patents/resolve?handle=${encodeURIComponent(handle)}`),
     register: (data: { clientId: string; realNumbers: string[] }) =>
       req<PatentOverview[]>('/patents', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, realNumber: string) =>

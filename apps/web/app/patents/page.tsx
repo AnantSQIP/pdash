@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   FileLock2, Plus, Trash2, Loader, ShieldAlert, KeyRound, Eye, EyeOff, Pencil, Check, X, Hash, FileText, Paperclip, Upload,
+  Archive, ArchiveRestore, Search,
 } from 'lucide-react';
 import { api, type ClientSummary, type PatentOverview } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
@@ -29,6 +30,24 @@ export default function PatentsPortalPage() {
   const [numbersText, setNumbersText] = useState('');
   const [editingClient, setEditingClient] = useState(false);
   const [ecode, setEcode] = useState('');
+  // Once the code is typed by hand, stop overwriting it with suggestions.
+  const [codeTouched, setCodeTouched] = useState(false);
+  // Debounced so a suggestion isn't requested on every keystroke.
+  const [nameForSuggest, setNameForSuggest] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setNameForSuggest(newName.trim()), 350);
+    return () => clearTimeout(t);
+  }, [newName]);
+  const { data: suggestion } = useQuery({
+    queryKey: ['client-code-suggestion', nameForSuggest],
+    queryFn: () => api.clients.codeSuggestion(nameForSuggest),
+    enabled: nameForSuggest.length >= 2,
+    staleTime: 60_000,
+  });
+  // Fill the code only while the user hasn't touched it — never clobber what they typed.
+  useEffect(() => {
+    if (!codeTouched && suggestion?.code) setNewCode(suggestion.code);
+  }, [suggestion?.code, codeTouched]);
   const [ename, setEname] = useState('');
   const [revealed, setRevealed] = useState<Record<string, string>>({}); // patentId → real number
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -62,6 +81,14 @@ export default function PatentsPortalPage() {
   const removeClient = useMutation({
     mutationFn: (id: string) => api.clients.remove(id),
     onSuccess: () => { setSelected(null); resetReveal(); qc.invalidateQueries({ queryKey: ['clients'] }); },
+    onError: e => setErr(msg(e)),
+  });
+  // Archive/restore: reversible, no passcode, and the client stays selected so the effect of
+  // the change is visible where it was made.
+  const setArchived = useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
+      archived ? api.clients.archive(id) : api.clients.restore(id),
+    onSuccess: () => { setErr(''); qc.invalidateQueries({ queryKey: ['clients'] }); },
     onError: e => setErr(msg(e)),
   });
   const register = useMutation({
@@ -129,6 +156,8 @@ export default function PatentsPortalPage() {
         </div>
       </div>
 
+      <HandleLookup />
+
       <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-5 mt-5">
         {/* ── Client Code ── */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden self-start">
@@ -145,10 +174,16 @@ export default function PatentsPortalPage() {
                 key={c.id}
                 onClick={() => pick(c.id)}
                 className={clsx('w-full text-left px-4 py-2.5 flex items-center justify-between hover:bg-gray-50 transition',
-                  selected === c.id && 'bg-brand-50/70')}
+                  selected === c.id && 'bg-brand-50/70',
+                  // Archived codes stay listed and selectable — their patents are still real —
+                  // but they read as retired rather than current.
+                  c.archivedAt && 'opacity-55')}
               >
                 <span className="min-w-0">
-                  <span className="block text-sm font-mono font-semibold text-gray-800 truncate">{c.code}</span>
+                  <span className="block text-sm font-mono font-semibold text-gray-800 truncate">
+                    {c.code}
+                    {c.archivedAt && <span className="ml-1.5 font-sans text-[10px] font-medium text-gray-400 uppercase tracking-wide">Archived</span>}
+                  </span>
                   {c.name && <span className="block text-[11px] text-gray-400 truncate">{c.name}</span>}
                 </span>
                 <span className="text-xs text-gray-400 shrink-0">{c._count?.patents ?? 0}</span>
@@ -157,16 +192,33 @@ export default function PatentsPortalPage() {
           </div>
           {/* New client code */}
           <div className="p-3 border-t border-gray-100 bg-gray-50/50 space-y-2">
-            <input
-              value={newCode} onChange={e => setNewCode(e.target.value.toUpperCase())}
-              placeholder="Client code * (e.g. MLK)"
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg font-mono focus:outline-none focus:border-brand-500"
-            />
+            {/* Name first, then the code — the code is DERIVED from the name, so asking for it
+                the other way round meant everyone invented their own convention. The suggestion
+                is only a default: typing over it is expected, and the server has the final say. */}
             <input
               value={newName} onChange={e => setNewName(e.target.value)}
               placeholder="Client name (optional)"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
             />
+            <div>
+              <input
+                value={newCode}
+                onChange={e => { setCodeTouched(true); setNewCode(e.target.value.toUpperCase()); }}
+                placeholder="Client code * (e.g. MLK)"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg font-mono focus:outline-none focus:border-brand-500"
+              />
+              {!codeTouched && newCode && (
+                <p className="text-[11px] text-gray-400 mt-1">Suggested from the name — edit it if you prefer another.</p>
+              )}
+            </div>
+            {/* The failure this prevents: a second code for a company we already have, which
+                silently splits that client's patents across two portfolios. */}
+            {suggestion?.similar?.length ? (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                Already on file: {suggestion.similar.map(c => `${c.name || '—'} (${c.code})`).join(', ')}. Use the
+                existing code unless this is genuinely a different client.
+              </p>
+            ) : null}
             <button
               onClick={() => createClient.mutate()}
               disabled={createClient.isPending || !newCode.trim()}
@@ -205,7 +257,10 @@ export default function PatentsPortalPage() {
                         <button onClick={() => { setEditingClient(true); setEcode(active.code); setEname(active.name ?? ''); setErr(''); }}
                           title="Edit code / name" className="text-gray-300 hover:text-brand-600 shrink-0"><Pencil size={12} /></button>
                       </h2>
-                      <p className="text-[11px] text-gray-400">IDs mint as <span className="font-mono">Pat_{active.code}_001</span>, in serial order · renaming the code re-mints the IDs</p>
+                      <p className="text-[11px] text-gray-400">
+                        IDs mint as <span className="font-mono">Pat_{active.code}_001</span>, in serial order ·
+                        renaming the code re-mints the IDs, and the old ones keep resolving
+                      </p>
                     </>
                   )}
                 </div>
@@ -220,15 +275,57 @@ export default function PatentsPortalPage() {
                       {reveal.isPending ? <Loader size={13} className="animate-spin" /> : <Eye size={13} />} Reveal numbers
                     </button>
                   )}
-                  <button onClick={() => { if (confirm(`Remove client code ${active.code} and all its patents?`)) removeClient.mutate(active.id); }}
-                    disabled={removeClient.isPending} title="Remove client code"
+                  {/* Archive is the button people should reach for; Remove sits beside it as the
+                      smaller, destructive one, and the server refuses it while anything depends
+                      on the client. */}
+                  <button
+                    onClick={() => {
+                      // Archiving a client whose work is still running is occasionally right and
+                      // usually a mistake. Say what is live before it happens, not after.
+                      const live = active.activeProjects ?? 0;
+                      if (!active.archivedAt && live > 0 && !confirm(
+                        `${active.code} still has ${live} project${live === 1 ? '' : 's'} running. `
+                        + `Archiving keeps everything, but the client leaves the patent picker and takes no new patents.\n\nArchive anyway?`,
+                      )) return;
+                      setArchived.mutate({ id: active.id, archived: !active.archivedAt });
+                    }}
+                    disabled={setArchived.isPending}
+                    title={active.archivedAt ? 'Restore this client to active use' : 'Retire this client — nothing is deleted'}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {setArchived.isPending ? <Loader size={13} className="animate-spin" />
+                      : active.archivedAt ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+                    {active.archivedAt ? 'Restore' : 'Archive'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      const held = (active._count?.patents ?? 0) + (active._count?.projects ?? 0);
+                      if (held) {
+                        setErr(`${active.code} still has ${active._count?.patents ?? 0} patent(s) and ${active._count?.projects ?? 0} project(s). Removing it would destroy those records — archive it instead.`);
+                        return;
+                      }
+                      if (confirm(`Permanently remove client code ${active.code}? This cannot be undone.`)) removeClient.mutate(active.id);
+                    }}
+                    disabled={removeClient.isPending} title="Remove client code permanently"
                     className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500">
                     <Trash2 size={15} />
                   </button>
                 </div>
               </div>
 
-              {/* Add patents — by number, or by uploading documents (one patent per file). */}
+              {/* Add patents — by number, or by uploading documents (one patent per file).
+                  An archived client accepts neither, so the whole block is replaced by the reason
+                  and the way out; the server refuses these calls regardless. */}
+              {active.archivedAt ? (
+                <div className="p-4 border-b border-gray-100 bg-gray-50/60 flex items-start gap-2.5">
+                  <Archive size={15} className="text-gray-400 mt-0.5 shrink-0" />
+                  <p className="text-xs text-gray-500">
+                    <b className="text-gray-700">This client is archived.</b> Its patents are kept and stay linked to
+                    their projects, but no new patents can be added and it no longer appears in the project patent
+                    picker. Restore it to work with it again.
+                  </p>
+                </div>
+              ) : (
               <div className="p-4 border-b border-gray-100 bg-gray-50/40 space-y-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">Add by number — one real number per line</label>
@@ -259,6 +356,7 @@ export default function PatentsPortalPage() {
                   </label>
                 </div>
               </div>
+              )}
 
               {/* Patent list */}
               <div className="divide-y divide-gray-50 max-h-[420px] overflow-y-auto">
@@ -268,7 +366,16 @@ export default function PatentsPortalPage() {
                   <p className="px-5 py-6 text-sm text-gray-400 text-center">No patents yet — upload some above.</p>
                 ) : patents.map(p => (
                   <div key={p.id} className="px-5 py-2.5 flex items-center gap-4 hover:bg-gray-50">
-                    <span className="text-sm font-mono font-semibold text-brand-700 w-32 shrink-0">{p.handle}</span>
+                    <span className="w-32 shrink-0">
+                      <span className="block text-sm font-mono font-semibold text-brand-700">{p.handle}</span>
+                      {/* IDs this patent was shared under before a code rename. They still
+                          resolve, and showing them is how anyone knows that. */}
+                      {p.formerHandles?.length ? (
+                        <span className="block text-[10px] text-gray-400 font-mono truncate" title={p.formerHandles.join(', ')}>
+                          was {p.formerHandles.join(', ')}
+                        </span>
+                      ) : null}
+                    </span>
                     <span className="text-sm text-gray-800 flex-1 font-mono min-w-0">
                       {editingId === p.id ? (
                         <span className="flex items-center gap-1.5">
@@ -317,6 +424,72 @@ export default function PatentsPortalPage() {
       </div>
 
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
+    </div>
+  );
+}
+
+/**
+ * "A client just quoted Pat_MLK_7 at us — what is that now?"
+ *
+ * Renaming a client code re-mints every ID under it, and the old ones are already out in the
+ * world. Without somewhere to type one in, the answer to that question was "search the portal,
+ * find nothing, and assume the patent was deleted".
+ */
+function HandleLookup() {
+  const [query, setQuery] = useState('');
+  const [result, setResult] = useState<{ handle: string; current: boolean; ambiguous?: boolean; searchedFor: string } | null>(null);
+  const [error, setError] = useState('');
+
+  const lookup = useMutation({
+    mutationFn: () => api.patents.resolve(query.trim()),
+    onSuccess: r => { setResult(r); setError(''); },
+    onError: e => { setResult(null); setError(msg(e)); },
+  });
+
+  return (
+    <div className="mt-4 bg-white rounded-xl border border-gray-200 px-4 py-3">
+      <form
+        onSubmit={e => { e.preventDefault(); if (query.trim()) lookup.mutate(); }}
+        className="flex flex-wrap items-center gap-2"
+      >
+        <label className="text-xs font-medium text-gray-600 shrink-0">Look up a patent ID</label>
+        <input
+          value={query}
+          onChange={e => { setQuery(e.target.value); setResult(null); setError(''); }}
+          placeholder="Pat_MLK_7"
+          className="w-44 px-3 py-1.5 text-sm font-mono border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+        />
+        <button
+          type="submit" disabled={lookup.isPending || !query.trim()}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+        >
+          {lookup.isPending ? <Loader size={13} className="animate-spin" /> : <Search size={13} />} Find
+        </button>
+        {result && (
+          result.ambiguous ? (
+            // Legacy data only — new codes can no longer be recycled, but IDs issued before
+            // that rule existed can still mean two things, and saying so beats picking one.
+            <span className="text-xs text-red-700">
+              <span className="font-mono">{result.searchedFor}</span> is ambiguous — it is live for{' '}
+              <span className="font-mono font-semibold">{result.handle}</span> and was also retired from another
+              patent. Check which client the ID came from.
+            </span>
+          ) : result.current ? (
+            <span className="text-xs text-gray-500">
+              <span className="font-mono font-semibold text-brand-700">{result.handle}</span> is current.
+            </span>
+          ) : (
+            <span className="text-xs text-amber-700">
+              <span className="font-mono">{result.searchedFor}</span> was renamed — it is now{' '}
+              <span className="font-mono font-semibold">{result.handle}</span>.
+            </span>
+          )
+        )}
+        {error && <span className="text-xs text-red-600">{error}</span>}
+      </form>
+      <p className="text-[11px] text-gray-400 mt-1.5">
+        Finds retired IDs too, so an ID quoted from an older report still resolves.
+      </p>
     </div>
   );
 }
