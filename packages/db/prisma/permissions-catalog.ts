@@ -149,8 +149,9 @@ const MANAGER_CODES = [
   code('analytics', 'view.own'), code('analytics', 'view.organization'),
   // Matrix 2026-07-28: Manager keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
-  // Delivery oversight: see who is free/overloaded, and the client-facing dates.
-  code('capacity', 'view'), code('deadline', 'view.client'),
+  // Delivery oversight: the client-facing dates. (capacity.view already arrives via
+  // VIEW_BASICS — the matrix opened the capacity board to everyone on 2026-08-12.)
+  code('deadline', 'view.client'),
   // Managers see team attendance but do NOT review regularisations — those route to
   // HR + Yash only (see AttendanceService.regularizationApproverIds).
   code('attendance', 'view.organization'),
@@ -201,8 +202,7 @@ const SENIOR_RESEARCH_ASSOCIATE_CODES = [
   // A senior IC still CREATES and EDITS tasks — Employees lost these in the 2026-07-28 matrix,
   // but an SRA leads a search/analysis workstream so keeps them.
   code('task', 'create'), code('task', 'update'),
-  code('issue', 'update'),
-  code('report', 'export'),
+  // (issue.update and report.export already arrive via EMPLOYEE_CODES.)
   // matrix: SRA may set up task lists.
   code('tasklist', 'create'), code('tasklist', 'update'),
   // Matrix 2026-07-28: SRA no longer assigns tasks (task.assign removed) and no longer mints a
@@ -230,8 +230,9 @@ const SENIOR_CONSULTANT_CODES = [
   code('analytics', 'view.own'),
   // Matrix 2026-07-28: keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
-  // Delivery oversight: see who is free/overloaded, and the client-facing dates.
-  code('capacity', 'view'), code('deadline', 'view.client'),
+  // Delivery oversight: the client-facing dates. (capacity.view already arrives via
+  // VIEW_BASICS — the matrix opened the capacity board to everyone on 2026-08-12.)
+  code('deadline', 'view.client'),
   code('leave', 'request'), code('leave', 'view.organization'),
   // Matrix 2026-07-28: recognition-giving (reward.give) stays with Manager/HR/Admin — removed here.
   code('user', 'view'), code('department', 'view'),

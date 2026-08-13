@@ -64,3 +64,31 @@ ALTER TABLE "team_task" DROP CONSTRAINT IF EXISTS "team_task_taskListId_fkey";
 ALTER TABLE "team_task"
   ADD CONSTRAINT "team_task_taskListId_fkey"
   FOREIGN KEY ("taskListId") REFERENCES "task_list"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- 4. A task may only be filed into a list belonging to ITS OWN owner.
+--
+-- While task_list.projectId was NOT NULL this was true by construction: every list had a
+-- project, and no other kind of owner existed. Sharing the table with team spaces removed that
+-- guarantee and left only an application-level check on one write path — so a project task could
+-- be filed into a team space's column, putting it on that space's board and within reach of
+-- members who were never granted access to the project.
+--
+-- Composite foreign keys restore it in the database, where it cannot be forgotten by a future
+-- write path. Both are MATCH SIMPLE: when taskListId is NULL the constraint simply does not
+-- apply, which is exactly "this task is in no list".
+ALTER TABLE "task_list" DROP CONSTRAINT IF EXISTS "task_list_id_projectId_key";
+ALTER TABLE "task_list" ADD CONSTRAINT "task_list_id_projectId_key" UNIQUE ("id", "projectId");
+ALTER TABLE "task_list" DROP CONSTRAINT IF EXISTS "task_list_id_teamId_key";
+ALTER TABLE "task_list" ADD CONSTRAINT "task_list_id_teamId_key" UNIQUE ("id", "teamId");
+
+ALTER TABLE "project_task" DROP CONSTRAINT IF EXISTS "project_task_list_belongs_to_project";
+ALTER TABLE "project_task"
+  ADD CONSTRAINT "project_task_list_belongs_to_project"
+  FOREIGN KEY ("taskListId", "projectId") REFERENCES "task_list"("id", "projectId")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "team_task" DROP CONSTRAINT IF EXISTS "team_task_list_belongs_to_team";
+ALTER TABLE "team_task"
+  ADD CONSTRAINT "team_task_list_belongs_to_team"
+  FOREIGN KEY ("taskListId", "teamId") REFERENCES "task_list"("id", "teamId")
+  ON DELETE SET NULL ON UPDATE CASCADE;

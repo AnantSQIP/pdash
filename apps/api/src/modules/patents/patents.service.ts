@@ -97,6 +97,11 @@ export class PatentsService {
    */
   private async assertCodeNotRetired(organizationId: string, code: string, exceptClientId?: string) {
     const prefix = `${formatPatentHandle(code, 0).slice(0, -3)}`; // "Pat_<code>_"
+    // starts_with(), NOT LIKE. A handle prefix is full of underscores, and `_` is a
+    // single-character wildcard in LIKE — so `LIKE 'Pat_MLK_%'` also matches "Pat_MLKZ_001",
+    // and retiring the code MLKZ would have refused the perfectly legitimate, unrelated code
+    // MLK with a message claiming its IDs were already issued. starts_with has no pattern
+    // language at all, which is exactly what a prefix test wants.
     const rows = await this.prisma.$queryRaw<{ handle: string; clientId: string }[]>`
       SELECT p."handle", p."clientId"
       FROM "patent" p
@@ -105,7 +110,7 @@ export class PatentsService {
         ${exceptClientId ? Prisma.sql`AND p."clientId" <> ${exceptClientId}` : Prisma.empty}
         AND EXISTS (
           SELECT 1 FROM unnest(p."formerHandles") AS h
-          WHERE h LIKE ${prefix + '%'}
+          WHERE starts_with(h, ${prefix})
         )
       LIMIT 1
     `;
