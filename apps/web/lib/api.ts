@@ -460,6 +460,38 @@ export type TeamTask = {
   taskListId?: string | null; sequence?: number;
 };
 
+// ─── BD pipeline (Phase 3) ───────────────────────────────────────────────────
+export type DealStageDef = { value: string; label: string; probability: number; terminal?: boolean };
+export type DealActivity = {
+  id: string; type: string; note?: string | null;
+  fromStage?: string | null; toStage?: string | null;
+  occurredAt: string; createdBy: string; byName?: string | null;
+};
+export type Deal = {
+  id: string; company: string; title?: string | null; stage: string;
+  value?: number | null; currency: string;
+  ownerId: string; source?: string | null;
+  expectedCloseDate?: string | null; wonAt?: string | null; lostAt?: string | null;
+  lostReason?: string | null; clientId?: string | null; notes?: string | null; teamId?: string | null;
+  createdAt: string; updatedAt: string;
+  owner: { id: string; firstName: string; lastName: string; profilePhoto?: string | null };
+  client?: { id: string; code: string; name?: string | null } | null;
+  activities?: DealActivity[];
+};
+export type PipelineSummary = {
+  byStage: { stage: string; label: string; probability: number; count: number; value: number; weighted: number }[];
+  openCount: number; openValue: number;
+  /** Open pipeline weighted by each stage's probability. */
+  weightedForecast: number;
+  wonCount: number; wonValue: number; lostCount: number;
+  /** Share of CLOSED deals that were won. Null until something has closed. */
+  winRate: number | null;
+  avgCycleDays: number | null;
+  lostReasons: { reason: string; count: number }[];
+  /** More than one means the totals above mix currencies and cannot be summed honestly. */
+  currencies: string[];
+};
+
 // ─── Client ledger ───────────────────────────────────────────────────────────
 /** Recomputed from live projects and timesheets on every read — never stored. */
 export type LedgerDerived = {
@@ -1225,6 +1257,39 @@ export const api = {
       req<TeamTask[]>(`/teams/${id}/tasks/${taskId}/move`, { method: 'PUT', body: JSON.stringify({ taskListId, sequence }) }),
     removeTask: (id: string, taskId: string) =>
       req<TeamTask[]>(`/teams/${id}/tasks/${taskId}`, { method: 'DELETE' }),
+  },
+
+  /**
+   * The BD pipeline. Commercial information, so behind deal.view / deal.manage rather than the
+   * basics — but deliberately not scoped to your own deals, since a pipeline you see a slice of
+   * cannot be forecast.
+   */
+  deals: {
+    stages: () => req<DealStageDef[]>('/deals/stages'),
+    summary: () => req<PipelineSummary>('/deals/summary'),
+    list: (opts: { stage?: string; ownerId?: string } = {}) => {
+      const q = new URLSearchParams();
+      if (opts.stage) q.set('stage', opts.stage);
+      if (opts.ownerId) q.set('ownerId', opts.ownerId);
+      const s = q.toString();
+      return req<Deal[]>(`/deals${s ? `?${s}` : ''}`);
+    },
+    get: (id: string) => req<Deal>(`/deals/${id}`),
+    create: (data: {
+      company: string; title?: string; stage?: string; value?: number; currency?: string;
+      ownerId?: string; source?: string; expectedCloseDate?: string; notes?: string;
+    }) => req<Deal>('/deals', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) =>
+      req<Deal>(`/deals/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Move along the pipeline. LOST requires a reason; WON may mint or link a client. */
+    move: (id: string, data: { stage: string; lostReason?: string; clientId?: string; newClientCode?: string }) =>
+      req<Deal>(`/deals/${id}/stage`, { method: 'PUT', body: JSON.stringify(data) }),
+    logActivity: (id: string, data: { type: string; note?: string; occurredAt?: string }) =>
+      req<Deal>(`/deals/${id}/activities`, { method: 'POST', body: JSON.stringify(data) }),
+    remove: (id: string) => req<{ ok: boolean }>(`/deals/${id}`, { method: 'DELETE' }),
+    /** A suggested client code for a company name, used when winning. */
+    codeSuggestion: (company: string) =>
+      req<{ code: string }>(`/deals/client-code-suggestion?company=${encodeURIComponent(company)}`),
   },
 
   // Client codes (the "MLK" grouping). Create/edit/remove need patent.manage + the org passcode;

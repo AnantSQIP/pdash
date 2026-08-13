@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, Users2, type LucideIcon,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, Users2, TrendingUp, type LucideIcon,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -37,6 +37,9 @@ const NAV: NavItem[] = [
   // Work that is not a client matter — HR, BD, operations. Which spaces you can actually open
   // is decided by membership server-side, so team.view is safe in everyone's basics.
   { href: '/teams',       icon: Users2,          label: 'Team Spaces', perm: 'team.view' },
+  // Prospective business. Commercial data, so NOT in the basics — deal.view is granted
+  // deliberately, unlike Team Spaces which everyone can at least open.
+  { href: '/pipeline',    icon: TrendingUp,      label: 'BD Pipeline', perm: 'deal.view' },
   { href: '/performance', icon: LineChart,       label: 'Performance', perm: 'performance.view.own' },
   { href: '/calendar',    icon: CalendarDays,    label: 'Calendar',    perm: 'calendar.view' },
   { href: '/attendance',  icon: Fingerprint,     label: 'Attendance',  perm: 'attendance.view.own' },

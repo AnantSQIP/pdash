@@ -86,6 +86,10 @@ export const MODULES: ModuleDef[] = [
   // Working INSIDE a space (tasks, lists) reuses the ordinary task.* permissions, so a team
   // space grants no capability over work that the person did not already have.
   { key: 'team',        label: 'Team Spaces',  actions: ['view', 'manage'] },
+  // Phase 3 — the BD pipeline. Commercial information (who we are talking to, for how much), so
+  // NOT in the basics: deal.view reads the pipeline, deal.manage changes it. Deliberately not
+  // scoped to your own deals — a pipeline each person sees a slice of cannot be forecast.
+  { key: 'deal',        label: 'BD Pipeline',  actions: ['view', 'manage'] },
 ];
 
 export interface PermissionDef {
@@ -135,8 +139,9 @@ const MANAGER_CODES = [
   // Matrix 2026-08-12: minting a Project ID moves up to Super Admin / Admin only. A Manager
   // still REQUESTS a PID like anyone else; they no longer issue one.
   code('project', 'create'), code('project', 'update'), code('project', 'approve'),
-  // Phase 3: a Manager runs their own team space (BD, Operations) the way they run a project.
-  code('team', 'manage'),
+  // Phase 3: a Manager runs their own team space (BD, Operations) the way they run a project,
+  // and owns the BD pipeline that sits alongside it.
+  code('team', 'manage'), code('deal', 'view'), code('deal', 'manage'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),

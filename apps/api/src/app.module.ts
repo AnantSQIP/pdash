@@ -48,6 +48,7 @@ import { AppraisalsModule } from './modules/appraisals/appraisals.module';
 import { SequenceModule } from './common/sequence/sequence.module';
 import { PatentsModule } from './modules/patents/patents.module';
 import { TeamsModule } from './modules/teams/teams.module';
+import { DealsModule } from './modules/deals/deals.module';
 
 @Module({
   imports: [
@@ -104,6 +105,7 @@ import { TeamsModule } from './modules/teams/teams.module';
     SequenceModule,
     PatentsModule,
     TeamsModule,
+    DealsModule,
   ],
   providers: [
     // 0) Global error mapping: Prisma/unknown errors → correct HTTP status (not 500).
