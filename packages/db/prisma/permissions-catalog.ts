@@ -80,6 +80,12 @@ export const MODULES: ModuleDef[] = [
   //   patent.view   → see clients, patent handles (Pat_MLK_1) and the project patent-picker.
   //   patent.manage → the confidential portal: register clients/patents + see REAL numbers.
   { key: 'patent',      label: 'Clients & Patents', actions: ['view', 'manage'] },
+  // Phase 3 — team spaces: where HR, BD and operations work lives, separate from client delivery.
+  //   team.view   → see the Team Spaces module and the spaces you are a member of.
+  //   team.manage → create/rename/archive a space and change who is in it.
+  // Working INSIDE a space (tasks, lists) reuses the ordinary task.* permissions, so a team
+  // space grants no capability over work that the person did not already have.
+  { key: 'team',        label: 'Team Spaces',  actions: ['view', 'manage'] },
 ];
 
 export interface PermissionDef {
@@ -114,6 +120,9 @@ const VIEW_BASICS = [
   // Matrix 2026-08-12: the capacity board is open to the whole organisation — knowing who is
   // free this week is not privileged information, and hiding it just meant people asked around.
   code('capacity', 'view'),
+  // Seeing the Team Spaces module is a basic: which space you can actually OPEN is decided by
+  // membership, exactly as it is for projects, so this reveals nothing on its own.
+  code('team', 'view'),
   code('channel', 'view'), code('report', 'view'),
   code('attendance', 'view.own'), code('leave', 'view.own'), code('holiday', 'view'),
   // Everyone can record their own business expenses and see them.
@@ -126,6 +135,8 @@ const MANAGER_CODES = [
   // Matrix 2026-08-12: minting a Project ID moves up to Super Admin / Admin only. A Manager
   // still REQUESTS a PID like anyone else; they no longer issue one.
   code('project', 'create'), code('project', 'update'), code('project', 'approve'),
+  // Phase 3: a Manager runs their own team space (BD, Operations) the way they run a project.
+  code('team', 'manage'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
@@ -284,6 +295,11 @@ const HR_CODES = [
   code('announcement', 'manage'), code('policy', 'manage'),
   // People-ops runs the appraisal review cycles.
   code('appraisal', 'manage'),
+  // Phase 3: HR owns its own team space — the point of the module is that people-ops work stops
+  // having to masquerade as a client project to exist at all. `view` is listed explicitly because
+  // HR deliberately does not inherit VIEW_BASICS (it is people-ops, not delivery), and manage
+  // without view would leave the module invisible to the role that owns a space in it.
+  code('team', 'view'), code('team', 'manage'),
 ];
 
 // CLIENT details (client names, the portal, real patent numbers) are SUPER-ADMIN-ONLY —

@@ -234,19 +234,57 @@ model DepartmentMember {
   @@map("department_member")
 }
 
+// A TEAM SPACE — where work that is not client delivery lives (HR, BD, Operations).
+//
+// Phase 3. Everything in this system was a client project: a Task cannot exist without one, and
+// every project type is a patent-analysis type carrying a PID, a client and billability. So an
+// HR hiring round or a BD conference push had nowhere to go except a "General / Other" project
+// sitting in the delivery list, collecting a PID it has no use for.
+//
+// A team space is deliberately NOT a kind of project. It has no PID, no client, and never reaches
+// the client ledger, the PID ledger or delivery reports — it is a different question about a
+// different kind of work. What it DOES share is the Task itself, so assignees, subtasks, comments,
+// statuses and logged time all behave exactly as people already expect.
 model Team {
   id             String  @id @default(cuid())
   organizationId String
   name           String
   description    String?
   status         String  @default("ACTIVE")
+  // Retired but kept, same meaning as on Client: no new work, everything already here preserved.
+  archivedAt     DateTime?
+  deletedAt      DateTime?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   members      TeamMember[]
   projectTeams ProjectTeam[]
+  taskLists    TaskList[]
+  teamTasks    TeamTask[]
 
-  @@index([organizationId])
+  @@index([organizationId, deletedAt])
   @@map("team")
+}
+
+// Tasks belonging to a team space. A deliberate mirror of ProjectTask: `Task` itself stays
+// generic and knows about neither, so a task reached this way carries every capability a project
+// task has, and nothing that reads tasks needs to learn a second shape.
+model TeamTask {
+  id         String @id @default(cuid())
+  teamId     String
+  taskId     String
+  taskListId String?
+  sequence   Int    @default(0)
+
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskList TaskList? @relation(fields: [taskListId], references: [id], onDelete: SetNull)
+
+  @@unique([teamId, taskId])
+  @@index([teamId])
+  @@map("team_task")
 }
 
 model TeamMember {
@@ -835,6 +873,7 @@ model Task {
   currentStatus WorkflowStatus?  @relation("TaskCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
   assignedBy    User?            @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
   projectTasks  ProjectTask[]
+  teamTasks     TeamTask[]
   assignees     TaskAssignee[]
   subtasks      Subtask[]
   successors    TaskDependency[] @relation("DependencyPredecessor")
@@ -953,9 +992,15 @@ model Checklist {
 // and cannot be deleted (enforced in TaskListsService).
 // ─────────────────────────────────────────────────────────────
 
+// A list/column of tasks. Belongs to EITHER a project or a team space — exactly one, enforced by
+// a database check. Two columns rather than one polymorphic pair because each keeps a real
+// foreign key, so a deleted project or team takes its lists with it instead of orphaning them.
 model TaskList {
   id          String    @id @default(cuid())
-  projectId   String
+  // Nullable since Phase 3: a list on a team space has no project. Every pre-existing row has a
+  // project, and every query that filters on projectId keeps working untouched.
+  projectId   String?
+  teamId      String?
   name        String
   isDefault   Boolean   @default(false)
   sequence    Int       @default(0)
@@ -963,10 +1008,13 @@ model TaskList {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  team         Team?         @relation(fields: [teamId], references: [id], onDelete: Cascade)
   projectTasks ProjectTask[]
+  teamTasks    TeamTask[]
 
   @@index([projectId])
+  @@index([teamId])
   @@map("task_list")
 }
 
