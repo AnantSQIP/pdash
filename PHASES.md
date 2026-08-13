@@ -293,15 +293,64 @@ need a second resolution path. This is the bulk of the risk in the phase.
 **one** Senior BD Executive, **one** HR Specialist, and **no Sales role at all**. A full CRM is a
 large build for one BD desk; it is the right call only if that team is about to grow.
 
-### Suggested build order
+### Build order and state
 
-1. **Team spaces core** — Team CRUD + members, team task lists, tasks in a team, board/list views,
-   sidebar destination, `team.*` permissions.
-2. **Measurement integration** — timesheets, capacity and performance against team tasks.
-3. **BD pipeline** — deals, stages, activities, forecast and conversion reporting; a won deal can
-   mint the Client code, which feeds straight into the Phase 2 ledger.
-4. **Permissions + regrant** — one `regrant-roles` at the end for all new codes.
+| # | Slice | State |
+|---|---|---|
+| 1 | **Team spaces core** — spaces, members, board columns, tasks, sidebar destination | ✅ built |
+| 2 | **Measurement integration** — timesheets, capacity, performance against team tasks | ⬜ not started |
+| 3 | **BD pipeline** — deals, stages, activities, forecast + conversion reporting | ✅ built |
+| 4 | **Permissions + regrant** | ✅ codes in; regrant needed at deploy |
+
+**Roster question answered 13 Aug: the BD team is growing**, so the full pipeline is the right
+build rather than a lighter lead tracker.
+
+#### What slice 1 turned into
+
+`Task` already knew nothing about projects — the link lives in a join table — so `team_task`
+mirrors `project_task` and `Task` needed no change. A task in a space keeps assignees, subtasks,
+comments, statuses and logged time for free. Access mirrors a project's: membership decides, with
+a `team.manage` oversight bypass, so there is no second security model. Being in a space grants no
+capability the person lacked — tasks still need `task.*`, columns `tasklist.*`.
+
+Deliberately simpler than a project: no Gantt, no capacity tab, no issues, no PID. Moving a task
+is a dropdown, not drag-and-drop — it works on a phone, is keyboard-reachable, and cannot lose a
+card to a mis-drop.
+
+#### What slice 3 turned into
+
+A deal is **not** a project: `company` is free text, because most prospects never become clients
+and a client record per conversation would fill the confidential portal with noise. The join is at
+winning — a won deal mints or links the Client, after which its work flows through projects and
+the client ledger. Minting still needs `patent.manage`.
+
+Losing **requires** a reason; the aggregate ("why we lose") is the most actionable thing here.
+Stage probabilities live in one file shared by board, forecast and validation, and the page states
+plainly that they are conventions to be replaced with measured conversion once there is history.
+Cycle time uses closed deals only. Mixed currencies are flagged rather than silently summed.
+
+#### Still open
+
+- **Slice 2, measurement integration.** The risk sits here: timesheets resolve work through a PID
+  and team work has none, and capacity/performance are computed from *project* tasks. All three
+  need a second resolution path.
+- **`Team.status` vs `archivedAt`** — two ways to say "not active" will drift. The table had no
+  rows, so dropping `status` is free now and will not be later. Awaiting a decision.
 
 ---
 
-*Last updated 13 August 2026 — Phase 2 complete including refinements; Phase 3 scoped, not started.*
+#### Phase 3 deployment notes
+
+- **Two migrations**: `20260920090000_team_spaces` (additive; drops NOT NULL on
+  `task_list.projectId` and adds composite FKs so a task cannot be filed into another owner's
+  list) and `20260921090000_bd_pipeline` (new `deal` + `deal_activity` tables).
+- **`regrant-roles` IS REQUIRED** — four new codes: `team.view`, `team.manage`, `deal.view`,
+  `deal.manage`. Unlike Phase 2, this cannot be skipped.
+- Role totals after the change: Super Admin 96 · Admin 94 · Manager 57 · Senior Consultant 51 ·
+  HR 51 · Consultant 44 · SRA 44 · Employee 40.
+- The BD team needs `deal.view`/`deal.manage` granted via the matrix — the presets give them to
+  Manager, Admin and Super Admin only, since the pipeline is commercial information.
+
+---
+
+*Last updated 13 August 2026 — Phase 2 complete; Phase 3 slices 1 and 3 built, slice 2 open.*
