@@ -6,7 +6,7 @@
 | | Phase 1 | Phase 2 |
 |---|---|---|
 | **Status** | ✅ **COMPLETE** — closed 12 August 2026 | 🚧 **IN PROGRESS** — opened 12 August 2026 |
-| **Scope** | Build and stabilise the internal platform | Clients and patents — identity, tagging, and a client ledger |
+| **Scope** | Build and stabilise the internal platform | Clients and patents; then team spaces and the BD pipeline |
 | **Live at** | https://217.76.59.244.sslip.io (Contabo) | same instance |
 | **Reference** | `Squark-Dashboard-Phase-1-Guide.pdf` (22 sections) | — |
 
@@ -101,9 +101,10 @@ whether WFH punches should capture location.
 
 ---
 
-## Defining Phase 2
+## Phase 2 — scope and rules
 
-Phase 2 scope is **not yet set**. Until the user defines it, do not assume it.
+Phase 2 opened 12 August 2026 and is **still open**. Its scope has widened once (see part two);
+widening it again is a decision to record here, not to assume.
 
 ### Which phase does a request belong to?
 
@@ -120,10 +121,14 @@ flowchart TD
   style P2 fill:#fff7ed,stroke:#f5b642
 ```
 
-### Rules for Phase 2
+### Rules while Phase 2 is open
 
 1. **Record the scope here** the moment it is agreed. A phase with no written scope grows
    until nobody can say whether it is finished.
+   **And do not invent a phase number.** Only the user opens a phase. Work that does not fit the
+   written scope is recorded as a new *part* of the open phase unless they say otherwise — the
+   repo already carries three unrelated "Phase 3" commits, so a number on its own identifies
+   nothing.
 2. **Do not silently reopen Phase 1.** If Phase 2 work requires changing a Phase 1 module,
    note it in the Phase 2 section rather than editing the Phase 1 record — the Phase 1 record
    is what shipped, and it should stay true.
@@ -252,23 +257,27 @@ Two halves of one defect, both about a patent ID coming to mean two different cl
   tagging reuses `project.update` + `patent.view`.
 - New sidebar entry **Client Ledger**, gated on `patent.manage` (Super Admin).
 
-#### State at the end of the second session
+#### State of the clients-and-patents work
 
-All five items are **built, typechecked, unit-tested and verified end-to-end against a scratch
-database** (seeded copy, API on :4011) — creating, archiving, restoring, the refusal paths,
-tagging round trips, the ledger totals, the override lifecycle, and a three-way client-code
-rename. 91 assertions pass across `tools/client-code.spec.ts` and `tools/patent-search.spec.ts`.
+All items **built, typechecked, unit-tested and verified end-to-end against a scratch database**
+(seeded copy, API on :4011) — creating, archiving, restoring, the refusal paths, tagging round
+trips, the ledger totals, the override lifecycle, and a three-way client-code rename. 91
+assertions pass across `tools/client-code.spec.ts` and `tools/patent-search.spec.ts`.
 
-**Not yet pushed, and not applied to the live demo database beyond the three additive migrations.**
-The user tests locally first.
-
----
+Shipped as **PR #82**, branch `phase2-clients-patents-ledger`. Not merged.
 
 ---
 
-## Phase 3 — team spaces and the BD pipeline
+## Phase 2, part two — team spaces and the BD pipeline
 
-**Status: scope agreed 13 August 2026. Not started.**
+Agreed 13 August 2026, when the request was *"proceed on to the next one — other teams task
+allocations, HR, Sales, BD team"*.
+
+> **On the numbering.** This is deliberately **not** a new phase. It sits inside Phase 2, whose
+> theme widened from "clients and patents" to "clients, and the parts of the firm that are not
+> client delivery". A brief attempt to call it "Phase 3" was withdrawn: three earlier and
+> completely unrelated commits already carry that label (`leave & attendance`, `TeamNest
+> appraisals`, `Discuss voice clips`), so the number identifies nothing.
 
 **Theme: work that is not client delivery.** Today every piece of work in this system is a client
 project — enforced, not conventional: a Task cannot exist without a Project, every project type is
@@ -287,11 +296,12 @@ Decisions, already made. Do not re-open them; build against them.
 
 **Known tension to design around for decision 3:** timesheets resolve work through a PID, and
 capacity and performance are computed from *project* tasks. Team work has no PID, so all three
-need a second resolution path. This is the bulk of the risk in the phase.
+need a second resolution path. This is the bulk of the remaining risk.
 
 **Worth confirming before building the pipeline:** the roster is 26 people — roughly 24 delivery,
 **one** Senior BD Executive, **one** HR Specialist, and **no Sales role at all**. A full CRM is a
-large build for one BD desk; it is the right call only if that team is about to grow.
+large build for one BD desk. **Answered 13 Aug: the BD team is growing**, so the full pipeline is
+the right build.
 
 ### Build order and state
 
@@ -339,7 +349,7 @@ Cycle time uses closed deals only. Mixed currencies are flagged rather than sile
 
 ---
 
-#### Phase 3 deployment notes
+#### Deployment notes for the team-spaces + pipeline work
 
 - **Two migrations**: `20260920090000_team_spaces` (additive; drops NOT NULL on
   `task_list.projectId` and adds composite FKs so a task cannot be filed into another owner's
@@ -353,4 +363,5 @@ Cycle time uses closed deals only. Mixed currencies are flagged rather than sile
 
 ---
 
-*Last updated 13 August 2026 — Phase 2 complete; Phase 3 slices 1 and 3 built, slice 2 open.*
+*Last updated 13 August 2026 — Phase 2: clients/patents complete; team spaces and the BD
+pipeline built; measurement integration open. No Phase 3 has been opened.*
