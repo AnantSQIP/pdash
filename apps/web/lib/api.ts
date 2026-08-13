@@ -436,6 +436,30 @@ export type ClientSummary = {
   /** Projects still running (PLANNING/ACTIVE/ON_HOLD) — what archiving would leave orphaned. */
   activeProjects?: number;
 };
+// ─── Team spaces (Phase 3) ───────────────────────────────────────────────────
+/** A space for work that is not client delivery: no PID, no client, no billability. */
+export type TeamSpace = {
+  id: string; name: string; description?: string | null;
+  archivedAt?: string | null; createdAt: string; createdBy?: string | null;
+  members: { userId: string; roleInTeam?: string | null; joinedAt?: string;
+    user: { id: string; firstName: string; lastName: string; email?: string; profilePhoto?: string | null; designation?: string | null } }[];
+  taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
+  _count?: { teamTasks: number };
+  /** Tasks not in a CLOSED status — what a wound-down space should not look busy with. */
+  openTasks?: number;
+};
+export type TeamTask = {
+  id: string; title: string; description?: string | null; priority: string;
+  startDate?: string | null; dueDate?: string | null;
+  estimatedHours?: number | null; actualHours?: number | null;
+  completionPercentage?: number; createdBy?: string; createdAt?: string;
+  currentStatus?: { id: string; name: string; colorHex?: string | null; type?: string | null } | null;
+  assignees: { userId: string; role?: string | null;
+    user: { id: string; firstName: string; lastName: string; profilePhoto?: string | null } }[];
+  _count?: { subtasks: number };
+  taskListId?: string | null; sequence?: number;
+};
+
 // ─── Client ledger ───────────────────────────────────────────────────────────
 /** Recomputed from live projects and timesheets on every read — never stored. */
 export type LedgerDerived = {
@@ -1165,6 +1189,42 @@ export const api = {
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
       req<ApiProject>(`/projects/${id}/members/${userId}`, { method: 'DELETE' }),
+  },
+
+  /**
+   * Team spaces — HR, BD, operations. `team.view` only opens the module; which spaces you can
+   * read is decided by membership server-side, exactly as it is for projects.
+   */
+  teams: {
+    list: () => req<TeamSpace[]>('/teams'),
+    get: (id: string) => req<TeamSpace>(`/teams/${id}`),
+    create: (data: { name: string; description?: string; memberIds?: string[] }) =>
+      req<TeamSpace>('/teams', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      req<TeamSpace>(`/teams/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    archive: (id: string) => req<TeamSpace>(`/teams/${id}/archive`, { method: 'POST' }),
+    restore: (id: string) => req<TeamSpace>(`/teams/${id}/restore`, { method: 'POST' }),
+    remove: (id: string) => req<{ ok: boolean }>(`/teams/${id}`, { method: 'DELETE' }),
+    /** Replace the whole membership — idempotent, not a delta. */
+    setMembers: (id: string, userIds: string[]) =>
+      req<TeamSpace>(`/teams/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
+    removeMember: (id: string, userId: string) =>
+      req<TeamSpace>(`/teams/${id}/members/${userId}`, { method: 'DELETE' }),
+    createList: (id: string, name: string) =>
+      req<TeamSpace>(`/teams/${id}/lists`, { method: 'POST', body: JSON.stringify({ name }) }),
+    updateList: (id: string, listId: string, data: { name?: string; sequence?: number }) =>
+      req<TeamSpace>(`/teams/${id}/lists/${listId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    removeList: (id: string, listId: string) =>
+      req<TeamSpace>(`/teams/${id}/lists/${listId}`, { method: 'DELETE' }),
+    tasks: (id: string) => req<TeamTask[]>(`/teams/${id}/tasks`),
+    createTask: (id: string, data: {
+      title: string; taskListId: string; description?: string; priority?: string;
+      startDate?: string; dueDate?: string; estimatedHours?: number; assigneeIds?: string[];
+    }) => req<TeamTask[]>(`/teams/${id}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
+    moveTask: (id: string, taskId: string, taskListId: string, sequence?: number) =>
+      req<TeamTask[]>(`/teams/${id}/tasks/${taskId}/move`, { method: 'PUT', body: JSON.stringify({ taskListId, sequence }) }),
+    removeTask: (id: string, taskId: string) =>
+      req<TeamTask[]>(`/teams/${id}/tasks/${taskId}`, { method: 'DELETE' }),
   },
 
   // Client codes (the "MLK" grouping). Create/edit/remove need patent.manage + the org passcode;
