@@ -71,6 +71,8 @@ export interface CapacityRow {
     id: string; title: string; projectId?: string; project?: string;
     /** The project's PID and which round it is — two rounds of one PID share a code. */
     projectPid?: string | null; projectRound?: number;
+    /** Internal team-space work rather than a client matter — no PID, never billable. */
+    isTeamWork?: boolean;
     dueDate?: string | null; priority: string; completionPercentage: number;
     remainingHours: number; overdue: boolean;
   }[];
@@ -193,6 +195,13 @@ export class CapacityService {
             select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true } } },
             take: 1,
           },
+          // Team-space work already counted toward load — this query is by ASSIGNEE, not by
+          // project — but it arrived with no label, so an HR or BD person looked booked with
+          // blank rows. Naming the space is what makes their week readable.
+          teamTasks: {
+            select: { team: { select: { id: true, name: true, deletedAt: true } } },
+            take: 1,
+          },
         },
       }),
     ]);
@@ -233,7 +242,9 @@ export class CapacityService {
 
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
+      const team = task.teamTasks[0]?.team;
       if (project?.deletedAt) continue; // archived project — not real work any more
+      if (team?.deletedAt) continue;    // deleted team space — likewise
       const done = (task.completionPercentage ?? 0) / 100;
       // Fallback (legacy tasks with no per-person hours): split the task estimate evenly.
       const evenSplit = (task.estimatedHours ?? DEFAULT_TASK_HOURS) / Math.max(1, task.assignees.length);
@@ -249,10 +260,13 @@ export class CapacityService {
         list.push({
           id: task.id,
           title: task.title,
-          projectId: project?.id,
-          project: project?.title,
+          projectId: project?.id ?? team?.id,
+          // Team work has no PID and no round — it is labelled by the space it belongs to, and
+          // flagged so the UI can tell a client matter from an internal one.
+          project: project?.title ?? team?.name,
           projectPid: project?.code ?? null,
           projectRound: project?.roundSeq,
+          isTeamWork: !project && !!team,
           dueDate: task.dueDate ? dayKey(task.dueDate) : null,
           priority: task.priority,
           completionPercentage: task.completionPercentage ?? 0,

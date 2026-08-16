@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { api, type ApiTask, type ApiProject } from '@/lib/api';
+import { api, type ApiTask, type ApiProject, type TeamSpace, type TeamTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { pidLabel } from '@/lib/mock-data';
 import { DateField } from '@/components/ui/DateField';
@@ -57,20 +57,39 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
     staleTime: 30_000,
   });
 
+  // Team spaces the actor is in. Internal work (HR, BD, operations) has no PID and no client,
+  // but the hours are still worked and still have to go somewhere.
+  const { data: teamSpaces = [] } = useQuery<TeamSpace[]>({
+    queryKey: ['teams'], queryFn: () => api.teams.list(),
+    enabled: isTask, staleTime: 30_000,
+  });
+  // The picker holds either a project id or a team id; this is which kind was chosen.
+  const pickedTeam = teamSpaces.find(t => t.id === projectId);
+
   // Tasks of the chosen project — fetched only once a project is picked.
   const { data: allTasks = [], isLoading: loadingTasks } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.tasks.list(projectId),
-    enabled: isTask && !!projectId,
+    enabled: isTask && !!projectId && !pickedTeam,
+  });
+  const { data: teamTasks = [], isLoading: loadingTeamTasks } = useQuery<TeamTask[]>({
+    queryKey: ['team-tasks', projectId],
+    queryFn: () => api.teams.tasks(projectId),
+    enabled: isTask && !!pickedTeam,
   });
   // You can only log time on tasks you're ASSIGNED to (the server enforces this) — so only
   // offer your own tasks, not every task in the project.
-  const tasks = allTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id));
+  const tasks = pickedTeam
+    ? teamTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id))
+        .map(t => ({ id: t.id, title: t.title })) as { id: string; title: string }[]
+    : allTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id))
+        .map(t => ({ id: t.id, title: t.title }));
 
   const selectedProject = projects.find(p => p.id === projectId);
   const pid = selectedProject?.code ?? '';       // the PID auto-fills from the chosen project
   const hasPid = !!pid;
-  const needPid = isTask && !assignLater;         // PID is required unless "assign PID later" is on
+  // Internal work has no PID to require — asking for one would make it unloggable.
+  const needPid = isTask && !assignLater && !pickedTeam;
 
   function pickProject(id: string) {
     setProjectId(id);
@@ -183,19 +202,31 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
                 required value={projectId} onChange={e => pickProject(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
               >
-                <option value="">{loadingProjects ? 'Loading projects…' : projects.length === 0 ? 'You are not on any projects' : 'Select a project'}</option>
+                <option value="">{loadingProjects ? 'Loading projects…' : (projects.length === 0 && teamSpaces.length === 0) ? 'You are not on any projects' : 'Select a project'}</option>
                 {/* A PID can hold several projects for a returning client, so the round has to be
                     on the option — otherwise two entries look identical and time lands on the wrong one. */}
-                {projects.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}
-                  </option>
-                ))}
+                <optgroup label="Client projects">
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}
+                    </option>
+                  ))}
+                </optgroup>
+                {/* Separated, not mixed in: internal work has no PID and is never billable, and
+                    someone scanning this list must be able to tell the two apart at a glance. */}
+                {teamSpaces.filter(t => !t.archivedAt).length > 0 && (
+                  <optgroup label="Team spaces — internal, non-billable">
+                    {teamSpaces.filter(t => !t.archivedAt).map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
 
-            {/* PID — auto-fills from the project; hidden while "Assign PID later" is on. */}
-            {!assignLater && (
+            {/* PID — auto-fills from the project; hidden while "Assign PID later" is on, and
+                absent entirely for internal work, which has no PID by design. */}
+            {!assignLater && !pickedTeam && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">PID <span className="text-red-500">*</span></label>
                 <input
@@ -211,6 +242,13 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
               </div>
             )}
 
+            {pickedTeam && (
+              <p className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                Internal team work — no PID, and recorded as non-billable. It still counts toward your
+                capacity and your logged hours.
+              </p>
+            )}
+
             {/* Task — always shown. */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
@@ -218,7 +256,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
                 required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
               >
-                <option value="">{!projectId ? 'Pick a project first' : loadingTasks ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
+                <option value="">{!projectId ? 'Pick a project first' : (loadingTasks || loadingTeamTasks) ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
                 {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
               </select>
             </div>

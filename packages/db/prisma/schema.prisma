@@ -251,8 +251,9 @@ model Team {
   organizationId String
   name           String
   description    String?
-  status         String  @default("ACTIVE")
   // Retired but kept, same meaning as on Client: no new work, everything already here preserved.
+  // There is deliberately no second `status` column — two ways to say "not active" drift apart,
+  // and the one nothing reads is the one that ends up lying.
   archivedAt     DateTime?
   deletedAt      DateTime?
   createdBy      String?
@@ -265,6 +266,7 @@ model Team {
   taskLists    TaskList[]
   teamTasks    TeamTask[]
   deals        Deal[]
+  timesheets   Timesheet[]
 
   @@index([organizationId, deletedAt])
   @@map("team")
@@ -1496,6 +1498,13 @@ model Timesheet {
   // while the PID is still to be assigned (inside the buffer window).
   taskId      String?
   issueId     String?
+  // Set when the time was logged against a TEAM SPACE task (HR, BD, operations) rather than a
+  // client project. Without it such an entry has a null projectId and is indistinguishable from
+  // one sitting in the "assign the PID later" buffer — so it would be chased for a PID it can
+  // never have, and counted as unattributed client work on the client ledger.
+  //
+  // Exactly one of projectId / teamId is meaningful; both null means the buffer.
+  teamId      String?
   // Non-project work category. null = a normal project/buffer/issue entry (the default, so
   // existing rows are unaffected). "OTHER" = miscellaneous non-project time (admin, internal
   // meetings, training) — never billable, never a PID buffer to assign.
@@ -1512,10 +1521,12 @@ model Timesheet {
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  team    Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
   task    Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
   issue   Issue?   @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
+  @@index([teamId, date])
   @@index([taskId, date])
   @@index([issueId])
   @@index([projectId])

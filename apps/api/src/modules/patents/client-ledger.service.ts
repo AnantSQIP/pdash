@@ -209,6 +209,10 @@ export class ClientLedgerService {
     const rows = await this.prisma.timesheet.findMany({
       where: {
         userId: { in: userIds }, deletedAt: null,
+        // Internal team-space work is EXCLUDED. It has no project by design, not by omission,
+        // and counting it here would overstate the very gap this figure exists to expose —
+        // "hours that should have reached a client but did not".
+        teamId: null,
         OR: [
           { projectId: null },                              // still inside the PID buffer
           ...(clientlessIds.length ? [{ projectId: { in: clientlessIds } }] : []),

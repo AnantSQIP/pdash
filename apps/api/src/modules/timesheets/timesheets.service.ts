@@ -120,6 +120,22 @@ export class TimesheetsService {
     return { projectId: pt?.project.id ?? null, projectType: pt?.project.projectType ?? null };
   }
 
+  /**
+   * The TEAM SPACE a task belongs to, if it is internal work rather than a client project.
+   *
+   * A task lives in exactly one of the two, so this is only consulted when the project lookup
+   * came back empty. Recording it is what stops internal time being read as an entry sitting in
+   * the PID buffer — chased forever for a Project ID it can never have, and counted on the client
+   * ledger as unattributed *client* work.
+   */
+  private async teamOfTask(taskId: string): Promise<string | null> {
+    const tt = await this.prisma.teamTask.findFirst({
+      where: { taskId, team: { deletedAt: null } },
+      select: { teamId: true },
+    });
+    return tt?.teamId ?? null;
+  }
+
   /** No one can log more than a full day against a single calendar day (across all entries). */
   private async assertDayCap(userId: string, date: Date, addingHours: number, excludeId?: string): Promise<void> {
     const dayAgg = await this.prisma.timesheet.aggregate({
@@ -281,6 +297,9 @@ export class TimesheetsService {
     // not the right to book hours against work you aren't staffed on.
     await this.access.assertTaskAssignee(actorId, dto.taskId);
     const { projectId, projectType } = await this.projectOfTask(dto.taskId);
+    // No project? It is either team-space work or an entry still awaiting its PID. Resolving the
+    // team here keeps those two apart for every reader downstream.
+    const teamId = projectId ? null : await this.teamOfTask(dto.taskId);
     // No time may be booked to a completed/closed client matter (was UI-only before).
     if (projectId) await this.access.assertProjectWritable(projectId);
 
@@ -297,10 +316,13 @@ export class TimesheetsService {
         userId: actorId,
         taskId: dto.taskId,
         projectId,
+        teamId,
         projectType,
         date: entryDay,
         hoursLogged: dto.hoursLogged,
-        billable,
+        // Internal work has no client to bill, so it is non-billable regardless of what was
+        // asked for. Leaving the choice open would let HR and BD hours land in billable totals.
+        billable: teamId ? false : billable,
         notes: dto.notes,
       },
       include: INCLUDE,
@@ -336,6 +358,10 @@ export class TimesheetsService {
     // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).
     await this.access.assertTaskAssignee(entry.userId, taskId);
     const { projectId, projectType } = await this.projectOfTask(taskId);
+    // The chosen task may be team-space work rather than a client project — resolve it here too,
+    // or the entry keeps a null projectId with no teamId and stays looking like a buffer entry
+    // for ever, even though it now has a task.
+    const teamId = projectId ? null : await this.teamOfTask(taskId);
     if (projectId) await this.access.assertProjectWritable(projectId);
     // Don't let buffer→assign duplicate an existing identical task entry (double-billing).
     const dupe = await this.prisma.timesheet.findFirst({
@@ -344,7 +370,10 @@ export class TimesheetsService {
     });
     if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
     const updated = await this.prisma.timesheet.update({
-      where: { id }, data: { taskId, projectId, projectType }, include: INCLUDE,
+      where: { id },
+      // Internal work cannot be billable — see create().
+      data: { taskId, projectId, teamId, projectType, ...(teamId ? { billable: false } : {}) },
+      include: INCLUDE,
     });
     await this.recomputeTaskActualHours(taskId);
     return updated;
