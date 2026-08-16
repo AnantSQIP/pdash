@@ -33,3 +33,20 @@ ALTER TABLE "timesheet"
 -- Free to do now and not later: no code path has ever written to this table outside this feature,
 -- so the column holds nothing anyone can lose.
 ALTER TABLE "team" DROP COLUMN IF EXISTS "status";
+
+-- Backfill: give every existing team-space task an opening status.
+--
+-- Team tasks were created with a workflow but no currentWorkflowStatusId, which made them
+-- PERMANENTLY open: capacity treats a null status as open, so their owner's load never came
+-- down, performance never counted one as closed, and a space's "open" badge only ever grew.
+-- New tasks now get a status on creation; these are the ones made before that.
+UPDATE "task" t
+SET "currentWorkflowStatusId" = (
+  SELECT ws.id FROM "workflow_status" ws
+  JOIN "workflow" w ON w.id = ws."workflowId"
+  WHERE w.type = 'GLOBAL' AND ws.type = 'OPEN'
+  ORDER BY ws.sequence ASC LIMIT 1
+)
+WHERE t."currentWorkflowStatusId" IS NULL
+  AND t."deletedAt" IS NULL
+  AND EXISTS (SELECT 1 FROM "team_task" tt WHERE tt."taskId" = t.id);

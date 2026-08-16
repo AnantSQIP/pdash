@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Put } from '@nestjs/
 import { TeamsService } from './teams.service';
 import {
   CreateTeamDto, CreateTeamListDto, CreateTeamTaskDto, MoveTeamTaskDto, SetTeamMembersDto,
-  TeamMemberDto, UpdateTeamDto, UpdateTeamListDto,
+  TeamMemberDto, UpdateTeamDto, UpdateTeamListDto, UpdateTeamTaskDto,
 } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
@@ -100,6 +100,19 @@ export class TeamsController {
   @Get(':id/tasks') @RequirePermission('task.view')
   tasks(@Param('id') id: string) {
     return this.teams.tasks(id);
+  }
+
+  /** The statuses a team task can take — the same GLOBAL workflow projects use. */
+  @Get('meta/statuses') @RequirePermission('task.view')
+  statuses() {
+    return this.teams.statuses();
+  }
+
+  /** Edit a task: title, dates, assignees, and above all its STATUS — an open task consumes
+   *  its owner's capacity for ever, so being unable to close one is not a cosmetic gap. */
+  @Patch(':id/tasks/:taskId') @RequirePermission('task.update')
+  updateTask(@Param('id') id: string, @Param('taskId') taskId: string, @Body() dto: UpdateTeamTaskDto) {
+    return this.teams.updateTask(id, taskId, dto);
   }
 
   @Post(':id/tasks') @RequirePermission('task.create')

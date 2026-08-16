@@ -1249,6 +1249,15 @@ export const api = {
     removeList: (id: string, listId: string) =>
       req<TeamSpace>(`/teams/${id}/lists/${listId}`, { method: 'DELETE' }),
     tasks: (id: string) => req<TeamTask[]>(`/teams/${id}/tasks`),
+    /** The statuses a team task can take — the same GLOBAL workflow projects use. */
+    taskStatuses: () => req<{ id: string; name: string; type: string; colorHex?: string | null }[]>('/teams/meta/statuses'),
+    /** Edit a task. `currentWorkflowStatusId` is how a task gets CLOSED — until it is, it keeps
+     *  consuming its owner's capacity. */
+    updateTask: (id: string, taskId: string, data: {
+      title?: string; description?: string; priority?: string; dueDate?: string | null;
+      estimatedHours?: number; completionPercentage?: number;
+      currentWorkflowStatusId?: string; assigneeIds?: string[];
+    }) => req<TeamTask[]>(`/teams/${id}/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     createTask: (id: string, data: {
       title: string; taskListId: string; description?: string; priority?: string;
       startDate?: string; dueDate?: string; estimatedHours?: number; assigneeIds?: string[];

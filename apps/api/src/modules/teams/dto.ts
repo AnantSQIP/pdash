@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class CreateTeamDto {
@@ -103,4 +103,38 @@ export class MoveTeamTaskDto {
 
   @IsOptional() @IsInt() @Min(0)
   sequence?: number;
+}
+
+/**
+ * Editing a task in a space — everything except which list it sits in (that is `move`).
+ *
+ * `currentWorkflowStatusId` matters most: without a way to close a task it consumes its owner's
+ * capacity for ever, and a "Done" column does not help, because a LIST is not a STATUS.
+ */
+export class UpdateTeamTaskDto {
+  @IsOptional() @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1) @MaxLength(200)
+  title?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  description?: string;
+
+  @IsOptional() @IsIn(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'])
+  priority?: string;
+
+  @IsOptional() @IsString()
+  dueDate?: string | null;
+
+  @IsOptional() @IsNumber() @Min(0)
+  estimatedHours?: number;
+
+  @IsOptional() @IsInt() @Min(0) @Max(100)
+  completionPercentage?: number;
+
+  @IsOptional() @IsString()
+  currentWorkflowStatusId?: string;
+
+  @IsOptional() @IsArray() @IsString({ each: true })
+  assigneeIds?: string[];
 }

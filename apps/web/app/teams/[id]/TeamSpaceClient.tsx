@@ -43,6 +43,9 @@ export function TeamSpaceClient({ teamId }: { teamId: string }) {
   const { data: tasks = [] } = useQuery<TeamTask[]>({
     queryKey: ['team-tasks', teamId], queryFn: () => api.teams.tasks(teamId), enabled: !!team,
   });
+  const { data: statuses = [] } = useQuery({
+    queryKey: ['team-task-statuses'], queryFn: () => api.teams.taskStatuses(), staleTime: Infinity,
+  });
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['team', teamId] });
@@ -62,6 +65,14 @@ export function TeamSpaceClient({ teamId }: { teamId: string }) {
   });
   const moveTask = useMutation({
     mutationFn: ({ taskId, listId }: { taskId: string; listId: string }) => api.teams.moveTask(teamId, taskId, listId),
+    onSuccess: refresh,
+    onError: e => toast(msg(e), 'error'),
+  });
+  // Closing a task is the one edit that changes numbers elsewhere: an open task keeps consuming
+  // its owner's capacity, and counts against the space's "N open" badge, for ever.
+  const setStatus = useMutation({
+    mutationFn: ({ taskId, statusId }: { taskId: string; statusId: string }) =>
+      api.teams.updateTask(teamId, taskId, { currentWorkflowStatusId: statusId }),
     onSuccess: refresh,
     onError: e => toast(msg(e), 'error'),
   });
@@ -165,14 +176,36 @@ export function TeamSpaceClient({ teamId }: { teamId: string }) {
                       </div>
                       {/* A dropdown rather than drag-and-drop: it works on a phone, it is
                           keyboard-reachable, and it never loses a card to a mis-drop. */}
-                      {!archived && can('task.update') && lists.length > 1 && (
-                        <select
-                          value={list.id}
-                          onChange={e => moveTask.mutate({ taskId: t.id, listId: e.target.value })}
-                          className="mt-2 w-full text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:border-brand-400"
-                        >
-                          {lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-                        </select>
+                      {!archived && can('task.update') && (
+                        <div className="mt-2 flex gap-1.5">
+                          {lists.length > 1 && (
+                            <select
+                              value={list.id}
+                              onChange={e => moveTask.mutate({ taskId: t.id, listId: e.target.value })}
+                              title="Which column"
+                              className="flex-1 min-w-0 text-[11px] text-gray-500 bg-gray-50 border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:border-brand-400"
+                            >
+                              {lists.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                            </select>
+                          )}
+                          {/* The COLUMN is not the status. Moving a card to "Done" used to leave
+                              the task open for ever — still eating capacity, still counted as
+                              open — because nothing ever set a status. This is what closes it. */}
+                          {statuses.length > 0 && (
+                            <select
+                              value={t.currentStatus?.id ?? ''}
+                              onChange={e => setStatus.mutate({ taskId: t.id, statusId: e.target.value })}
+                              title="Status — this is what actually closes the task"
+                              className={clsx('flex-1 min-w-0 text-[11px] border rounded px-1.5 py-1 focus:outline-none',
+                                t.currentStatus?.type === 'CLOSED'
+                                  ? 'bg-green-50 border-green-200 text-green-700'
+                                  : 'bg-gray-50 border-gray-200 text-gray-500')}
+                            >
+                              {!t.currentStatus && <option value="">No status</option>}
+                              {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}

@@ -5,7 +5,7 @@ import { PermissionService } from '../permissions/permission.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { getActorId } from '../../common/context/request-context';
 import {
-  CreateTeamDto, UpdateTeamDto, TeamMemberDto, CreateTeamListDto, UpdateTeamListDto, CreateTeamTaskDto,
+  CreateTeamDto, UpdateTeamDto, TeamMemberDto, CreateTeamListDto, UpdateTeamListDto, CreateTeamTaskDto, UpdateTeamTaskDto,
 } from './dto';
 
 /**
@@ -379,9 +379,18 @@ export class TeamsService {
       }
     }
 
+    // Give the task a real OPENING status, not just a workflow.
+    //
+    // Leaving currentWorkflowStatusId null made the task *permanently* open everywhere that
+    // matters: capacity treats a null status as open, so an HR person's load never came down;
+    // performance never counted one as closed; and a space's own "N open" badge only ever grew.
+    // Moving a card to a "Done" column changed none of that, because a LIST is not a STATUS.
     const wf = await this.prisma.workflow.findFirst({
-      where: { type: 'GLOBAL' }, orderBy: { name: 'asc' }, select: { id: true },
+      where: { type: 'GLOBAL' },
+      orderBy: { name: 'asc' },
+      select: { id: true, statuses: { where: { type: 'OPEN' }, orderBy: { sequence: 'asc' }, take: 1, select: { id: true } } },
     });
+    const openingStatusId = wf?.statuses[0]?.id;
 
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
@@ -395,6 +404,7 @@ export class TeamsService {
           createdBy: actorId,
           assignedById: assigneeIds.length ? actorId : null,
           workflowId: wf?.id,
+          currentWorkflowStatusId: openingStatusId,
           assignees: assigneeIds.length ? { create: assigneeIds.map(userId => ({ userId })) } : undefined,
         },
         select: { id: true, title: true },
@@ -417,6 +427,85 @@ export class TeamsService {
         link: `/teams/${teamId}`,
       });
     }
+    return this.tasks(teamId);
+  }
+
+  /** The statuses a team task can be in — the same GLOBAL workflow projects use. */
+  async statuses() {
+    const wf = await this.prisma.workflow.findFirst({
+      where: { type: 'GLOBAL' }, orderBy: { name: 'asc' },
+      select: { statuses: { orderBy: { sequence: 'asc' }, select: { id: true, name: true, type: true, colorHex: true } } },
+    });
+    return wf?.statuses ?? [];
+  }
+
+  /**
+   * Edit a task in a space — everything about it except which list it sits in.
+   *
+   * Without this a team task was write-once: created, then frozen. You could not correct a
+   * typo, re-assign it, push the date, or mark it done. Closing it matters most of all, because
+   * an open task keeps consuming its owner's capacity for ever.
+   */
+  async updateTask(teamId: string, taskId: string, dto: UpdateTeamTaskDto) {
+    const actorId = await this.assertAccess(teamId);
+    await this.assertWritable(teamId);
+    if (!(await this.permissions.check(actorId, 'task.update'))) {
+      throw new ForbiddenException('You are not permitted to edit tasks.');
+    }
+    const link = await this.prisma.teamTask.findFirst({ where: { teamId, taskId }, select: { id: true } });
+    if (!link) throw new NotFoundException('That task is not in this team space.');
+
+    // A status must belong to the task's own workflow — the same rule project tasks follow.
+    if (dto.currentWorkflowStatusId) {
+      const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { workflowId: true } });
+      const st = await this.prisma.workflowStatus.findFirst({
+        where: { id: dto.currentWorkflowStatusId, ...(task?.workflowId ? { workflowId: task.workflowId } : {}) },
+        select: { id: true },
+      });
+      if (!st) throw new BadRequestException('That status does not belong to this task\'s workflow.');
+    }
+    // Assignees must be members of the space — same rule as creating.
+    const assigneeIds = dto.assigneeIds ? [...new Set(dto.assigneeIds)] : undefined;
+    if (assigneeIds?.length) {
+      const members = (await this.prisma.teamMember.findMany({
+        where: { teamId, userId: { in: assigneeIds } }, select: { userId: true },
+      })).map(m => m.userId);
+      if (members.length !== assigneeIds.length) {
+        throw new BadRequestException('Everyone assigned must be a member of this team space.');
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.task.update({
+        where: { id: taskId },
+        data: {
+          ...(dto.title !== undefined ? { title: dto.title.trim() } : {}),
+          ...(dto.description !== undefined ? { description: dto.description || null } : {}),
+          ...(dto.priority !== undefined ? { priority: dto.priority } : {}),
+          ...(dto.dueDate !== undefined ? { dueDate: dto.dueDate ? new Date(dto.dueDate) : null } : {}),
+          ...(dto.estimatedHours !== undefined ? { estimatedHours: dto.estimatedHours } : {}),
+          ...(dto.completionPercentage !== undefined ? { completionPercentage: dto.completionPercentage } : {}),
+          ...(dto.currentWorkflowStatusId !== undefined ? { currentWorkflowStatusId: dto.currentWorkflowStatusId } : {}),
+          // Whoever changes the assignees is the person who delegated the work.
+          ...(assigneeIds ? { assignedById: actorId } : {}),
+        },
+      });
+      if (assigneeIds) {
+        // TaskAssignee is unique on (taskId, userId, ROLE), so the same person can legitimately
+        // hold two roles on one task. Replacing the set wholesale — rather than upserting per
+        // person — is therefore the only way to land on exactly the requested list.
+        await tx.taskAssignee.deleteMany({ where: { taskId } });
+        if (assigneeIds.length) {
+          await tx.taskAssignee.createMany({
+            data: assigneeIds.map(userId => ({ taskId, userId })),
+            skipDuplicates: true,
+          });
+        }
+      }
+    });
+    await this.events.emit({
+      action: 'team.task_updated', entityType: 'TASK', entityId: taskId, metadata: { teamId },
+    });
     return this.tasks(teamId);
   }
 
