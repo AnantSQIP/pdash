@@ -308,7 +308,7 @@ the right build.
 | # | Slice | State |
 |---|---|---|
 | 1 | **Team spaces core** — spaces, members, board columns, tasks, sidebar destination | ✅ built |
-| 2 | **Measurement integration** — timesheets, capacity, performance against team tasks | ⬜ not started |
+| 2 | **Measurement integration** — timesheets, capacity, performance against team tasks | ✅ built |
 | 3 | **BD pipeline** — deals, stages, activities, forecast + conversion reporting | ✅ built |
 | 4 | **Permissions + regrant** | ✅ codes in; regrant needed at deploy |
 
@@ -339,21 +339,37 @@ Stage probabilities live in one file shared by board, forecast and validation, a
 plainly that they are conventions to be replaced with measured conversion once there is history.
 Cycle time uses closed deals only. Mixed currencies are flagged rather than silently summed.
 
+#### What slice 2 turned into
+
+Far smaller than feared for two of the three. **Capacity and performance already counted team
+tasks** — both query `Task` by *assignee* with no project filter — they simply arrived unlabelled,
+because both read the project through `projectTasks` and a team task has none. So an HR person
+looked booked with blank rows, and their internal hours vanished from "where did your time go",
+making the breakdown not add up to its own total. Both now fall back to the space's name.
+
+**Timesheets** was the real work. An entry reaches its context through `projectId`; a team task
+has none, so the entry would carry a null `projectId` — which already means *"inside the
+assign-the-PID-later buffer"*. Left that way, internal time would be chased forever for a PID it
+can never have, and the client ledger's Unattributed line would count it as unattributed *client*
+work, overstating the gap that figure exists to expose. `Timesheet.teamId` keeps the three states
+apart: project set = client work · team set = internal · both null = genuinely awaiting a PID.
+Internal time is forced non-billable — there is no client to bill.
+
+`team.status` was dropped in the same migration: it overlapped `archivedAt`, nothing ever read it,
+and the column that nothing reads is the one that ends up lying.
+
 #### Still open
 
-- **Slice 2, measurement integration.** The risk sits here: timesheets resolve work through a PID
-  and team work has none, and capacity/performance are computed from *project* tasks. All three
-  need a second resolution path.
-- **`Team.status` vs `archivedAt`** — two ways to say "not active" will drift. The table had no
-  rows, so dropping `status` is free now and will not be later. Awaiting a decision.
+Nothing in the agreed scope. Both PRs await review and merge.
 
 ---
 
 #### Deployment notes for the team-spaces + pipeline work
 
-- **Two migrations**: `20260920090000_team_spaces` (additive; drops NOT NULL on
+- **Three migrations**: `20260920090000_team_spaces` (additive; drops NOT NULL on
   `task_list.projectId` and adds composite FKs so a task cannot be filed into another owner's
-  list) and `20260921090000_bd_pipeline` (new `deal` + `deal_activity` tables).
+  list), `20260921090000_bd_pipeline` (new `deal` + `deal_activity` tables), and
+  `20260922090000_timesheet_team` (adds `timesheet.teamId`, drops the unused `team.status`).
 - **`regrant-roles` IS REQUIRED** — four new codes: `team.view`, `team.manage`, `deal.view`,
   `deal.manage`. Unlike Phase 2, this cannot be skipped.
 - Role totals after the change: Super Admin 96 · Admin 94 · Manager 57 · Senior Consultant 51 ·
@@ -363,5 +379,5 @@ Cycle time uses closed deals only. Mixed currencies are flagged rather than sile
 
 ---
 
-*Last updated 13 August 2026 — Phase 2: clients/patents complete; team spaces and the BD
-pipeline built; measurement integration open. No Phase 3 has been opened.*
+*Last updated 16 August 2026 — Phase 2: clients/patents complete; team spaces, the BD pipeline
+and measurement integration all built. Nothing in the agreed scope remains. No Phase 3 opened.*
