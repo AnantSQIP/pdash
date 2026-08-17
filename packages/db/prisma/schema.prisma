@@ -48,6 +48,7 @@ model Organization {
   calendarEvents   CalendarEvent[]
   channels         Channel[]
   holidays         Holiday[]
+  optionalHolidays OptionalHoliday[]
   leaveTypes       LeaveType[]
   mentionTags      MentionTag[]
   announcements      Announcement[]
@@ -109,6 +110,7 @@ model User {
   taskAssignments        TaskAssignee[]
   tasksAssignedByMe      Task[]                  @relation("TaskAssignedBy")
   dealsOwned             Deal[]                  @relation("DealOwner")
+  optionalHolidays       OptionalHolidayElection[]
   subtaskAssignments     SubtaskAssignee[]
   userRoles              UserRole[]
   userPermissions        UserPermission[]
@@ -1464,12 +1466,22 @@ model LeaveType {
   @@map("leave_type")
 }
 
+// A day the FIRM IS CLOSED. Everything in this table is a non-working day for everyone — twelve
+// separate queries across attendance, capacity, leave, timesheets, performance and the digest read
+// it that way, none of them filtering on `type`.
+//
+// Which is why OPTIONAL holidays are NOT in here (see OptionalHoliday). An optional holiday is a
+// day off for the two people who chose it, not for the firm — putting one in this table hands the
+// whole company the day, which is how "Good Friday, optional" became a universal holiday.
 model Holiday {
   id             String   @id @default(cuid())
   organizationId String
   name           String
   date           DateTime
-  // PUBLIC | OPTIONAL | COMPANY
+  // PUBLIC | COMPANY — a closed day either way. (OPTIONAL is retired: see OptionalHoliday.)
+  // WEEKEND marks a holiday that happens to fall on a Saturday or Sunday: recorded so the
+  // published calendar matches the one HR issued, and granting nothing, because the day is
+  // already not a working day.
   type           String   @default("PUBLIC")
   recurring      Boolean  @default(false)
   createdAt      DateTime @default(now())
@@ -1479,6 +1491,57 @@ model Holiday {
   @@unique([organizationId, date])
   @@index([organizationId])
   @@map("holiday")
+}
+
+// The four OPTIONAL holidays the firm declares each year, of which each employee may take TWO.
+//
+// Deliberately its own table rather than a `type` on Holiday. Every working-day calculation in the
+// system reads Holiday and treats each row as a day the firm is shut — none of them look at the
+// type. An optional holiday is the opposite kind of fact: a day that is off for whoever chose it
+// and an ordinary working day for everybody else. Keeping the two apart means no existing
+// calculation had to be touched, and none of them can accidentally hand the whole firm a day off.
+//
+// The rules, from the published calendar: apply in advance, HR approves subject to team
+// requirements, and unused ones neither carry forward nor pay out — which needs no field, because
+// the allowance is simply counted per calendar year.
+model OptionalHoliday {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  date           DateTime
+  // The calendar year the allowance is counted against. Stored rather than derived from `date`
+  // so the yearly count is a plain indexed query.
+  year           Int
+  createdAt      DateTime @default(now())
+
+  organization Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  elections    OptionalHolidayElection[]
+
+  @@unique([organizationId, date])
+  @@index([organizationId, year])
+  @@map("optional_holiday")
+}
+
+// One person choosing one optional holiday. Approved = that date is off for them alone.
+model OptionalHolidayElection {
+  id                String    @id @default(cuid())
+  optionalHolidayId String
+  userId            String
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status            String    @default("PENDING")
+  reviewedBy        String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  optionalHoliday OptionalHoliday @relation(fields: [optionalHolidayId], references: [id], onDelete: Cascade)
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One request per person per holiday — asking twice is a mistake, not a second day off.
+  @@unique([optionalHolidayId, userId])
+  @@index([userId, status])
+  @@map("optional_holiday_election")
 }
 
 // ═══════════════════════════════════════════════════════════════

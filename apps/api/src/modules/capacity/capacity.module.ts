@@ -5,6 +5,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
+import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
@@ -104,6 +106,7 @@ export class CapacityService {
     private readonly prisma: PrismaService,
     private readonly actor: ActorContextService,
     private readonly notifications: NotificationsService,
+    private readonly optionalHolidays: OptionalHolidaysService,
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
@@ -157,7 +160,10 @@ export class CapacityService {
     const to = addDays(today, horizon);
     const userFilter = onlyUserIds ? { id: { in: onlyUserIds.length ? onlyUserIds : ['__none__'] } } : {};
 
-    const [users, holidays, leaves, tasks] = await Promise.all([
+    // An APPROVED optional holiday is a non-working day for ONE person. It therefore belongs with
+    // that person's leave, not with the firm's holidays — the whole reason optional holidays are
+    // not rows in `holiday`.
+    const [users, holidays, leaves, tasks, optionalOff] = await Promise.all([
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
@@ -204,6 +210,7 @@ export class CapacityService {
           },
         },
       }),
+      this.optionalHolidays.approvedDayKeys(organizationId, today, to),
     ]);
 
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
@@ -225,13 +232,16 @@ export class CapacityService {
     const window: Date[] = [];
     for (let d = new Date(today); d < to; d = addDays(d, 1)) window.push(new Date(d));
 
-    /** Working days for a user (excludes weekends, holidays, their approved leave). Memoised —
-     *  this is asked once per task, and recomputing it per task is O(tasks × window). */
+    /** Working days for a user (excludes weekends, firm holidays, their approved leave, and any
+     *  optional holiday they were granted). Memoised — this is asked once per task, and
+     *  recomputing it per task is O(tasks × window). */
     const workingDaysCache = new Map<string, Date[]>();
     const workingDaysFor = (userId: string): Date[] => {
       const hit = workingDaysCache.get(userId);
       if (hit) return hit;
-      const wd = window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d)) && !leaveByUserDay.has(`${userId}|${dayKey(d)}`));
+      const wd = window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d))
+        && !leaveByUserDay.has(`${userId}|${dayKey(d)}`)
+        && !optionalOff.has(`${userId}|${dayKey(d)}`));
       workingDaysCache.set(userId, wd);
       return wd;
     };
@@ -314,8 +324,13 @@ export class CapacityService {
         const k = dayKey(d);
         const leave = leaveByUserDay.get(`${u.id}|${k}`);
         const holiday = holidayByDay.get(k);
+        // An optional holiday this person was GRANTED. Reported as a holiday because that is what
+        // it is to them, but it is theirs alone — the same date is an ordinary working day for
+        // everyone who did not choose it, which is why it is keyed by user.
+        const optional = optionalOff.has(`${u.id}|${k}`);
         if (isWeekend(d)) return { date: k, state: 'WEEKEND', load: 0, capacity: 0, utilization: 0, free: 0 };
         if (holiday) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: holiday };
+        if (optional) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: 'Optional holiday' };
         if (leave) return { date: k, state: 'LEAVE', load: 0, capacity: 0, utilization: 0, free: 0, note: `${leave} leave` };
 
         const load = loadByUserDay.get(`${u.id}|${k}`) ?? 0;
@@ -711,6 +726,9 @@ class CapacityController {
 }
 
 @Module({
+  // OptionalHolidaysModule supplies the per-person approved-optional-holiday days, which the
+  // board treats exactly like approved leave: off for that person, nobody else.
+  imports: [OptionalHolidaysModule],
   controllers: [CapacityController],
   providers: [CapacityService],
   exports: [CapacityService],
