@@ -49,6 +49,7 @@ model Organization {
   channels         Channel[]
   holidays         Holiday[]
   optionalHolidays OptionalHoliday[]
+  appraisalParameters AppraisalParameter[]
   leaveTypes       LeaveType[]
   mentionTags      MentionTag[]
   announcements      Announcement[]
@@ -269,6 +270,7 @@ model Team {
   teamTasks    TeamTask[]
   deals        Deal[]
   timesheets   Timesheet[]
+  appraisalParameters AppraisalParameter[]
 
   @@index([organizationId, deletedAt])
   @@map("team")
@@ -2406,6 +2408,12 @@ model AppraisalCycle {
   periodEnd      DateTime?
   dueDate        DateTime?
   status         String    @default("DRAFT") // DRAFT | ACTIVE | CLOSED
+  // HALF_YEARLY | ANNUAL — the two the firm actually runs. Stored rather than inferred from the
+  // period dates, because a six-month period is not always a half-yearly review.
+  cycleType      String    @default("HALF_YEARLY")
+  // "26-27" — which financial year this belongs to, so a person's history reads as a year at a
+  // time rather than a list of cycles somebody has to date-sort by eye.
+  fyLabel        String?
   createdBy      String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -2417,6 +2425,68 @@ model AppraisalCycle {
   @@map("appraisal_cycle")
 }
 
+// What people are actually rated ON.
+//
+// A rating used to be a single integer, which says a person is "a 4" without saying at what. These
+// are the named criteria behind the number, and the number becomes their weighted average rather
+// than something typed directly.
+//
+// SCOPING is the part that matters: parameters differ by team and by position. A parameter applies
+// to somebody when it names their team space, or names their designation, or names neither — the
+// last meaning "everyone". A person's form is assembled from every parameter that matches them, so
+// a BD executive and a Research Associate are rated on genuinely different things without anyone
+// maintaining two separate forms.
+model AppraisalParameter {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  // Null on BOTH = applies to everyone. Either one set narrows it.
+  teamId         String?
+  designation    String?
+  // Relative importance within a person's own set. The overall rating is the weighted mean of the
+  // parameters that applied to them, so weights need not sum to anything in particular.
+  weight         Float     @default(1)
+  sequence       Int       @default(0)
+  active         Boolean   @default(true)
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         Team?            @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  scores       AppraisalScore[]
+
+  @@index([organizationId, active])
+  @@index([teamId])
+  @@map("appraisal_parameter")
+}
+
+// One parameter, scored on one appraisal: what the person said, and what their manager said.
+//
+// Both are 1-5 with 5 the highest, enforced in the service and by a database check — a scale that
+// can be violated is not a scale, and a stray 7 would silently skew every average built on it.
+model AppraisalScore {
+  id          String   @id @default(cuid())
+  appraisalId String
+  parameterId String
+  selfScore   Int?
+  managerScore Int?
+  comment     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  appraisal Appraisal          @relation(fields: [appraisalId], references: [id], onDelete: Cascade)
+  parameter AppraisalParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
+
+  // One score per parameter per appraisal. Scoring the same thing twice is a bug, not a second
+  // opinion.
+  @@unique([appraisalId, parameterId])
+  @@index([appraisalId])
+  @@map("appraisal_score")
+}
+
 model Appraisal {
   id             String    @id @default(cuid())
   cycleId        String
@@ -2425,18 +2495,27 @@ model Appraisal {
   reviewerId     String?
   // PENDING_SELF → PENDING_MANAGER → COMPLETED → ACKNOWLEDGED
   status         String    @default("PENDING_SELF")
-  selfRating     Int?
+  // Float, not Int. These are the WEIGHTED MEAN of the parameter scores, so 4.2 is a real and
+  // different answer from 4. Held as integers they silently truncated, and the financial-year
+  // figure — an average of these — lost precision twice over.
+  selfRating     Float?
   selfComments   String?
-  managerRating  Int?
+  managerRating  Float?
   managerComments String?
-  overallRating  Int?
+  overallRating  Float?
   submittedSelfAt    DateTime?
   submittedManagerAt DateTime?
   acknowledgedAt     DateTime?
+  // The review call — step three of the flow (self-assessment, manager remarks, then a call).
+  // Held as a real calendar event so it appears where every other commitment does, rather than
+  // as a date typed into an appraisal that nobody's calendar knows about.
+  reviewCallAt       DateTime?
+  reviewCallEventId  String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   cycle        AppraisalCycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  scores       AppraisalScore[]
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     User            @relation("AppraisalEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
   reviewer     User?           @relation("AppraisalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
