@@ -169,15 +169,82 @@ export class CompanyService {
     return { id: u.id, firstName: u.firstName, lastName: u.lastName, email: u.email, profilePhoto: u.profilePhoto, designation: u.designation };
   }
 
-  // ── company directory (everyone: name, designation, email, contact number) ──────
+  // ── company directory ────────────────────────────────────────────────────────────
+  /**
+   * Everyone active, with the things people actually look a colleague up FOR.
+   *
+   * It used to return name, designation, email and phone only, which answers "how do I contact
+   * this person" but not "who are they" — the two questions that bring somebody to a directory are
+   * usually asked together. Office, department and reporting manager are all already recorded, so
+   * withholding them made the page thinner than the data behind it.
+   *
+   * NOTE ON PRIVACY: everything here is workplace-contact information, visible to every colleague
+   * by design. Personal details — address, date of birth, next of kin — are a different matter and
+   * stay behind the Admin/HR redaction in the profile module. Nothing from there is added here.
+   */
   async directory() {
     const organizationId = await this.actor.requireOrgId();
     const users = await this.prisma.user.findMany({
       where: { organizationId, status: 'ACTIVE', deletedAt: null },
-      select: { ...USER_SELECT, phone: true },
+      select: {
+        ...USER_SELECT,
+        phone: true,
+        office: true,
+        departmentMemberships: { select: { department: { select: { id: true, name: true } } } },
+        // The reporting line, written for the first time in Phase 2. Before that this was empty
+        // for everybody, which is why no screen showed a manager.
+        managedBy: { select: { manager: { select: USER_SELECT } }, take: 1 },
+      },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
     });
-    return users.map(u => ({ ...this.pick(u), phone: u.phone }));
+    return users.map(u => ({
+      ...this.pick(u),
+      phone: u.phone,
+      office: u.office,
+      departments: u.departmentMemberships.map(m => m.department),
+      manager: u.managedBy[0]?.manager ? this.pick(u.managedBy[0].manager) : null,
+    }));
+  }
+
+  /**
+   * The org chart — a flat list of everyone with their manager, for the client to assemble.
+   *
+   * Flat rather than nested on purpose. A nested payload has to pick a single root, and this chart
+   * legitimately has more than one: the VP sits at the top, but anyone whose reporting line is not
+   * yet recorded is also a root until somebody records it. Sending the edges lets the page draw
+   * those people in an "unplaced" group instead of dropping them, which is what a nested tree
+   * silently does.
+   *
+   * The page subtitle has promised an org chart since the Company module was built. There has never
+   * been one, and until Phase 2 wrote the reporting lines there was nothing to draw it from.
+   */
+  async orgChart() {
+    const organizationId = await this.actor.requireOrgId();
+    const users = await this.prisma.user.findMany({
+      where: { organizationId, status: 'ACTIVE', deletedAt: null },
+      select: {
+        ...USER_SELECT,
+        office: true,
+        departmentMemberships: { select: { department: { select: { id: true, name: true } } } },
+        managedBy: { select: { managerId: true }, take: 1 },
+      },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+    });
+    const ids = new Set(users.map(u => u.id));
+    return {
+      people: users.map(u => {
+        const managerId = u.managedBy[0]?.managerId ?? null;
+        return {
+          ...this.pick(u),
+          office: u.office,
+          departments: u.departmentMemberships.map(m => m.department),
+          // A manager who is inactive or deleted is dropped to null rather than left dangling —
+          // otherwise the client looks for a node that is not in the list and loses the subtree
+          // hanging off it.
+          managerId: managerId && ids.has(managerId) ? managerId : null,
+        };
+      }),
+    };
   }
 
   // ── recognition / rewards (everyone views; admins/HR/managers give) ──────────────
@@ -323,6 +390,7 @@ export class CompanyController {
     return this.svc.celebrations(Number.isFinite(n) && n > 0 && n <= 400 ? n : 30);
   }
   @Get('directory') directory() { return this.svc.directory(); }
+  @Get('org-chart') orgChart() { return this.svc.orgChart(); }
   @Get('rewards') listRewards(@Query('period') period?: string) { return this.svc.listRewards(period); }
   @Get('policies') listPolicies() { return this.svc.listPolicies(); }
   @Post('policies/:id/acknowledge') acknowledge(@Param('id') id: string) { return this.svc.acknowledgePolicy(id); }

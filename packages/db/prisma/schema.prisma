@@ -23,40 +23,40 @@ datasource db {
 // ═══════════════════════════════════════════════════════════════
 
 model Organization {
-  id         String   @id @default(cuid())
-  name       String
-  code       String   @unique
-  status     String   @default("ACTIVE")
-  timezone   String   @default("UTC")     // M25: persisted Settings → General
-  brandColor String   @default("#3d8de2")
+  id                   String   @id @default(cuid())
+  name                 String
+  code                 String   @unique
+  status               String   @default("ACTIVE")
+  timezone             String   @default("UTC") // M25: persisted Settings → General
+  brandColor           String   @default("#3d8de2")
   // Hour (IST, 0–23) at which the daily admin digest is sent. Admin-editable. Default 10pm.
-  digestHourIst Int   @default(22)
+  digestHourIst        Int      @default(22)
   // Step-up "big change" passcode — argon2id hash of the org-wide passcode required
   // (on top of RBAC) for sensitive org/people/RBAC mutations. Null = feature not yet
   // configured (guard is a no-op). Updatable via POST /auth/passcode.
   securityPasscodeHash String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  users            User[]
-  departments      Department[]
-  teams            Team[]
-  roles            Role[]
-  permissionGroups PermissionGroup[]
-  dashboards       Dashboard[]
-  integrations     Integration[]
-  calendarEvents   CalendarEvent[]
-  channels         Channel[]
-  holidays         Holiday[]
-  optionalHolidays OptionalHoliday[]
+  users               User[]
+  departments         Department[]
+  teams               Team[]
+  roles               Role[]
+  permissionGroups    PermissionGroup[]
+  dashboards          Dashboard[]
+  integrations        Integration[]
+  calendarEvents      CalendarEvent[]
+  channels            Channel[]
+  holidays            Holiday[]
+  optionalHolidays    OptionalHoliday[]
   appraisalParameters AppraisalParameter[]
-  leaveTypes       LeaveType[]
-  mentionTags      MentionTag[]
-  announcements      Announcement[]
-  policies           Policy[]
-  appraisalCycles    AppraisalCycle[]
-  appraisals         Appraisal[]
-  rewards            Reward[]
+  leaveTypes          LeaveType[]
+  mentionTags         MentionTag[]
+  announcements       Announcement[]
+  policies            Policy[]
+  appraisalCycles     AppraisalCycle[]
+  appraisals          Appraisal[]
+  rewards             Reward[]
 
   @@map("organization")
 }
@@ -66,28 +66,28 @@ model Organization {
 // ═══════════════════════════════════════════════════════════════
 
 model User {
-  id             String    @id @default(cuid())
-  organizationId String
-  employeeCode   String?
-  firstName      String
-  lastName       String
-  email          String
-  phone          String?
-  designation    String?
-  profilePhoto   String?
-  joiningDate    DateTime?
+  id                       String    @id @default(cuid())
+  organizationId           String
+  employeeCode             String?
+  firstName                String
+  lastName                 String
+  email                    String
+  phone                    String?
+  designation              String?
+  profilePhoto             String?
+  joiningDate              DateTime?
   // Physical office / branch the member works from — "GURGAON" or "JAIPUR". Groups the
   // capacity board. Nullable for members not yet assigned to an office.
-  office         String?
-  status         String    @default("ACTIVE")
+  office                   String?
+  status                   String    @default("ACTIVE")
   // ── Auth / credentials ──
-  passwordHash      String?
-  passwordChangedAt DateTime?
-  mustResetPassword Boolean   @default(false)
-  failedLoginCount  Int       @default(0)
-  lockedUntil       DateTime?
-  securityVersion   Int       @default(1) // bump to invalidate all access tokens for this user
-  lastLoginAt       DateTime?
+  passwordHash             String?
+  passwordChangedAt        DateTime?
+  mustResetPassword        Boolean   @default(false)
+  failedLoginCount         Int       @default(0)
+  lockedUntil              DateTime?
+  securityVersion          Int       @default(1) // bump to invalidate all access tokens for this user
+  lastLoginAt              DateTime?
   // Set when the user asks for a password reset from the login page. There is no mail
   // transport, so this — not an email — is how someone locked out reaches an admin.
   // Cleared once an admin actually resets them.
@@ -95,60 +95,61 @@ model User {
   // Null until the user has filled in their joining details. AppShell blocks the app on
   // first sign-in until this is set (after the forced password change).
   profileCompletedAt       DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  deletedAt      DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  deletedAt                DateTime?
 
-  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  profile                UserProfile?
-  refreshTokens          RefreshToken[]
-  authTokens             AuthToken[]
-  managedBy              UserManager[]           @relation("UserManagers")
-  manages                UserManager[]           @relation("ManagerUsers")
-  departmentMemberships  DepartmentMember[]
-  teamMemberships        TeamMember[]
-  projectMemberships     ProjectMember[]
-  taskAssignments        TaskAssignee[]
-  tasksAssignedByMe      Task[]                  @relation("TaskAssignedBy")
-  dealsOwned             Deal[]                  @relation("DealOwner")
-  optionalHolidays       OptionalHolidayElection[]
-  subtaskAssignments     SubtaskAssignee[]
-  userRoles              UserRole[]
-  userPermissions        UserPermission[]
-  permissionGroupMembers PermissionGroupMember[]
-  permissionOverrides    PermissionOverride[]
-  comments               Comment[]
-  activities             Activity[]              @relation("ActivityActor")
-  auditLogs              AuditLog[]
-  notifications          Notification[]
-  timesheets             Timesheet[]
-  attendance             Attendance[]
-  leaveRequests          LeaveRequest[]
-  leaveCoverFor          LeaveRequest[] @relation("LeaveAlternateEmployee")
-  regularizationRequests RegularizationRequest[]
-  compOffRequests        CompOffRequest[]
-  wfhRequests            WfhRequest[]
+  organization              Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  profile                   UserProfile?
+  refreshTokens             RefreshToken[]
+  authTokens                AuthToken[]
+  managedBy                 UserManager[]              @relation("UserManagers")
+  manages                   UserManager[]              @relation("ManagerUsers")
+  departmentMemberships     DepartmentMember[]
+  departmentsHeaded         Department[]               @relation("DepartmentHead")
+  teamMemberships           TeamMember[]
+  projectMemberships        ProjectMember[]
+  taskAssignments           TaskAssignee[]
+  tasksAssignedByMe         Task[]                     @relation("TaskAssignedBy")
+  dealsOwned                Deal[]                     @relation("DealOwner")
+  optionalHolidays          OptionalHolidayElection[]
+  subtaskAssignments        SubtaskAssignee[]
+  userRoles                 UserRole[]
+  userPermissions           UserPermission[]
+  permissionGroupMembers    PermissionGroupMember[]
+  permissionOverrides       PermissionOverride[]
+  comments                  Comment[]
+  activities                Activity[]                 @relation("ActivityActor")
+  auditLogs                 AuditLog[]
+  notifications             Notification[]
+  timesheets                Timesheet[]
+  attendance                Attendance[]
+  leaveRequests             LeaveRequest[]
+  leaveCoverFor             LeaveRequest[]             @relation("LeaveAlternateEmployee")
+  regularizationRequests    RegularizationRequest[]
+  compOffRequests           CompOffRequest[]
+  wfhRequests               WfhRequest[]
   timesheetBackdateRequests TimesheetBackdateRequest[]
-  expenses               Expense[]
-  calendarEventAttendees CalendarEventAttendee[]
-  channelMemberships     ChannelMember[]
-  messages               Message[]
-  messageReactions       MessageReaction[]
-  messageMentions        MessageMention[]
-  pollsCreated           Poll[]                  @relation("PollCreator")
-  pollVotes              PollVote[]
-  savedMessages          SavedMessage[]
-  mentionTagMemberships  MentionTagMember[]
-  channelReads           ChannelRead[]
-  appraisalsAsEmployee   Appraisal[]             @relation("AppraisalEmployee")
-  appraisalsAsReviewer   Appraisal[]             @relation("AppraisalReviewer")
-  rewardsReceived        Reward[]                @relation("RewardRecipient")
-  rewardsGiven           Reward[]                @relation("RewardGiver")
-  reportedIssues         Issue[]                 @relation("IssueReporter")
-  assignedIssues         Issue[]                 @relation("IssueAssignee")
-  metricsDaily           UserMetricDaily[]
-  presence               Presence?
-  notificationPreference NotificationPreference?
+  expenses                  Expense[]
+  calendarEventAttendees    CalendarEventAttendee[]
+  channelMemberships        ChannelMember[]
+  messages                  Message[]
+  messageReactions          MessageReaction[]
+  messageMentions           MessageMention[]
+  pollsCreated              Poll[]                     @relation("PollCreator")
+  pollVotes                 PollVote[]
+  savedMessages             SavedMessage[]
+  mentionTagMemberships     MentionTagMember[]
+  channelReads              ChannelRead[]
+  appraisalsAsEmployee      Appraisal[]                @relation("AppraisalEmployee")
+  appraisalsAsReviewer      Appraisal[]                @relation("AppraisalReviewer")
+  rewardsReceived           Reward[]                   @relation("RewardRecipient")
+  rewardsGiven              Reward[]                   @relation("RewardGiver")
+  reportedIssues            Issue[]                    @relation("IssueReporter")
+  assignedIssues            Issue[]                    @relation("IssueAssignee")
+  metricsDaily              UserMetricDaily[]
+  presence                  Presence?
+  notificationPreference    NotificationPreference?
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -210,16 +211,27 @@ model UserManager {
 // ═══════════════════════════════════════════════════════════════
 
 model Department {
-  id             String @id @default(cuid())
+  id             String  @id @default(cuid())
   organizationId String
   name           String
   description    String?
-  status         String @default("ACTIVE")
+  status         String  @default("ACTIVE")
+  // The department head, held EXPLICITLY. It used to be inferred by running
+  // /head|lead|manager/i over each member's free-text roleInDepartment, which meant "Team Leader"
+  // matched on "lead", a coordinator called "Manager, Operations" matched on "manager", and with
+  // two matches the winner was whoever joined first. Who runs a department is a fact somebody
+  // decides, not a string somebody happened to type.
+  //
+  // Always a member of this department — enforced on write, and cleared when that member leaves.
+  headUserId     String?
 
   organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  head               User?               @relation("DepartmentHead", fields: [headUserId], references: [id], onDelete: SetNull)
   members            DepartmentMember[]
   projectDepartments ProjectDepartment[]
 
+  // Two departments called "Engineering" are always a mistake, never a plan.
+  @@unique([organizationId, name])
   @@index([organizationId])
   @@map("department")
 }
@@ -250,7 +262,7 @@ model DepartmentMember {
 // different kind of work. What it DOES share is the Task itself, so assignees, subtasks, comments,
 // statuses and logged time all behave exactly as people already expect.
 model Team {
-  id             String  @id @default(cuid())
+  id             String    @id @default(cuid())
   organizationId String
   name           String
   description    String?
@@ -263,13 +275,13 @@ model Team {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  members      TeamMember[]
-  projectTeams ProjectTeam[]
-  taskLists    TaskList[]
-  teamTasks    TeamTask[]
-  deals        Deal[]
-  timesheets   Timesheet[]
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members             TeamMember[]
+  projectTeams        ProjectTeam[]
+  taskLists           TaskList[]
+  teamTasks           TeamTask[]
+  deals               Deal[]
+  timesheets          Timesheet[]
   appraisalParameters AppraisalParameter[]
 
   @@index([organizationId, deletedAt])
@@ -288,34 +300,34 @@ model Team {
 // the Client it became, at which point its work starts flowing through projects and the client
 // ledger like any other. Before that point a prospect is just a name.
 model Deal {
-  id             String    @id @default(cuid())
-  organizationId String
+  id                String    @id @default(cuid())
+  organizationId    String
   // The BD team space that runs this pipeline. Optional — a deal can exist before a space does.
-  teamId         String?
+  teamId            String?
   // The prospect. Free text, because most prospects never become a Client record.
-  company        String
+  company           String
   // What the work would be — "Portfolio landscape, 40 patents".
-  title          String?
+  title             String?
   // NEW | CONTACTED | PROPOSAL | NEGOTIATION | WON | LOST
-  stage          String    @default("NEW")
-  value          Float?
-  currency       String    @default("INR")
+  stage             String    @default("NEW")
+  value             Float?
+  currency          String    @default("INR")
   // Whose deal it is. Distinct from createdBy: pipelines get handed over.
-  ownerId        String
+  ownerId           String
   // Where it came from — referral, conference, inbound. Free text; the taxonomy is not ours to fix.
-  source         String?
+  source            String?
   expectedCloseDate DateTime?
-  wonAt          DateTime?
-  lostAt         DateTime?
+  wonAt             DateTime?
+  lostAt            DateTime?
   // Why it was lost. The single most useful field in any pipeline, and the most often skipped.
-  lostReason     String?
+  lostReason        String?
   // Set when a won deal is tied to a client — the join into the Phase 2 ledger.
-  clientId       String?
-  notes          String?
-  createdBy      String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  deletedAt      DateTime?
+  clientId          String?
+  notes             String?
+  createdBy         String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
 
   team       Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   client     Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
@@ -356,11 +368,11 @@ model DealActivity {
 // generic and knows about neither, so a task reached this way carries every capability a project
 // task has, and nothing that reads tasks needs to learn a second shape.
 model TeamTask {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   teamId     String
   taskId     String
   taskListId String?
-  sequence   Int    @default(0)
+  sequence   Int     @default(0)
 
   team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
   task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -404,10 +416,10 @@ model Role {
   userRoles       UserRole[]
   rolePermissions RolePermission[]
 
-  @@index([organizationId])
   // #3: role names must be unique per org (the resolver + UI key on name; duplicates
   // silently collapse and mis-assign). Also underpins detecting Super Admin by name.
   @@unique([organizationId, name])
+  @@index([organizationId])
   @@map("role")
 }
 
@@ -547,11 +559,11 @@ model WorkflowStatus {
   sequence   Int    @default(0)
   type       String @default("OPEN")
 
-  workflow               Workflow             @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  transitionsFrom        WorkflowTransition[] @relation("TransitionFrom")
-  transitionsTo          WorkflowTransition[] @relation("TransitionTo")
-  projectsAtStatus       Project[]            @relation("ProjectCurrentStatus")
-  tasksAtStatus          Task[]               @relation("TaskCurrentStatus")
+  workflow         Workflow             @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  transitionsFrom  WorkflowTransition[] @relation("TransitionFrom")
+  transitionsTo    WorkflowTransition[] @relation("TransitionTo")
+  projectsAtStatus Project[]            @relation("ProjectCurrentStatus")
+  tasksAtStatus    Task[]               @relation("TaskCurrentStatus")
 
   @@index([workflowId])
   @@map("workflow_status")
@@ -669,13 +681,13 @@ model Project {
 // A Client is the "Malikie / MLK" grouping. Its patents get a public HANDLE (Pat_MLK_1, …)
 // shown in the project picker, while the real patent number stays Admin/Super-Admin only.
 model Client {
-  id             String    @id @default(cuid())
+  id             String                @id @default(cuid())
   organizationId String
-  name           String?   // OPTIONAL — the portal shows the code alone when there's no name
-  code           String    // "MLK" — used in patent handles Pat_<code>_<serial>
+  name           String? // OPTIONAL — the portal shows the code alone when there's no name
+  code           String // "MLK" — used in patent handles Pat_<code>_<serial>
   createdBy      String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
   // ARCHIVED ≠ DELETED. Archiving retires a client from day-to-day work — no new patents, gone
   // from the project picker — while every existing patent, handle and project link stays exactly
   // as it was. It is reversible and needs no passcode, which is what makes it the safe answer to
@@ -705,11 +717,11 @@ model Client {
 // One row per client (hence @unique), because this is a statement about the client relationship,
 // not about any one project.
 model ClientLedgerOverride {
-  id             String   @id @default(cuid())
-  organizationId String
-  clientId       String   @unique
+  id                  String   @id @default(cuid())
+  organizationId      String
+  clientId            String   @unique
   // Supersedes the derived billable-hours total. Null = use the derived figure.
-  billableHours  Float?
+  billableHours       Float?
   // What the DERIVED billable-hours figure was at the moment this statement was made.
   //
   // Without it there is no way to tell a deliberate write-down from a figure the world has moved
@@ -718,16 +730,16 @@ model ClientLedgerOverride {
   // difference between a number someone chose and a number quietly going wrong.
   derivedHoursWhenSet Float?
   // The commercial value of the relationship. Nothing derives this; it is stated or it is absent.
-  amount         Float?
-  currency       String   @default("INR")
+  amount              Float?
+  currency            String   @default("INR")
   // Why the stated figures differ from the derived ones. The point of the whole row: an override
   // with no explanation is indistinguishable from a typo six months later.
-  note           String?
+  note                String?
   // WHO stated it and WHEN — the audit trail lives on the record itself, not only in the log,
   // so the ledger can show it beside the figure without a second lookup.
-  updatedBy      String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  updatedBy           String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
@@ -736,24 +748,24 @@ model ClientLedgerOverride {
 }
 
 model Patent {
-  id             String    @id @default(cuid())
+  id             String          @id @default(cuid())
   organizationId String
   clientId       String
-  serial         Int       // 1..N within the client
-  handle         String    // "Pat_MLK_1" — the non-secret, shareable identifier
+  serial         Int // 1..N within the client
+  handle         String // "Pat_MLK_1" — the non-secret, shareable identifier
   // Handles this patent used to have. A client-code rename re-mints every handle under it, and
   // the old ones are already out in the world — quoted in emails, written on reports we sent.
   // Keeping them means an ID a client quotes back still resolves instead of returning nothing.
   // Append-only, oldest first; the live handle is never in here.
-  formerHandles  String[]  @default([])
+  formerHandles  String[]        @default([])
   // CONFIDENTIAL real patent number — never selected for a non-`patent.manage` actor.
   realNumber     String
   // Optional attached patent document (PDF/media), stored via the shared Document + blob table.
   documentId     String?
   documentName   String?
   createdBy      String
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
   deletedAt      DateTime?
   client         Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
   projectLinks   ProjectPatent[]
@@ -850,7 +862,7 @@ model PidReservation {
 model TechnologyDomain {
   id             String   @id @default(cuid())
   organizationId String
-  value          String   // stable slug used as Project.technologyDomain (unique per org)
+  value          String // stable slug used as Project.technologyDomain (unique per org)
   label          String
   isActive       Boolean  @default(true)
   createdBy      String
@@ -865,7 +877,7 @@ model TechnologyDomain {
 model ProjectTemplate {
   id             String   @id @default(cuid())
   organizationId String
-  value          String   // stable slug used as Project.projectType (unique per org)
+  value          String // stable slug used as Project.projectType (unique per org)
   label          String
   description    String?
   taskListName   String?
@@ -978,15 +990,15 @@ model Task {
 // Join table: task ↔ project (M2M).
 // Also captures the task's position within this specific project.
 model ProjectTask {
-  id          String @id @default(cuid())
-  projectId   String
-  taskId      String
-  taskListId  String?
-  sequence    Int    @default(0)
+  id         String  @id @default(cuid())
+  projectId  String
+  taskId     String
+  taskListId String?
+  sequence   Int     @default(0)
 
-  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  task      Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  taskList  TaskList?  @relation(fields: [taskListId], references: [id], onDelete: SetNull)
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskList TaskList? @relation(fields: [taskListId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, taskId])
   @@index([projectId])
@@ -994,16 +1006,16 @@ model ProjectTask {
 }
 
 model TaskAssignee {
-  id     String @id @default(cuid())
-  taskId String
-  userId String
+  id             String    @id @default(cuid())
+  taskId         String
+  userId         String
   // Role on this task: PM (one) | REVIEWER (many) | ANALYST (many). Null = a legacy plain assignee.
-  role   String?
+  role           String?
   // Per-person estimated hours (OPTIONAL — a reviewer may carry 0). The task's total estimated
   // hours is the SUM of these across everyone assigned.
   estimatedHours Float?
   // Per-assignment deadline for THIS person in THIS role on the task (optional).
-  dueDate DateTime?
+  dueDate        DateTime?
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1081,17 +1093,17 @@ model Checklist {
 // a database check. Two columns rather than one polymorphic pair because each keeps a real
 // foreign key, so a deleted project or team takes its lists with it instead of orphaning them.
 model TaskList {
-  id          String    @id @default(cuid())
+  id        String    @id @default(cuid())
   // Nullable since Phase 3: a list on a team space has no project. Every pre-existing row has a
   // project, and every query that filters on projectId keeps working untouched.
-  projectId   String?
-  teamId      String?
-  name        String
-  isDefault   Boolean   @default(false)
-  sequence    Int       @default(0)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  deletedAt   DateTime?
+  projectId String?
+  teamId    String?
+  name      String
+  isDefault Boolean   @default(false)
+  sequence  Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
 
   project      Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   team         Team?         @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -1177,12 +1189,12 @@ model UserProfile {
   userId String @unique
 
   // ── Personal ──
-  dateOfBirth   DateTime?
-  gender        String?
-  bloodGroup    String?
-  maritalStatus String?   // SINGLE | MARRIED
+  dateOfBirth        DateTime?
+  gender             String?
+  bloodGroup         String?
+  maritalStatus      String? // SINGLE | MARRIED
   weddingAnniversary DateTime? // set when MARRIED — powers the celebrations feed (month/day only)
-  nationality   String?
+  nationality        String?
 
   // ── Private contact (the work email/phone stay on User — those are directory data) ──
   personalEmail  String?
@@ -1198,12 +1210,12 @@ model UserProfile {
 
   // ── Permanent address ──
   permanentSameAsCurrent Boolean @default(false)
-  permanentLine1      String?
-  permanentLine2      String?
-  permanentCity       String?
-  permanentState      String?
-  permanentPostalCode String?
-  permanentCountry    String?
+  permanentLine1         String?
+  permanentLine2         String?
+  permanentCity          String?
+  permanentState         String?
+  permanentPostalCode    String?
+  permanentCountry       String?
 
   // ── Emergency contact ──
   emergencyName         String?
@@ -1267,24 +1279,24 @@ model Attendance {
 // The employee raises it; HR (attendance.regularize) approves or rejects. Only on APPROVAL is
 // the change written to the Attendance row — regularisation is no longer a silent self-edit.
 model RegularizationRequest {
-  id             String   @id @default(cuid())
-  userId         String
-  organizationId String?
-  date           DateTime
+  id                String    @id @default(cuid())
+  userId            String
+  organizationId    String?
+  date              DateTime
   // What the employee is asking for.
-  reason         String
+  reason            String
   // FORGOT_IN | LATE_IN | FORGOT_OUT | WRONG_TIME | WFH | OTHER
-  requestType    String   @default("OTHER")
-  requestedStatus   String   @default("PRESENT") // PRESENT | HALF_DAY
+  requestType       String    @default("OTHER")
+  requestedStatus   String    @default("PRESENT") // PRESENT | HALF_DAY
   requestedCheckIn  DateTime?
   requestedCheckOut DateTime?
   // PENDING | APPROVED | REJECTED | CANCELLED
-  status         String   @default("PENDING")
-  reviewedBy     String?
-  reviewedAt     DateTime?
-  reviewNote     String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  status            String    @default("PENDING")
+  reviewedBy        String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1331,25 +1343,25 @@ model Expense {
 // normal leave of type CO. Kept separate from LeaveRequest: this is the EARN side; the
 // USE side is an ordinary CO LeaveRequest.
 model CompOffRequest {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   userId         String
   organizationId String?
   workDate       DateTime // the non-working day they worked
-  reason         String   // what they worked on
+  reason         String // what they worked on
   // Free-text Project ID / PID the comp-off was worked against (mandatory on new claims;
   // nullable so any pre-existing rows stay valid).
   projectRef     String?
   hoursWorked    Float?
   // FULL (worked a whole day → target 8h) | HALF (half day → 4h). Drives the timesheet/attendance
   // reflection when approved. Defaults to FULL for pre-existing rows.
-  dayType        String   @default("FULL")
+  dayType        String    @default("FULL")
   // PENDING | APPROVED | REJECTED | CANCELLED
-  status         String   @default("PENDING")
+  status         String    @default("PENDING")
   reviewedBy     String?
   reviewedAt     DateTime?
   reviewNote     String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1365,10 +1377,10 @@ model CompOffRequest {
 // (or edit) time for any day in [fromDate, toDate].
 model TimesheetBackdateRequest {
   id             String    @id @default(cuid())
-  userId         String    // the requester
+  userId         String // the requester
   organizationId String?
-  fromDate       DateTime  // inclusive day
-  toDate         DateTime  // inclusive day
+  fromDate       DateTime // inclusive day
+  toDate         DateTime // inclusive day
   reason         String
   // PENDING | APPROVED | REJECTED | CANCELLED
   status         String    @default("PENDING")
@@ -1413,18 +1425,18 @@ model WfhRequest {
 }
 
 model LeaveRequest {
-  id             String    @id @default(cuid())
-  userId         String
-  organizationId String?
-  leaveType      String // LeaveType.code
-  startDate      DateTime
-  endDate        DateTime
+  id                  String    @id @default(cuid())
+  userId              String
+  organizationId      String?
+  leaveType           String // LeaveType.code
+  startDate           DateTime
+  endDate             DateTime
   // FULL or HALF. A HALF-day leave covers a single date and consumes 0.5 of the balance.
   // There is no smaller unit: leave is counted in whole and half days only, so numDays is
   // always a multiple of 0.5 (enforced by a CHECK constraint, not just by the service).
-  dayType        String    @default("FULL")
+  dayType             String    @default("FULL")
   // Which half of the day a HALF leave covers — FIRST (morning) or SECOND (afternoon).
-  halfPeriod     String?
+  halfPeriod          String?
   // Who to reach while this person is away, so the team is not left guessing.
   alternateEmployeeId String?
   alternateNumber     String?
@@ -1432,15 +1444,15 @@ model LeaveRequest {
   // Proof attached to the request (medical certificate, travel document …). Uses the shared
   // Document store, so it inherits its size limits, storage driver and access rules.
   supportingDocId     String?
-  numDays        Float     @default(1)
-  reason         String?
+  numDays             Float     @default(1)
+  reason              String?
   // DRAFT | PENDING | APPROVED | REJECTED | CANCELLED
-  status         String    @default("PENDING")
-  reviewedBy     String?
-  reviewedAt     DateTime?
-  reviewNote     String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  status              String    @default("PENDING")
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  reviewNote          String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   alternateEmployee User?     @relation("LeaveAlternateEmployee", fields: [alternateEmployeeId], references: [id], onDelete: SetNull)
@@ -1780,22 +1792,22 @@ model AnalyticsSnapshot {
 
 // Per-user daily performance snapshot (powers heatmap, trends, leaderboards).
 model UserMetricDaily {
-  id                  String   @id @default(cuid())
-  userId              String
-  organizationId      String?
-  date                DateTime // UTC day boundary (00:00:00Z)
-  tasksCompleted      Int      @default(0)
-  tasksCompletedOnTime Int     @default(0)
-  tasksOverdue        Int      @default(0)
-  hoursLogged         Float    @default(0)
-  billableHours       Float    @default(0)
-  issuesResolved      Int      @default(0)
-  commentsPosted      Int      @default(0)
-  approvalActions     Int      @default(0)
-  activityVolume      Int      @default(0)
-  present             Boolean  @default(false)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  userId               String
+  organizationId       String?
+  date                 DateTime // UTC day boundary (00:00:00Z)
+  tasksCompleted       Int      @default(0)
+  tasksCompletedOnTime Int      @default(0)
+  tasksOverdue         Int      @default(0)
+  hoursLogged          Float    @default(0)
+  billableHours        Float    @default(0)
+  issuesResolved       Int      @default(0)
+  commentsPosted       Int      @default(0)
+  approvalActions      Int      @default(0)
+  activityVolume       Int      @default(0)
+  present              Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1851,7 +1863,7 @@ model Tag {
 }
 
 model CustomField {
-  id              String @id @default(cuid())
+  id              String  @id @default(cuid())
   name            String
   fieldType       String
   entityType      String
@@ -2011,23 +2023,23 @@ model Integration {
 // ═══════════════════════════════════════════════════════════════
 
 model CalendarEvent {
-  id             String    @id @default(cuid())
-  organizationId String
-  title          String
-  description    String?
-  type           String    @default("EVENT")
-  startDate      DateTime
-  endDate        DateTime?
-  allDay         Boolean   @default(false)
-  color          String    @default("#3d8de2")
+  id                 String    @id @default(cuid())
+  organizationId     String
+  title              String
+  description        String?
+  type               String    @default("EVENT")
+  startDate          DateTime
+  endDate            DateTime?
+  allDay             Boolean   @default(false)
+  color              String    @default("#3d8de2")
   // Where a meeting happens: a room/place and/or an external video link (Meet/Zoom/Teams).
   // pdash schedules and reminds; the call itself runs on whatever tool the link points to.
-  location       String?
-  joinUrl        String?
+  location           String?
+  joinUrl            String?
   // Optional reminder: notify attendees this many minutes before start. reminderSentAt
   // stops the reminder sweep from firing twice for the same meeting.
-  reminderMinutes Int?
-  reminderSentAt  DateTime?
+  reminderMinutes    Int?
+  reminderSentAt     DateTime?
   // Recurrence: NONE | DAILY | WEEKLY | BIWEEKLY | MONTHLY. Occurrences are materialized as
   // separate events up to recurrenceUntil, each linked back to the series master via
   // recurrenceParentId (null on the master itself).
@@ -2035,12 +2047,12 @@ model CalendarEvent {
   recurrenceUntil    DateTime?
   recurrenceParentId String?
   // Shared, collaboratively-editable meeting notes (agenda / minutes).
-  notes          String?
-  createdBy      String
-  projectId      String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  deletedAt      DateTime?
+  notes              String?
+  createdBy          String
+  projectId          String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
   organization Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   attendees    CalendarEventAttendee[]
@@ -2051,9 +2063,9 @@ model CalendarEvent {
 }
 
 model CalendarEventAttendee {
-  id      String @id @default(cuid())
-  eventId String
-  userId  String
+  id       String @id @default(cuid())
+  eventId  String
+  userId   String
   // The attendee's RSVP: PENDING | ACCEPTED | DECLINED | TENTATIVE.
   response String @default("PENDING")
 
@@ -2373,8 +2385,8 @@ model Policy {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  document        Document?              @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  document         Document?               @relation(fields: [documentId], references: [id], onDelete: SetNull)
   acknowledgements PolicyAcknowledgement[]
 
   @@index([organizationId])
@@ -2468,14 +2480,14 @@ model AppraisalParameter {
 // Both are 1-5 with 5 the highest, enforced in the service and by a database check — a scale that
 // can be violated is not a scale, and a stray 7 would silently skew every average built on it.
 model AppraisalScore {
-  id          String   @id @default(cuid())
-  appraisalId String
-  parameterId String
-  selfScore   Int?
+  id           String   @id @default(cuid())
+  appraisalId  String
+  parameterId  String
+  selfScore    Int?
   managerScore Int?
-  comment     String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  comment      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   appraisal Appraisal          @relation(fields: [appraisalId], references: [id], onDelete: Cascade)
   parameter AppraisalParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
@@ -2488,21 +2500,21 @@ model AppraisalScore {
 }
 
 model Appraisal {
-  id             String    @id @default(cuid())
-  cycleId        String
-  organizationId String
-  employeeId     String
-  reviewerId     String?
+  id                 String    @id @default(cuid())
+  cycleId            String
+  organizationId     String
+  employeeId         String
+  reviewerId         String?
   // PENDING_SELF → PENDING_MANAGER → COMPLETED → ACKNOWLEDGED
-  status         String    @default("PENDING_SELF")
+  status             String    @default("PENDING_SELF")
   // Float, not Int. These are the WEIGHTED MEAN of the parameter scores, so 4.2 is a real and
   // different answer from 4. Held as integers they silently truncated, and the financial-year
   // figure — an average of these — lost precision twice over.
-  selfRating     Float?
-  selfComments   String?
-  managerRating  Float?
-  managerComments String?
-  overallRating  Float?
+  selfRating         Float?
+  selfComments       String?
+  managerRating      Float?
+  managerComments    String?
+  overallRating      Float?
   submittedSelfAt    DateTime?
   submittedManagerAt DateTime?
   acknowledgedAt     DateTime?
@@ -2516,14 +2528,14 @@ model Appraisal {
   // Document table so it lands in the same on-disk blob storage as every other attachment.
   sheetDocumentId    String?
   sheetDocumentName  String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  cycle        AppraisalCycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  cycle        AppraisalCycle   @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   scores       AppraisalScore[]
-  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  employee     User            @relation("AppraisalEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
-  reviewer     User?           @relation("AppraisalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     User             @relation("AppraisalEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewer     User?            @relation("AppraisalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   goals        AppraisalGoal[]
 
   @@unique([cycleId, employeeId])
@@ -2562,7 +2574,7 @@ model Reward {
   organizationId String
   recipientId    String
   givenById      String
-  category       String   // STAR_PERFORMER | TEAM_PLAYER | ABOVE_AND_BEYOND | INNOVATION | LEADERSHIP | APPRECIATION
+  category       String // STAR_PERFORMER | TEAM_PLAYER | ABOVE_AND_BEYOND | INNOVATION | LEADERSHIP | APPRECIATION
   message        String?
   awardedAt      DateTime @default(now()) // drives the financial-year bucket
   createdAt      DateTime @default(now())

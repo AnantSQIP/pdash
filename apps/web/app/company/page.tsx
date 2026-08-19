@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Megaphone, FileText, Contact, Search, Plus, X, Loader, Pin, PinOff, Pencil, Trash2, Check,
   Cake, PartyPopper, Download, CheckCircle2, Users as UsersIcon,
-  Award, Star, Rocket, Lightbulb, Crown, Heart, Medal, type LucideIcon,
+  Award, Star, Rocket, Lightbulb, Crown, Heart, Medal, Network, Building2, type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -16,6 +16,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { OrgChartTab } from '@/components/company/OrgChartTab';
 import { AttachButton, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 
 function fmtDate(iso?: string | null) {
@@ -347,31 +348,34 @@ function DirectoryTab() {
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return people;
-    return people.filter(p => `${fullName(p)} ${p.designation ?? ''} ${p.email} ${p.phone ?? ''}`.toLowerCase().includes(s));
+    return people.filter(p => `${fullName(p)} ${p.designation ?? ''} ${p.email} ${p.phone ?? ''} ${p.office ?? ''} ${(p.departments ?? []).map(d => d.name).join(' ')} ${p.manager ? fullName(p.manager) : ''}`.toLowerCase().includes(s));
   }, [people, q]);
 
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader size={18} className="animate-spin text-gray-400" /></div>;
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-6xl">
       <div className="flex items-center gap-2 mb-4">
         <div className="flex items-center gap-1.5 flex-1 max-w-sm border border-gray-200 rounded-lg px-3 py-2 focus-within:border-brand-400">
           <Search size={15} className="text-gray-400 shrink-0" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, designation, email or number…" className="flex-1 text-sm focus:outline-none bg-transparent" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, designation, department, manager, office, email or number…" className="flex-1 text-sm focus:outline-none bg-transparent" />
         </div>
         <span className="text-xs text-gray-400">{filtered.length} {filtered.length === 1 ? 'person' : 'people'}</span>
       </div>
       <div className="border border-gray-200 rounded-xl overflow-hidden overflow-x-auto">
-        <table className="w-full text-left min-w-[560px]">
+        <table className="w-full text-left min-w-[900px]">
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-2.5">Name</th>
               <th className="px-4 py-2.5">Designation</th>
+              <th className="px-4 py-2.5">Department</th>
+              <th className="px-4 py-2.5">Reports to</th>
+              <th className="px-4 py-2.5">Office</th>
               <th className="px-4 py-2.5">Email</th>
               <th className="px-4 py-2.5">Contact</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
-            {filtered.length === 0 && <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-gray-400">No one matches “{q}”.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">No one matches “{q}”.</td></tr>}
             {filtered.map(p => (
               <tr key={p.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3">
@@ -381,6 +385,17 @@ function DirectoryTab() {
                   </div>
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-600">{p.designation ?? '—'}</td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {p.departments?.length ? p.departments.map(d => d.name).join(', ') : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {p.manager ? (
+                    <span className="inline-flex items-center gap-1.5"><Avatar user={p.manager} size={20} />{fullName(p.manager)}</span>
+                  ) : <span className="text-gray-300">—</span>}
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-500">
+                  {p.office ? p.office.charAt(0) + p.office.slice(1).toLowerCase() : <span className="text-gray-300">—</span>}
+                </td>
                 <td className="px-4 py-3 text-sm"><a href={`mailto:${p.email}`} className="text-brand-600 hover:underline">{p.email}</a></td>
                 <td className="px-4 py-3 text-sm">{p.phone ? <a href={`tel:${p.phone}`} className="text-gray-700 hover:text-brand-600">{p.phone}</a> : <span className="text-gray-400">—</span>}</td>
               </tr>
@@ -563,6 +578,9 @@ const TABS = [
   { id: 'rewards', label: 'Recognition', icon: Award },
   { id: 'policies', label: 'Policies', icon: FileText },
   { id: 'directory', label: 'Directory', icon: Contact },
+  // The subtitle has promised an org chart since this module was built. Until Phase 2 wrote the
+  // reporting lines there was nothing to draw it from.
+  { id: 'orgchart', label: 'Org Chart', icon: Network },
 ];
 
 export default function CompanyPage() {
@@ -596,6 +614,7 @@ export default function CompanyPage() {
         {tab === 'rewards' && <RewardsTab canGive={can('reward.give')} />}
         {tab === 'policies' && <PoliciesTab canManage={canPolicy} />}
         {tab === 'directory' && <DirectoryTab />}
+        {tab === 'orgchart' && <OrgChartTab />}
       </div>
     </div>
   );

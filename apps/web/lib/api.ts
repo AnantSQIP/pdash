@@ -637,7 +637,18 @@ export type Announcement = {
 };
 export type Celebration = { user: PersonLite; inDays: number; month: number; day: number; years?: number };
 export type Celebrations = { anniversaries: (Celebration & { years: number })[]; birthdays: Celebration[]; weddingAnniversaries?: Celebration[] };
-export type DirectoryEntry = PersonLite & { phone?: string | null };
+export type DirectoryEntry = PersonLite & {
+  phone?: string | null;
+  office?: string | null;
+  departments?: { id: string; name: string }[];
+  manager?: PersonLite | null;
+};
+/** Flat edges, not a nested tree — the chart has more than one root while lines are still missing. */
+export type OrgChartPerson = PersonLite & {
+  office?: string | null;
+  departments?: { id: string; name: string }[];
+  managerId: string | null;
+};
 // Recognition / rewards given to employees.
 export type Reward = {
   id: string; recipientId: string; givenById: string; category: string;
@@ -861,9 +872,12 @@ export type OrgTrend = {
   byDepartment: Record<string, number | string>[];
   departments: string[];
 };
+export type DepartmentMemberEntry = UserSummary & { roleInDepartment?: string | null; joinedAt?: string };
 export type DepartmentSummary = {
-  id: string; name: string; description?: string; status?: string; memberCount?: number;
-  members?: (UserSummary & { roleInDepartment?: string })[];
+  id: string; name: string; description?: string | null; status?: string; memberCount?: number;
+  members?: DepartmentMemberEntry[];
+  /** From Department.headUserId — an explicit choice, not a guess at a job title. */
+  headUserId?: string | null;
   head?: UserSummary | null;
 };
 
@@ -1630,6 +1644,7 @@ export const api = {
     deleteAnnouncement: (id: string) => req<void>(`/company/announcements/${id}`, { method: 'DELETE' }),
     celebrations: (days?: number) => req<Celebrations>(`/company/celebrations${days ? `?days=${days}` : ''}`),
     directory: () => req<DirectoryEntry[]>('/company/directory'),
+    orgChart: () => req<{ people: OrgChartPerson[] }>('/company/org-chart'),
     rewards: (period?: 'current' | 'last') => req<RewardsView>(`/company/rewards${period === 'last' ? '?period=last' : ''}`),
     giveReward: (data: { recipientId: string; category: string; message?: string }) =>
       req<Reward>('/company/rewards', { method: 'POST', body: JSON.stringify(data) }),
@@ -1809,6 +1824,21 @@ export const api = {
 
   departments: {
     list: (orgId: string) => req<DepartmentSummary[]>(`/departments?organizationId=${encodeURIComponent(orgId)}`),
+    create: (data: { name: string; description?: string }) =>
+      req<DepartmentSummary>('/departments', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      req<DepartmentSummary>(`/departments/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: string) => req<{ ok: boolean }>(`/departments/${id}`, { method: 'DELETE' }),
+    members: (id: string) => req<{ userId: string; roleInDepartment?: string | null; user: UserSummary }[]>(`/departments/${id}/members`),
+    addMember: (id: string, userId: string, roleInDepartment?: string) =>
+      req<DepartmentMemberEntry>(`/departments/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, roleInDepartment }) }),
+    updateMember: (id: string, userId: string, roleInDepartment?: string) =>
+      req<DepartmentMemberEntry>(`/departments/${id}/members/${userId}`, { method: 'PATCH', body: JSON.stringify({ userId, roleInDepartment }) }),
+    removeMember: (id: string, userId: string) =>
+      req<{ ok: boolean; headCleared: boolean }>(`/departments/${id}/members/${userId}`, { method: 'DELETE' }),
+    /** Pass null to clear. The head must already be a member — the server refuses otherwise. */
+    setHead: (id: string, userId: string | null) =>
+      req<DepartmentSummary>(`/departments/${id}/head`, { method: 'PATCH', body: JSON.stringify({ userId }) }),
   },
 
   profile: {
