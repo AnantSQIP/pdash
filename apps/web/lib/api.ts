@@ -546,6 +546,23 @@ export type LedgerEffective = {
   stale?: boolean;
 };
 /** Hours the ledger cannot attribute to any client, split by the reason. */
+/** Where the client → patent → PID → hours chain was never joined up. */
+export type ChainGaps = {
+  unusedPatents: {
+    count: number; total: number;
+    items: { id: string; handle: string; createdAt: string; client?: { id: string; code: string; name?: string | null } | null }[];
+  };
+  clientsWithoutWork: {
+    count: number; total: number;
+    items: { id: string; code: string; name?: string | null; patentCount: number }[];
+  };
+  projectsWithoutClient: {
+    count: number;
+    /** Hours that will never reach a client ledger while the project has no client. */
+    strandedHours: number;
+    items: { id: string; code: string | null; roundSeq: number; title: string; projectPhase: string }[];
+  };
+};
 export type LedgerUnattributed = {
   totalHours: number; billableHours: number;
   awaitingPid: number; onClientlessProjects: number; projectCount: number;
@@ -567,7 +584,15 @@ export type LedgerDetail = LedgerRow & { patentCount: number; projects: LedgerPr
  *  still finds it after a client-code rename. */
 export type PatentOption = { id: string; handle: string; serial: number; clientId?: string; formerHandles?: string[] };
 /** Portal OVERVIEW — patent IDs + serials, NO real number. */
-export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; documentId?: string | null; documentName?: string | null; formerHandles?: string[]; client?: { id: string; name?: string | null; code: string } };
+export type PatentOverview = {
+  id: string; handle: string; serial: number; clientId: string;
+  documentId?: string | null; documentName?: string | null; formerHandles?: string[];
+  client?: { id: string; name?: string | null; code: string };
+  /** The work this patent is tagged to — what turns a handle into a history. */
+  projects?: { id: string; code: string | null; roundSeq: number; title: string; projectPhase: string; completedAt?: string | null }[];
+  /** Minted but tagged to nothing. */
+  unused?: boolean;
+};
 /** Portal REVEAL — includes the confidential real number (passcode-gated). */
 export type PatentFull = PatentOverview & { realNumber: string; createdAt?: string };
 
@@ -1424,6 +1449,7 @@ export const api = {
       req<LedgerRow[]>(`/client-ledger?includeArchived=${includeArchived}`),
     detail: (clientId: string) => req<LedgerDetail>(`/client-ledger/${clientId}`),
     /** Hours that reach no client — the PID buffer, and projects with no client set. */
+    gaps: () => req<ChainGaps>('/client-ledger/gaps'),
     unattributed: () => req<LedgerUnattributed>('/client-ledger/unattributed'),
     /**
      * State or clear the figures. An OMITTED field keeps its stored value; an explicit `null`

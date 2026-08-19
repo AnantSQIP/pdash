@@ -193,6 +193,90 @@ export class ClientLedgerService {
    * a complete picture of the firm's work when it is not. Showing the number is the whole fix:
    * it turns "where did those hours go" into a question with an answer on screen.
    */
+  /**
+   * Where the chain from client to patent to PID to logged hour is broken.
+   *
+   * Each of those four things exists to make work traceable back to whoever it was done for. The
+   * links are enforced when they are made — a project cannot hold patents from two clients — but
+   * nothing ever said when a link was simply never made at all, and the gaps are invisible from
+   * any single screen:
+   *
+   *   • a patent minted and never tagged to any work — the portal cannot tell it apart from one
+   *     with a year of work behind it;
+   *   • a client with no projects — created for a deal that never landed, or created twice;
+   *   • a project with a PID but no client — its hours fall out of the ledger entirely, which is
+   *     the only one of the three that changes a number rather than just leaving a loose end.
+   *
+   * Counts and identifiers only. No real patent numbers pass through here.
+   */
+  async chainGaps(organizationId: string) {
+    const [clients, patents, projects] = await Promise.all([
+      this.prisma.client.findMany({
+        where: { organizationId, deletedAt: null },
+        select: {
+          id: true, code: true, name: true, archivedAt: true,
+          _count: { select: { projects: true, patents: true } },
+        },
+        orderBy: { code: 'asc' },
+      }),
+      this.prisma.patent.findMany({
+        where: { organizationId, deletedAt: null },
+        select: {
+          id: true, handle: true, createdAt: true,
+          client: { select: { id: true, code: true, name: true } },
+          projectLinks: { select: { projectId: true } },
+        },
+        orderBy: { serial: 'asc' },
+      }),
+      // Project carries no organizationId — it reaches the org through its members, which is how
+      // every other query in the system scopes one.
+      this.prisma.project.findMany({
+        where: {
+          deletedAt: null, clientId: null,
+          members: { some: { user: { organizationId } } },
+        },
+        select: { id: true, code: true, roundSeq: true, title: true, projectPhase: true },
+        orderBy: { code: 'asc' },
+      }),
+    ]);
+
+    // Hours stranded on the clientless projects — the part of this that is not merely untidy.
+    const clientlessIds = projects.map(p => p.id);
+    const stranded = clientlessIds.length
+      ? await this.prisma.timesheet.aggregate({
+          where: { projectId: { in: clientlessIds }, deletedAt: null },
+          _sum: { hoursLogged: true },
+        })
+      : null;
+
+    const unusedPatents = patents.filter(p => p.projectLinks.length === 0);
+    // An archived client with no work is not a loose end — it was retired on purpose.
+    const clientsWithoutWork = clients.filter(c => c._count.projects === 0 && !c.archivedAt);
+
+    return {
+      unusedPatents: {
+        count: unusedPatents.length,
+        total: patents.length,
+        items: unusedPatents.slice(0, 50).map(p => ({
+          id: p.id, handle: p.handle, createdAt: p.createdAt, client: p.client,
+        })),
+      },
+      clientsWithoutWork: {
+        count: clientsWithoutWork.length,
+        total: clients.length,
+        items: clientsWithoutWork.map(c => ({
+          id: c.id, code: c.code, name: c.name, patentCount: c._count.patents,
+        })),
+      },
+      projectsWithoutClient: {
+        count: projects.length,
+        /** Hours that will never reach a client ledger while the project has no client. */
+        strandedHours: Math.round((stranded?._sum.hoursLogged ?? 0) * 10) / 10,
+        items: projects,
+      },
+    };
+  }
+
   async unattributed(organizationId: string): Promise<Unattributed> {
     // Scope through the person who logged it: Timesheet carries no organizationId, and inside
     // the buffer it has no project to reach one through either.

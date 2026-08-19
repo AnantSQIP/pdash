@@ -300,12 +300,48 @@ export class PatentsService {
   }
 
   // ── Patents ───────────────────────────────────────────────────────────────
-  /** OVERVIEW — patent IDs (handles) + serials, NO real numbers. patent.manage, no passcode. */
-  listPatents(organizationId: string, clientId?: string) {
-    return this.prisma.patent.findMany({
+  /**
+   * OVERVIEW — patent IDs (handles) + serials, NO real numbers. patent.manage, no passcode.
+   *
+   * Each patent carries the WORK DONE ON IT: the PIDs it is tagged to, with their phase. Without
+   * it the portal answers "which patents exist" and not "what have we done about this one", which
+   * is the question somebody actually arrives with — and it left 30 of 33 patents here looking
+   * identical whether they had a year of work behind them or none at all.
+   *
+   * Only the project's code, title and phase travel: the handle→PID link is exactly what this
+   * screen is for, and neither carries a real patent number.
+   */
+  async listPatents(organizationId: string, clientId?: string) {
+    const rows = await this.prisma.patent.findMany({
       where: { organizationId, deletedAt: null, ...(clientId ? { clientId } : {}) },
-      select: { ...PATENT_OVERVIEW_SELECT, client: { select: CLIENT_MINI } },
+      select: {
+        ...PATENT_OVERVIEW_SELECT,
+        client: { select: CLIENT_MINI },
+        projectLinks: {
+          select: {
+            project: {
+              select: {
+                id: true, code: true, roundSeq: true, title: true,
+                projectPhase: true, completedAt: true, deletedAt: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: [{ clientId: 'asc' }, { serial: 'asc' }],
+    });
+    return rows.map(({ projectLinks, ...p }) => {
+      const projects = projectLinks
+        .map(l => l.project)
+        .filter(pr => pr && !pr.deletedAt)
+        .map(({ deletedAt, ...pr }) => pr)
+        .sort((a, b) => (a.code ?? '').localeCompare(b.code ?? '') || a.roundSeq - b.roundSeq);
+      return {
+        ...p,
+        projects,
+        /** Minted but never tagged to any work — the patent equivalent of an unused reservation. */
+        unused: projects.length === 0,
+      };
     });
   }
 
