@@ -27,6 +27,12 @@ export class DealsController {
   }
 
   /** Counts, values, weighted forecast, win rate, cycle time and why deals are lost. */
+  /** Can we deliver what is about to land? Crosses close dates against the capacity board. */
+  @Get('delivery-outlook') @RequirePermission('deal.view')
+  async deliveryOutlook(@Query('days') days?: string) {
+    return this.deals.deliveryOutlook(await this.actor.requireOrgId(), Number(days) || 60);
+  }
+
   @Get('summary') @RequirePermission('deal.view')
   async summary() {
     return this.deals.summary(await this.actor.requireOrgId());

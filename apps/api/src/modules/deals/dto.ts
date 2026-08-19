@@ -1,4 +1,4 @@
-import { IsIn, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { DEAL_ACTIVITY_TYPES, DEAL_STAGE_VALUES } from '../../common/deal-stages';
 
@@ -38,6 +38,15 @@ export class CreateDealDto {
 
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
+
+  @IsOptional() @IsDateString()
+  nextActionAt?: string;
+
+  @IsOptional() @IsString() @MaxLength(300)
+  nextActionNote?: string;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  expectedProjectType?: string;
 }
 
 export class UpdateDealDto {
@@ -64,6 +73,15 @@ export class UpdateDealDto {
 
   @IsOptional() @IsString() @MaxLength(2000)
   notes?: string;
+
+  @IsOptional() @IsDateString()
+  nextActionAt?: string;
+
+  @IsOptional() @IsString() @MaxLength(300)
+  nextActionNote?: string;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  expectedProjectType?: string;
 }
 
 /**

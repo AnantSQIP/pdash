@@ -6,13 +6,19 @@ import { getActorId } from '../../common/context/request-context';
 import { DEAL_STAGES, OPEN_STAGES, stageDef, type DealStage } from '../../common/deal-stages';
 import { validateClientCode, suggestClientCode } from '../../common/client-code';
 import { CreateDealDto, LogActivityDto, MoveDealDto, UpdateDealDto } from './dto';
+import { assessDeal, daysInCurrentStage, lastTouchedAt, stageDurations } from './deal-health';
+import { CapacityService } from '../capacity/capacity.module';
 
 const DEAL_SELECT = {
   id: true, company: true, title: true, stage: true, value: true, currency: true,
   ownerId: true, source: true, expectedCloseDate: true, wonAt: true, lostAt: true,
   lostReason: true, clientId: true, notes: true, teamId: true, createdAt: true, updatedAt: true,
+  nextActionAt: true, nextActionNote: true, expectedProjectType: true,
   owner: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
   client: { select: { id: true, code: true, name: true } },
+  // The stage-change trail, which is what "how long has this sat here?" and "when was this last
+  // touched?" are computed from. Only two columns — this rides along on every list.
+  activities: { select: { occurredAt: true, toStage: true } },
 } as const;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -36,6 +42,9 @@ export class DealsService {
     private readonly prisma: PrismaService,
     private readonly events: EventService,
     private readonly permissions: PermissionService,
+    // The pipeline asks the delivery side whether the work about to land can be absorbed.
+    // This one dependency is the difference between a pipeline and a CRM bolted on beside one.
+    private readonly capacity: CapacityService,
   ) {}
 
   private async actor(): Promise<string> {
@@ -46,7 +55,7 @@ export class DealsService {
 
   // ── Reading ───────────────────────────────────────────────────────────────
   async list(organizationId: string, opts: { stage?: string; ownerId?: string } = {}) {
-    return this.prisma.deal.findMany({
+    const rows = await this.prisma.deal.findMany({
       where: {
         organizationId, deletedAt: null,
         ...(opts.stage ? { stage: opts.stage } : {}),
@@ -56,6 +65,30 @@ export class DealsService {
       // Biggest first inside each stage: the board should lead with what matters most, and a
       // nameless £5k enquiry should not sit above the deal the quarter depends on.
       orderBy: [{ stage: 'asc' }, { value: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    // Which companies are already clients. A deal from somebody we have delivered for is a
+    // different proposition from a cold one — they know what we cost and came back anyway — and
+    // no external CRM could tell you this, because it does not hold the delivery history.
+    const clients = await this.prisma.client.findMany({
+      where: { organizationId, deletedAt: null },
+      select: { id: true, name: true, code: true, archivedAt: true },
+    });
+    // A client with no name cannot be matched by one, so it is simply not in the index.
+    const byName = new Map(
+      clients.filter(c => c.name?.trim()).map(c => [c.name!.trim().toLowerCase(), c]),
+    );
+
+    return rows.map(({ activities, ...d }) => {
+      const existing = d.client ?? byName.get(d.company.trim().toLowerCase()) ?? null;
+      return {
+        ...d,
+        flags: assessDeal({ ...d, activities }),
+        daysInStage: daysInCurrentStage({ ...d, activities }),
+        lastTouchedAt: lastTouchedAt({ ...d, activities }),
+        /** Already a client of ours — surfaced whether or not the deal has been linked yet. */
+        existingClient: existing ? { id: existing.id, code: existing.code, name: existing.name } : null,
+      };
     });
   }
 
@@ -90,7 +123,12 @@ export class DealsService {
   async summary(organizationId: string) {
     const deals = await this.prisma.deal.findMany({
       where: { organizationId, deletedAt: null },
-      select: { stage: true, value: true, currency: true, wonAt: true, lostAt: true, createdAt: true, lostReason: true },
+      select: {
+        stage: true, value: true, currency: true, wonAt: true, lostAt: true, createdAt: true,
+        lostReason: true, clientId: true, expectedCloseDate: true, nextActionAt: true,
+        expectedProjectType: true,
+        activities: { select: { occurredAt: true, toStage: true } },
+      },
     });
 
     const byStage = DEAL_STAGES.map(s => {
@@ -136,9 +174,135 @@ export class DealsService {
       winRate: closed ? Math.round((won.length / closed) * 100) : null,
       avgCycleDays: cycleDays.length ? Math.round(cycleDays.reduce((a, b) => a + b, 0) / cycleDays.length) : null,
       lostReasons: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
+
+      /**
+       * Where deals actually die. A firm losing everything at Proposal has a pricing problem; one
+       * losing at Contacted has a qualification problem. Same board, entirely different fix — and
+       * no single card can tell you which it is.
+       */
+      stageDurations: stageDurations(deals),
+
+      /**
+       * Win and loss by the KIND of work. "We win FTO and lose Invalidity" is a strategy signal,
+       * and it is unanswerable after the fact unless the type was captured while the deal was open.
+       */
+      byProjectType: (() => {
+        const m = new Map<string, { won: number; lost: number; open: number; wonValue: number }>();
+        for (const d of deals) {
+          const k = d.expectedProjectType || 'Not stated';
+          const e = m.get(k) ?? { won: 0, lost: 0, open: 0, wonValue: 0 };
+          if (d.stage === 'WON') { e.won++; e.wonValue += d.value ?? 0; }
+          else if (d.stage === 'LOST') e.lost++;
+          else e.open++;
+          m.set(k, e);
+        }
+        return [...m].map(([projectType, v]) => ({
+          projectType, ...v, wonValue: round2(v.wonValue),
+          // Null rather than 0% until something has closed — a type with no history has no rate,
+          // and showing 0% would read as "we never win these".
+          winRate: v.won + v.lost ? Math.round((v.won / (v.won + v.lost)) * 100) : null,
+        })).sort((a, b) => (b.won + b.lost + b.open) - (a.won + a.lost + a.open));
+      })(),
+
+      /** How many open deals need attention today, by the same rules the board uses. */
+      needsAttention: deals
+        .filter(d => OPEN_STAGES.includes(d.stage as DealStage))
+        .reduce((n, d) => n + (assessDeal(d as never).some(f => f.severity === 'urgent') ? 1 : 0), 0),
+
+      /** Won, but nobody has created the client record — the handover to delivery, unfinished. */
+      awaitingClientRecord: deals.filter(d => d.stage === 'WON' && !d.clientId).length,
       // Currency is per-deal, so a pipeline mixing them cannot be summed honestly. Say so rather
       // than adding rupees to dollars and presenting the result as a forecast.
       currencies: [...new Set(deals.map(d => d.currency))],
+    };
+  }
+
+  /**
+   * Could we actually deliver what is about to land?
+   *
+   * This is the question a standalone CRM structurally cannot answer. HubSpot knows the deal;
+   * it does not know that the four people who would do the work are already committed that
+   * fortnight. pdash knows both, and joining them is the whole advantage of the pipeline living
+   * inside the delivery system rather than beside it.
+   *
+   * Deliberately advisory. It never blocks a deal — you do not decline work because a spreadsheet
+   * says the team is busy, you go in knowing you will need to hire, subcontract or push the date.
+   * The point is that the conversation happens BEFORE the commitment, not after.
+   *
+   * Only open deals with a close date inside the horizon are assessed; anything else has nothing
+   * to compare against and is reported as such rather than guessed at.
+   */
+  async deliveryOutlook(organizationId: string, horizonDays = 60) {
+    const deals = await this.prisma.deal.findMany({
+      where: {
+        organizationId, deletedAt: null,
+        stage: { in: OPEN_STAGES },
+        expectedCloseDate: { not: null },
+      },
+      select: {
+        id: true, company: true, title: true, stage: true, value: true, currency: true,
+        expectedCloseDate: true, expectedProjectType: true,
+      },
+      orderBy: { expectedCloseDate: 'asc' },
+    });
+
+    const capacity = await this.capacity.team(organizationId, horizonDays);
+    // Free hours across the whole team, by day. The capacity board already accounts for leave,
+    // holidays, weekends and committed task hours, so none of that is re-derived here.
+    const freeByDay = new Map<string, number>();
+    for (const row of capacity.rows) {
+      for (const d of row.days) {
+        freeByDay.set(d.date, (freeByDay.get(d.date) ?? 0) + Math.max(0, d.free));
+      }
+    }
+
+    const horizonEnd = new Date(capacity.to);
+    const items = deals.map(d => {
+      const close = d.expectedCloseDate as Date;
+      if (close > horizonEnd) {
+        return {
+          dealId: d.id, company: d.company, title: d.title, stage: d.stage,
+          value: d.value, currency: d.currency, expectedCloseDate: close,
+          expectedProjectType: d.expectedProjectType,
+          beyondHorizon: true, freeHoursInWindow: null, verdict: null as string | null,
+          closeDatePassed: false,
+        };
+      }
+      // The fortnight after the deal is expected to close — when the work would actually start.
+      //
+      // Clamped to today, because a close date can be in the PAST: the deal has slipped but is
+      // still open. Measuring a window that has already elapsed returns zero free hours and
+      // reports "no capacity", which is exactly backwards — the date is stale, the team is not
+      // necessarily busy. Work that lands late lands now, so now is when to look.
+      const today = new Date(capacity.from);
+      const from = close < today ? today : close;
+      const to = new Date(from.getTime() + 14 * 86_400_000);
+      let free = 0;
+      for (const [day, hours] of freeByDay) {
+        const dt = new Date(day);
+        if (dt >= from && dt <= to) free += hours;
+      }
+      // Thresholds are about the SHAPE of the answer, not precision: "plenty", "tight",
+      // "nothing spare". A firm of 27 has roughly 8h x 5d x 2wk x headcount available, so a few
+      // hundred free hours is comfortable and near-zero is not.
+      const verdict = free >= 200 ? 'comfortable' : free >= 80 ? 'tight' : 'committed';
+      return {
+        dealId: d.id, company: d.company, title: d.title, stage: d.stage,
+        value: d.value, currency: d.currency, expectedCloseDate: close,
+        expectedProjectType: d.expectedProjectType,
+        beyondHorizon: false, freeHoursInWindow: Math.round(free), verdict,
+        /** The close date has already passed — the window measured is from today instead. */
+        closeDatePassed: close < today,
+      };
+    });
+
+    return {
+      horizonDays,
+      from: capacity.from,
+      to: capacity.to,
+      /** Deals landing in a fortnight where the team has little or nothing spare. */
+      atRisk: items.filter(i => i.verdict === 'committed').length,
+      items,
     };
   }
 
@@ -164,6 +328,9 @@ export class DealsService {
         expectedCloseDate: dto.expectedCloseDate ? new Date(dto.expectedCloseDate) : null,
         teamId: dto.teamId ?? null,
         notes: dto.notes?.trim() || null,
+        nextActionAt: dto.nextActionAt ? new Date(dto.nextActionAt) : null,
+        nextActionNote: dto.nextActionNote?.trim() || null,
+        expectedProjectType: dto.expectedProjectType?.trim() || null,
         createdBy: actorId,
       },
       select: DEAL_SELECT,
@@ -202,6 +369,11 @@ export class DealsService {
         ...(dto.expectedCloseDate !== undefined
           ? { expectedCloseDate: dto.expectedCloseDate ? new Date(dto.expectedCloseDate) : null } : {}),
         ...(dto.notes !== undefined ? { notes: dto.notes?.trim() || null } : {}),
+        ...(dto.nextActionAt !== undefined
+          ? { nextActionAt: dto.nextActionAt ? new Date(dto.nextActionAt) : null } : {}),
+        ...(dto.nextActionNote !== undefined ? { nextActionNote: dto.nextActionNote?.trim() || null } : {}),
+        ...(dto.expectedProjectType !== undefined
+          ? { expectedProjectType: dto.expectedProjectType?.trim() || null } : {}),
       },
     });
     return this.get(organizationId, id);
