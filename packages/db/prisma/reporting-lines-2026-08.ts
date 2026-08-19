@@ -10,16 +10,35 @@ const prisma = new PrismaClient();
  * appraisal launched with no reviewer and the manager-review step could not run at all. The org
  * chart has been drawing nothing for the same reason.
  *
- * HOW THESE LINES ARE DERIVED (decided 17 Aug 2026: "based on the project managers appointed and
- * the organisation chart you can assume from the seniority level")
+ * HOW THESE LINES ARE DERIVED
  *
- *   1. A LADDER by role seniority is the backbone — stated below, not inferred.
- *   2. A PROJECT MANAGER overrides the ladder for the people on their project, but ONLY when they
- *      actually outrank them. This guard is not theoretical: in the current data a Research
- *      Associate is the manager of one project, and without the check four senior people would
- *      have been made to report to a junior.
- *   3. OVERRIDES win over both. Reality does not always follow a ladder, and this is where a real
- *      line that contradicts the derivation gets recorded.
+ *   1. OVERRIDES first — the lines somebody has actually decided. These are facts, not guesses.
+ *   2. Otherwise a LADDER by role seniority, with reports DISTRIBUTED evenly across the managers
+ *      available at the tier above.
+ *
+ * THE PROJECT-MANAGER SIGNAL WAS REMOVED (19 Aug 2026), having been tried and found wrong.
+ *
+ * The original brief was to derive lines "based on the project managers appointed". On the real
+ * roster that produced a Consultant and an intern both reporting directly to the VP, because both
+ * happened to be staffed on projects the VP manages — while their peers reported to the Delivery
+ * Manager. The rule did what it was told; the trouble is the premise.
+ *
+ * Managing a PROJECT and managing a PERSON are different relationships. One is temporary and can
+ * be held by several people at once — somebody on three matters has three project managers — while
+ * a reporting line is singular and lasting. Deriving the second from the first produces a chart
+ * that reshuffles itself every time staffing changes, which is the opposite of what an org chart
+ * is for.
+ *
+ * WHY DISTRIBUTE RATHER THAN PICK THE SENIOR-MOST PERSON
+ *
+ * The first version sent everyone at a level to the single most senior person above them, which
+ * gave one Senior Research Associate seven direct reports while three of her peers had none. That
+ * is an artefact of "pick the first candidate", not an org design. Reports are now dealt out in
+ * rotation, so spans of control come out even.
+ *
+ * The TIER each person reports into is derived and reliable. WHICH individual within that tier is
+ * a real management decision this script cannot know — it is deterministic and even, and where it
+ * is wrong, the fix is one line in OVERRIDES.
  *
  * Re-runnable and idempotent: it computes the whole map, prints it, and writes only what changed.
  */
@@ -53,20 +72,23 @@ const LADDER: Record<string, string[]> = {
 };
 
 /**
- * Explicit lines, keyed by the person's login email, that override everything above.
+ * Explicit lines, keyed by login email, that override the ladder.
  *
- * Two are already needed, because the ladder cannot know about function:
- *   • Product Development is not delivery, so reporting it to the Delivery Manager would be wrong.
- *   • Business Development is not delivery either.
- * Both go to the AVP, who is the nearest person actually accountable for them.
+ * These are the lines somebody has DECIDED, as opposed to the ones this script infers. Function is
+ * the usual reason one is needed: Product Development and Business Development are not delivery,
+ * so the Delivery Manager is the wrong line for them however senior he is.
  *
  * ADD REAL LINES HERE. Anything stated here is treated as fact and never recomputed.
  */
 const OVERRIDES: Record<string, string> = {
-  'ankit.verma@squarkip.com': 'yash@squarkip.com',   // Product Development
-  'anant.gupta@squarkip.com': 'yash@squarkip.com',   // Product Development
-  'ritik.sharma@squarkip.com': 'yash@squarkip.com',  // Business Development
   'yash@squarkip.com': 'mohit@squarkip.com',         // AVP -> VP
+  // Product Development, stated 19 Aug 2026. The two sit on the same team and report to
+  // different people, which no ladder would ever guess — exactly what this map is for.
+  'ankit.verma@squarkip.com': 'mohit@squarkip.com',
+  'anant.gupta@squarkip.com': 'yash@squarkip.com',
+  // Business Development reports to the AVP: it is not delivery, so the Delivery Manager is the
+  // wrong line for it.
+  'ritik.sharma@squarkip.com': 'yash@squarkip.com',
 };
 
 /**
@@ -102,53 +124,44 @@ async function main() {
   const byEmail = new Map(people.map(p => [p.email, p]));
   const byId = new Map(people.map(p => [p.id, p]));
 
-  // The most senior holder of a role, so "reports to a Manager" resolves to a person. Ties break
-  // on name for stability — re-running must not reshuffle the chart.
-  const seniorOf = (role: string): Person | undefined =>
-    people.filter(p => p.role === role).sort((a, b) => a.name.localeCompare(b.name))[0];
-
-  // ── Project managers, for signal 2 ────────────────────────────────────────
-  const memberships = await prisma.projectMember.findMany({
-    where: { isActive: true, project: { deletedAt: null } },
-    select: { userId: true, projectRole: true, projectId: true },
-  });
-  const managerOfProject = new Map<string, string[]>();
-  for (const m of memberships) {
-    if (m.projectRole === 'MANAGER' || m.projectRole === 'PM') {
-      managerOfProject.set(m.projectId, [...(managerOfProject.get(m.projectId) ?? []), m.userId]);
-    }
-  }
-  /** For each person, the most senior project manager they work under who OUTRANKS them. */
-  const pmFor = new Map<string, Person>();
-  for (const m of memberships) {
-    const me = byId.get(m.userId);
-    if (!me) continue;
-    for (const mgrId of managerOfProject.get(m.projectId) ?? []) {
-      const mgr = byId.get(mgrId);
-      if (!mgr || mgr.id === me.id) continue;
-      if (mgr.rank <= me.rank) continue;               // the guard that matters — see the header
-      const held = pmFor.get(me.id);
-      if (!held || mgr.rank > held.rank) pmFor.set(me.id, mgr);
-    }
-  }
+  /** Everyone holding a role, in a stable order — re-running must not reshuffle the chart. */
+  const holdersOf = (role: string): Person[] =>
+    people.filter(p => p.role === role).sort((a, b) => a.name.localeCompare(b.name));
 
   // ── Resolve one manager per person ────────────────────────────────────────
   const resolved = new Map<string, Person | null>();
+
+  // 1. Stated lines win outright.
+  const pending: Person[] = [];
   for (const p of people) {
     const override = OVERRIDES[p.email];
     if (override) {
       const mgr = byEmail.get(override.toLowerCase());
       resolved.set(p.id, mgr && mgr.id !== p.id ? mgr : null);
-      continue;
+    } else {
+      pending.push(p);
     }
-    const pm = pmFor.get(p.id);
-    if (pm) { resolved.set(p.id, pm); continue; }
-    let found: Person | null = null;
-    for (const role of LADDER[p.role] ?? []) {
-      const cand = seniorOf(role);
-      if (cand && cand.id !== p.id && cand.rank > p.rank) { found = cand; break; }
+  }
+
+  // 2. Everyone else follows the ladder, DEALT OUT IN ROTATION across the tier above.
+  //
+  //    Grouped by role and handled most-senior-first, so a tier's managers are settled before the
+  //    tier below is distributed among them. Within a role, people are taken in name order and
+  //    assigned round-robin — deterministic, so the chart is identical on every run, and even, so
+  //    nobody inherits seven reports while their peers have none.
+  const roleOrder = [...new Set(pending.map(p => p.role))].sort((a, b) => (RANK[b] ?? 0) - (RANK[a] ?? 0));
+  for (const role of roleOrder) {
+    const group = pending.filter(p => p.role === role).sort((a, b) => a.name.localeCompare(b.name));
+    // The first tier in the ladder that actually has anybody senior enough in it.
+    let candidates: Person[] = [];
+    for (const mgrRole of LADDER[role] ?? []) {
+      candidates = holdersOf(mgrRole).filter(c => c.rank > (RANK[role] ?? 0));
+      if (candidates.length) break;
     }
-    resolved.set(p.id, found);
+    group.forEach((p, i) => {
+      const mgr = candidates.length ? candidates[i % candidates.length] : null;
+      resolved.set(p.id, mgr && mgr.id !== p.id ? mgr : null);
+    });
   }
 
   // ── Guard: no cycles. A loop here would make the appraisal chain unresolvable. ─────────

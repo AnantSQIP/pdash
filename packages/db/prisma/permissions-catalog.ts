@@ -308,6 +308,21 @@ const HR_CODES = [
   code('team', 'view'), code('team', 'manage'),
 ];
 
+// Business Development: an Employee's surface plus the pipeline.
+//
+// Created because the alternative was worse in both directions. Granting deal.* to the Employee
+// role would hand every intern and research associate the commercial pipeline — who we are talking
+// to and for how much. Granting it to one person by hand does not survive the next regrant and
+// does not scale, and this team is growing. A role is the thing that scales: put the next BD hire
+// on it and they are correct by construction.
+//
+// Deliberately NOT given delivery authority. A BD executive is not a project lead; they carry the
+// same task/project surface as any Employee, plus the pipeline that is their actual job.
+const BUSINESS_DEVELOPMENT_CODES = [
+  ...EMPLOYEE_CODES,
+  code('deal', 'view'), code('deal', 'manage'),
+];
+
 // CLIENT details (client names, the portal, real patent numbers) are SUPER-ADMIN-ONLY —
 // gated by patent.manage, which a Super Admin may grant to anyone via the matrix (a
 // passcode-gated RBAC change). Patent HANDLES (the pickable "Patent ID") are broader —
@@ -333,6 +348,7 @@ export const ROLE_PRESETS: Record<string, string[] | '*'> = {
   Consultant: CONSULTANT_CODES,
   'Senior Research Associate': SENIOR_RESEARCH_ASSOCIATE_CODES,
   HR: HR_CODES,
+  'Business Development': BUSINESS_DEVELOPMENT_CODES,
   Employee: EMPLOYEE_CODES,
 };
 
