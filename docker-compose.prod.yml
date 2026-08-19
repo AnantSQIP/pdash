@@ -1,6 +1,26 @@
 # Production stack: Postgres + API + Web. Run from the repo root:
 #   cp .env.production.example .env.production   # then edit the secrets
-#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# WHY THE SECRETS ARRIVE VIA env_file RATHER THAN ${INTERPOLATION}
+#
+# They used to be written as ${POSTGRES_USER} and friends. That is INTERPOLATION, resolved by the
+# docker-compose process itself before a container exists, and it reads only the shell environment
+# or a file named exactly `.env`. This file is called `.env.production`, so unless every command
+# carried `--env-file .env.production` every one of those variables resolved to an EMPTY STRING.
+#
+# Compose does not treat that as an error. It warns once per variable, among a wall of other
+# output, and carries on. Postgres then failed its healthcheck — `pg_isready -U` with no username
+# — and api and web refused to start behind an unhealthy dependency. The site returned 502 and the
+# error on screen talked about health, not configuration. It cost an outage.
+#
+# `env_file` is a different mechanism: it hands variables to the CONTAINER at runtime, so nothing
+# has to be interpolated and no flag has to be remembered. It also fails loudly and immediately if
+# the file is missing, which is the behaviour you want from a missing production environment.
+#
+# The interpolated lines had to GO, not merely be supplemented: `environment:` overrides
+# `env_file:`, so leaving `POSTGRES_USER: ${POSTGRES_USER}` in place would have kept overwriting
+# the correct value with a blank one.
 #
 # The web container proxies /api/* to the api container over the compose network, so only
 # the web port is published. Postgres and the API are not exposed to the host.
@@ -8,14 +28,18 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+    # POSTGRES_USER / _PASSWORD / _DB come from here. Compose refuses to start if the file is
+    # absent, which is the right answer for a missing production environment.
+    env_file:
+      - .env.production
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      # $$ escapes to a literal $, so the shell INSIDE the container expands this from the
+      # container's own environment at run time. Written as ${POSTGRES_USER} it was interpolated
+      # by compose instead, and became `pg_isready -U` — which fails, marks postgres unhealthy,
+      # and takes api and web down with it.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -28,12 +52,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # DATABASE_URL, JWT_ACCESS_SECRET and CORS_ORIGINS come from here.
+    env_file:
+      - .env.production
     environment:
+      # These are fixed for this stack and deliberately NOT taken from the env file: they must not
+      # be overridable by editing it. `environment` wins over `env_file`, which is what makes that
+      # guarantee hold.
       NODE_ENV: production
       API_PORT: "4000"
-      DATABASE_URL: ${DATABASE_URL}
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
-      CORS_ORIGINS: ${CORS_ORIGINS}
       AUTH_DEV_TRUST_HEADER: "false"
       # Uploaded documents (patent PDFs, attachments) live on this mounted volume, NOT in the DB.
       DOCUMENT_STORAGE_DIR: /app/.data/documents

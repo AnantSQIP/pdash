@@ -8,6 +8,7 @@ import clsx from 'clsx';
 import { api, type DashboardStats, type ReportProject } from '@/lib/api';
 import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
 import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
 import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
@@ -83,8 +84,10 @@ const ROLE_LABEL: Record<string, string> = { PM: 'Project Manager', REVIEWER: 'R
  * are ringed and lifted, and everything else on the table dims — so on a long list there is never
  * any doubt which project you have open.
  */
-function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
+function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canExport }: {
   project: ReportProject; onUpdated: () => void; expanded: boolean; dimmed: boolean; onToggle: () => void;
+  /** Passed down rather than read here, so every download control on this page obeys one decision. */
+  canExport: boolean;
 }) {
   const phase = PHASE_COLORS[project.phase];
   const priorityColor = PRIORITY_COLORS[project.priority] ?? '#9aa0a6';
@@ -136,13 +139,15 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
                     {project.title} <ExternalLink size={12} className="text-gray-300" />
                   </Link>
                 </div>
-                <button
-                  onClick={e => { e.stopPropagation(); singleProjectCsv(project); }}
-                  title="Download everything about this project as CSV"
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 shrink-0"
-                >
-                  <Download size={13} /> Download this project
-                </button>
+                {canExport && (
+                  <button
+                    onClick={e => { e.stopPropagation(); singleProjectCsv(project); }}
+                    title="Download everything about this project as CSV"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 shrink-0"
+                  >
+                    <Download size={13} /> Download this project
+                  </button>
+                )}
               </div>
 
               {/* Everything known about the matter. */}
@@ -230,6 +235,16 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle }: {
 
 export default function ReportsPage() {
   const { org } = useOrg();
+  // `report.export` existed in the catalogue, was granted to every role, and gated nothing at all
+  // — a permission implying a control that did not exist. It gates the download controls now.
+  //
+  // Be clear about what that can and cannot mean: the CSV is built in the browser from data the
+  // page already holds, so this is NOT a security boundary — anyone who can read the report can
+  // copy it. What it does is stop the whole book leaving in one click, which is a policy control
+  // a firm may reasonably want, and it makes revoking the permission from a role actually do
+  // something.
+  const { can } = usePermissions();
+  const canExport = can('report.export');
   const qc = useQueryClient();
   const [sortField, setSortField] = useState<'title' | 'progress' | 'phase' | 'priority'>('progress');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -307,7 +322,7 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-center gap-2">
           {loading && <Loader size={16} className="animate-spin text-gray-400" />}
-          <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />
+          {canExport && <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />}
         </div>
       </div>
 
@@ -456,15 +471,17 @@ export default function ReportsPage() {
               {q && <span className="text-xs text-gray-400 whitespace-nowrap">{sorted.length} match{sorted.length === 1 ? '' : 'es'}</span>}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => fullReportCsv(sorted)}
-                disabled={loading || sorted.length === 0}
-                title="Full CSV — every project plus every task and who is on it"
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-              >
-                <Download size={14} /> Full CSV
-              </button>
-              <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />
+              {canExport && (
+                <button
+                  onClick={() => fullReportCsv(sorted)}
+                  disabled={loading || sorted.length === 0}
+                  title="Full CSV — every project plus every task and who is on it"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                >
+                  <Download size={14} /> Full CSV
+                </button>
+              )}
+              {canExport && <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />}
             </div>
           </div>
 
@@ -508,6 +525,7 @@ export default function ReportsPage() {
                   <ProjectReportRow
                     key={project.id}
                     project={project}
+                    canExport={canExport}
                     onUpdated={invalidate}
                     expanded={openId === project.id}
                     // Everything else dims while one project is open — that's the spotlight.

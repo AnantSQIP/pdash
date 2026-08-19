@@ -62,15 +62,24 @@ export class AnalyticsService {
         _sum: { hoursLogged: true },
       }),
 
+      // A task with NO status is unfinished, not excluded. Written as a bare relation filter it
+      // was dropped from the count entirely — the same NULL-shaped hole the rest of the codebase
+      // already writes around (capacity, the digest and the overdue sweep all use this OR form).
+      // Nothing in this database currently has a null status, so this changes no number today; it
+      // stops one hiding the first time something does.
       this.prisma.task.count({
-        where: { ...inScope, dueDate: { lt: startOfToday }, currentStatus: { type: { not: 'CLOSED' } } },
+        where: {
+          ...inScope, dueDate: { lt: startOfToday },
+          OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
+        },
       }),
 
       this.prisma.task.count({
         where: {
           ...inScope,
           dueDate: { gte: startOfToday, lt: endOfToday },
-          currentStatus: { type: { not: 'CLOSED' } },
+          OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
+          // completionPercentage is a non-nullable Int, so `not` is safe here.
           completionPercentage: { not: 100 },
         },
       }),
