@@ -1,34 +1,25 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { UserPlus, Search, Loader } from 'lucide-react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { api, type UserSummary, type ApiProject } from '@/lib/api';
+import { api, type UserSummary, type ApiProject, type DepartmentSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePresence, presenceMeta } from '@/lib/presence-context';
 import { Can } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
+import { DepartmentsPanel } from '@/components/people/DepartmentsPanel';
 
 function fullName(u: UserSummary) {
   return `${u.firstName} ${u.lastName ?? ''}`.trim();
 }
 
-// Map a designation to a department bucket for the Departments tab.
-function departmentOf(designation?: string): string {
-  switch (designation) {
-    case 'VP': return 'Leadership';
-    case 'Manager': return 'Management';
-    case 'Product Development': return 'Product';
-    case 'Research Associate':
-    case 'Senior Research Associate': return 'Search & Analytics';
-    case 'Senior Consultant':
-    case 'Consultant': return 'Consulting';
-    case 'Testing and QA': return 'QA';
-    case 'HR': return 'Human Resources';
-    default: return 'Other';
-  }
-}
+// The Department column used to come from a `departmentOf(designation)` switch that mapped job
+// titles onto invented bucket names — "Leadership", "Search & Analytics", "Other". It looked like
+// the department feature working, so nobody noticed the real one was unreachable, and it disagreed
+// with the actual Department records the moment anybody created one. It now reads real membership,
+// and a person in no department says so.
 
 type Tab = 'All Members' | 'Departments';
 
@@ -63,13 +54,23 @@ export default function UsersPage() {
     placeholderData: keepPreviousData,
   });
 
-  // #5: real departments (with real members + head) — not designation-string buckets.
-  const { data: departments = [] } = useQuery({
+  // Real Department records — not designation-string buckets.
+  const { data: departments = [] } = useQuery<DepartmentSummary[]>({
     queryKey: ['departments', org?.id],
     queryFn: () => api.departments.list(org!.id),
     enabled: !!org?.id,
     staleTime: 60_000,
   });
+
+  // userId → the departments they actually belong to. Someone can be in more than one, so the
+  // column joins them rather than picking whichever came back first.
+  const deptsByUser = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const d of departments) {
+      for (const mem of d.members ?? []) m.set(mem.id, [...(m.get(mem.id) ?? []), d.name]);
+    }
+    return m;
+  }, [departments]);
 
   // Count how many projects each user is a member of.
   const projectCount: Record<string, number> = {};
@@ -189,7 +190,9 @@ export default function UsersPage() {
                         </div>
                       </td>
                       <td className="px-3 py-3 text-gray-600">{u.designation ?? '—'}</td>
-                      <td className="px-3 py-3 text-gray-500">{departmentOf(u.designation)}</td>
+                      <td className="px-3 py-3 text-gray-500">
+                        {deptsByUser.get(u.id)?.join(', ') ?? <span className="text-gray-300">None</span>}
+                      </td>
                       <td className="px-3 py-3">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                           u.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
@@ -215,40 +218,9 @@ export default function UsersPage() {
             </div>
           </div>
         ) : (
-          /* Departments Tab — real Department records + members */
-          departments.length === 0 ? (
-            <p className="text-sm text-gray-400 py-8 text-center">No departments have been set up yet.</p>
-          ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {departments.map(dept => {
-              const members = dept.members ?? [];
-              return (
-                <div key={dept.id} className="bg-white rounded-xl border border-gray-200 p-5">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{dept.name}</h3>
-                      <p className="text-xs text-gray-500 mt-0.5">{dept.memberCount ?? members.length} member{(dept.memberCount ?? members.length) !== 1 ? 's' : ''}</p>
-                    </div>
-                  </div>
-                  <div className="flex -space-x-2 mb-3">
-                    {members.slice(0, 6).map(u => (
-                      <Avatar key={u.id} user={u} size={28} className="ring-2 ring-white" />
-                    ))}
-                    {members.length === 0 && <p className="text-xs text-gray-400">No members</p>}
-                  </div>
-                  {dept.head && (
-                    <p className="text-xs text-gray-500 mb-4">
-                      Head: <span className="font-medium text-gray-700">{fullName(dept.head)}</span>
-                    </p>
-                  )}
-                  <Link href="/admin" className="block text-center w-full px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors">
-                    Manage in Admin →
-                  </Link>
-                </div>
-              );
-            })}
-          </div>
-          )
+          /* Departments — create, rename, staff and delete, in place. The card used to carry a
+             "Manage in Admin →" link to a page that has no department management on it. */
+          <DepartmentsPanel everyone={users} />
         )}
       </div>
     </div>
