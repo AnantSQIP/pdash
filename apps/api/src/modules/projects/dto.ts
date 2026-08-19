@@ -372,3 +372,24 @@ export class RoundMemberDto {
   @MaxLength(40)
   projectRole?: string;
 }
+
+/**
+ * The COMPLETE set of patents a project should be tagged with — not a delta. An empty array
+ * therefore means "no patents", and is the way to clear a mistagged project.
+ */
+export class SetProjectPatentsDto {
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  patentIds?: string[];
+}
+
+/**
+ * The client a project is for, named directly. `null` detaches it.
+ * Only accepted while the project has no tagged patents — see ProjectsService.setClient.
+ */
+export class SetProjectClientDto {
+  @IsOptional()
+  @IsString()
+  clientId?: string | null;
+}

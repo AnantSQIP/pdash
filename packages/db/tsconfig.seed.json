@@ -22,6 +22,7 @@
     "prisma/reset-operational-data.ts",
     "prisma/reset-keep-one-project.ts",
     "prisma/assign-offices.ts",
-    "prisma/roster-align-2026-08.ts"
+    "prisma/roster-align-2026-08.ts",
+    "prisma/reporting-lines-2026-08.ts"
   ]
 }

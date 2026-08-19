@@ -80,6 +80,16 @@ export const MODULES: ModuleDef[] = [
   //   patent.view   → see clients, patent handles (Pat_MLK_1) and the project patent-picker.
   //   patent.manage → the confidential portal: register clients/patents + see REAL numbers.
   { key: 'patent',      label: 'Clients & Patents', actions: ['view', 'manage'] },
+  // Phase 3 — team spaces: where HR, BD and operations work lives, separate from client delivery.
+  //   team.view   → see the Team Spaces module and the spaces you are a member of.
+  //   team.manage → create/rename/archive a space and change who is in it.
+  // Working INSIDE a space (tasks, lists) reuses the ordinary task.* permissions, so a team
+  // space grants no capability over work that the person did not already have.
+  { key: 'team',        label: 'Team Spaces',  actions: ['view', 'manage'] },
+  // Phase 3 — the BD pipeline. Commercial information (who we are talking to, for how much), so
+  // NOT in the basics: deal.view reads the pipeline, deal.manage changes it. Deliberately not
+  // scoped to your own deals — a pipeline each person sees a slice of cannot be forecast.
+  { key: 'deal',        label: 'BD Pipeline',  actions: ['view', 'manage'] },
 ];
 
 export interface PermissionDef {
@@ -114,6 +124,9 @@ const VIEW_BASICS = [
   // Matrix 2026-08-12: the capacity board is open to the whole organisation — knowing who is
   // free this week is not privileged information, and hiding it just meant people asked around.
   code('capacity', 'view'),
+  // Seeing the Team Spaces module is a basic: which space you can actually OPEN is decided by
+  // membership, exactly as it is for projects, so this reveals nothing on its own.
+  code('team', 'view'),
   code('channel', 'view'), code('report', 'view'),
   code('attendance', 'view.own'), code('leave', 'view.own'), code('holiday', 'view'),
   // Everyone can record their own business expenses and see them.
@@ -126,6 +139,9 @@ const MANAGER_CODES = [
   // Matrix 2026-08-12: minting a Project ID moves up to Super Admin / Admin only. A Manager
   // still REQUESTS a PID like anyone else; they no longer issue one.
   code('project', 'create'), code('project', 'update'), code('project', 'approve'),
+  // Phase 3: a Manager runs their own team space (BD, Operations) the way they run a project,
+  // and owns the BD pipeline that sits alongside it.
+  code('team', 'manage'), code('deal', 'view'), code('deal', 'manage'),
   code('task', 'create'), code('task', 'update'), code('task', 'delete'), code('task', 'assign'),
   code('tasklist', 'create'), code('tasklist', 'update'), code('tasklist', 'delete'),
   code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),
@@ -138,8 +154,9 @@ const MANAGER_CODES = [
   code('analytics', 'view.own'), code('analytics', 'view.organization'),
   // Matrix 2026-07-28: Manager keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
-  // Delivery oversight: see who is free/overloaded, and the client-facing dates.
-  code('capacity', 'view'), code('deadline', 'view.client'),
+  // Delivery oversight: the client-facing dates. (capacity.view already arrives via
+  // VIEW_BASICS — the matrix opened the capacity board to everyone on 2026-08-12.)
+  code('deadline', 'view.client'),
   // Managers see team attendance but do NOT review regularisations — those route to
   // HR + Yash only (see AttendanceService.regularizationApproverIds).
   code('attendance', 'view.organization'),
@@ -190,8 +207,7 @@ const SENIOR_RESEARCH_ASSOCIATE_CODES = [
   // A senior IC still CREATES and EDITS tasks — Employees lost these in the 2026-07-28 matrix,
   // but an SRA leads a search/analysis workstream so keeps them.
   code('task', 'create'), code('task', 'update'),
-  code('issue', 'update'),
-  code('report', 'export'),
+  // (issue.update and report.export already arrive via EMPLOYEE_CODES.)
   // matrix: SRA may set up task lists.
   code('tasklist', 'create'), code('tasklist', 'update'),
   // Matrix 2026-07-28: SRA no longer assigns tasks (task.assign removed) and no longer mints a
@@ -219,8 +235,9 @@ const SENIOR_CONSULTANT_CODES = [
   code('analytics', 'view.own'),
   // Matrix 2026-07-28: keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
-  // Delivery oversight: see who is free/overloaded, and the client-facing dates.
-  code('capacity', 'view'), code('deadline', 'view.client'),
+  // Delivery oversight: the client-facing dates. (capacity.view already arrives via
+  // VIEW_BASICS — the matrix opened the capacity board to everyone on 2026-08-12.)
+  code('deadline', 'view.client'),
   code('leave', 'request'), code('leave', 'view.organization'),
   // Matrix 2026-07-28: recognition-giving (reward.give) stays with Manager/HR/Admin — removed here.
   code('user', 'view'), code('department', 'view'),
@@ -284,6 +301,11 @@ const HR_CODES = [
   code('announcement', 'manage'), code('policy', 'manage'),
   // People-ops runs the appraisal review cycles.
   code('appraisal', 'manage'),
+  // Phase 3: HR owns its own team space — the point of the module is that people-ops work stops
+  // having to masquerade as a client project to exist at all. `view` is listed explicitly because
+  // HR deliberately does not inherit VIEW_BASICS (it is people-ops, not delivery), and manage
+  // without view would leave the module invisible to the role that owns a space in it.
+  code('team', 'view'), code('team', 'manage'),
 ];
 
 // CLIENT details (client names, the portal, real patent numbers) are SUPER-ADMIN-ONLY —

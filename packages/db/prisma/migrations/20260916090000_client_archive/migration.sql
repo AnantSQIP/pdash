@@ -1,0 +1,15 @@
+-- Phase 2 — Archive is not Remove.
+--
+-- Until now the only way to retire a client code was the Remove button, which soft-deleted the
+-- client AND every patent under it. That is a destructive answer to a non-destructive question:
+-- "we have finished working with this client" does not mean "erase their patent records".
+--
+-- archivedAt gives that state somewhere to live. It is reversible, carries no passcode, and
+-- changes nothing about the data — the patents, their handles and their project links all stay.
+-- Remove keeps its meaning and gains a guard (enforced in the service): it is refused outright
+-- while any patent or project still points at the client, because Patent.clientId cascades and
+-- an unguarded delete would take the patent records and their documents with it.
+--
+-- Additive and nullable: every existing client comes through as not-archived, and an older API
+-- build that has never heard of this column keeps working against the same database.
+ALTER TABLE "client" ADD COLUMN IF NOT EXISTS "archivedAt" TIMESTAMP(3);

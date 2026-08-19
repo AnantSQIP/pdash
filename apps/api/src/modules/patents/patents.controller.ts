@@ -31,6 +31,13 @@ export class PatentsController {
     return this.patents.listClients(await this.actor.requireOrgId());
   }
 
+  /** Advisory: a suggested code for a name + any clients that look like the same company.
+   *  Read-only and creates nothing, so no passcode — the passcode guards the save. */
+  @Get('clients/code-suggestion') @RequirePermission('patent.manage')
+  async codeSuggestion(@Query('name') name?: string) {
+    return this.patents.suggestCode(await this.actor.requireOrgId(), name ?? '');
+  }
+
   @Post('clients') @RequirePermission('patent.manage') @RequirePasscode()
   async createClient(@Body() dto: CreateClientDto) {
     return this.patents.createClient(await this.actor.requireOrgId(), getActorId()!, dto);
@@ -42,7 +49,24 @@ export class PatentsController {
     return this.patents.updateClient(await this.actor.requireOrgId(), id, dto);
   }
 
-  // Removing a client code (and soft-deleting its patents) is a "big change" → passcode.
+  /**
+   * ARCHIVE / RESTORE — reversible and destroys nothing, so no passcode. The step-up prompt is
+   * reserved for changes that cannot be walked back; asking for it here would only teach people
+   * to type it without reading, which is the failure mode the passcode exists to prevent.
+   */
+  @Post('clients/:id/archive') @RequirePermission('patent.manage')
+  async archiveClient(@Param('id') id: string) {
+    return this.patents.setClientArchived(await this.actor.requireOrgId(), getActorId()!, id, true);
+  }
+
+  @Post('clients/:id/restore') @RequirePermission('patent.manage')
+  async restoreClient(@Param('id') id: string) {
+    return this.patents.setClientArchived(await this.actor.requireOrgId(), getActorId()!, id, false);
+  }
+
+  // REMOVE — a real delete, and irreversible. patent.manage is Super-Admin-only, and the passcode
+  // is the second factor. The service refuses outright while any patent or project still points
+  // at the client, so this only ever deletes a code nothing depends on.
   @Delete('clients/:id') @RequirePermission('patent.manage') @RequirePasscode()
   async deleteClient(@Param('id') id: string) {
     return this.patents.deleteClient(await this.actor.requireOrgId(), id);
@@ -59,6 +83,16 @@ export class PatentsController {
   @Get('patents/reveal') @RequirePermission('patent.manage') @RequirePasscode()
   async reveal(@Query('clientId') clientId?: string) {
     return this.patents.revealPatents(await this.actor.requireOrgId(), clientId);
+  }
+
+  /**
+   * Look up a patent ID that may be out of date — the one a client quotes back from an email
+   * sent before their code was renamed. Handles only, so `patent.view` is the right gate: it
+   * reveals nothing the picker does not already show.
+   */
+  @Get('patents/resolve') @RequirePermission('patent.view')
+  async resolve(@Query('handle') handle?: string) {
+    return this.patents.resolveHandle(await this.actor.requireOrgId(), handle ?? '');
   }
 
   /** Handle-only options for the project picker. patent.view. */

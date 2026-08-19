@@ -5,6 +5,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
+import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
@@ -71,6 +73,8 @@ export interface CapacityRow {
     id: string; title: string; projectId?: string; project?: string;
     /** The project's PID and which round it is — two rounds of one PID share a code. */
     projectPid?: string | null; projectRound?: number;
+    /** Internal team-space work rather than a client matter — no PID, never billable. */
+    isTeamWork?: boolean;
     dueDate?: string | null; priority: string; completionPercentage: number;
     remainingHours: number; overdue: boolean;
   }[];
@@ -102,6 +106,7 @@ export class CapacityService {
     private readonly prisma: PrismaService,
     private readonly actor: ActorContextService,
     private readonly notifications: NotificationsService,
+    private readonly optionalHolidays: OptionalHolidaysService,
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
@@ -155,7 +160,10 @@ export class CapacityService {
     const to = addDays(today, horizon);
     const userFilter = onlyUserIds ? { id: { in: onlyUserIds.length ? onlyUserIds : ['__none__'] } } : {};
 
-    const [users, holidays, leaves, tasks] = await Promise.all([
+    // An APPROVED optional holiday is a non-working day for ONE person. It therefore belongs with
+    // that person's leave, not with the firm's holidays — the whole reason optional holidays are
+    // not rows in `holiday`.
+    const [users, holidays, leaves, tasks, optionalOff] = await Promise.all([
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
@@ -193,8 +201,16 @@ export class CapacityService {
             select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true } } },
             take: 1,
           },
+          // Team-space work already counted toward load — this query is by ASSIGNEE, not by
+          // project — but it arrived with no label, so an HR or BD person looked booked with
+          // blank rows. Naming the space is what makes their week readable.
+          teamTasks: {
+            select: { team: { select: { id: true, name: true, deletedAt: true } } },
+            take: 1,
+          },
         },
       }),
+      this.optionalHolidays.approvedDayKeys(organizationId, today, to),
     ]);
 
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
@@ -216,13 +232,16 @@ export class CapacityService {
     const window: Date[] = [];
     for (let d = new Date(today); d < to; d = addDays(d, 1)) window.push(new Date(d));
 
-    /** Working days for a user (excludes weekends, holidays, their approved leave). Memoised —
-     *  this is asked once per task, and recomputing it per task is O(tasks × window). */
+    /** Working days for a user (excludes weekends, firm holidays, their approved leave, and any
+     *  optional holiday they were granted). Memoised — this is asked once per task, and
+     *  recomputing it per task is O(tasks × window). */
     const workingDaysCache = new Map<string, Date[]>();
     const workingDaysFor = (userId: string): Date[] => {
       const hit = workingDaysCache.get(userId);
       if (hit) return hit;
-      const wd = window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d)) && !leaveByUserDay.has(`${userId}|${dayKey(d)}`));
+      const wd = window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d))
+        && !leaveByUserDay.has(`${userId}|${dayKey(d)}`)
+        && !optionalOff.has(`${userId}|${dayKey(d)}`));
       workingDaysCache.set(userId, wd);
       return wd;
     };
@@ -233,7 +252,9 @@ export class CapacityService {
 
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
+      const team = task.teamTasks[0]?.team;
       if (project?.deletedAt) continue; // archived project — not real work any more
+      if (team?.deletedAt) continue;    // deleted team space — likewise
       const done = (task.completionPercentage ?? 0) / 100;
       // Fallback (legacy tasks with no per-person hours): split the task estimate evenly.
       const evenSplit = (task.estimatedHours ?? DEFAULT_TASK_HOURS) / Math.max(1, task.assignees.length);
@@ -249,10 +270,13 @@ export class CapacityService {
         list.push({
           id: task.id,
           title: task.title,
-          projectId: project?.id,
-          project: project?.title,
+          projectId: project?.id ?? team?.id,
+          // Team work has no PID and no round — it is labelled by the space it belongs to, and
+          // flagged so the UI can tell a client matter from an internal one.
+          project: project?.title ?? team?.name,
           projectPid: project?.code ?? null,
           projectRound: project?.roundSeq,
+          isTeamWork: !project && !!team,
           dueDate: task.dueDate ? dayKey(task.dueDate) : null,
           priority: task.priority,
           completionPercentage: task.completionPercentage ?? 0,
@@ -300,8 +324,13 @@ export class CapacityService {
         const k = dayKey(d);
         const leave = leaveByUserDay.get(`${u.id}|${k}`);
         const holiday = holidayByDay.get(k);
+        // An optional holiday this person was GRANTED. Reported as a holiday because that is what
+        // it is to them, but it is theirs alone — the same date is an ordinary working day for
+        // everyone who did not choose it, which is why it is keyed by user.
+        const optional = optionalOff.has(`${u.id}|${k}`);
         if (isWeekend(d)) return { date: k, state: 'WEEKEND', load: 0, capacity: 0, utilization: 0, free: 0 };
         if (holiday) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: holiday };
+        if (optional) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: 'Optional holiday' };
         if (leave) return { date: k, state: 'LEAVE', load: 0, capacity: 0, utilization: 0, free: 0, note: `${leave} leave` };
 
         const load = loadByUserDay.get(`${u.id}|${k}`) ?? 0;
@@ -697,6 +726,9 @@ class CapacityController {
 }
 
 @Module({
+  // OptionalHolidaysModule supplies the per-person approved-optional-holiday days, which the
+  // board treats exactly like approved leave: off for that person, nobody else.
+  imports: [OptionalHolidaysModule],
   controllers: [CapacityController],
   providers: [CapacityService],
   exports: [CapacityService],

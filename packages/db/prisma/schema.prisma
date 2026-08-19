@@ -48,6 +48,8 @@ model Organization {
   calendarEvents   CalendarEvent[]
   channels         Channel[]
   holidays         Holiday[]
+  optionalHolidays OptionalHoliday[]
+  appraisalParameters AppraisalParameter[]
   leaveTypes       LeaveType[]
   mentionTags      MentionTag[]
   announcements      Announcement[]
@@ -108,6 +110,8 @@ model User {
   projectMemberships     ProjectMember[]
   taskAssignments        TaskAssignee[]
   tasksAssignedByMe      Task[]                  @relation("TaskAssignedBy")
+  dealsOwned             Deal[]                  @relation("DealOwner")
+  optionalHolidays       OptionalHolidayElection[]
   subtaskAssignments     SubtaskAssignee[]
   userRoles              UserRole[]
   userPermissions        UserPermission[]
@@ -234,19 +238,137 @@ model DepartmentMember {
   @@map("department_member")
 }
 
+// A TEAM SPACE — where work that is not client delivery lives (HR, BD, Operations).
+//
+// Phase 3. Everything in this system was a client project: a Task cannot exist without one, and
+// every project type is a patent-analysis type carrying a PID, a client and billability. So an
+// HR hiring round or a BD conference push had nowhere to go except a "General / Other" project
+// sitting in the delivery list, collecting a PID it has no use for.
+//
+// A team space is deliberately NOT a kind of project. It has no PID, no client, and never reaches
+// the client ledger, the PID ledger or delivery reports — it is a different question about a
+// different kind of work. What it DOES share is the Task itself, so assignees, subtasks, comments,
+// statuses and logged time all behave exactly as people already expect.
 model Team {
   id             String  @id @default(cuid())
   organizationId String
   name           String
   description    String?
-  status         String  @default("ACTIVE")
+  // Retired but kept, same meaning as on Client: no new work, everything already here preserved.
+  // There is deliberately no second `status` column — two ways to say "not active" drift apart,
+  // and the one nothing reads is the one that ends up lying.
+  archivedAt     DateTime?
+  deletedAt      DateTime?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   members      TeamMember[]
   projectTeams ProjectTeam[]
+  taskLists    TaskList[]
+  teamTasks    TeamTask[]
+  deals        Deal[]
+  timesheets   Timesheet[]
+  appraisalParameters AppraisalParameter[]
 
-  @@index([organizationId])
+  @@index([organizationId, deletedAt])
   @@map("team")
+}
+
+// ── Business development pipeline (Phase 3) ─────────────────────────────────
+// A DEAL is a prospective piece of business, tracked from first contact to won or lost.
+//
+// It is deliberately not a Project. A project is work we have been engaged to do and are
+// accountable for delivering; a deal is work we hope to be engaged for, and most of them never
+// happen. Conflating the two would put speculative revenue into delivery reporting and give
+// every lost prospect a Project ID.
+//
+// The join to the rest of the system is at the moment of winning: a won deal can mint (or link)
+// the Client it became, at which point its work starts flowing through projects and the client
+// ledger like any other. Before that point a prospect is just a name.
+model Deal {
+  id             String    @id @default(cuid())
+  organizationId String
+  // The BD team space that runs this pipeline. Optional — a deal can exist before a space does.
+  teamId         String?
+  // The prospect. Free text, because most prospects never become a Client record.
+  company        String
+  // What the work would be — "Portfolio landscape, 40 patents".
+  title          String?
+  // NEW | CONTACTED | PROPOSAL | NEGOTIATION | WON | LOST
+  stage          String    @default("NEW")
+  value          Float?
+  currency       String    @default("INR")
+  // Whose deal it is. Distinct from createdBy: pipelines get handed over.
+  ownerId        String
+  // Where it came from — referral, conference, inbound. Free text; the taxonomy is not ours to fix.
+  source         String?
+  expectedCloseDate DateTime?
+  wonAt          DateTime?
+  lostAt         DateTime?
+  // Why it was lost. The single most useful field in any pipeline, and the most often skipped.
+  lostReason     String?
+  // Set when a won deal is tied to a client — the join into the Phase 2 ledger.
+  clientId       String?
+  notes          String?
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  team       Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  client     Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  owner      User           @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  activities DealActivity[]
+
+  @@index([organizationId, deletedAt, stage])
+  @@index([ownerId])
+  @@index([clientId])
+  @@map("deal")
+}
+
+// Everything that happened on a deal, including its stage changes.
+//
+// A pipeline without history is a set of assertions nobody can check: "why is this still in
+// Proposal after four months" has no answer unless the moves were recorded as they happened.
+// Stage changes are written here automatically; calls, emails and meetings are logged by hand.
+model DealActivity {
+  id         String   @id @default(cuid())
+  dealId     String
+  // CALL | EMAIL | MEETING | NOTE | STAGE_CHANGE
+  type       String
+  note       String?
+  // Populated for STAGE_CHANGE, so the path through the pipeline is reconstructable.
+  fromStage  String?
+  toStage    String?
+  occurredAt DateTime @default(now())
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  deal Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([dealId, occurredAt])
+  @@map("deal_activity")
+}
+
+// Tasks belonging to a team space. A deliberate mirror of ProjectTask: `Task` itself stays
+// generic and knows about neither, so a task reached this way carries every capability a project
+// task has, and nothing that reads tasks needs to learn a second shape.
+model TeamTask {
+  id         String @id @default(cuid())
+  teamId     String
+  taskId     String
+  taskListId String?
+  sequence   Int    @default(0)
+
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskList TaskList? @relation(fields: [taskListId], references: [id], onDelete: SetNull)
+
+  @@unique([teamId, taskId])
+  @@index([teamId])
+  @@map("team_task")
 }
 
 model TeamMember {
@@ -554,13 +676,63 @@ model Client {
   createdBy      String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  // ARCHIVED ≠ DELETED. Archiving retires a client from day-to-day work — no new patents, gone
+  // from the project picker — while every existing patent, handle and project link stays exactly
+  // as it was. It is reversible and needs no passcode, which is what makes it the safe answer to
+  // "we're done with this client": the destructive alternative (Remove) is refused outright while
+  // any patent or project still points here, because Patent.clientId cascades.
+  archivedAt     DateTime?
   deletedAt      DateTime?
   patents        Patent[]
   projects       Project[]
+  ledgerOverride ClientLedgerOverride?
+  deals          Deal[]
 
   @@unique([organizationId, code])
   @@index([organizationId, deletedAt])
   @@map("client")
+}
+
+// A Super Admin's stated figure for a client, overriding what the ledger derives from live
+// project and timesheet data.
+//
+// The ledger's numbers are recomputed on every read and are right about the work; they cannot
+// be right about the commerce, because nothing in this system knows a rate or an agreed fee.
+// This row is where a person supplies what the data cannot. It never replaces the derived
+// figure in storage — the ledger returns both, so an override that has gone stale is visible
+// as a disagreement rather than passing silently as fact.
+//
+// One row per client (hence @unique), because this is a statement about the client relationship,
+// not about any one project.
+model ClientLedgerOverride {
+  id             String   @id @default(cuid())
+  organizationId String
+  clientId       String   @unique
+  // Supersedes the derived billable-hours total. Null = use the derived figure.
+  billableHours  Float?
+  // What the DERIVED billable-hours figure was at the moment this statement was made.
+  //
+  // Without it there is no way to tell a deliberate write-down from a figure the world has moved
+  // past: "you stated 1,980h" is silent about whether the data then said 2,000h or 400h. Holding
+  // the snapshot turns that into "the data has moved 520h since you said this", which is the
+  // difference between a number someone chose and a number quietly going wrong.
+  derivedHoursWhenSet Float?
+  // The commercial value of the relationship. Nothing derives this; it is stated or it is absent.
+  amount         Float?
+  currency       String   @default("INR")
+  // Why the stated figures differ from the derived ones. The point of the whole row: an override
+  // with no explanation is indistinguishable from a typo six months later.
+  note           String?
+  // WHO stated it and WHEN — the audit trail lives on the record itself, not only in the log,
+  // so the ledger can show it beside the figure without a second lookup.
+  updatedBy      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("client_ledger_override")
 }
 
 model Patent {
@@ -569,6 +741,11 @@ model Patent {
   clientId       String
   serial         Int       // 1..N within the client
   handle         String    // "Pat_MLK_1" — the non-secret, shareable identifier
+  // Handles this patent used to have. A client-code rename re-mints every handle under it, and
+  // the old ones are already out in the world — quoted in emails, written on reports we sent.
+  // Keeping them means an ID a client quotes back still resolves instead of returning nothing.
+  // Append-only, oldest first; the live handle is never in here.
+  formerHandles  String[]  @default([])
   // CONFIDENTIAL real patent number — never selected for a non-`patent.manage` actor.
   realNumber     String
   // Optional attached patent document (PDF/media), stored via the shared Document + blob table.
@@ -781,6 +958,7 @@ model Task {
   currentStatus WorkflowStatus?  @relation("TaskCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
   assignedBy    User?            @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
   projectTasks  ProjectTask[]
+  teamTasks     TeamTask[]
   assignees     TaskAssignee[]
   subtasks      Subtask[]
   successors    TaskDependency[] @relation("DependencyPredecessor")
@@ -899,9 +1077,15 @@ model Checklist {
 // and cannot be deleted (enforced in TaskListsService).
 // ─────────────────────────────────────────────────────────────
 
+// A list/column of tasks. Belongs to EITHER a project or a team space — exactly one, enforced by
+// a database check. Two columns rather than one polymorphic pair because each keeps a real
+// foreign key, so a deleted project or team takes its lists with it instead of orphaning them.
 model TaskList {
   id          String    @id @default(cuid())
-  projectId   String
+  // Nullable since Phase 3: a list on a team space has no project. Every pre-existing row has a
+  // project, and every query that filters on projectId keeps working untouched.
+  projectId   String?
+  teamId      String?
   name        String
   isDefault   Boolean   @default(false)
   sequence    Int       @default(0)
@@ -909,10 +1093,13 @@ model TaskList {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  team         Team?         @relation(fields: [teamId], references: [id], onDelete: Cascade)
   projectTasks ProjectTask[]
+  teamTasks    TeamTask[]
 
   @@index([projectId])
+  @@index([teamId])
   @@map("task_list")
 }
 
@@ -1281,12 +1468,22 @@ model LeaveType {
   @@map("leave_type")
 }
 
+// A day the FIRM IS CLOSED. Everything in this table is a non-working day for everyone — twelve
+// separate queries across attendance, capacity, leave, timesheets, performance and the digest read
+// it that way, none of them filtering on `type`.
+//
+// Which is why OPTIONAL holidays are NOT in here (see OptionalHoliday). An optional holiday is a
+// day off for the two people who chose it, not for the firm — putting one in this table hands the
+// whole company the day, which is how "Good Friday, optional" became a universal holiday.
 model Holiday {
   id             String   @id @default(cuid())
   organizationId String
   name           String
   date           DateTime
-  // PUBLIC | OPTIONAL | COMPANY
+  // PUBLIC | COMPANY — a closed day either way. (OPTIONAL is retired: see OptionalHoliday.)
+  // WEEKEND marks a holiday that happens to fall on a Saturday or Sunday: recorded so the
+  // published calendar matches the one HR issued, and granting nothing, because the day is
+  // already not a working day.
   type           String   @default("PUBLIC")
   recurring      Boolean  @default(false)
   createdAt      DateTime @default(now())
@@ -1296,6 +1493,57 @@ model Holiday {
   @@unique([organizationId, date])
   @@index([organizationId])
   @@map("holiday")
+}
+
+// The four OPTIONAL holidays the firm declares each year, of which each employee may take TWO.
+//
+// Deliberately its own table rather than a `type` on Holiday. Every working-day calculation in the
+// system reads Holiday and treats each row as a day the firm is shut — none of them look at the
+// type. An optional holiday is the opposite kind of fact: a day that is off for whoever chose it
+// and an ordinary working day for everybody else. Keeping the two apart means no existing
+// calculation had to be touched, and none of them can accidentally hand the whole firm a day off.
+//
+// The rules, from the published calendar: apply in advance, HR approves subject to team
+// requirements, and unused ones neither carry forward nor pay out — which needs no field, because
+// the allowance is simply counted per calendar year.
+model OptionalHoliday {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  date           DateTime
+  // The calendar year the allowance is counted against. Stored rather than derived from `date`
+  // so the yearly count is a plain indexed query.
+  year           Int
+  createdAt      DateTime @default(now())
+
+  organization Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  elections    OptionalHolidayElection[]
+
+  @@unique([organizationId, date])
+  @@index([organizationId, year])
+  @@map("optional_holiday")
+}
+
+// One person choosing one optional holiday. Approved = that date is off for them alone.
+model OptionalHolidayElection {
+  id                String    @id @default(cuid())
+  optionalHolidayId String
+  userId            String
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status            String    @default("PENDING")
+  reviewedBy        String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  optionalHoliday OptionalHoliday @relation(fields: [optionalHolidayId], references: [id], onDelete: Cascade)
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One request per person per holiday — asking twice is a mistake, not a second day off.
+  @@unique([optionalHolidayId, userId])
+  @@index([userId, status])
+  @@map("optional_holiday_election")
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1315,6 +1563,13 @@ model Timesheet {
   // while the PID is still to be assigned (inside the buffer window).
   taskId      String?
   issueId     String?
+  // Set when the time was logged against a TEAM SPACE task (HR, BD, operations) rather than a
+  // client project. Without it such an entry has a null projectId and is indistinguishable from
+  // one sitting in the "assign the PID later" buffer — so it would be chased for a PID it can
+  // never have, and counted as unattributed client work on the client ledger.
+  //
+  // Exactly one of projectId / teamId is meaningful; both null means the buffer.
+  teamId      String?
   // Non-project work category. null = a normal project/buffer/issue entry (the default, so
   // existing rows are unaffected). "OTHER" = miscellaneous non-project time (admin, internal
   // meetings, training) — never billable, never a PID buffer to assign.
@@ -1331,10 +1586,12 @@ model Timesheet {
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  team    Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
   task    Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
   issue   Issue?   @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
+  @@index([teamId, date])
   @@index([taskId, date])
   @@index([issueId])
   @@index([projectId])
@@ -2151,6 +2408,12 @@ model AppraisalCycle {
   periodEnd      DateTime?
   dueDate        DateTime?
   status         String    @default("DRAFT") // DRAFT | ACTIVE | CLOSED
+  // HALF_YEARLY | ANNUAL — the two the firm actually runs. Stored rather than inferred from the
+  // period dates, because a six-month period is not always a half-yearly review.
+  cycleType      String    @default("HALF_YEARLY")
+  // "26-27" — which financial year this belongs to, so a person's history reads as a year at a
+  // time rather than a list of cycles somebody has to date-sort by eye.
+  fyLabel        String?
   createdBy      String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -2162,6 +2425,68 @@ model AppraisalCycle {
   @@map("appraisal_cycle")
 }
 
+// What people are actually rated ON.
+//
+// A rating used to be a single integer, which says a person is "a 4" without saying at what. These
+// are the named criteria behind the number, and the number becomes their weighted average rather
+// than something typed directly.
+//
+// SCOPING is the part that matters: parameters differ by team and by position. A parameter applies
+// to somebody when it names their team space, or names their designation, or names neither — the
+// last meaning "everyone". A person's form is assembled from every parameter that matches them, so
+// a BD executive and a Research Associate are rated on genuinely different things without anyone
+// maintaining two separate forms.
+model AppraisalParameter {
+  id             String    @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  // Null on BOTH = applies to everyone. Either one set narrows it.
+  teamId         String?
+  designation    String?
+  // Relative importance within a person's own set. The overall rating is the weighted mean of the
+  // parameters that applied to them, so weights need not sum to anything in particular.
+  weight         Float     @default(1)
+  sequence       Int       @default(0)
+  active         Boolean   @default(true)
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         Team?            @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  scores       AppraisalScore[]
+
+  @@index([organizationId, active])
+  @@index([teamId])
+  @@map("appraisal_parameter")
+}
+
+// One parameter, scored on one appraisal: what the person said, and what their manager said.
+//
+// Both are 1-5 with 5 the highest, enforced in the service and by a database check — a scale that
+// can be violated is not a scale, and a stray 7 would silently skew every average built on it.
+model AppraisalScore {
+  id          String   @id @default(cuid())
+  appraisalId String
+  parameterId String
+  selfScore   Int?
+  managerScore Int?
+  comment     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  appraisal Appraisal          @relation(fields: [appraisalId], references: [id], onDelete: Cascade)
+  parameter AppraisalParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
+
+  // One score per parameter per appraisal. Scoring the same thing twice is a bug, not a second
+  // opinion.
+  @@unique([appraisalId, parameterId])
+  @@index([appraisalId])
+  @@map("appraisal_score")
+}
+
 model Appraisal {
   id             String    @id @default(cuid())
   cycleId        String
@@ -2170,18 +2495,32 @@ model Appraisal {
   reviewerId     String?
   // PENDING_SELF → PENDING_MANAGER → COMPLETED → ACKNOWLEDGED
   status         String    @default("PENDING_SELF")
-  selfRating     Int?
+  // Float, not Int. These are the WEIGHTED MEAN of the parameter scores, so 4.2 is a real and
+  // different answer from 4. Held as integers they silently truncated, and the financial-year
+  // figure — an average of these — lost precision twice over.
+  selfRating     Float?
   selfComments   String?
-  managerRating  Int?
+  managerRating  Float?
   managerComments String?
-  overallRating  Int?
+  overallRating  Float?
   submittedSelfAt    DateTime?
   submittedManagerAt DateTime?
   acknowledgedAt     DateTime?
+  // The review call — step three of the flow (self-assessment, manager remarks, then a call).
+  // Held as a real calendar event so it appears where every other commitment does, rather than
+  // as a date typed into an appraisal that nobody's calendar knows about.
+  reviewCallAt       DateTime?
+  reviewCallEventId  String?
+  // The PERFORMANCE SHEET — whatever the manager and employee worked from: a spreadsheet of
+  // numbers, a document of evidence, whatever the team actually uses. Stored through the shared
+  // Document table so it lands in the same on-disk blob storage as every other attachment.
+  sheetDocumentId    String?
+  sheetDocumentName  String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   cycle        AppraisalCycle  @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  scores       AppraisalScore[]
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employee     User            @relation("AppraisalEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
   reviewer     User?           @relation("AppraisalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)

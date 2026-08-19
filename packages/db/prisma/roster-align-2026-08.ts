@@ -39,7 +39,10 @@ const ROSTER: Record<string, Person> = {
 
   'ajay.sharma@squarkip.com':         { designation: 'Senior Associate Consultant',            role: 'Consultant' },
   'ritik.sharma@squarkip.com':        { designation: 'Senior BD Executive',                    role: 'Employee' },
-  'ankit.verma@squarkip.com':         { designation: 'Product Development & Research Associate', role: 'Employee' },
+  // Product Development: decided 17 Aug 2026 to carry Senior Consultant RIGHTS. The designations
+  // below are unchanged — this is a deliberate grant of system capability, not a promotion, and it
+  // is exactly the case this file exists to record: the title still says Associate and Intern.
+  'ankit.verma@squarkip.com':         { designation: 'Product Development & Research Associate', role: 'Senior Consultant' },
 
   'meetu.singh@squarkip.com':         { designation: 'Consultant',                             role: 'Consultant' },
   'vijay.mishra@squarkip.com':        { designation: 'Consultant',                             role: 'Consultant' },
@@ -61,7 +64,7 @@ const ROSTER: Record<string, Person> = {
   'rajesh.joshi@squarkip.com':        { designation: 'Intern- Research Associate',             role: 'Employee' },
   'aman.sharma@squarkip.com':         { designation: 'Intern- Research Associate',             role: 'Employee' },
   'geetesh.rathore@squarkip.com':     { designation: 'Intern- Research Associate',             role: 'Employee' },
-  'anant.gupta@squarkip.com':         { designation: 'Intern- Product Development & Research', role: 'Employee' },
+  'anant.gupta@squarkip.com':         { designation: 'Intern- Product Development & Research', role: 'Senior Consultant' },
 };
 
 /**

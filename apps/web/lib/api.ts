@@ -394,6 +394,11 @@ export type ApiProject = {
   code?: string | null;
   /** The client/matter this project is for. */
   client?: { id: string; name: string; code: string } | null;
+  /**
+   * True when the client is INFERRED from the tagged patents (and so cannot be edited on its
+   * own); false when it was named directly. Only present for actors who may see clients.
+   */
+  clientFromPatents?: boolean;
   /** Linked patent handles — confidential real numbers are never included here. */
   patents?: { patent: PatentOption }[];
   // See ApiTask: `null` = unset (and clears on update); an ABSENT clientDueDate means the
@@ -423,11 +428,118 @@ export type ApiProject = {
 };
 
 // ─── Patent-analysis client codes + confidential coded patents ────────────────
-export type ClientSummary = { id: string; name?: string | null; code: string; _count?: { patents: number } };
-/** Non-secret patent handle (for the project picker + project detail). */
-export type PatentOption = { id: string; handle: string; serial: number; clientId?: string };
+export type ClientSummary = {
+  id: string; name?: string | null; code: string;
+  /** Set = retired from day-to-day work. Reversible; nothing about the data changes. */
+  archivedAt?: string | null;
+  _count?: { patents: number; projects: number };
+  /** Projects still running (PLANNING/ACTIVE/ON_HOLD) — what archiving would leave orphaned. */
+  activeProjects?: number;
+};
+// ─── Team spaces (Phase 3) ───────────────────────────────────────────────────
+/** A space for work that is not client delivery: no PID, no client, no billability. */
+export type TeamSpace = {
+  id: string; name: string; description?: string | null;
+  archivedAt?: string | null; createdAt: string; createdBy?: string | null;
+  members: { userId: string; roleInTeam?: string | null; joinedAt?: string;
+    user: { id: string; firstName: string; lastName: string; email?: string; profilePhoto?: string | null; designation?: string | null } }[];
+  taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
+  _count?: { teamTasks: number };
+  /** Tasks not in a CLOSED status — what a wound-down space should not look busy with. */
+  openTasks?: number;
+};
+export type TeamTask = {
+  id: string; title: string; description?: string | null; priority: string;
+  startDate?: string | null; dueDate?: string | null;
+  estimatedHours?: number | null; actualHours?: number | null;
+  completionPercentage?: number; createdBy?: string; createdAt?: string;
+  currentStatus?: { id: string; name: string; colorHex?: string | null; type?: string | null } | null;
+  assignees: { userId: string; role?: string | null;
+    user: { id: string; firstName: string; lastName: string; profilePhoto?: string | null } }[];
+  _count?: { subtasks: number };
+  taskListId?: string | null; sequence?: number;
+};
+
+// ─── BD pipeline (Phase 3) ───────────────────────────────────────────────────
+export type DealStageDef = { value: string; label: string; probability: number; terminal?: boolean };
+export type DealActivity = {
+  id: string; type: string; note?: string | null;
+  fromStage?: string | null; toStage?: string | null;
+  occurredAt: string; createdBy: string; byName?: string | null;
+};
+export type Deal = {
+  id: string; company: string; title?: string | null; stage: string;
+  value?: number | null; currency: string;
+  ownerId: string; source?: string | null;
+  expectedCloseDate?: string | null; wonAt?: string | null; lostAt?: string | null;
+  lostReason?: string | null; clientId?: string | null; notes?: string | null; teamId?: string | null;
+  createdAt: string; updatedAt: string;
+  owner: { id: string; firstName: string; lastName: string; profilePhoto?: string | null };
+  client?: { id: string; code: string; name?: string | null } | null;
+  activities?: DealActivity[];
+};
+export type PipelineSummary = {
+  byStage: { stage: string; label: string; probability: number; count: number; value: number; weighted: number }[];
+  openCount: number; openValue: number;
+  /** Open pipeline weighted by each stage's probability. */
+  weightedForecast: number;
+  wonCount: number; wonValue: number; lostCount: number;
+  /** Share of CLOSED deals that were won. Null until something has closed. */
+  winRate: number | null;
+  avgCycleDays: number | null;
+  lostReasons: { reason: string; count: number }[];
+  /** More than one means the totals above mix currencies and cannot be summed honestly. */
+  currencies: string[];
+};
+
+// ─── Client ledger ───────────────────────────────────────────────────────────
+/** Recomputed from live projects and timesheets on every read — never stored. */
+export type LedgerDerived = {
+  projectCount: number; activeProjectCount: number; patentCount: number;
+  billableHours: number; nonBillableHours: number; totalHours: number;
+  contributorCount: number; firstLoggedAt?: string | null; lastLoggedAt?: string | null;
+};
+/** A Super Admin's stated figures. Null fields fall back to the derived ones. */
+export type LedgerOverride = {
+  billableHours: number | null; amount: number | null; currency: string;
+  note: string | null; updatedBy: string; updatedByName?: string | null; updatedAt: string;
+  /** The derived figure when the statement was made — the baseline drift is measured from. */
+  derivedHoursWhenSet?: number | null;
+};
+/** What to show: the override where one exists, the derived figure otherwise. */
+export type LedgerEffective = {
+  billableHours: number;
+  billableHoursSource: 'derived' | 'override';
+  amount: number | null;
+  currency: string;
+  /** How far the derived figure has moved since the statement. Null = nothing stated. */
+  driftHours?: number | null;
+  /** The statement is far enough behind the data to be worth revisiting. */
+  stale?: boolean;
+};
+/** Hours the ledger cannot attribute to any client, split by the reason. */
+export type LedgerUnattributed = {
+  totalHours: number; billableHours: number;
+  awaitingPid: number; onClientlessProjects: number; projectCount: number;
+};
+export type LedgerRow = {
+  id: string; code: string; name?: string | null; archivedAt?: string | null; createdAt: string;
+  derived: LedgerDerived; override: LedgerOverride | null; effective: LedgerEffective;
+};
+export type LedgerProject = {
+  id: string; code?: string | null; title: string; projectPhase: string; projectType?: string | null;
+  startDate?: string | null; dueDate?: string | null; completedAt?: string | null;
+  workingHours?: number | null; actualHours?: number | null;
+  billableHours: number; nonBillableHours: number; totalHours: number;
+};
+export type LedgerDetail = LedgerRow & { patentCount: number; projects: LedgerProject[] };
+
+/** Non-secret patent handle (for the project picker + project detail).
+ *  `formerHandles` = IDs this patent used to have, kept so an ID quoted from an old email
+ *  still finds it after a client-code rename. */
+export type PatentOption = { id: string; handle: string; serial: number; clientId?: string; formerHandles?: string[] };
 /** Portal OVERVIEW — patent IDs + serials, NO real number. */
-export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; documentId?: string | null; documentName?: string | null; client?: { id: string; name?: string | null; code: string } };
+export type PatentOverview = { id: string; handle: string; serial: number; clientId: string; documentId?: string | null; documentName?: string | null; formerHandles?: string[]; client?: { id: string; name?: string | null; code: string } };
 /** Portal REVEAL — includes the confidential real number (passcode-gated). */
 export type PatentFull = PatentOverview & { realNumber: string; createdAt?: string };
 
@@ -550,15 +662,47 @@ export type AppraisalGoal = {
   selfRating?: number | null; selfComment?: string | null; managerRating?: number | null; managerComment?: string | null; sequence: number;
 };
 export type AppraisalCycleRef = { id: string; name: string; status: string; dueDate?: string | null; periodStart?: string | null; periodEnd?: string | null };
+/** One criterion on an appraisal, with what each side scored it. 1-5, 5 highest. */
+export type AppraisalScore = {
+  id: string;
+  selfScore?: number | null;
+  managerScore?: number | null;
+  comment?: string | null;
+  parameter: { id: string; name: string; description?: string | null; weight: number; sequence: number };
+};
+/** A criterion HR maintains. Scoped to a team, a designation, or neither (= everyone). */
+export type AppraisalParameter = {
+  id: string; name: string; description?: string | null;
+  teamId?: string | null; designation?: string | null;
+  weight: number; sequence: number; active: boolean;
+  team?: { id: string; name: string } | null;
+};
 export type Appraisal = {
   id: string; cycleId: string; organizationId: string; employeeId: string; reviewerId?: string | null; status: string;
   selfRating?: number | null; selfComments?: string | null; managerRating?: number | null; managerComments?: string | null; overallRating?: number | null;
   submittedSelfAt?: string | null; submittedManagerAt?: string | null; acknowledgedAt?: string | null; createdAt: string; updatedAt: string;
   cycle?: AppraisalCycleRef; employee?: PersonLite; reviewer?: PersonLite | null; goals?: AppraisalGoal[];
+  /** The criteria this person was rated on — fixed at launch, so it is the form as it was. */
+  scores?: AppraisalScore[];
+  /** Step three: the review call, held as a real calendar event. */
+  reviewCallAt?: string | null; reviewCallEventId?: string | null;
+  /** The document the review was actually held over. */
+  sheetDocumentId?: string | null; sheetDocumentName?: string | null;
+};
+/** A person's completed reviews, plus a figure per financial year. */
+export type AppraisalHistory = {
+  reviews: {
+    id: string; overallRating?: number | null; selfRating?: number | null; managerRating?: number | null;
+    acknowledgedAt?: string | null;
+    cycle: { id: string; name: string; cycleType: string; fyLabel?: string | null; periodStart?: string | null; periodEnd?: string | null };
+  }[];
+  byFinancialYear: { fyLabel: string; reviews: number; rating: number }[];
 };
 export type AppraisalCycle = {
   id: string; organizationId: string; name: string; periodStart?: string | null; periodEnd?: string | null; dueDate?: string | null;
   status: string; createdBy: string; createdAt: string; updatedAt: string;
+  /** HALF_YEARLY | ANNUAL — the two the firm runs. */
+  cycleType?: string; fyLabel?: string | null;
   progress?: { total: number; completed: number; pendingSelf: number; pendingManager: number };
   appraisals?: Appraisal[];
 };
@@ -1092,20 +1236,140 @@ export const api = {
     /** What the completion form should prefill "working hours" with (logged time, else estimates). */
     completionHours: (id: string) =>
       req<{ loggedHours: number; estimatedHours: number; suggested: number }>(`/projects/${id}/completion-hours`),
+    /**
+     * Replace the project's tagged patents — the COMPLETE set, not a delta, so an empty array
+     * clears them. Open to anyone who can edit the project; the server derives the client from
+     * whatever is left and refuses a mix of two clients.
+     */
+    setPatents: (id: string, patentIds: string[]) =>
+      req<ApiProject>(`/projects/${id}/patents`, { method: 'PUT', body: JSON.stringify({ patentIds }) }),
+    /**
+     * Name the project's client directly — only accepted while it has NO tagged patents, since
+     * patents decide the client whenever there are any. `null` detaches it. Needs patent.manage.
+     */
+    setClient: (id: string, clientId: string | null) =>
+      req<ApiProject>(`/projects/${id}/client`, { method: 'PUT', body: JSON.stringify({ clientId }) }),
     addMember: (id: string, userId: string, projectRole?: string) =>
       req<ApiProject>(`/projects/${id}/members`, { method: 'POST', body: JSON.stringify({ userId, projectRole }) }),
     removeMember: (id: string, userId: string) =>
       req<ApiProject>(`/projects/${id}/members/${userId}`, { method: 'DELETE' }),
   },
 
-  // Client codes (the "MLK" grouping). Create/remove need patent.manage + the org passcode.
+  /**
+   * Team spaces — HR, BD, operations. `team.view` only opens the module; which spaces you can
+   * read is decided by membership server-side, exactly as it is for projects.
+   */
+  teams: {
+    list: () => req<TeamSpace[]>('/teams'),
+    get: (id: string) => req<TeamSpace>(`/teams/${id}`),
+    create: (data: { name: string; description?: string; memberIds?: string[] }) =>
+      req<TeamSpace>('/teams', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string }) =>
+      req<TeamSpace>(`/teams/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    archive: (id: string) => req<TeamSpace>(`/teams/${id}/archive`, { method: 'POST' }),
+    restore: (id: string) => req<TeamSpace>(`/teams/${id}/restore`, { method: 'POST' }),
+    remove: (id: string) => req<{ ok: boolean }>(`/teams/${id}`, { method: 'DELETE' }),
+    /** Replace the whole membership — idempotent, not a delta. */
+    setMembers: (id: string, userIds: string[]) =>
+      req<TeamSpace>(`/teams/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
+    removeMember: (id: string, userId: string) =>
+      req<TeamSpace>(`/teams/${id}/members/${userId}`, { method: 'DELETE' }),
+    createList: (id: string, name: string) =>
+      req<TeamSpace>(`/teams/${id}/lists`, { method: 'POST', body: JSON.stringify({ name }) }),
+    updateList: (id: string, listId: string, data: { name?: string; sequence?: number }) =>
+      req<TeamSpace>(`/teams/${id}/lists/${listId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    removeList: (id: string, listId: string) =>
+      req<TeamSpace>(`/teams/${id}/lists/${listId}`, { method: 'DELETE' }),
+    tasks: (id: string) => req<TeamTask[]>(`/teams/${id}/tasks`),
+    /** The statuses a team task can take — the same GLOBAL workflow projects use. */
+    taskStatuses: () => req<{ id: string; name: string; type: string; colorHex?: string | null }[]>('/teams/meta/statuses'),
+    /** Edit a task. `currentWorkflowStatusId` is how a task gets CLOSED — until it is, it keeps
+     *  consuming its owner's capacity. */
+    updateTask: (id: string, taskId: string, data: {
+      title?: string; description?: string; priority?: string; dueDate?: string | null;
+      estimatedHours?: number; completionPercentage?: number;
+      currentWorkflowStatusId?: string; assigneeIds?: string[];
+    }) => req<TeamTask[]>(`/teams/${id}/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    createTask: (id: string, data: {
+      title: string; taskListId: string; description?: string; priority?: string;
+      startDate?: string; dueDate?: string; estimatedHours?: number; assigneeIds?: string[];
+    }) => req<TeamTask[]>(`/teams/${id}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
+    moveTask: (id: string, taskId: string, taskListId: string, sequence?: number) =>
+      req<TeamTask[]>(`/teams/${id}/tasks/${taskId}/move`, { method: 'PUT', body: JSON.stringify({ taskListId, sequence }) }),
+    removeTask: (id: string, taskId: string) =>
+      req<TeamTask[]>(`/teams/${id}/tasks/${taskId}`, { method: 'DELETE' }),
+  },
+
+  /**
+   * The BD pipeline. Commercial information, so behind deal.view / deal.manage rather than the
+   * basics — but deliberately not scoped to your own deals, since a pipeline you see a slice of
+   * cannot be forecast.
+   */
+  deals: {
+    stages: () => req<DealStageDef[]>('/deals/stages'),
+    summary: () => req<PipelineSummary>('/deals/summary'),
+    list: (opts: { stage?: string; ownerId?: string } = {}) => {
+      const q = new URLSearchParams();
+      if (opts.stage) q.set('stage', opts.stage);
+      if (opts.ownerId) q.set('ownerId', opts.ownerId);
+      const s = q.toString();
+      return req<Deal[]>(`/deals${s ? `?${s}` : ''}`);
+    },
+    get: (id: string) => req<Deal>(`/deals/${id}`),
+    create: (data: {
+      company: string; title?: string; stage?: string; value?: number; currency?: string;
+      ownerId?: string; source?: string; expectedCloseDate?: string; notes?: string;
+    }) => req<Deal>('/deals', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) =>
+      req<Deal>(`/deals/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Move along the pipeline. LOST requires a reason; WON may mint or link a client. */
+    move: (id: string, data: { stage: string; lostReason?: string; clientId?: string; newClientCode?: string }) =>
+      req<Deal>(`/deals/${id}/stage`, { method: 'PUT', body: JSON.stringify(data) }),
+    logActivity: (id: string, data: { type: string; note?: string; occurredAt?: string }) =>
+      req<Deal>(`/deals/${id}/activities`, { method: 'POST', body: JSON.stringify(data) }),
+    remove: (id: string) => req<{ ok: boolean }>(`/deals/${id}`, { method: 'DELETE' }),
+    /** A suggested client code for a company name, used when winning. */
+    codeSuggestion: (company: string) =>
+      req<{ code: string }>(`/deals/client-code-suggestion?company=${encodeURIComponent(company)}`),
+  },
+
+  // Client codes (the "MLK" grouping). Create/edit/remove need patent.manage + the org passcode;
+  // archive and restore need neither passcode nor any data change — they are reversible.
   clients: {
     list: () => req<ClientSummary[]>('/clients'),
+    /** Advisory code suggestion + look-alike clients for a typed name. Creates nothing. */
+    codeSuggestion: (name: string) =>
+      req<{ code: string; similar: { id: string; name?: string | null; code: string }[] }>(
+        `/clients/code-suggestion?name=${encodeURIComponent(name)}`),
     create: (data: { code: string; name?: string }) =>
       req<ClientSummary>('/clients', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { code?: string; name?: string }) =>
       req<ClientSummary>(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Retire a client: no new patents, gone from the project picker, everything kept. */
+    archive: (id: string) => req<ClientSummary>(`/clients/${id}/archive`, { method: 'POST' }),
+    restore: (id: string) => req<ClientSummary>(`/clients/${id}/restore`, { method: 'POST' }),
+    /** A REAL delete — the server refuses while any patent or project still points at it. */
     remove: (id: string) => req<{ ok: boolean }>(`/clients/${id}`, { method: 'DELETE' }),
+  },
+
+  /**
+   * The client ledger — what each client's work amounts to. A separate screen from the patent
+   * portal: this one never touches real patent numbers, so it needs no passcode, but it is keyed
+   * by client and so stays behind patent.manage (Super Admin).
+   */
+  clientLedger: {
+    list: (includeArchived = true) =>
+      req<LedgerRow[]>(`/client-ledger?includeArchived=${includeArchived}`),
+    detail: (clientId: string) => req<LedgerDetail>(`/client-ledger/${clientId}`),
+    /** Hours that reach no client — the PID buffer, and projects with no client set. */
+    unattributed: () => req<LedgerUnattributed>('/client-ledger/unattributed'),
+    /**
+     * State or clear the figures. An OMITTED field keeps its stored value; an explicit `null`
+     * clears it and hands the figure back to the derived calculation.
+     */
+    setOverride: (clientId: string, data: {
+      billableHours?: number | null; amount?: number | null; currency?: string; note?: string | null;
+    }) => req<LedgerDetail>(`/client-ledger/${clientId}/override`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 
   // Confidential coded patents. `list` is the passcode-free OVERVIEW (patent IDs, no real
@@ -1118,6 +1382,18 @@ export const api = {
       req<PatentFull[]>(`/patents/reveal${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
     options: (clientId?: string) =>
       req<PatentOption[]>(`/patents/options${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
+    /**
+     * Look up a patent ID that may be out of date — what a client quotes back from an email sent
+     * before their code was renamed. `current: false` means the ID asked for has been retired.
+     */
+    resolve: (handle: string) =>
+      req<{
+        id: string; handle: string; serial: number; formerHandles: string[];
+        current: boolean;
+        /** The ID is live for one patent and retired from another — genuinely ambiguous. */
+        ambiguous?: boolean;
+        searchedFor: string;
+      }>(`/patents/resolve?handle=${encodeURIComponent(handle)}`),
     register: (data: { clientId: string; realNumbers: string[] }) =>
       req<PatentOverview[]>('/patents', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, realNumber: string) =>
@@ -1376,17 +1652,48 @@ export const api = {
     updateGoal: (id: string, goalId: string, data: Partial<Pick<AppraisalGoal, 'title' | 'description' | 'selfRating' | 'selfComment' | 'managerRating' | 'managerComment'>>) =>
       req<Appraisal>(`/appraisals/${id}/goals/${goalId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     deleteGoal: (id: string, goalId: string) => req<Appraisal>(`/appraisals/${id}/goals/${goalId}`, { method: 'DELETE' }),
-    submitSelf: (id: string, data: { selfRating?: number; selfComments?: string }) =>
-      req<Appraisal>(`/appraisals/${id}/submit-self`, { method: 'POST', body: JSON.stringify(data) }),
-    submitManager: (id: string, data: { managerRating?: number; overallRating?: number; managerComments?: string }) =>
-      req<Appraisal>(`/appraisals/${id}/submit-manager`, { method: 'POST', body: JSON.stringify(data) }),
+    /** `scores` is what actually counts — the headline rating is their weighted mean. */
+    submitSelf: (id: string, data: {
+      selfRating?: number; selfComments?: string;
+      scores?: { parameterId: string; score?: number; comment?: string }[];
+    }) => req<Appraisal>(`/appraisals/${id}/submit-self`, { method: 'POST', body: JSON.stringify(data) }),
+    submitManager: (id: string, data: {
+      managerRating?: number; overallRating?: number; managerComments?: string;
+      scores?: { parameterId: string; score?: number; comment?: string }[];
+      /** Books the review call as a real calendar event for both parties. */
+      reviewCallAt?: string;
+    }) => req<Appraisal>(`/appraisals/${id}/submit-manager`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Book or move the review call on its own. Reviewer or HR. */
+    scheduleReviewCall: (id: string, reviewCallAt: string) =>
+      req<Appraisal>(`/appraisals/${id}/review-call`, { method: 'POST', body: JSON.stringify({ reviewCallAt }) }),
+    /** Every completed review for a person, plus a figure per financial year. */
+    history: (userId: string) => req<AppraisalHistory>(`/appraisals/history/${userId}`),
+
+    // Performance sheet — the document the review is actually held over.
+    uploadSheet: (id: string, file: File) => {
+      const form = new FormData(); form.append('file', file);
+      return uploadReq<Appraisal>(`/appraisals/${id}/sheet`, form);
+    },
+    downloadSheet: (id: string) => blobReq(`/appraisals/${id}/sheet/content`),
+    removeSheet: (id: string) => req<Appraisal>(`/appraisals/${id}/sheet`, { method: 'DELETE' }),
+
+    // Rating parameters (HR) — different per team and per position.
+    parameters: () => req<AppraisalParameter[]>('/appraisals/parameters'),
+    parametersFor: (userId: string) => req<AppraisalParameter[]>(`/appraisals/parameters/for/${userId}`),
+    createParameter: (data: {
+      name: string; description?: string; teamId?: string | null; designation?: string | null;
+      weight?: number; sequence?: number; active?: boolean;
+    }) => req<AppraisalParameter>('/appraisals/parameters', { method: 'POST', body: JSON.stringify(data) }),
+    updateParameter: (id: string, data: Record<string, unknown>) =>
+      req<AppraisalParameter>(`/appraisals/parameters/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    removeParameter: (id: string) => req<{ ok: boolean }>(`/appraisals/parameters/${id}`, { method: 'DELETE' }),
     acknowledge: (id: string) => req<Appraisal>(`/appraisals/${id}/acknowledge`, { method: 'POST' }),
     // cycles (HR)
     cycles: () => req<AppraisalCycle[]>('/appraisals/cycles'),
     getCycle: (id: string) => req<AppraisalCycle>(`/appraisals/cycles/${id}`),
-    createCycle: (data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string }) =>
+    createCycle: (data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string; cycleType?: string; fyLabel?: string }) =>
       req<AppraisalCycle>('/appraisals/cycles', { method: 'POST', body: JSON.stringify(data) }),
-    updateCycle: (id: string, data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string }) =>
+    updateCycle: (id: string, data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string; cycleType?: string; fyLabel?: string }) =>
       req<AppraisalCycle>(`/appraisals/cycles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     launch: (id: string, employeeIds?: string[]) =>
       req<{ ok: boolean; created: number }>(`/appraisals/cycles/${id}/launch`, { method: 'POST', body: JSON.stringify({ employeeIds }) }),

@@ -482,7 +482,15 @@ export class PerformanceService {
           // credited the wrong round. The task link stays only as a fallback for entries that
           // predate projectId being recorded.
           project: { select: { id: true, code: true, roundSeq: true, title: true } },
-          task: { select: { projectTasks: { select: { project: { select: { id: true, code: true, roundSeq: true, title: true } } }, take: 1 } } },
+          task: {
+            select: {
+              projectTasks: { select: { project: { select: { id: true, code: true, roundSeq: true, title: true } } }, take: 1 },
+              // Team-space work counts toward a person's hours like anything else, but it has no
+              // project to group under — so without this it silently vanished from the "where did
+              // your time go" breakdown, making the numbers not add up to the total.
+              teamTasks: { select: { team: { select: { id: true, name: true } } }, take: 1 },
+            },
+          },
         },
       }),
       this.prisma.task.findMany({
@@ -503,7 +511,11 @@ export class PerformanceService {
 
     const projMap = new Map<string, { name: string; pid: string | null; roundSeq: number | null; hours: number; billable: number }>();
     for (const s of sheets) {
-      const proj = s.project ?? s.task?.projectTasks?.[0]?.project;
+      const team = s.task?.teamTasks?.[0]?.team;
+      // A team space stands in for a project in this breakdown: same shape, no PID, so the
+      // person's hours still sum to their total instead of quietly losing the internal ones.
+      const proj = s.project ?? s.task?.projectTasks?.[0]?.project
+        ?? (team ? { id: team.id, title: team.name, code: null, roundSeq: null } : null);
       if (!proj) continue;
       const cur = projMap.get(proj.id)
         ?? { name: proj.title, pid: proj.code ?? null, roundSeq: proj.roundSeq ?? null, hours: 0, billable: 0 };
