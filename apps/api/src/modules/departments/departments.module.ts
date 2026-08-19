@@ -1,9 +1,11 @@
 import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post } from '@nestjs/common';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
+import { serialize, departmentKeyFor } from '../../common/db/serialize';
 
 class CreateDepartmentDto {
   // Ignored — the org is always taken from the session (never the client body).
@@ -110,8 +112,11 @@ export class DepartmentsService {
    * The database has a unique index too — this exists so the answer is a 409 explaining which name
    * clashed, rather than a Prisma constraint error surfacing as a 500.
    */
-  private async assertNameFree(organizationId: string, name: string, exceptId?: string) {
-    const clash = await this.prisma.department.findFirst({
+  private async assertNameFree(
+    organizationId: string, name: string, exceptId?: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const clash = await tx.department.findFirst({
       where: {
         organizationId,
         name: { equals: name.trim(), mode: 'insensitive' },
@@ -125,9 +130,14 @@ export class DepartmentsService {
   async create(organizationId: string, dto: CreateDepartmentDto) {
     const name = dto.name.trim();
     if (!name) throw new BadRequestException('A department needs a name.');
-    await this.assertNameFree(organizationId, name);
-    return this.prisma.department.create({
-      data: { organizationId, name, description: dto.description?.trim() || null },
+    // Name check and insert together. Apart, they raced: six simultaneous requests whose names
+    // differed only in capitals produced four departments, because the application check is
+    // case-insensitive while the database index is not, so nothing caught what slipped between.
+    return serialize(this.prisma, departmentKeyFor(organizationId), async tx => {
+      await this.assertNameFree(organizationId, name, undefined, tx);
+      return tx.department.create({
+        data: { organizationId, name, description: dto.description?.trim() || null },
+      });
     });
   }
 
@@ -135,13 +145,16 @@ export class DepartmentsService {
     await this.assertDeptInOrg(departmentId, organizationId);
     const name = dto.name?.trim();
     if (dto.name !== undefined && !name) throw new BadRequestException('A department needs a name.');
-    if (name) await this.assertNameFree(organizationId, name, departmentId);
-    return this.prisma.department.update({
-      where: { id: departmentId },
-      data: {
-        ...(name ? { name } : {}),
-        ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
-      },
+    // A rename can collide exactly as a create can, so it takes the same lock.
+    return serialize(this.prisma, departmentKeyFor(organizationId), async tx => {
+      if (name) await this.assertNameFree(organizationId, name, departmentId, tx);
+      return tx.department.update({
+        where: { id: departmentId },
+        data: {
+          ...(name ? { name } : {}),
+          ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
+        },
+      });
     });
   }
 
@@ -183,18 +196,20 @@ export class DepartmentsService {
     if (!user) throw new BadRequestException(`User ${dto.userId} is not in this organization`);
 
     // Checked rather than left to the unique index, so a second add reads as "already a member"
-    // instead of a Prisma constraint error surfacing as a 500.
-    const already = await this.prisma.departmentMember.findUnique({
-      where: { departmentId_userId: { departmentId, userId: dto.userId } },
-      select: { id: true },
-    });
-    if (already) {
-      throw new ConflictException(`${user.firstName} is already in this department.`);
-    }
-
-    return this.prisma.departmentMember.create({
-      data: { departmentId, userId: dto.userId, roleInDepartment: dto.roleInDepartment?.trim() || null },
-      include: { user: { select: MEMBER_USER_SELECT } },
+    // instead of a Prisma constraint error surfacing as a 500. Inside the lock so that two
+    // simultaneous adds cannot both find nothing — the index would catch it, but as a 500.
+    return serialize(this.prisma, `deptmem:${departmentId}`, async tx => {
+      const already = await tx.departmentMember.findUnique({
+        where: { departmentId_userId: { departmentId, userId: dto.userId } },
+        select: { id: true },
+      });
+      if (already) {
+        throw new ConflictException(`${user.firstName} is already in this department.`);
+      }
+      return tx.departmentMember.create({
+        data: { departmentId, userId: dto.userId, roleInDepartment: dto.roleInDepartment?.trim() || null },
+        include: { user: { select: MEMBER_USER_SELECT } },
+      });
     });
   }
 

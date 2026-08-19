@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Module, Res, UploadedFile, UseInterceptors,
+  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Module, Res, UploadedFile, UseGuards, UseInterceptors,
   NotFoundException, Param, Patch, Post,
 } from '@nestjs/common';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { PermissionService } from '../permissions/permission.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
+import { AppraisalAccessGuard } from './appraisal-access.guard';
 import { DocumentsModule } from '../documents/documents.module';
 import { DocumentsService, MAX_FILE_BYTES, isInlineSafe, type UploadedFileLike } from '../documents/documents.service';
 
@@ -694,21 +695,28 @@ export class AppraisalsController {
   @Post('cycles/:id/close') @RequirePermission('appraisal.manage') close(@Param('id') id: string) { return this.svc.closeCycle(id); }
   @Delete('cycles/:id') @RequirePermission('appraisal.manage') deleteCycle(@Param('id') id: string) { return this.svc.deleteCycle(id); }
 
-  // ── individual appraisal (access enforced in the service) ──────────────────────
+  // ── individual appraisal ──────────────────────────────────────────────────────
+  // AppraisalAccessGuard turns an outsider away BEFORE the body is validated, so probing
+  // somebody else's appraisal cannot be used to confirm it exists or learn the request shape.
+  // The service keeps its own, finer checks (only the employee may submit a self-assessment,
+  // only the reviewer may submit the review) — this is an earlier gate, not a replacement.
+  @UseGuards(AppraisalAccessGuard)
   @Get(':id') get(@Param('id') id: string) { return this.svc.getAppraisal(id); }
-  @Post(':id/goals') addGoal(@Param('id') id: string, @Body() dto: GoalDto) { return this.svc.addGoal(id, dto); }
-  @Patch(':id/goals/:goalId') updateGoal(@Param('id') id: string, @Param('goalId') goalId: string, @Body() dto: UpdateGoalDto) { return this.svc.updateGoal(id, goalId, dto); }
-  @Delete(':id/goals/:goalId') deleteGoal(@Param('id') id: string, @Param('goalId') goalId: string) { return this.svc.deleteGoal(id, goalId); }
-  @Post(':id/submit-self') submitSelf(@Param('id') id: string, @Body() dto: SubmitSelfDto) { return this.svc.submitSelf(id, dto); }
+  @UseGuards(AppraisalAccessGuard) @Post(':id/goals') addGoal(@Param('id') id: string, @Body() dto: GoalDto) { return this.svc.addGoal(id, dto); }
+  @UseGuards(AppraisalAccessGuard) @Patch(':id/goals/:goalId') updateGoal(@Param('id') id: string, @Param('goalId') goalId: string, @Body() dto: UpdateGoalDto) { return this.svc.updateGoal(id, goalId, dto); }
+  @UseGuards(AppraisalAccessGuard) @Delete(':id/goals/:goalId') deleteGoal(@Param('id') id: string, @Param('goalId') goalId: string) { return this.svc.deleteGoal(id, goalId); }
+  @UseGuards(AppraisalAccessGuard) @Post(':id/submit-self') submitSelf(@Param('id') id: string, @Body() dto: SubmitSelfDto) { return this.svc.submitSelf(id, dto); }
   /** Step three: book the review call. Reviewer or HR. */
-  @Post(':id/review-call') scheduleCall(@Param('id') id: string, @Body() dto: ReviewCallDto) { return this.svc.scheduleReviewCall(id, dto.reviewCallAt); }
+  @UseGuards(AppraisalAccessGuard) @Post(':id/review-call') scheduleCall(@Param('id') id: string, @Body() dto: ReviewCallDto) { return this.svc.scheduleReviewCall(id, dto.reviewCallAt); }
 
   // ── Performance sheet — the document the review is actually held over ─────
+  @UseGuards(AppraisalAccessGuard)
   @Post(':id/sheet')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FILE_BYTES, files: 1 } }))
   uploadSheet(@Param('id') id: string, @UploadedFile() file: UploadedFileLike | undefined) {
     return this.svc.uploadSheet(id, file);
   }
+  @UseGuards(AppraisalAccessGuard)
   @Get(':id/sheet/content')
   async sheetContent(@Param('id') id: string, @Res() res: Response) {
     const { doc, data } = await this.svc.sheetContent(id);
@@ -718,15 +726,15 @@ export class AppraisalsController {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.send(Buffer.from(data));
   }
-  @Delete(':id/sheet') removeSheet(@Param('id') id: string) { return this.svc.removeSheet(id); }
-  @Post(':id/submit-manager') submitManager(@Param('id') id: string, @Body() dto: SubmitManagerDto) { return this.svc.submitManager(id, dto); }
-  @Post(':id/acknowledge') acknowledge(@Param('id') id: string) { return this.svc.acknowledge(id); }
+  @UseGuards(AppraisalAccessGuard) @Delete(':id/sheet') removeSheet(@Param('id') id: string) { return this.svc.removeSheet(id); }
+  @UseGuards(AppraisalAccessGuard) @Post(':id/submit-manager') submitManager(@Param('id') id: string, @Body() dto: SubmitManagerDto) { return this.svc.submitManager(id, dto); }
+  @UseGuards(AppraisalAccessGuard) @Post(':id/acknowledge') acknowledge(@Param('id') id: string) { return this.svc.acknowledge(id); }
 }
 
 @Module({
   // DocumentsModule provides the shared on-disk blob storage the performance sheet rides on.
   imports: [DocumentsModule],
   controllers: [AppraisalsController],
-  providers: [AppraisalsService],
+  providers: [AppraisalsService, AppraisalAccessGuard],
 })
 export class AppraisalsModule {}

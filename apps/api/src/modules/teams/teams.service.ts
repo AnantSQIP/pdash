@@ -288,14 +288,21 @@ export class TeamsService {
   }
 
   // ── Lists (the board's columns) ────────────────────────────────────────────
+  /**
+   * Returns the list it just created, not the whole team space.
+   *
+   * It used to return the team, which meant a caller asking "make me a list" got back everything
+   * except a direct answer — it had to search the returned lists to find the one it had asked for,
+   * and had no reliable way to tell it apart from an identically named sibling. The screen ignores
+   * the response and refetches, so nothing depended on the old shape.
+   */
   async createList(teamId: string, dto: CreateTeamListDto) {
     await this.assertAccess(teamId);
     await this.assertWritable(teamId);
     const sequence = await this.prisma.taskList.count({ where: { teamId, deletedAt: null } });
-    await this.prisma.taskList.create({
+    return this.prisma.taskList.create({
       data: { teamId, name: dto.name.trim(), sequence },
     });
-    return this.get(teamId);
   }
 
   async updateList(teamId: string, listId: string, dto: UpdateTeamListDto) {

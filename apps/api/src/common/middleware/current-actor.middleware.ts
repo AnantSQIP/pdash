@@ -28,7 +28,7 @@ export class CurrentActorMiddleware implements NestMiddleware {
     const token = (req as any).cookies?.access_token as string | undefined;
     if (token) {
       try {
-        const payload = this.jwt.verify<{ sub?: string; sav?: number }>(token);
+        const payload = this.jwt.verify<{ sub?: string; sav?: number; sid?: string }>(token);
         const sub = payload?.sub ?? null;
         if (sub) {
           // Honour the signed securityVersion (sav): logout-all and password-change
@@ -39,7 +39,24 @@ export class CurrentActorMiddleware implements NestMiddleware {
             select: { securityVersion: true, status: true, deletedAt: true, mustResetPassword: true },
           });
           const savOk = payload.sav == null || payload.sav === user?.securityVersion;
-          if (user && user.deletedAt == null && user.status === 'ACTIVE' && savOk) {
+
+          // Honour the signed session id (sid): signing out revokes that session's refresh
+          // family, and an access token whose session is gone must stop working at once.
+          // Without this, logout revoked the refresh token while the access token kept working
+          // until it expired — a signed-out session that was not actually signed out.
+          //
+          // A token with no `sid` predates this and is accepted on `sav` alone, so shipping the
+          // change does not sign everybody out. The lookup is one indexed read on familyId.
+          let sessionOk = true;
+          if (savOk && user && payload.sid) {
+            const live = await this.prisma.refreshToken.findFirst({
+              where: { familyId: payload.sid, userId: sub, revokedAt: null },
+              select: { id: true },
+            });
+            sessionOk = !!live;
+          }
+
+          if (user && user.deletedAt == null && user.status === 'ACTIVE' && savOk && sessionOk) {
             actorId = sub;
             mustResetPassword = user.mustResetPassword;
           }

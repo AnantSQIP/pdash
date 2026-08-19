@@ -132,6 +132,11 @@ export default function PipelinePage() {
                       {formatMoney(stageValue, currency)}
                       {!s.terminal && <span className="ml-1">· {Math.round(s.probability * 100)}% odds</span>}
                     </p>
+                    {s.value === 'WON' && inStage.some(d => !d.client) && (
+                      <p className="text-[11px] font-medium text-amber-700 mt-1">
+                        {inStage.filter(d => !d.client).length} awaiting a client record
+                      </p>
+                    )}
                   </div>
                   <div className="p-2 space-y-2 min-h-[60px]">
                     {inStage.map(d => (
@@ -150,6 +155,14 @@ export default function PipelinePage() {
                         {d.client && (
                           <span className="mt-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-50 text-purple-700">
                             {d.client.code}
+                          </span>
+                        )}
+                        {/* Won, but no client record yet. Minting one needs the confidential-client
+                            permission, which BD does not have — so the deal is done and the handover
+                            to delivery is still outstanding. Nothing used to say so. */}
+                        {d.stage === 'WON' && !d.client && (
+                          <span className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 ring-1 ring-amber-200">
+                            <AlertTriangle size={9} /> Awaiting client record
                           </span>
                         )}
                         {d.lostReason && <p className="mt-1.5 text-[10px] text-gray-400 line-clamp-2">{d.lostReason}</p>}
