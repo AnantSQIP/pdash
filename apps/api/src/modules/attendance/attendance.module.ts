@@ -7,6 +7,7 @@ import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { serialize, leaveKeyFor, wfhKeyFor } from '../../common/db/serialize';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 import { PermissionService } from '../permissions/permission.service';
 
@@ -454,20 +455,26 @@ export class AttendanceService {
     if ((end.getTime() - start.getTime()) / 86_400_000 > 31) {
       throw new BadRequestException('WFH requests are limited to 31 days — please arrange longer periods with HR directly.');
     }
-    const clash = await this.prisma.wfhRequest.findFirst({
-      where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
-    });
-    if (clash) throw new BadRequestException('You already have a WFH request overlapping these dates.');
-    // A day can't be both approved leave and WFH — you're either off or working.
-    const onLeave = await this.prisma.leaveRequest.findFirst({
-      where: { userId, status: 'APPROVED', startDate: { lte: end }, endDate: { gte: start } },
-    });
-    if (onLeave) throw new BadRequestException('You have approved leave overlapping these dates.');
-
     const organizationId = await this.orgOf(userId);
-    const req = await this.prisma.wfhRequest.create({
-      data: { userId, organizationId, startDate: start, endDate: end, reason: data.reason.trim(), status: 'PENDING' },
-      include: { user: this.regUserSelect },
+    // Both clash tests and the write go in one locked transaction. Checked outside it they are
+    // races — four simultaneous requests for the same day were all accepted in testing, leaving
+    // HR three phantom requests to dismiss after approving the real one.
+    const req = await serialize(this.prisma, wfhKeyFor(userId), async tx => {
+      const clash = await tx.wfhRequest.findFirst({
+        where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
+        select: { id: true },
+      });
+      if (clash) throw new BadRequestException('You already have a WFH request overlapping these dates.');
+      // A day can't be both approved leave and WFH — you're either off or working.
+      const onLeave = await tx.leaveRequest.findFirst({
+        where: { userId, status: 'APPROVED', startDate: { lte: end }, endDate: { gte: start } },
+        select: { id: true },
+      });
+      if (onLeave) throw new BadRequestException('You have approved leave overlapping these dates.');
+      return tx.wfhRequest.create({
+        data: { userId, organizationId, startDate: start, endDate: end, reason: data.reason.trim(), status: 'PENDING' },
+        include: { user: this.regUserSelect },
+      });
     });
     const u = (req as any).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
@@ -1018,40 +1025,58 @@ export class LeaveService {
       if (!doc) throw new BadRequestException('That supporting document could not be found.');
       supportingDocId = doc.id;
     }
-    // Comp-off leave is spent against EARNED credits (approved comp-off claims), not a quota.
-    // A plan spends nothing yet, so it is not measured against either — the balance is checked
-    // for real when the plan is submitted as an application.
-    if (dto.plan) {
-      // nothing to debit
-    } else if (dto.leaveType === 'CO') {
-      const { available } = await this.compOffBalance(userId);
-      if (available < numDays) {
-        throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
-      }
-    } else if (type.annualQuota > 0) {
-      // Enforce the annual quota for regular leave types (CL/SL/EL …). Count both pending
-      // and approved days this year so stacked requests can't collectively exceed it.
-      const year = new Date().getUTCFullYear();
-      const yStart = new Date(Date.UTC(year, 0, 1));
-      const yEnd = new Date(Date.UTC(year + 1, 0, 1));
-      const usedAgg = await this.prisma.leaveRequest.aggregate({
-        where: { userId, leaveType: dto.leaveType, status: { in: ['PENDING', 'APPROVED'] }, startDate: { gte: yStart, lt: yEnd } },
-        _sum: { numDays: true },
+    // ── The three checks that decide whether this leave may exist, and the write, together ──
+    //
+    // The overlap test above, the comp-off balance and the annual quota are all "look at what is
+    // already there, then add to it". Run outside a transaction they are races, and testing
+    // proved it: four simultaneous requests for the same Wednesday were all accepted, because
+    // each read the day before any of them had written to it. HR then sees four requests for one
+    // absence, and if more than one is approved the balance is permanently wrong.
+    //
+    // The overlap check is repeated INSIDE the lock. The copy above stays because it fails fast
+    // and cheaply on the common case; this one is the copy that is actually authoritative.
+    const created = await serialize(this.prisma, leaveKeyFor(userId), async tx => {
+      const clashNow = await tx.leaveRequest.findFirst({
+        where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
+        select: { id: true },
       });
-      const used = usedAgg._sum.numDays ?? 0;
-      if (used + numDays > type.annualQuota) {
-        const remaining = Math.max(0, type.annualQuota - used);
-        throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
+      if (clashNow) throw new BadRequestException('You already have a leave (pending or approved) on one or more of these days — only one leave can apply to a day.');
+
+      // Comp-off leave is spent against EARNED credits (approved comp-off claims), not a quota.
+      // A plan spends nothing yet, so it is not measured against either — the balance is checked
+      // for real when the plan is submitted as an application.
+      if (dto.plan) {
+        // nothing to debit
+      } else if (dto.leaveType === 'CO') {
+        const { available } = await this.compOffBalance(userId);
+        if (available < numDays) {
+          throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
+        }
+      } else if (type.annualQuota > 0) {
+        // Enforce the annual quota for regular leave types (CL/SL/EL …). Count both pending
+        // and approved days this year so stacked requests can't collectively exceed it.
+        const year = new Date().getUTCFullYear();
+        const yStart = new Date(Date.UTC(year, 0, 1));
+        const yEnd = new Date(Date.UTC(year + 1, 0, 1));
+        const usedAgg = await tx.leaveRequest.aggregate({
+          where: { userId, leaveType: dto.leaveType, status: { in: ['PENDING', 'APPROVED'] }, startDate: { gte: yStart, lt: yEnd } },
+          _sum: { numDays: true },
+        });
+        const used = usedAgg._sum.numDays ?? 0;
+        if (used + numDays > type.annualQuota) {
+          const remaining = Math.max(0, type.annualQuota - used);
+          throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
+        }
       }
-    }
-    const created = await this.prisma.leaveRequest.create({
-      data: {
-        userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end,
-        numDays, dayType, halfPeriod,
-        alternateEmployeeId, alternateNumber, alternateAddress, supportingDocId,
-        reason: dto.reason ?? null, status: dto.plan ? 'DRAFT' : 'PENDING',
-      },
-      include: this.detailInclude,
+      return tx.leaveRequest.create({
+        data: {
+          userId, organizationId, leaveType: dto.leaveType, startDate: start, endDate: end,
+          numDays, dayType, halfPeriod,
+          alternateEmployeeId, alternateNumber, alternateAddress, supportingDocId,
+          reason: dto.reason ?? null, status: dto.plan ? 'DRAFT' : 'PENDING',
+        },
+        include: this.detailInclude,
+      });
     });
     // Nobody needs to review a plan, so it notifies nobody — not the approvers, not the stand-in.
     if (dto.plan) return created;
