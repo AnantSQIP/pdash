@@ -133,6 +133,13 @@ export class TasksService {
     // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
     await this.ensureAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
 
+    // Only when a status is explicitly named — the common path adds no query.
+    const createdClosed = dto.currentWorkflowStatusId
+      ? (await this.prisma.workflowStatus.findUnique({
+          where: { id: dto.currentWorkflowStatusId }, select: { type: true },
+        }))?.type === 'CLOSED'
+      : false;
+
     const task = await this.prisma.$transaction(async (tx) => {
       const created = await tx.task.create({
         data: {
@@ -148,6 +155,10 @@ export class TasksService {
           assignedById: dto.assigneeIds?.length ? (getActorId() ?? dto.createdBy ?? null) : null,
           workflowId,
           currentWorkflowStatusId: dto.currentWorkflowStatusId,
+          // Almost always an opening status, but a client may name any status in the workflow.
+          // A task created directly in a closed state is complete on arrival, and performance
+          // should see that rather than a null it would later have to guess about.
+          ...(createdClosed ? { completedAt: new Date() } : {}),
           assignees: dto.assigneeIds?.length
             ? { create: dto.assigneeIds.map((userId) => ({ userId })) }
             : undefined,
@@ -347,6 +358,14 @@ export class TasksService {
           completionPercentage: status.type === 'CLOSED'
             ? 100
             : (wasClosed ? 0 : task.completionPercentage),
+          // WHEN the work finished, recorded rather than inferred from updatedAt. Performance
+          // reads this: taking updatedAt meant a task closed in January but edited in March
+          // counted as completed in March, and an on-time delivery went retroactively late the
+          // moment anybody edited it. Set on the way in, cleared on reopen, and left alone when
+          // moving between two closed statuses — the work finished when it finished.
+          ...(status.type === 'CLOSED'
+            ? (wasClosed ? {} : { completedAt: new Date() })
+            : (wasClosed ? { completedAt: null } : {})),
         },
         include: this.taskInclude(),
       });

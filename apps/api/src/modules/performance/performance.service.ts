@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
+import { Prisma } from '@prisma/client';
 
 function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -17,9 +18,31 @@ function istDayKey(d: Date): string {
   return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 /** A task closed on or before its due DATE (both compared as IST calendar days) is on time. */
-function isOnTime(updatedAt: Date, dueDate: Date): boolean {
-  return istDayKey(updatedAt) <= dayKey(dueDate);
+/**
+ * Delivered on or before the day it was due.
+ *
+ * Takes the COMPLETION date, not `updatedAt`. It used to take updatedAt, which meant a task
+ * delivered on time turned retroactively late the moment anybody edited it afterwards — fixing a
+ * typo in a closed task could damage somebody's on-time rate, and that rate feeds their appraisal.
+ */
+function isOnTime(completedAt: Date, dueDate: Date): boolean {
+  return istDayKey(completedAt) <= dayKey(dueDate);
 }
+/**
+ * "Every timesheet entry except miscellaneous non-project time" — NULL-safely.
+ *
+ * `{ category: { not: 'OTHER' } }` looks like it says this and does not. `category` is nullable,
+ * and a normal task entry leaves it NULL; in SQL `NULL <> 'OTHER'` is NULL rather than true, so
+ * every ordinary entry was filtered OUT. On this database that is 1,225 of 1,225 rows: the
+ * Performance module reported ZERO hours logged for everybody, always, and nobody noticed because
+ * zero is a plausible-looking number next to a chart.
+ *
+ * The rest of the codebase already avoids this — capacity, the digest and the overdue sweep all
+ * write the OR form. Performance was the one module that did not.
+ */
+const notOtherTime = (): { OR: Prisma.TimesheetWhereInput[] } =>
+  ({ OR: [{ category: null }, { category: { not: 'OTHER' } }] });
+
 function pct(n: number, d: number): number {
   return d > 0 ? Math.round((n / d) * 100) : 0;
 }
@@ -121,7 +144,12 @@ export class PerformanceService {
       completionRate: pct(tasksCompletedAll, tasksAssigned),
       hoursLogged: cur.hoursLogged,
       billableHours: cur.billableHours,
-      billablePct: pct(cur.billableHours, cur.hoursLogged),
+      // Measured against CLIENT hours, not all hours. Team-space work is non-billable by rule —
+      // there is no client to bill — so counting it in the denominator gave everybody in HR and
+      // BD a flat 0%, sitting in the same column as a consultant at 85%. That is not a worse
+      // performance, it is a different kind of work, and the honest answer is "not applicable".
+      billablePct: cur.clientHours > 0 ? pct(cur.billableHours, cur.clientHours) : null,
+      clientHours: cur.clientHours,
       issuesReported: cur.issuesReported,
       issuesResolved: cur.issuesResolved,
       commentsPosted: cur.commentsPosted,
@@ -143,28 +171,39 @@ export class PerformanceService {
 
   /** Windowed throughput metrics for [from, to). */
   private async windowMetrics(userId: string, from: Date, to: Date) {
-    const [completed, hoursAgg, billableAgg, issuesReported, issuesResolved, commentsPosted, activityVolume] = await Promise.all([
+    const [completed, hoursAgg, billableAgg, clientAgg, issuesReported, issuesResolved, commentsPosted, activityVolume] = await Promise.all([
       this.prisma.task.findMany({
-        where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: from, lt: to } },
-        select: { dueDate: true, updatedAt: true },
+        // Windowed on completedAt, not updatedAt: a task closed in January but edited in March
+        // used to count as completed in MARCH, inflating the current period and emptying the one
+        // where the work actually happened.
+        where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to } },
+        select: { dueDate: true, completedAt: true },
       }),
       // Delivery performance excludes "Other" (non-project) time — admin/meeting/training hours
       // shouldn't inflate a person's delivery hours or score. (billable already excludes it.)
-      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, category: { not: 'OTHER' }, date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
+      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
       this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, billable: true, date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
+      // CLIENT hours — the denominator billable % is honestly measured against. Team-space work
+      // is excluded because it can never be billable, so including it would guarantee 0% for
+      // anyone in HR or BD however well they worked.
+      this.prisma.timesheet.aggregate({
+        where: { userId, deletedAt: null, ...notOtherTime(), teamId: null, date: { gte: from, lt: to } },
+        _sum: { hoursLogged: true },
+      }),
       this.prisma.issue.count({ where: { reportedBy: userId, deletedAt: null, createdAt: { gte: from, lt: to } } }),
       this.prisma.issue.count({ where: { assigneeId: userId, deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to } } }),
       this.prisma.comment.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
       this.prisma.analyticsEvent.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
     ]);
-    const withDue = completed.filter(t => t.dueDate);
-    const onTime = withDue.filter(t => t.dueDate && isOnTime(t.updatedAt, t.dueDate)).length;
+    const withDue = completed.filter(t => t.dueDate && t.completedAt);
+    const onTime = withDue.filter(t => t.dueDate && t.completedAt && isOnTime(t.completedAt, t.dueDate)).length;
     return {
       tasksCompleted: completed.length,
       onTimeRate: pct(onTime, withDue.length),
       withDueCount: withDue.length,
       hoursLogged: Math.round((hoursAgg._sum.hoursLogged ?? 0) * 10) / 10,
       billableHours: Math.round((billableAgg._sum.hoursLogged ?? 0) * 10) / 10,
+      clientHours: Math.round((clientAgg._sum.hoursLogged ?? 0) * 10) / 10,
       issuesReported, issuesResolved, commentsPosted, activityVolume,
     };
   }
@@ -210,7 +249,7 @@ export class PerformanceService {
 
     // live fallback aggregates (used where snapshots are absent)
     const [sheets, events] = await Promise.all([
-      this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, category: { not: 'OTHER' }, date: { gte: since } }, select: { date: true, hoursLogged: true } }),
+      this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, ...notOtherTime(), date: { gte: since } }, select: { date: true, hoursLogged: true } }),
       this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
     ]);
     const liveHours = new Map<string, number>();
@@ -292,10 +331,12 @@ export class PerformanceService {
   private async orgWindowMetrics(organizationId: string, from: Date, to: Date) {
     const [completedTasks, hoursByUser, resolvedByUser, activityByUser] = await Promise.all([
       this.prisma.task.findMany({
-        where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
-        select: { dueDate: true, updatedAt: true, assignees: { select: { userId: true } } },
+        // Windowed and judged on completedAt, exactly as the per-user query is — the two must
+        // agree or the leaderboard contradicts the individual pages it is built from.
+        where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
+        select: { dueDate: true, completedAt: true, assignees: { select: { userId: true } } },
       }),
-      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, category: { not: 'OTHER' }, date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
+      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
       this.prisma.issue.groupBy({ by: ['assigneeId'], where: { deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to }, assignee: { organizationId } }, _count: { _all: true } }),
       this.prisma.analyticsEvent.groupBy({ by: ['userId'], where: { organizationId, createdAt: { gte: from, lt: to } }, _count: { _all: true } }),
     ]);
@@ -310,11 +351,11 @@ export class PerformanceService {
     let distinctCompleted = 0, distinctWithDue = 0, distinctOnTime = 0;
     for (const t of completedTasks) {
       distinctCompleted++;
-      if (t.dueDate) { distinctWithDue++; if (isOnTime(t.updatedAt, t.dueDate)) distinctOnTime++; }
+      if (t.dueDate && t.completedAt) { distinctWithDue++; if (isOnTime(t.completedAt, t.dueDate)) distinctOnTime++; }
       for (const a of t.assignees) {
         const x = at(a.userId);
         x.tasksCompleted++;
-        if (t.dueDate) { x.withDueCount++; if (isOnTime(t.updatedAt, t.dueDate)) x.onTime++; }
+        if (t.dueDate && t.completedAt) { x.withDueCount++; if (isOnTime(t.completedAt, t.dueDate)) x.onTime++; }
       }
     }
     for (const h of hoursByUser) at(h.userId).hoursLogged = Math.round((h._sum.hoursLogged ?? 0) * 10) / 10;
@@ -338,8 +379,30 @@ export class PerformanceService {
       },
     });
     const { from, to, prevFrom, prevTo } = windowRange(days);
-    const scoreOf = (m: { tasksCompleted: number; onTimeRate: number; hoursLogged: number; issuesResolved: number; activityVolume: number }) =>
-      Math.round(m.tasksCompleted * 4 + m.onTimeRate * 0.5 + m.hoursLogged + m.issuesResolved * 3 + m.activityVolume * 0.5);
+    /**
+     * The ranking score: WHAT SOMEBODY DELIVERED, and how reliably.
+     *
+     * It used to be `tasks*4 + onTime*0.5 + hours + issues*3 + activity*0.5`, which on the real
+     * roster meant hours dominated everything. Somebody with 120 logged hours scored 120 points;
+     * completing a task was worth 4. One person ranked SECOND in the firm having completed
+     * nothing at all, on logged hours alone. Activity volume counted analytics events, so eight
+     * clicks around the app scored the same as finishing a piece of work.
+     *
+     * Hours and activity measure INPUT — how long someone was present and how much they clicked.
+     * Neither belongs in a ranking. Both are still reported as figures, because they are useful
+     * to look at; they are simply not what the ordering is built from.
+     *
+     * On-time is a MULTIPLIER rather than an addition, so reliability modulates delivery instead
+     * of being fifty free points. Ten tasks at 80% on time beats one task delivered perfectly,
+     * which is the right way round and was not true before.
+     */
+    const scoreOf = (m: { tasksCompleted: number; onTimeRate: number; withDueCount: number; issuesResolved: number }) => {
+      const output = m.tasksCompleted * 10 + m.issuesResolved * 5;
+      // No task carried a due date, so there was nothing to be late for. Treat that as neutral —
+      // scoring it as 0% on-time would penalise people for deadlines nobody ever set.
+      const reliability = m.withDueCount > 0 ? 0.5 + m.onTimeRate / 200 : 1;
+      return Math.round(output * reliability);
+    };
 
     // Set-based: two window aggregations (~8 queries total) instead of the old
     // per-user fan-out (14N+2 ≈ 394 round-trips for 28 users).
@@ -417,7 +480,7 @@ export class PerformanceService {
     for (const u of users) {
       const userId = u.id;
       const [sheets, events, comments] = await Promise.all([
-        this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, category: { not: 'OTHER' }, date: { gte: since } }, select: { date: true, hoursLogged: true, billable: true } }),
+        this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, ...notOtherTime(), date: { gte: since } }, select: { date: true, hoursLogged: true, billable: true } }),
         this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
         this.prisma.comment.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true } }),
       ]);
@@ -564,7 +627,7 @@ export class PerformanceService {
     const [hoursByUser, tasks, issues, projects] = await Promise.all([
       this.prisma.timesheet.groupBy({
         by: ['userId'],
-        where: { userId: { in: userIds }, deletedAt: null, category: { not: 'OTHER' }, date: { gte: from, lt: to } },
+        where: { userId: { in: userIds }, deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to } },
         _sum: { hoursLogged: true },
       }),
       this.prisma.task.findMany({
@@ -710,7 +773,7 @@ export class PerformanceService {
     } else {
       // live fallback when snapshots aren't built yet
       const [sheets, events] = await Promise.all([
-        this.prisma.timesheet.findMany({ where: { userId: { in: userIds }, deletedAt: null, category: { not: 'OTHER' }, date: { gte: since } }, select: { userId: true, date: true, hoursLogged: true, billable: true } }),
+        this.prisma.timesheet.findMany({ where: { userId: { in: userIds }, deletedAt: null, ...notOtherTime(), date: { gte: since } }, select: { userId: true, date: true, hoursLogged: true, billable: true } }),
         this.prisma.analyticsEvent.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
       ]);
       for (const s of sheets) {
