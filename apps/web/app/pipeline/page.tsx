@@ -4,13 +4,15 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  TrendingUp, Plus, Loader, ShieldAlert, X, Trophy, XCircle, AlertTriangle,
+  TrendingUp, Plus, Loader, ShieldAlert, X, Trophy, XCircle, AlertTriangle, Repeat, Clock, Gauge,
 } from 'lucide-react';
 import { api, type Deal, type DealStageDef, type PipelineSummary } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useOrg, byName } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { formatMoney } from '@/lib/ledger-format';
+import { DeliveryOutlookPanel, StageDurations, TypeBreakdown } from '@/components/pipeline/PipelineInsights';
+import type { ProjectTypeDef } from '@/lib/api';
 import { DealPanel } from '@/components/deals/DealPanel';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
@@ -111,6 +113,17 @@ export default function PipelinePage() {
           </>
         )}
 
+        {/* The two questions a board of cards cannot answer: where deals slow down, what we win,
+            and whether the team could absorb what is about to land. Collapsed by default —
+            reference for planning, not something to read on every visit. */}
+        {summary && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <DeliveryOutlookPanel enabled={enabled} />
+            <StageDurations summary={summary} currency={currency} />
+            <TypeBreakdown summary={summary} currency={currency} />
+          </div>
+        )}
+
         {/* The board */}
         <div className="overflow-x-auto">
           <div className="flex gap-4 min-w-min items-start">
@@ -137,6 +150,11 @@ export default function PipelinePage() {
                         {inStage.filter(d => !d.client).length} awaiting a client record
                       </p>
                     )}
+                    {!s.terminal && inStage.some(d => d.flags?.some(f => f.severity === 'urgent')) && (
+                      <p className="text-[11px] font-medium text-red-700 mt-1">
+                        {inStage.filter(d => d.flags?.some(f => f.severity === 'urgent')).length} need attention
+                      </p>
+                    )}
                   </div>
                   <div className="p-2 space-y-2 min-h-[60px]">
                     {inStage.map(d => (
@@ -157,13 +175,39 @@ export default function PipelinePage() {
                             {d.client.code}
                           </span>
                         )}
-                        {/* Won, but no client record yet. Minting one needs the confidential-client
-                            permission, which BD does not have — so the deal is done and the handover
-                            to delivery is still outstanding. Nothing used to say so. */}
-                        {d.stage === 'WON' && !d.client && (
-                          <span className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 ring-1 ring-amber-200">
-                            <AlertTriangle size={9} /> Awaiting client record
+                        {/* Already a client of ours — a warmer proposition than a cold name, and
+                            something only this system can know, because it holds the delivery history. */}
+                        {!d.client && d.existingClient && (
+                          <span className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+                            <Repeat size={9} /> Existing client · {d.existingClient.code}
                           </span>
+                        )}
+                        {/* What is wrong with this deal, computed rather than typed. The whole point
+                            of the board saying something back instead of only showing what was entered. */}
+                        {!!d.flags?.length && (
+                          <div className="mt-1.5 space-y-1">
+                            {d.flags.slice(0, 2).map(f => (
+                              <div key={f.kind}
+                                className={clsx('flex items-start gap-1 text-[10px] leading-snug rounded px-1.5 py-1',
+                                  f.severity === 'urgent'
+                                    ? 'bg-red-50 text-red-800 ring-1 ring-red-200'
+                                    : 'bg-amber-50 text-amber-800 ring-1 ring-amber-200')}>
+                                <AlertTriangle size={9} className="shrink-0 mt-[2px]" />
+                                <span>{f.message}</span>
+                              </div>
+                            ))}
+                            {d.flags.length > 2 && (
+                              <p className="text-[10px] text-gray-400 pl-1">+{d.flags.length - 2} more</p>
+                            )}
+                          </div>
+                        )}
+                        {/* How long it has sat here. A card cannot show you where deals die; this
+                            is the per-deal half of that question. */}
+                        {!s.terminal && (d.daysInStage ?? 0) > 0 && (
+                          <p className="mt-1 text-[10px] text-gray-400">
+                            {d.daysInStage}d in {s.label.toLowerCase()}
+                            {d.nextActionAt && <> · next {new Date(d.nextActionAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</>}
+                          </p>
                         )}
                         {d.lostReason && <p className="mt-1.5 text-[10px] text-gray-400 line-clamp-2">{d.lostReason}</p>}
                       </button>
@@ -225,6 +269,11 @@ function Stat({ label, value, sub, highlight }: { label: string; value: string; 
 
 function NewDealModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { users, currentUser } = useOrg();
+  // The same list projects are created from, so the two can never drift apart. A deal that
+  // becomes a project should already name the kind of project it becomes.
+  const { data: workTypes = [] } = useQuery<ProjectTypeDef[]>({
+    queryKey: ['project-types'], queryFn: () => api.projects.types(), staleTime: Infinity,
+  });
   const [company, setCompany] = useState('');
   const [title, setTitle] = useState('');
   const [value, setValue] = useState('');
@@ -233,6 +282,9 @@ function NewDealModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const [ownerId, setOwnerId] = useState(currentUser?.id ?? '');
   const [source, setSource] = useState('');
   const [expectedCloseDate, setExpectedCloseDate] = useState('');
+  const [nextActionAt, setNextActionAt] = useState('');
+  const [nextActionNote, setNextActionNote] = useState('');
+  const [expectedProjectType, setExpectedProjectType] = useState('');
   const [err, setErr] = useState('');
 
   const create = useMutation({
@@ -242,6 +294,9 @@ function NewDealModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
       currency, stage, ownerId: ownerId || undefined,
       source: source.trim() || undefined,
       expectedCloseDate: expectedCloseDate || undefined,
+      nextActionAt: nextActionAt || undefined,
+      nextActionNote: nextActionNote.trim() || undefined,
+      expectedProjectType: expectedProjectType || undefined,
     }),
     onSuccess: onCreated,
     onError: (e: unknown) => setErr(msg(e)),
@@ -307,6 +362,42 @@ function NewDealModal({ onClose, onCreated }: { onClose: () => void; onCreated: 
               <input type="date" value={expectedCloseDate} onChange={e => setExpectedCloseDate(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
+          </div>
+
+          {/* The kind of matter this would become. Captured now because once a deal closes,
+              nobody can say what it would have been — and it is what lets win/loss be read
+              by type of work rather than as one undifferentiated number. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Kind of work</label>
+            <select value={expectedProjectType} onChange={e => setExpectedProjectType(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+              <option value="">Not sure yet</option>
+              {workTypes.filter(t => !t.comingSoon).map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+            <p className="text-[11px] text-gray-400 mt-1">
+              Lets the pipeline tell you which kinds of work you actually win.
+            </p>
+          </div>
+
+          {/* The single field that stops deals being forgotten rather than lost. */}
+          <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 space-y-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Next step due</label>
+                <input type="date" value={nextActionAt} onChange={e => setNextActionAt(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">What is it</label>
+                <input value={nextActionNote} onChange={e => setNextActionNote(e.target.value)} maxLength={300}
+                  placeholder="Send the quote"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500" />
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-500">
+              A deal without a next step is the one that gets forgotten. The board flags any deal
+              that has none, and any whose step is overdue.
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Where it came from</label>

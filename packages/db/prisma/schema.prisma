@@ -300,34 +300,47 @@ model Team {
 // the Client it became, at which point its work starts flowing through projects and the client
 // ledger like any other. Before that point a prospect is just a name.
 model Deal {
-  id                String    @id @default(cuid())
-  organizationId    String
+  id                  String    @id @default(cuid())
+  organizationId      String
   // The BD team space that runs this pipeline. Optional — a deal can exist before a space does.
-  teamId            String?
+  teamId              String?
   // The prospect. Free text, because most prospects never become a Client record.
-  company           String
+  company             String
   // What the work would be — "Portfolio landscape, 40 patents".
-  title             String?
+  title               String?
   // NEW | CONTACTED | PROPOSAL | NEGOTIATION | WON | LOST
-  stage             String    @default("NEW")
-  value             Float?
-  currency          String    @default("INR")
+  stage               String    @default("NEW")
+  value               Float?
+  currency            String    @default("INR")
   // Whose deal it is. Distinct from createdBy: pipelines get handed over.
-  ownerId           String
+  ownerId             String
   // Where it came from — referral, conference, inbound. Free text; the taxonomy is not ours to fix.
-  source            String?
-  expectedCloseDate DateTime?
-  wonAt             DateTime?
-  lostAt            DateTime?
+  source              String?
+  expectedCloseDate   DateTime?
+  // THE NEXT STEP, and when it is due.
+  //
+  // A pipeline's real failure mode is not losing deals, it is forgetting them: a prospect sits at
+  // Proposal for four months and the board looks exactly as healthy as one that moved yesterday.
+  // Stage and value describe where a deal IS; this is the only field that says what happens next,
+  // and it is what makes an overdue deal visible rather than merely old.
+  nextActionAt        DateTime?
+  nextActionNote      String?
+  // Which kind of matter this would become — one of the project types (HML, FTO, Novelty,
+  // Invalidity...). Recorded on the DEAL so win and loss can be read by type: "we win FTO work
+  // and lose Invalidity" is a strategy signal, and it is unanswerable once the deal is closed
+  // unless it was captured while the deal was open.
+  expectedProjectType String?
+  wonAt               DateTime?
+  lostAt              DateTime?
   // Why it was lost. The single most useful field in any pipeline, and the most often skipped.
-  lostReason        String?
+  lostReason          String?
   // Set when a won deal is tied to a client — the join into the Phase 2 ledger.
-  clientId          String?
-  notes             String?
-  createdBy         String
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  deletedAt         DateTime?
+  clientId            String?
+  notes               String?
+  createdBy           String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
 
   team       Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   client     Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
