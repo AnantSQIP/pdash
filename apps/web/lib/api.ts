@@ -467,20 +467,48 @@ export type DealActivity = {
   fromStage?: string | null; toStage?: string | null;
   occurredAt: string; createdBy: string; byName?: string | null;
 };
+/** One thing wrong with a deal, computed rather than typed. */
+export type DealFlag = {
+  kind: 'STALE' | 'NEXT_ACTION_DUE' | 'NO_NEXT_ACTION' | 'CLOSE_DATE_PASSED' | 'STUCK_IN_STAGE' | 'AWAITING_CLIENT';
+  severity: 'warn' | 'urgent';
+  message: string;
+};
 export type Deal = {
   id: string; company: string; title?: string | null; stage: string;
   value?: number | null; currency: string;
   ownerId: string; source?: string | null;
   expectedCloseDate?: string | null; wonAt?: string | null; lostAt?: string | null;
   lostReason?: string | null; clientId?: string | null; notes?: string | null; teamId?: string | null;
+  nextActionAt?: string | null; nextActionNote?: string | null; expectedProjectType?: string | null;
   createdAt: string; updatedAt: string;
   owner: { id: string; firstName: string; lastName: string; profilePhoto?: string | null };
   client?: { id: string; code: string; name?: string | null } | null;
   activities?: DealActivity[];
+  /** Computed by the server — what is wrong with this deal, most pressing first. */
+  flags?: DealFlag[];
+  daysInStage?: number;
+  lastTouchedAt?: string;
+  /** Already a client of ours, matched by name even when the deal is not yet linked. */
+  existingClient?: { id: string; code: string; name?: string | null } | null;
+};
+export type DeliveryOutlook = {
+  horizonDays: number; from: string; to: string; atRisk: number;
+  items: {
+    dealId: string; company: string; title?: string | null; stage: string;
+    value?: number | null; currency: string; expectedCloseDate: string;
+    expectedProjectType?: string | null;
+    beyondHorizon: boolean; closeDatePassed: boolean;
+    freeHoursInWindow: number | null;
+    verdict: 'comfortable' | 'tight' | 'committed' | null;
+  }[];
 };
 export type PipelineSummary = {
   byStage: { stage: string; label: string; probability: number; count: number; value: number; weighted: number }[];
   openCount: number; openValue: number;
+  needsAttention?: number;
+  awaitingClientRecord?: number;
+  stageDurations?: { stage: string; medianDays: number | null; openNow: number; longestOpenDays: number | null }[];
+  byProjectType?: { projectType: string; won: number; lost: number; open: number; wonValue: number; winRate: number | null }[];
   /** Open pipeline weighted by each stage's probability. */
   weightedForecast: number;
   wonCount: number; wonValue: number; lostCount: number;
@@ -1324,6 +1352,8 @@ export const api = {
   deals: {
     stages: () => req<DealStageDef[]>('/deals/stages'),
     summary: () => req<PipelineSummary>('/deals/summary'),
+    deliveryOutlook: (days?: number) =>
+      req<DeliveryOutlook>(`/deals/delivery-outlook${days ? `?days=${days}` : ''}`),
     list: (opts: { stage?: string; ownerId?: string } = {}) => {
       const q = new URLSearchParams();
       if (opts.stage) q.set('stage', opts.stage);
@@ -1335,6 +1365,7 @@ export const api = {
     create: (data: {
       company: string; title?: string; stage?: string; value?: number; currency?: string;
       ownerId?: string; source?: string; expectedCloseDate?: string; notes?: string;
+      nextActionAt?: string; nextActionNote?: string; expectedProjectType?: string;
     }) => req<Deal>('/deals', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Record<string, unknown>) =>
       req<Deal>(`/deals/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
