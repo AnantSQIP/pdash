@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -148,8 +150,17 @@ export function ClientLedgerPanel({ clientId, onClose }: { clientId: string; onC
                       <tbody className="divide-y divide-gray-50">
                         {data.projects.map(p => (
                           <tr key={p.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-2 font-mono text-xs text-gray-500">{p.code ?? '—'}</td>
-                            <td className="px-3 py-2 text-gray-800">{p.title}</td>
+                            {/* The PID is the identifier people quote; making it the way through
+                                to the work is the whole point of it being here. The ledger used
+                                to be a dead end — a figure with no route to what produced it. */}
+                            <td className="px-4 py-2 font-mono text-xs">
+                              <Link href={`/projects/${p.id}`} className="text-brand-600 hover:underline">
+                                {p.code ?? '—'}
+                              </Link>
+                            </td>
+                            <td className="px-3 py-2 text-gray-800">
+                              <Link href={`/projects/${p.id}`} className="hover:text-brand-600">{p.title}</Link>
+                            </td>
                             <td className="px-3 py-2 text-xs text-gray-500">{p.projectPhase}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-700">{formatHours(p.billableHours)}</td>
                             <td className="px-3 py-2 text-right tabular-nums text-gray-500">{formatHours(p.totalHours)}</td>

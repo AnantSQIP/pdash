@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Loader, ShieldAlert, BookOpen, Archive, ChevronRight, AlertTriangle } from 'lucide-react';
 import { api, type LedgerRow, type LedgerUnattributed } from '@/lib/api';
+import { ChainGaps } from '@/components/ledger/ChainGaps';
 import { usePermissions } from '@/lib/permissions-context';
 import { ClientLedgerPanel } from '@/components/patents/ClientLedgerPanel';
 import { formatHours, formatMoney } from '@/lib/ledger-format';
@@ -75,6 +76,11 @@ export default function ClientLedgerPage() {
           <Stat label="Patents" value={String(totals.patents)} />
           <Stat label="Billable hours" value={formatHours(totals.billable)} />
         </div>
+
+        {/* Where the chain was never joined up. Above the table because a project with no client
+            is the reason a total below can be wrong, and reading the totals first would mean
+            reading them without knowing what is missing from them. */}
+        <ChainGaps />
 
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="px-4 sm:px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3">

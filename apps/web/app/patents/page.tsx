@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -375,6 +377,26 @@ export default function PatentsPortalPage() {
                           was {p.formerHandles.join(', ')}
                         </span>
                       ) : null}
+                      {/* WHERE THIS PATENT HAS ACTUALLY BEEN WORKED ON. Without it the portal
+                          answers "which patents exist" and not "what have we done about this
+                          one" — and a patent with a year of work behind it looked identical to
+                          one nobody has touched. */}
+                      {p.projects?.length ? (
+                        <span className="block mt-0.5 space-y-0.5">
+                          {p.projects.slice(0, 2).map(pr => (
+                            <Link key={pr.id} href={`/projects/${pr.id}`}
+                              className="block text-[10px] font-mono text-gray-500 hover:text-brand-600 truncate"
+                              title={pr.title}>
+                              {pr.code}{pr.roundSeq > 1 ? ` · r${pr.roundSeq}` : ''}
+                            </Link>
+                          ))}
+                          {p.projects.length > 2 && (
+                            <span className="block text-[10px] text-gray-400">+{p.projects.length - 2} more</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="block mt-0.5 text-[10px] text-amber-600">not tagged to any work</span>
+                      )}
                     </span>
                     <span className="text-sm text-gray-800 flex-1 font-mono min-w-0">
                       {editingId === p.id ? (
