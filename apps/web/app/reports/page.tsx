@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { TrendingUp, FolderOpen, CheckSquare, Users, Loader, BarChart2, Clock, ChevronDown, ChevronUp, ChevronRight, Edit3, Check, X, Search, Download, ExternalLink } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useOrg } from '@/lib/org-context';
 import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
 import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
+import { PeriodFilter, buildPeriods, inPeriod, type Period } from '@/components/reports/PeriodFilter';
 
 const PHASE_COLORS: Record<string, { color: string; label: string }> = {
   ACTIVE:    { color: '#34a853', label: 'Active'    },
@@ -234,6 +235,7 @@ export default function ReportsPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [openId, setOpenId] = useState<string | null>(null); // expanded project detail (spotlit)
   const [search, setSearch] = useState('');                   // by PID or project name
+  const [period, setPeriod] = useState<Period>(() => buildPeriods()[0]);   // All time
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ['analytics-dashboard', org?.id],
@@ -259,11 +261,22 @@ export default function ReportsPage() {
     else { setSortField(field); setSortDir('desc'); }
   }
 
+  // The period comes first: everything below — the table, the totals and the CSV — describes the
+  // window that was asked for, so the export can no longer disagree with the screen.
+  const inWindow = useMemo(() => projects.filter(pr => inPeriod(pr, period)), [projects, period]);
+
+  // What the exported file should say about itself. A CSV that does not state its period is a
+  // set of numbers with the question missing.
+  const exportCaption = [
+    period.key === 'all' ? 'All time' : `Period: ${period.label}`,
+    search.trim() ? `Filtered by “${search.trim()}”` : null,
+  ].filter(Boolean).join(' · ');
+
   // Search matches the PID or the name — the two things anyone actually has to hand.
   const q = search.trim().toLowerCase();
   const filtered = q
-    ? projects.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''}`.toLowerCase().includes(q))
-    : projects;
+    ? inWindow.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''}`.toLowerCase().includes(q))
+    : inWindow;
 
   const sorted = [...filtered].sort((a, b) => {
     const av = a[sortField]; const bv = b[sortField];
@@ -294,7 +307,7 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-center gap-2">
           {loading && <Loader size={16} className="animate-spin text-gray-400" />}
-          <ExportMenu getData={() => projectsExport(sorted, q ? `Filtered by “${search.trim()}”` : undefined)} disabled={loading || sorted.length === 0} />
+          <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />
         </div>
       </div>
 
@@ -412,11 +425,19 @@ export default function ReportsPage() {
           </div>
         </div>
 
+        {/* Which period the whole page describes. Above the table because it governs the table,
+            the totals and the export alike — the export used to ignore every filter on screen. */}
+        <div className="bg-white rounded-xl border border-gray-200 px-5 py-3">
+          <PeriodFilter value={period} onChange={setPeriod} matched={inWindow.length} total={projects.length} />
+        </div>
+
         {/* Projects table */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="flex items-center justify-between gap-3 flex-wrap px-5 py-4 border-b border-gray-100">
             <div className="flex items-center gap-3 min-w-0">
-              <h3 className="text-sm font-semibold text-gray-900 shrink-0">All Projects</h3>
+              <h3 className="text-sm font-semibold text-gray-900 shrink-0">
+                {period.key === 'all' ? 'All Projects' : period.label}
+              </h3>
               {/* Look one up by the number the client quotes, or by name. */}
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -443,7 +464,7 @@ export default function ReportsPage() {
               >
                 <Download size={14} /> Full CSV
               </button>
-              <ExportMenu getData={() => projectsExport(sorted, q ? `Filtered by “${search.trim()}”` : undefined)} disabled={loading || sorted.length === 0} />
+              <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />
             </div>
           </div>
 
