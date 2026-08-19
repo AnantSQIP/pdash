@@ -1,5 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { serialize, dayKeyFor } from '../../common/db/serialize';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
@@ -136,9 +138,16 @@ export class TimesheetsService {
     return tt?.teamId ?? null;
   }
 
-  /** No one can log more than a full day against a single calendar day (across all entries). */
-  private async assertDayCap(userId: string, date: Date, addingHours: number, excludeId?: string): Promise<void> {
-    const dayAgg = await this.prisma.timesheet.aggregate({
+  /** No one can log more than a full day against a single calendar day (across all entries).
+   *
+   *  `tx` MUST be supplied on the write paths. Read outside the transaction that inserts, this
+   *  check is a race: four simultaneous six-hour entries all read "0 logged" and all passed,
+   *  putting 24h against one day. See common/db/serialize.ts. */
+  private async assertDayCap(
+    userId: string, date: Date, addingHours: number, excludeId?: string,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<void> {
+    const dayAgg = await tx.timesheet.aggregate({
       where: { userId, date, deletedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) },
       _sum: { hoursLogged: true },
     });
@@ -212,13 +221,16 @@ export class TimesheetsService {
     if (dto.category === 'OTHER') {
       const title = dto.title?.trim();
       if (!title) throw new BadRequestException('A title is required for "Other" time.');
-      await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
-      const entry = await this.prisma.timesheet.create({
-        data: {
-          userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
-          billable: false, category: 'OTHER', title, notes: dto.notes,
-        },
-        include: INCLUDE,
+      // Cap check and insert in one locked transaction — see common/db/serialize.ts.
+      const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
+        await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
+        return tx.timesheet.create({
+          data: {
+            userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
+            billable: false, category: 'OTHER', title, notes: dto.notes,
+          },
+          include: INCLUDE,
+        });
       });
       await this.events.emit({
         action: EVENTS.TIME_LOGGED, entityType: 'TIMESHEET', entityId: entry.id, actorId,
@@ -252,14 +264,16 @@ export class TimesheetsService {
         select: { id: true, projectType: true },
       });
       if (!project) throw new NotFoundException('That project could not be found.');
-      await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
-      const entry = await this.prisma.timesheet.create({
-        data: {
-          userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
-          projectId: project.id, projectType: project.projectType,
-          billable, category: 'CLIENT_CALL', title, notes: dto.notes,
-        },
-        include: INCLUDE,
+      const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
+        await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
+        return tx.timesheet.create({
+          data: {
+            userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
+            projectId: project.id, projectType: project.projectType,
+            billable, category: 'CLIENT_CALL', title, notes: dto.notes,
+          },
+          include: INCLUDE,
+        });
       });
       await this.events.emit({
         action: EVENTS.TIME_LOGGED, entityType: 'TIMESHEET', entityId: entry.id, actorId,
@@ -272,12 +286,14 @@ export class TimesheetsService {
     //    means no project/type; the 24h/day cap still applies. `entryDay` is normalised to the
     //    calendar-day boundary so the cap can't be side-stepped with a time component. ──
     if (!dto.taskId) {
-      await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
-      const entry = await this.prisma.timesheet.create({
-        data: {
-          userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged, billable, notes: dto.notes,
-        },
-        include: INCLUDE,
+      const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
+        await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
+        return tx.timesheet.create({
+          data: {
+            userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged, billable, notes: dto.notes,
+          },
+          include: INCLUDE,
+        });
       });
       await this.events.emit({
         action: EVENTS.TIME_LOGGED, entityType: 'TIMESHEET', entityId: entry.id, actorId,
@@ -303,29 +319,34 @@ export class TimesheetsService {
     // No time may be booked to a completed/closed client matter (was UI-only before).
     if (projectId) await this.access.assertProjectWritable(projectId);
 
-    // Reject an identical re-submission (same task, day and hours) — a double-billing vector.
-    const dupe = await this.prisma.timesheet.findFirst({
-      where: { userId: actorId, taskId: dto.taskId, date: entryDay, hoursLogged: dto.hoursLogged, deletedAt: null },
-      select: { id: true },
-    });
-    if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
-    await this.assertDayCap(actorId, entryDay, dto.hoursLogged);
+    // The duplicate check and the cap check both look at the world and then write to it, so both
+    // go inside the lock. Read outside it they are races: four identical six-hour submissions
+    // arriving together each saw no duplicate and no hours logged, and all four were accepted.
+    const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
+      // Reject an identical re-submission (same task, day and hours) — a double-billing vector.
+      const dupe = await tx.timesheet.findFirst({
+        where: { userId: actorId, taskId: dto.taskId, date: entryDay, hoursLogged: dto.hoursLogged, deletedAt: null },
+        select: { id: true },
+      });
+      if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
+      await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
 
-    const entry = await this.prisma.timesheet.create({
-      data: {
-        userId: actorId,
-        taskId: dto.taskId,
-        projectId,
-        teamId,
-        projectType,
-        date: entryDay,
-        hoursLogged: dto.hoursLogged,
-        // Internal work has no client to bill, so it is non-billable regardless of what was
-        // asked for. Leaving the choice open would let HR and BD hours land in billable totals.
-        billable: teamId ? false : billable,
-        notes: dto.notes,
-      },
-      include: INCLUDE,
+      return tx.timesheet.create({
+        data: {
+          userId: actorId,
+          taskId: dto.taskId,
+          projectId,
+          teamId,
+          projectType,
+          date: entryDay,
+          hoursLogged: dto.hoursLogged,
+          // Internal work has no client to bill, so it is non-billable regardless of what was
+          // asked for. Leaving the choice open would let HR and BD hours land in billable totals.
+          billable: teamId ? false : billable,
+          notes: dto.notes,
+        },
+        include: INCLUDE,
+      });
     });
     await this.events.emit({
       action: EVENTS.TIME_LOGGED,
@@ -394,26 +415,22 @@ export class TimesheetsService {
     // can ever be flipped to billable.
     const billable = (entry.issueId || entry.category === 'OTHER') ? false : dto.billable;
 
-    // Re-enforce the 24h/day cap if the hours are being raised.
-    if (dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged) {
-      const dayAgg = await this.prisma.timesheet.aggregate({
-        where: { userId: entry.userId, date: entry.date, deletedAt: null, id: { not: id } },
-        _sum: { hoursLogged: true },
+    // Re-enforce the daily cap when the hours change, in the same locked transaction as the
+    // write. This used to be a second copy of the cap arithmetic sitting outside any transaction,
+    // which gave the edit path the identical race the create path had: two simultaneous edits
+    // both read the day's total before either had written, and both were allowed through.
+    const raising = dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged;
+    const updated = await serialize(this.prisma, dayKeyFor(entry.userId, entry.date), async tx => {
+      if (raising) await this.assertDayCap(entry.userId, entry.date, dto.hoursLogged!, id, tx);
+      return tx.timesheet.update({
+        where: { id },
+        data: {
+          hoursLogged: dto.hoursLogged,
+          billable,
+          notes: dto.notes,
+        },
+        include: INCLUDE,
       });
-      if ((dayAgg._sum.hoursLogged ?? 0) + dto.hoursLogged > MAX_HOURS_PER_DAY) {
-        const left = Math.max(0, MAX_HOURS_PER_DAY - (dayAgg._sum.hoursLogged ?? 0));
-        throw new BadRequestException(`That would exceed ${MAX_HOURS_PER_DAY}h logged for the day — ${left}h remaining.`);
-      }
-    }
-
-    const updated = await this.prisma.timesheet.update({
-      where: { id },
-      data: {
-        hoursLogged: dto.hoursLogged,
-        billable,
-        notes: dto.notes,
-      },
-      include: INCLUDE,
     });
     if (dto.hoursLogged !== undefined && entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
     return updated;

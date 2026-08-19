@@ -1288,8 +1288,10 @@ export const api = {
       req<TeamSpace>(`/teams/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
     removeMember: (id: string, userId: string) =>
       req<TeamSpace>(`/teams/${id}/members/${userId}`, { method: 'DELETE' }),
+    /** Returns the created list itself — the screen refetches the team separately. */
     createList: (id: string, name: string) =>
-      req<TeamSpace>(`/teams/${id}/lists`, { method: 'POST', body: JSON.stringify({ name }) }),
+      req<{ id: string; name: string; sequence: number; teamId: string | null }>(
+        `/teams/${id}/lists`, { method: 'POST', body: JSON.stringify({ name }) }),
     updateList: (id: string, listId: string, data: { name?: string; sequence?: number }) =>
       req<TeamSpace>(`/teams/${id}/lists/${listId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     removeList: (id: string, listId: string) =>

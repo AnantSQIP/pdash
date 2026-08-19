@@ -87,8 +87,22 @@ export class AuthService {
     };
   }
 
-  private signAccess(u: { id: string; organizationId: string; securityVersion: number }): string {
-    return this.jwt.sign({ sub: u.id, org: u.organizationId, sav: u.securityVersion });
+  /**
+   * `sid` is the refresh-token FAMILY id — one per sign-in, stable across every rotation of that
+   * session's refresh token.
+   *
+   * It exists so that signing out can end THIS session immediately. Before it, logout revoked the
+   * refresh token but the access token stayed usable until it expired, because a JWT is only a
+   * signature and nothing consulted the database about it. The alternative already in the code —
+   * bumping `securityVersion` — does revoke immediately, but revokes EVERY device, so signing out
+   * of a shared desktop would also sign you out on your phone. `sid` gives the narrow version:
+   * this session dies, others do not.
+   *
+   * Optional on purpose. A token minted before this change carries no `sid` and stays valid until
+   * it expires, so deploying this does not sign the whole firm out.
+   */
+  private signAccess(u: { id: string; organizationId: string; securityVersion: number }, sid?: string): string {
+    return this.jwt.sign({ sub: u.id, org: u.organizationId, sav: u.securityVersion, ...(sid ? { sid } : {}) });
   }
 
   private async issueRefresh(userId: string, familyId: string, ctx: Ctx) {
@@ -125,8 +139,10 @@ export class AuthService {
     if (user.status !== 'ACTIVE') throw new ForbiddenException('Account is not active');
 
     await this.prisma.user.update({ where: { id: user.id }, data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() } });
-    const accessToken = this.signAccess(user);
-    const refresh = await this.issueRefresh(user.id, randomBytes(16).toString('hex'), ctx);
+    // Refresh first: the access token has to carry the session id, which the refresh row owns.
+    const familyId = randomBytes(16).toString('hex');
+    const refresh = await this.issueRefresh(user.id, familyId, ctx);
+    const accessToken = this.signAccess(user, familyId);
     return { user: this.toAuthUser(user), accessToken, refreshToken: refresh.raw };
   }
 
@@ -161,13 +177,31 @@ export class AuthService {
 
     const next = await this.issueRefresh(user.id, row.familyId, ctx);
     await this.prisma.refreshToken.update({ where: { id: row.id }, data: { replacedById: next.id } });
-    const accessToken = this.signAccess(user);
+    // Same family, so the refreshed access token identifies the same session.
+    const accessToken = this.signAccess(user, row.familyId);
     return { user: this.toAuthUser(user), accessToken, refreshToken: next.raw };
   }
 
+  /**
+   * End THIS session.
+   *
+   * Revokes the whole refresh FAMILY rather than the single presented token. That is what makes
+   * the access token stop working immediately: the middleware asks whether this session still has
+   * a live refresh token, and after this there is none. Revoking only the one row left the rest of
+   * the rotation chain alive, so the session was not actually over.
+   *
+   * Other devices are untouched — each sign-in has its own family.
+   */
   async logout(rawToken?: string) {
     if (rawToken) {
-      await this.prisma.refreshToken.updateMany({ where: { tokenHash: sha256(rawToken), revokedAt: null }, data: { revokedAt: new Date() } });
+      const row = await this.prisma.refreshToken.findUnique({
+        where: { tokenHash: sha256(rawToken) }, select: { familyId: true },
+      });
+      if (row) {
+        await this.prisma.refreshToken.updateMany({
+          where: { familyId: row.familyId, revokedAt: null }, data: { revokedAt: new Date() },
+        });
+      }
     }
     return { ok: true };
   }
