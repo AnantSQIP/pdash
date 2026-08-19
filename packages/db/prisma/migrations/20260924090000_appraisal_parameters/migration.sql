@@ -110,3 +110,9 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE "appraisal" ALTER COLUMN "selfRating"    TYPE DOUBLE PRECISION;
 ALTER TABLE "appraisal" ALTER COLUMN "managerRating" TYPE DOUBLE PRECISION;
 ALTER TABLE "appraisal" ALTER COLUMN "overallRating" TYPE DOUBLE PRECISION;
+
+-- The performance sheet: whatever the manager and employee actually worked from. Held through the
+-- shared Document table, so it lands in the same on-disk blob storage as every other attachment
+-- and inherits its size limits and streaming — nothing new to build for storage.
+ALTER TABLE "appraisal" ADD COLUMN IF NOT EXISTS "sheetDocumentId"   TEXT;
+ALTER TABLE "appraisal" ADD COLUMN IF NOT EXISTS "sheetDocumentName" TEXT;

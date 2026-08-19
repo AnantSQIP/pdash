@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Module,
+  BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Injectable, Module, Res, UploadedFile, UseInterceptors,
   NotFoundException, Param, Patch, Post,
 } from '@nestjs/common';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
@@ -10,6 +10,10 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { PermissionService } from '../permissions/permission.service';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
+import { DocumentsModule } from '../documents/documents.module';
+import { DocumentsService, MAX_FILE_BYTES, isInlineSafe, type UploadedFileLike } from '../documents/documents.service';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true, designation: true };
 
@@ -82,6 +86,7 @@ export class AppraisalsService {
     private readonly actor: ActorContextService,
     private readonly notifications: NotificationsService,
     private readonly permissions: PermissionService,
+    private readonly documents: DocumentsService,
   ) {}
 
   private actorId(): string {
@@ -593,6 +598,60 @@ export class AppraisalsService {
     return { ok: true };
   }
 
+  /**
+   * Attach (or replace) the performance sheet.
+   *
+   * The employee, their reviewer and HR may all attach one — the sheet is the thing the
+   * conversation is held over, and either side may be the one holding it. Replacing soft-deletes
+   * the previous blob so storage does not accumulate every draft.
+   */
+  async uploadSheet(id: string, file: UploadedFileLike | undefined) {
+    const actorId = this.actorId();
+    const a = await this.loadAppraisal(id);
+    if (a.employeeId !== actorId && a.reviewerId !== actorId && !(await this.canManage(actorId))) {
+      throw new ForbiddenException('You cannot attach a sheet to this appraisal.');
+    }
+    const doc = await this.documents.upload(file);
+    if (!doc) throw new BadRequestException('Upload failed.');
+    if (a.sheetDocumentId) {
+      await this.prisma.document.update({
+        where: { id: a.sheetDocumentId }, data: { deletedAt: new Date() },
+      }).catch(() => {});
+    }
+    await this.prisma.appraisal.update({
+      where: { id }, data: { sheetDocumentId: doc.id, sheetDocumentName: doc.name },
+    });
+    return this.getAppraisal(id);
+  }
+
+  /** The sheet's bytes. Same three people who may attach one may read it. */
+  async sheetContent(id: string) {
+    const actorId = this.actorId();
+    const a = await this.loadAppraisal(id);
+    if (a.employeeId !== actorId && a.reviewerId !== actorId && !(await this.canManage(actorId))) {
+      throw new ForbiddenException('You cannot read this appraisal.');
+    }
+    if (!a.sheetDocumentId) throw new NotFoundException('No performance sheet attached.');
+    return this.documents.getContentForPatentPortal(a.sheetDocumentId);
+  }
+
+  async removeSheet(id: string) {
+    const actorId = this.actorId();
+    const a = await this.loadAppraisal(id);
+    if (a.employeeId !== actorId && a.reviewerId !== actorId && !(await this.canManage(actorId))) {
+      throw new ForbiddenException('You cannot change this appraisal.');
+    }
+    if (a.sheetDocumentId) {
+      await this.prisma.document.update({
+        where: { id: a.sheetDocumentId }, data: { deletedAt: new Date() },
+      }).catch(() => {});
+    }
+    await this.prisma.appraisal.update({
+      where: { id }, data: { sheetDocumentId: null, sheetDocumentName: null },
+    });
+    return this.getAppraisal(id);
+  }
+
   async acknowledge(id: string) {
     const actorId = this.actorId();
     const a = await this.loadAppraisal(id);
@@ -643,11 +702,30 @@ export class AppraisalsController {
   @Post(':id/submit-self') submitSelf(@Param('id') id: string, @Body() dto: SubmitSelfDto) { return this.svc.submitSelf(id, dto); }
   /** Step three: book the review call. Reviewer or HR. */
   @Post(':id/review-call') scheduleCall(@Param('id') id: string, @Body() dto: ReviewCallDto) { return this.svc.scheduleReviewCall(id, dto.reviewCallAt); }
+
+  // ── Performance sheet — the document the review is actually held over ─────
+  @Post(':id/sheet')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FILE_BYTES, files: 1 } }))
+  uploadSheet(@Param('id') id: string, @UploadedFile() file: UploadedFileLike | undefined) {
+    return this.svc.uploadSheet(id, file);
+  }
+  @Get(':id/sheet/content')
+  async sheetContent(@Param('id') id: string, @Res() res: Response) {
+    const { doc, data } = await this.svc.sheetContent(id);
+    const inline = isInlineSafe(doc.mimeType);
+    res.setHeader('Content-Type', inline ? (doc.mimeType as string) : 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(doc.name)}`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(Buffer.from(data));
+  }
+  @Delete(':id/sheet') removeSheet(@Param('id') id: string) { return this.svc.removeSheet(id); }
   @Post(':id/submit-manager') submitManager(@Param('id') id: string, @Body() dto: SubmitManagerDto) { return this.svc.submitManager(id, dto); }
   @Post(':id/acknowledge') acknowledge(@Param('id') id: string) { return this.svc.acknowledge(id); }
 }
 
 @Module({
+  // DocumentsModule provides the shared on-disk blob storage the performance sheet rides on.
+  imports: [DocumentsModule],
   controllers: [AppraisalsController],
   providers: [AppraisalsService],
 })

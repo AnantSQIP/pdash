@@ -3,9 +3,12 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Star, ClipboardList, UserCheck, Plus, X, Loader, Trash2, Rocket, ChevronRight, Send, BadgeCheck,
+  Star, ClipboardList, UserCheck, Plus, X, Loader, Trash2, Rocket, ChevronRight, Send, BadgeCheck, SlidersHorizontal,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { ParameterGrid } from '@/components/appraisals/ParameterGrid';
+import { ParametersAdmin } from '@/components/appraisals/ParametersAdmin';
+import { PerformanceSheet, ReviewCall, RatingHistory } from '@/components/appraisals/AppraisalExtras';
 import { api, type Appraisal, type AppraisalCycle, type AppraisalGoal } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useOrg } from '@/lib/org-context';
@@ -50,6 +53,16 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
   const [mgrRating, setMgrRating] = useState<number | undefined>();
   const [overallRating, setOverallRating] = useState<number | undefined>();
   const [mgrComments, setMgrComments] = useState('');
+  // Per-parameter marks being entered now, keyed by parameterId. Held as a draft so the grid can
+  // show what you have picked before anything is submitted.
+  const [draft, setDraft] = useState<Record<string, { score?: number; comment?: string }>>({});
+  const [callAt, setCallAt] = useState('');
+  const setScore = (pid: string, score: number) => setDraft(d => ({ ...d, [pid]: { ...d[pid], score } }));
+  const setNote  = (pid: string, comment: string) => setDraft(d => ({ ...d, [pid]: { ...d[pid], comment } }));
+  /** Only send what was actually touched, or a blank grid would wipe existing marks. */
+  const draftScores = () => Object.entries(draft)
+    .filter(([, v]) => v.score != null || (v.comment ?? '') !== '')
+    .map(([parameterId, v]) => ({ parameterId, score: v.score, comment: v.comment }));
   const { data: a, isLoading } = useQuery<Appraisal>({
     queryKey: ['appraisal', id], queryFn: () => api.appraisals.get(id),
   });
@@ -79,12 +92,30 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
   }
   async function submitSelf() {
     if (!confirm('Submit your self-assessment? You will not be able to edit it after.')) return;
-    try { await api.appraisals.submitSelf(id, { selfRating, selfComments: selfComments.trim() || undefined }); toast('Self-assessment submitted'); invalidate(); }
+    try {
+      await api.appraisals.submitSelf(id, {
+        selfComments: selfComments.trim() || undefined,
+        scores: draftScores(),
+        // Only sent when there are no parameters to derive from — otherwise the headline is
+        // the weighted mean of the grid, computed server-side.
+        ...(draftScores().length ? {} : { selfRating }),
+      });
+      setDraft({}); toast('Self-assessment submitted'); invalidate();
+    }
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
   }
   async function submitManager() {
     if (!confirm('Submit this review? The employee will be able to see it.')) return;
-    try { await api.appraisals.submitManager(id, { managerRating: mgrRating, overallRating: overallRating ?? mgrRating, managerComments: mgrComments.trim() || undefined }); toast('Review submitted'); invalidate(); }
+    try {
+      await api.appraisals.submitManager(id, {
+        managerComments: mgrComments.trim() || undefined,
+        scores: draftScores(),
+        ...(draftScores().length ? {} : { managerRating: mgrRating, overallRating: overallRating ?? mgrRating }),
+        ...(callAt ? { reviewCallAt: new Date(callAt).toISOString() } : {}),
+      });
+      setDraft({}); setCallAt('');
+      toast(callAt ? 'Review submitted and the call booked' : 'Review submitted'); invalidate();
+    }
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
   }
   async function acknowledge() {
@@ -95,7 +126,7 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="relative w-full max-w-lg bg-white shadow-2xl flex flex-col h-full">
+      <div className="relative w-full max-w-3xl bg-white shadow-2xl flex flex-col h-full">
         {isLoading || !a ? (
           <div className="flex items-center justify-center h-full"><Loader size={20} className="animate-spin text-gray-400" /></div>
         ) : (
@@ -159,20 +190,51 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
                 )}
               </div>
 
-              {/* Self-assessment summary */}
+              {/* What this person is rated ON — the criteria, and both sides' marks. */}
+              <div>
+                <div className="flex items-baseline justify-between gap-2 mb-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Rated on</p>
+                  <span className="text-[11px] text-gray-400">
+                    self <b className="text-gray-700">{a.selfRating ?? '—'}</b>
+                    {' · '}manager <b className="text-gray-700">{a.managerRating ?? '—'}</b>
+                    {' · '}overall <b className="text-gray-900">{a.overallRating ?? '—'}</b>
+                  </span>
+                </div>
+                <ParameterGrid
+                  scores={a.scores ?? []}
+                  editing={isEmployee && selfStage ? 'self' : isReviewer && mgrStage ? 'manager' : null}
+                  draft={draft}
+                  onScore={setScore}
+                  onComment={setNote}
+                />
+                {/* An appraisal with no parameters — launched before they existed, or HR has none
+                    set — still has to be ratable, or it can never be completed. Falls back to a
+                    single overall mark, which is exactly what these used to be. */}
+                {!(a.scores ?? []).length && (isEmployee && selfStage) && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-xs text-gray-500">Overall</span>
+                    <StarRating value={selfRating} onChange={setSelfRating} />
+                  </div>
+                )}
+                {!(a.scores ?? []).length && (isReviewer && mgrStage) && (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center gap-2"><span className="text-xs text-gray-500 w-16">Rating</span><StarRating value={mgrRating} onChange={setMgrRating} /></div>
+                    <div className="flex items-center gap-2"><span className="text-xs text-gray-500 w-16">Overall</span><StarRating value={overallRating ?? mgrRating} onChange={setOverallRating} /></div>
+                  </div>
+                )}
+              </div>
+
+              {/* Self-assessment narrative */}
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Self-assessment</p>
                 {isEmployee && selfStage ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2"><span className="text-xs text-gray-500">Overall</span><StarRating value={selfRating} onChange={setSelfRating} /></div>
-                    <textarea value={selfComments} onChange={e => setSelfComments(e.target.value)} rows={3} placeholder="Summarise your performance…"
-                      className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-400 resize-none" />
-                  </div>
+                  <textarea value={selfComments} onChange={e => setSelfComments(e.target.value)} rows={3} placeholder="Summarise your half…"
+                    className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-400 resize-none" />
                 ) : (
                   <div className="text-sm">
-                    <div className="flex items-center gap-2"><span className="text-xs text-gray-500">Overall</span><StarRating value={a.selfRating} readOnly /></div>
-                    {a.selfComments && <p className="text-gray-600 mt-1">“{a.selfComments}”</p>}
-                    {!a.selfComments && a.status === 'PENDING_SELF' && <p className="text-gray-400 text-xs">Not submitted yet.</p>}
+                    {a.selfComments
+                      ? <p className="text-gray-600">“{a.selfComments}”</p>
+                      : <p className="text-gray-400 text-xs">{a.status === 'PENDING_SELF' ? 'Not submitted yet.' : 'No comment.'}</p>}
                   </div>
                 )}
               </div>
@@ -183,20 +245,39 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Manager review</p>
                   {isReviewer && mgrStage ? (
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2"><span className="text-xs text-gray-500 w-16">Rating</span><StarRating value={mgrRating} onChange={setMgrRating} /></div>
-                      <div className="flex items-center gap-2"><span className="text-xs text-gray-500 w-16">Overall</span><StarRating value={overallRating ?? mgrRating} onChange={setOverallRating} /></div>
-                      <textarea value={mgrComments} onChange={e => setMgrComments(e.target.value)} rows={3} placeholder="Overall feedback…"
+                      <textarea value={mgrComments} onChange={e => setMgrComments(e.target.value)} rows={3} placeholder="Your remarks…"
                         className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-400 resize-none" />
+                      {/* Step three, offered at the moment the remarks are written — that is when
+                          the reviewer knows what the conversation needs to cover. */}
+                      <label className="block text-[11px] text-gray-500">
+                        Book the review call (optional — you can do it afterwards)
+                        <input
+                          type="datetime-local" value={callAt} onChange={e => setCallAt(e.target.value)}
+                          className="mt-1 block px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                        />
+                      </label>
                     </div>
                   ) : (
                     <div className="text-sm">
-                      <div className="flex items-center gap-2"><span className="text-xs text-gray-500 w-16">Overall</span><StarRating value={a.overallRating ?? a.managerRating} readOnly /></div>
-                      {a.managerComments && <p className="text-gray-600 mt-1">“{a.managerComments}”</p>}
-                      {!a.managerComments && a.status === 'PENDING_MANAGER' && <p className="text-gray-400 text-xs">Awaiting the reviewer.</p>}
+                      {a.managerComments
+                        ? <p className="text-gray-600">“{a.managerComments}”</p>
+                        : <p className="text-gray-400 text-xs">{a.status === 'PENDING_MANAGER' ? 'Awaiting the reviewer.' : 'No remarks.'}</p>}
                     </div>
                   )}
                 </div>
               )}
+
+              <ReviewCall
+                appraisal={a}
+                canSchedule={isReviewer && a.status !== 'PENDING_SELF'}
+                onChanged={invalidate}
+              />
+              <PerformanceSheet
+                appraisal={a}
+                canEdit={isEmployee || isReviewer}
+                onChanged={invalidate}
+              />
+              {a.employeeId && <RatingHistory userId={a.employeeId} />}
             </div>
 
             {/* Stage action */}
@@ -248,10 +329,14 @@ function CycleModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   const [periodStart, setStart] = useState('');
   const [periodEnd, setEnd] = useState('');
   const [dueDate, setDue] = useState('');
+  // The two the firm runs. Stated rather than guessed from the dates — a six-month period is not
+  // always a half-yearly review.
+  const [cycleType, setCycleType] = useState('HALF_YEARLY');
+  const [fyLabel, setFyLabel] = useState('');
   const [busy, setBusy] = useState(false);
   async function submit() {
     if (!name.trim()) return; setBusy(true);
-    try { await api.appraisals.createCycle({ name: name.trim(), periodStart: periodStart || undefined, periodEnd: periodEnd || undefined, dueDate: dueDate || undefined }); toast('Cycle created'); onDone(); onClose(); }
+    try { await api.appraisals.createCycle({ name: name.trim(), periodStart: periodStart || undefined, periodEnd: periodEnd || undefined, dueDate: dueDate || undefined, cycleType, fyLabel: fyLabel.trim() || undefined }); toast('Cycle created'); onDone(); onClose(); }
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } finally { setBusy(false); }
   }
   return (
@@ -266,6 +351,23 @@ function CycleModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
             <label className="flex-1 text-xs text-gray-500">Period end<input type="date" value={periodEnd} onChange={e => setEnd(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
           </div>
           <label className="block text-xs text-gray-500">Due date<input type="date" value={dueDate} onChange={e => setDue(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
+          <div className="flex gap-3">
+            <label className="flex-1 text-xs text-gray-500">
+              Kind
+              <select value={cycleType} onChange={e => setCycleType(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5 bg-white">
+                <option value="HALF_YEARLY">Half-yearly review</option>
+                <option value="ANNUAL">Annual appraisal</option>
+              </select>
+            </label>
+            <label className="flex-1 text-xs text-gray-500">
+              Financial year
+              <input value={fyLabel} onChange={e => setFyLabel(e.target.value)} placeholder="26-27" maxLength={10}
+                className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" />
+            </label>
+          </div>
+          <p className="text-[11px] text-gray-400">
+            The financial year groups a person&apos;s reviews — the FY figure is the mean of that year&apos;s cycles.
+          </p>
         </div>
         <div className="flex items-center justify-end gap-3 px-6 py-3 border-t border-gray-100">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
@@ -365,6 +467,8 @@ export default function AppraisalsPage() {
     const t = [{ id: 'mine', label: 'My reviews', icon: Star }];
     if (toReview.length) t.push({ id: 'review', label: `To review (${toReview.length})`, icon: UserCheck });
     if (canManage) t.push({ id: 'cycles', label: 'Cycles', icon: ClipboardList });
+    // What people are rated on. HR's, because it decides everyone else's form.
+    if (canManage) t.push({ id: 'parameters', label: 'Parameters', icon: SlidersHorizontal });
     return t;
   }, [toReview.length, canManage]);
   const [tab, setTab] = useState('mine');
@@ -408,6 +512,7 @@ export default function AppraisalsPage() {
           </div>
         )}
         {activeTab === 'cycles' && canManage && <CyclesTab onOpenAppraisal={setOpenId} />}
+        {activeTab === 'parameters' && canManage && <ParametersAdmin />}
       </div>
 
       {openId && <AppraisalDetail id={openId} currentUserId={currentUser?.id} onClose={() => setOpenId(null)} onChanged={refreshLists} />}

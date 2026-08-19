@@ -662,15 +662,47 @@ export type AppraisalGoal = {
   selfRating?: number | null; selfComment?: string | null; managerRating?: number | null; managerComment?: string | null; sequence: number;
 };
 export type AppraisalCycleRef = { id: string; name: string; status: string; dueDate?: string | null; periodStart?: string | null; periodEnd?: string | null };
+/** One criterion on an appraisal, with what each side scored it. 1-5, 5 highest. */
+export type AppraisalScore = {
+  id: string;
+  selfScore?: number | null;
+  managerScore?: number | null;
+  comment?: string | null;
+  parameter: { id: string; name: string; description?: string | null; weight: number; sequence: number };
+};
+/** A criterion HR maintains. Scoped to a team, a designation, or neither (= everyone). */
+export type AppraisalParameter = {
+  id: string; name: string; description?: string | null;
+  teamId?: string | null; designation?: string | null;
+  weight: number; sequence: number; active: boolean;
+  team?: { id: string; name: string } | null;
+};
 export type Appraisal = {
   id: string; cycleId: string; organizationId: string; employeeId: string; reviewerId?: string | null; status: string;
   selfRating?: number | null; selfComments?: string | null; managerRating?: number | null; managerComments?: string | null; overallRating?: number | null;
   submittedSelfAt?: string | null; submittedManagerAt?: string | null; acknowledgedAt?: string | null; createdAt: string; updatedAt: string;
   cycle?: AppraisalCycleRef; employee?: PersonLite; reviewer?: PersonLite | null; goals?: AppraisalGoal[];
+  /** The criteria this person was rated on — fixed at launch, so it is the form as it was. */
+  scores?: AppraisalScore[];
+  /** Step three: the review call, held as a real calendar event. */
+  reviewCallAt?: string | null; reviewCallEventId?: string | null;
+  /** The document the review was actually held over. */
+  sheetDocumentId?: string | null; sheetDocumentName?: string | null;
+};
+/** A person's completed reviews, plus a figure per financial year. */
+export type AppraisalHistory = {
+  reviews: {
+    id: string; overallRating?: number | null; selfRating?: number | null; managerRating?: number | null;
+    acknowledgedAt?: string | null;
+    cycle: { id: string; name: string; cycleType: string; fyLabel?: string | null; periodStart?: string | null; periodEnd?: string | null };
+  }[];
+  byFinancialYear: { fyLabel: string; reviews: number; rating: number }[];
 };
 export type AppraisalCycle = {
   id: string; organizationId: string; name: string; periodStart?: string | null; periodEnd?: string | null; dueDate?: string | null;
   status: string; createdBy: string; createdAt: string; updatedAt: string;
+  /** HALF_YEARLY | ANNUAL — the two the firm runs. */
+  cycleType?: string; fyLabel?: string | null;
   progress?: { total: number; completed: number; pendingSelf: number; pendingManager: number };
   appraisals?: Appraisal[];
 };
@@ -1620,17 +1652,48 @@ export const api = {
     updateGoal: (id: string, goalId: string, data: Partial<Pick<AppraisalGoal, 'title' | 'description' | 'selfRating' | 'selfComment' | 'managerRating' | 'managerComment'>>) =>
       req<Appraisal>(`/appraisals/${id}/goals/${goalId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     deleteGoal: (id: string, goalId: string) => req<Appraisal>(`/appraisals/${id}/goals/${goalId}`, { method: 'DELETE' }),
-    submitSelf: (id: string, data: { selfRating?: number; selfComments?: string }) =>
-      req<Appraisal>(`/appraisals/${id}/submit-self`, { method: 'POST', body: JSON.stringify(data) }),
-    submitManager: (id: string, data: { managerRating?: number; overallRating?: number; managerComments?: string }) =>
-      req<Appraisal>(`/appraisals/${id}/submit-manager`, { method: 'POST', body: JSON.stringify(data) }),
+    /** `scores` is what actually counts — the headline rating is their weighted mean. */
+    submitSelf: (id: string, data: {
+      selfRating?: number; selfComments?: string;
+      scores?: { parameterId: string; score?: number; comment?: string }[];
+    }) => req<Appraisal>(`/appraisals/${id}/submit-self`, { method: 'POST', body: JSON.stringify(data) }),
+    submitManager: (id: string, data: {
+      managerRating?: number; overallRating?: number; managerComments?: string;
+      scores?: { parameterId: string; score?: number; comment?: string }[];
+      /** Books the review call as a real calendar event for both parties. */
+      reviewCallAt?: string;
+    }) => req<Appraisal>(`/appraisals/${id}/submit-manager`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Book or move the review call on its own. Reviewer or HR. */
+    scheduleReviewCall: (id: string, reviewCallAt: string) =>
+      req<Appraisal>(`/appraisals/${id}/review-call`, { method: 'POST', body: JSON.stringify({ reviewCallAt }) }),
+    /** Every completed review for a person, plus a figure per financial year. */
+    history: (userId: string) => req<AppraisalHistory>(`/appraisals/history/${userId}`),
+
+    // Performance sheet — the document the review is actually held over.
+    uploadSheet: (id: string, file: File) => {
+      const form = new FormData(); form.append('file', file);
+      return uploadReq<Appraisal>(`/appraisals/${id}/sheet`, form);
+    },
+    downloadSheet: (id: string) => blobReq(`/appraisals/${id}/sheet/content`),
+    removeSheet: (id: string) => req<Appraisal>(`/appraisals/${id}/sheet`, { method: 'DELETE' }),
+
+    // Rating parameters (HR) — different per team and per position.
+    parameters: () => req<AppraisalParameter[]>('/appraisals/parameters'),
+    parametersFor: (userId: string) => req<AppraisalParameter[]>(`/appraisals/parameters/for/${userId}`),
+    createParameter: (data: {
+      name: string; description?: string; teamId?: string | null; designation?: string | null;
+      weight?: number; sequence?: number; active?: boolean;
+    }) => req<AppraisalParameter>('/appraisals/parameters', { method: 'POST', body: JSON.stringify(data) }),
+    updateParameter: (id: string, data: Record<string, unknown>) =>
+      req<AppraisalParameter>(`/appraisals/parameters/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    removeParameter: (id: string) => req<{ ok: boolean }>(`/appraisals/parameters/${id}`, { method: 'DELETE' }),
     acknowledge: (id: string) => req<Appraisal>(`/appraisals/${id}/acknowledge`, { method: 'POST' }),
     // cycles (HR)
     cycles: () => req<AppraisalCycle[]>('/appraisals/cycles'),
     getCycle: (id: string) => req<AppraisalCycle>(`/appraisals/cycles/${id}`),
-    createCycle: (data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string }) =>
+    createCycle: (data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string; cycleType?: string; fyLabel?: string }) =>
       req<AppraisalCycle>('/appraisals/cycles', { method: 'POST', body: JSON.stringify(data) }),
-    updateCycle: (id: string, data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string }) =>
+    updateCycle: (id: string, data: { name: string; periodStart?: string; periodEnd?: string; dueDate?: string; cycleType?: string; fyLabel?: string }) =>
       req<AppraisalCycle>(`/appraisals/cycles/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     launch: (id: string, employeeIds?: string[]) =>
       req<{ ok: boolean; created: number }>(`/appraisals/cycles/${id}/launch`, { method: 'POST', body: JSON.stringify({ employeeIds }) }),

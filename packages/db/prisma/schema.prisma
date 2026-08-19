@@ -2511,6 +2511,11 @@ model Appraisal {
   // as a date typed into an appraisal that nobody's calendar knows about.
   reviewCallAt       DateTime?
   reviewCallEventId  String?
+  // The PERFORMANCE SHEET — whatever the manager and employee worked from: a spreadsheet of
+  // numbers, a document of evidence, whatever the team actually uses. Stored through the shared
+  // Document table so it lands in the same on-disk blob storage as every other attachment.
+  sheetDocumentId    String?
+  sheetDocumentName  String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
