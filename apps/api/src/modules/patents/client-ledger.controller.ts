@@ -29,6 +29,12 @@ export class ClientLedgerController {
    * Hours that belong to no client. Declared BEFORE `:clientId` — Nest matches in order, so a
    * literal segment defined after a parameter one would never be reached.
    */
+  /** Where the client → patent → PID → hours chain is broken. Counts and identifiers only. */
+  @Get('gaps') @RequirePermission('patent.manage')
+  async gaps() {
+    return this.ledger.chainGaps(await this.actor.requireOrgId());
+  }
+
   @Get('unattributed') @RequirePermission('patent.manage')
   async unattributed() {
     return this.ledger.unattributed(await this.actor.requireOrgId());
