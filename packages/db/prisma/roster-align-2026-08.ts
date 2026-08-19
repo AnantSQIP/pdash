@@ -38,7 +38,7 @@ const ROSTER: Record<string, Person> = {
   'neha.shukla@squarkip.com':         { designation: 'Senior Consultant',                      role: 'Senior Consultant' },
 
   'ajay.sharma@squarkip.com':         { designation: 'Senior Associate Consultant',            role: 'Consultant' },
-  'ritik.sharma@squarkip.com':        { designation: 'Senior BD Executive',                    role: 'Employee' },
+  'ritik.sharma@squarkip.com':        { designation: 'Senior BD Executive',                    role: 'Business Development' },
   // Product Development: decided 17 Aug 2026 to carry Senior Consultant RIGHTS. The designations
   // below are unchanged — this is a deliberate grant of system capability, not a promotion, and it
   // is exactly the case this file exists to record: the title still says Associate and Intern.
