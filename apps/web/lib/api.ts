@@ -692,8 +692,18 @@ export type Policy = {
   id: string; organizationId: string; title: string; description?: string | null; category?: string | null;
   body?: string | null; documentId?: string | null; requiresAck: boolean; publishedBy: string;
   createdAt: string; updatedAt: string; document?: PolicyDoc | null; ackCount: number; acknowledgedByMe: boolean;
+  /** Bumped when the BODY or attached document changes — not on a rename. */
+  version: number;
+  /** True when you agreed to an EARLIER version: read it again, the terms moved. */
+  supersededForMe?: boolean;
 };
-export type PolicyAckStatus = { user: PersonLite; acknowledgedAt: string | null };
+export type PolicyAckStatus = {
+  user: PersonLite; acknowledgedAt: string | null;
+  acknowledgedVersion: number | null;
+  currentVersion: number;
+  /** Agreed to something, but not to what the policy says now. */
+  outdated: boolean;
+};
 
 // ── Appraisal review cycles ────────────────────────────────────────────────────
 export type AppraisalGoal = {

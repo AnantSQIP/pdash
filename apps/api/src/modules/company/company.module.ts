@@ -305,17 +305,25 @@ export class CompanyService {
       where: { organizationId },
       include: {
         document: { select: { id: true, name: true, fileUrl: true, mimeType: true, fileSize: true, deletedAt: true } },
-        acknowledgements: { select: { userId: true } },
+        acknowledgements: { select: { userId: true, version: true } },
         _count: { select: { acknowledgements: true } },
       },
       orderBy: [{ category: 'asc' }, { title: 'asc' }],
     });
-    return rows.map(({ acknowledgements, document, ...p }) => ({
-      ...p,
-      document: document && !document.deletedAt ? document : null,
-      ackCount: acknowledgements.length,
-      acknowledgedByMe: acknowledgements.some(a => a.userId === actorId),
-    }));
+    return rows.map(({ acknowledgements, document, ...p }) => {
+      const mine = acknowledgements.find(a => a.userId === actorId);
+      return {
+        ...p,
+        document: document && !document.deletedAt ? document : null,
+        // Only agreement to the CURRENT text counts toward the headline figure. Counting older
+        // agreements would report a policy as accepted by people who never saw what it now says.
+        ackCount: acknowledgements.filter(a => a.version >= p.version).length,
+        acknowledgedByMe: !!mine && mine.version >= p.version,
+        // Read the old wording and the terms have since changed — a different state from never
+        // having read it, and the reason to ask again rather than assume.
+        supersededForMe: !!mine && mine.version < p.version,
+      };
+    });
   }
 
   async createPolicy(dto: PolicyDto) {
@@ -340,8 +348,24 @@ export class CompanyService {
     if (!p) throw new NotFoundException('Policy not found');
     return p;
   }
+  /**
+   * Editing a policy, with the one distinction that matters: did the TERMS change?
+   *
+   * An acknowledgement is a record that somebody agreed to a text. Silently keeping every prior
+   * acknowledgement after rewriting that text turned the record into a claim nobody had made.
+   * So a change to the BODY or the attached DOCUMENT bumps the version, and everyone who agreed
+   * to the older wording is reported as needing to read it again.
+   *
+   * Renaming a policy, moving it between categories or correcting its summary does NOT bump it.
+   * Those are not changes of terms, and invalidating real consent over a typo would train people
+   * to click through the next one without reading.
+   */
   async updatePolicy(id: string, dto: PolicyDto) {
-    await this.ownPolicy(id);
+    const existing = await this.ownPolicy(id);
+    const bodyChanged = dto.body !== undefined && (dto.body?.trim() || null) !== (existing.body ?? null);
+    const docChanged = dto.documentId !== undefined && (dto.documentId || null) !== (existing.documentId ?? null);
+    const termsChanged = bodyChanged || docChanged;
+
     return this.prisma.policy.update({
       where: { id },
       data: {
@@ -349,6 +373,7 @@ export class CompanyService {
         ...(dto.body !== undefined ? { body: dto.body?.trim() || null } : {}),
         ...(dto.documentId !== undefined ? { documentId: dto.documentId || null } : {}),
         ...(dto.requiresAck !== undefined ? { requiresAck: !!dto.requiresAck } : {}),
+        ...(termsChanged ? { version: { increment: 1 } } : {}),
       },
     });
   }
@@ -357,25 +382,50 @@ export class CompanyService {
     await this.prisma.policy.delete({ where: { id } });
     return { ok: true };
   }
+  /**
+   * Records agreement to the version of the text this person just read.
+   *
+   * `update` sets the version rather than doing nothing, because a re-acknowledgement after the
+   * terms changed is the entire point: it moves somebody from "agreed to v1" to "agreed to v3".
+   * Leaving the row untouched would silently keep the old claim.
+   */
   async acknowledgePolicy(id: string) {
     const actorId = this.actorId();
-    await this.ownPolicy(id); // also asserts same org
+    const policy = await this.ownPolicy(id); // also asserts same org
     await this.prisma.policyAcknowledgement.upsert({
       where: { policyId_userId: { policyId: id, userId: actorId } },
-      create: { policyId: id, userId: actorId }, update: {},
+      create: { policyId: id, userId: actorId, version: policy.version },
+      update: { version: policy.version, acknowledgedAt: new Date() },
     });
     return { ok: true };
   }
   /** Who has / hasn't acknowledged — HR view of compliance. */
+  /**
+   * Who has agreed to the CURRENT text, who agreed to an older one, and who never has.
+   *
+   * The middle case did not exist before and is the one that matters: somebody who accepted the
+   * policy a year ago, before it was rewritten, was indistinguishable from somebody who accepted
+   * it this morning. Reporting them as compliant is a claim nobody made.
+   */
   async policyAckStatus(id: string) {
     const organizationId = await this.actor.requireOrgId();
-    await this.ownPolicy(id);
+    const policy = await this.ownPolicy(id);
     const [acks, users] = await Promise.all([
-      this.prisma.policyAcknowledgement.findMany({ where: { policyId: id }, select: { userId: true, acknowledgedAt: true } }),
+      this.prisma.policyAcknowledgement.findMany({ where: { policyId: id }, select: { userId: true, acknowledgedAt: true, version: true } }),
       this.prisma.user.findMany({ where: { organizationId, status: 'ACTIVE', deletedAt: null }, select: USER_SELECT }),
     ]);
-    const ackMap = new Map(acks.map(a => [a.userId, a.acknowledgedAt]));
-    return users.map(u => ({ user: u, acknowledgedAt: ackMap.get(u.id) ?? null }));
+    const ackMap = new Map(acks.map(a => [a.userId, a]));
+    return users.map(u => {
+      const a = ackMap.get(u.id);
+      return {
+        user: u,
+        acknowledgedAt: a?.acknowledgedAt ?? null,
+        acknowledgedVersion: a?.version ?? null,
+        currentVersion: policy.version,
+        // Agreed to something, but not to what the policy says now.
+        outdated: !!a && a.version < policy.version,
+      };
+    });
   }
 }
 

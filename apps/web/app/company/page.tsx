@@ -236,14 +236,19 @@ function PolicyModal({ existing, onClose, onDone }: { existing?: Policy; onClose
 
 function AckStatusModal({ policy, onClose }: { policy: Policy; onClose: () => void }) {
   const { data: rows = [], isLoading } = useQuery<PolicyAckStatus[]>({ queryKey: ['policy-acks', policy.id], queryFn: () => api.company.policyAckStatus(policy.id) });
-  const done = rows.filter(r => r.acknowledgedAt);
+  // Three states, not two. Somebody who agreed to last year's wording is not the same as
+  // somebody who agreed this morning, and reporting them together was the bug.
+  const done = rows.filter(r => r.acknowledgedAt && !r.outdated);
+  const outdated = rows.filter(r => r.outdated);
   const pending = rows.filter(r => !r.acknowledgedAt);
   return (
     <div className="fixed inset-0 z-[55] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 max-h-[calc(100dvh-4rem)] overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <div><h2 className="text-base font-semibold text-gray-900">Acknowledgements</h2><p className="text-xs text-gray-400">{done.length}/{rows.length} acknowledged</p></div>
+          <div><h2 className="text-base font-semibold text-gray-900">Acknowledgements</h2><p className="text-xs text-gray-400">
+            {done.length}/{rows.length} on the current version{policy.version > 1 ? ` (v${policy.version})` : ''}
+          </p></div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
         </div>
         <div className="overflow-y-auto px-4 py-3">
@@ -251,6 +256,24 @@ function AckStatusModal({ policy, onClose }: { policy: Policy; onClose: () => vo
             <>
               {pending.length > 0 && <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600 px-2 mb-1">Pending ({pending.length})</p>}
               {pending.map(r => <div key={r.user.id} className="flex items-center gap-2.5 px-2 py-1.5"><Avatar user={r.user} size={26} /><span className="text-sm text-gray-700">{fullName(r.user)}</span></div>)}
+              {outdated.length > 0 && (
+                <>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-700 px-2 mt-3 mb-1">
+                    Agreed to an older version ({outdated.length})
+                  </p>
+                  <p className="text-[11px] text-gray-400 px-2 mb-1">
+                    They accepted the policy before the terms changed, so their agreement does not
+                    cover what it says now.
+                  </p>
+                  {outdated.map(r => (
+                    <div key={r.user.id} className="flex items-center gap-2.5 px-2 py-1.5">
+                      <Avatar user={r.user} size={26} />
+                      <span className="text-sm text-gray-700 flex-1">{fullName(r.user)}</span>
+                      <span className="text-[11px] text-amber-700">v{r.acknowledgedVersion} · {fmtDate(r.acknowledgedAt)}</span>
+                    </div>
+                  ))}
+                </>
+              )}
               {done.length > 0 && <p className="text-[11px] font-semibold uppercase tracking-wide text-green-600 px-2 mt-3 mb-1">Acknowledged ({done.length})</p>}
               {done.map(r => (
                 <div key={r.user.id} className="flex items-center gap-2.5 px-2 py-1.5">
@@ -325,7 +348,15 @@ function PoliciesTab({ canManage }: { canManage: boolean }) {
                   {p.requiresAck && (
                     p.acknowledgedByMe
                       ? <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium"><CheckCircle2 size={13} /> You acknowledged</span>
-                      : <button onClick={() => acknowledge(p)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-50 text-brand-700 rounded-lg hover:bg-brand-100">I acknowledge this policy</button>
+                      : (
+                        <button onClick={() => acknowledge(p)}
+                          className={clsx('inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg',
+                            p.supersededForMe
+                              ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-200 hover:bg-amber-100'
+                              : 'bg-brand-50 text-brand-700 hover:bg-brand-100')}>
+                          {p.supersededForMe ? 'This has changed since you agreed — read and confirm' : 'I acknowledge this policy'}
+                        </button>
+                      )
                   )}
                 </div>
               </div>
