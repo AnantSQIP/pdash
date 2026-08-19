@@ -38,13 +38,13 @@ export function rateColor(v: number): string {
 // the info tooltips and the "How these are calculated" legend. Kept in sync with the
 // server-side formulas in performance.service.ts.
 export const METRIC_HELP: Record<string, string> = {
-  score: 'Contribution score = 4×tasks completed + 3×issues resolved + 1×hour logged + 0.5×on-time% + 0.5×activity. A single weighted number to rank delivered, timely work.',
+  score: 'Delivery score = (10×tasks completed + 5×issues resolved) × reliability, where reliability runs from 0.5 at 0% on-time to 1.0 at 100%. It measures OUTPUT: hours logged and app activity are shown as figures but deliberately not scored, because they measure how long somebody was present and how much they clicked rather than what they delivered. On-time multiplies rather than adds, so ten tasks at 80% on time beats one task delivered perfectly. Somebody with no deadlines at all is treated as neutral, not as 0% on-time.',
   tasksCompleted: 'Tasks moved to a Done/Closed status within the selected period.',
-  hoursLogged: 'Total hours booked to timesheets in the period.',
-  onTimeRate: 'Of the completed tasks that HAD a deadline, the share finished on or before it. Tasks with no due date are not counted.',
+  hoursLogged: 'Hours booked to timesheets in the period, excluding miscellaneous non-project time. Shown for context — it is no longer part of the delivery score, because hours measure how long someone was present rather than what they produced.',
+  onTimeRate: 'Of the completed tasks that HAD a deadline, the share finished on or before it. Tasks with no due date are not counted. Measured from the recorded completion date — but for tasks closed before 19 August 2026 that date was reconstructed from when the task was last edited, because it was never recorded. Those older figures are not reliable, and were not before either; everything completed since is accurate.',
   activityVolume: 'Number of tracked actions in the period — task & issue updates, status changes and comments. A proxy for how active someone was.',
   completionRate: 'Share of assigned tasks that are completed.',
-  billablePct: 'Share of logged hours marked billable.',
+  billablePct: 'Share of CLIENT hours marked billable. Team-space work is excluded — it can never be billable, so counting it would show 0% for anyone in HR or BD however well they worked. Reads n/a when there was no client work at all.',
   cycleTime: 'Average days from a task starting to being completed.',
 };
 

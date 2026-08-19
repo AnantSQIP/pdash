@@ -76,7 +76,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
   const radar = [
     { axis: 'Completion', v: k.completionRate },
     { axis: 'On-time', v: k.onTimeCompletionRate },
-    { axis: 'Billable', v: k.billablePct },
+    { axis: 'Billable', v: k.billablePct ?? 0 },
     { axis: 'Activity', v: Math.min(100, k.activityVolume * 8) },
     { axis: 'Issues', v: k.issuesReported ? Math.round((k.issuesResolved / k.issuesReported) * 100) : 0 },
   ];
@@ -114,7 +114,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
       ['On-time completion rate', `${k.onTimeCompletionRate}%`],
       ['Hours logged', `${k.hoursLogged}h`],
       ['Billable hours', `${k.billableHours}h`],
-      ['Billable %', `${k.billablePct}%`],
+      ['Billable %', k.billablePct === null ? 'n/a — no client work' : `${k.billablePct}%`],
       ['Issues reported', k.issuesReported],
       ['Issues resolved', k.issuesResolved],
       ['Comments posted', k.commentsPosted],
@@ -146,7 +146,15 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
           <div className="flex items-center justify-around">
             <GaugeCard value={k.completionRate} label="Completion" color={C.brand} />
             <GaugeCard value={k.onTimeCompletionRate} label="On-time" />
-            <GaugeCard value={k.billablePct} label="Billable" color={C.teal} />
+            {k.billablePct === null ? (
+              <div className="flex flex-col items-center justify-center text-center px-2" style={{ minWidth: 96 }}>
+                <span className="text-lg font-semibold text-gray-300">n/a</span>
+                <span className="text-[11px] text-gray-500 mt-1">Billable</span>
+                <span className="text-[10px] text-gray-400 mt-0.5 leading-tight">no client work<br />to measure against</span>
+              </div>
+            ) : (
+              <GaugeCard value={k.billablePct} label="Billable" color={C.teal} />
+            )}
           </div>
         </ChartCard>
         <ChartCard title="Task status mix">

@@ -971,6 +971,15 @@ model Task {
   completionPercentage    Int       @default(0)
   workflowId              String?
   currentWorkflowStatusId String?
+  // WHEN THE WORK WAS FINISHED, recorded rather than inferred.
+  //
+  // Performance used `updatedAt` as a stand-in, which is wrong in two ways that both land on a
+  // person's appraisal: a task closed in January but edited in March counted as completed in
+  // MARCH, and an on-time delivery became retroactively LATE the moment anyone edited the task
+  // after its due date. Correcting a typo in a closed task could damage somebody's on-time rate.
+  //
+  // Set when the task enters a CLOSED status, cleared if it is reopened.
+  completedAt             DateTime?
   createdBy               String
   // Who assigned this task to its assignee(s) — the person who delegated the work, kept
   // DISTINCT from the assignees (who do it). Set to the actor when assignees are changed.

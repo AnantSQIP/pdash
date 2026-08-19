@@ -148,7 +148,9 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     const [createdToday, completedToday, tasksClosedToday, overdueTasks, dueTodayOpen, activeProjects] = await Promise.all([
       this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: { title: true, code: true } }),
       this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: { title: true, code: true } }),
-      this.prisma.task.count({ where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: dayStart, lt: dayEnd } } }),
+      // "Closed today" means finished today, not edited today. Windowed on completedAt so an old
+      // task someone tidied up does not appear in tonight's digest as new work.
+      this.prisma.task.count({ where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: dayStart, lt: dayEnd } } }),
       this.prisma.task.findMany({
         where: { deletedAt: null, dueDate: { lt: dayStart }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
         select: { title: true, dueDate: true }, orderBy: { dueDate: 'asc' }, take: 500,
@@ -230,8 +232,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
         this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
         this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
         this.prisma.task.findMany({
-          where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, updatedAt: { gte: dayStart, lt: dayEnd } },
-          select: { ...taskSelect, updatedAt: true }, take: 500,
+          where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: dayStart, lt: dayEnd } },
+          select: { ...taskSelect, updatedAt: true, completedAt: true }, take: 500,
         }),
         this.prisma.task.findMany({
           where: { deletedAt: null, dueDate: { gte: dayStart, lt: dayEnd }, currentStatus: { type: 'CLOSED' } },
