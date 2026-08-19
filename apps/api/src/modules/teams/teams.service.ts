@@ -463,13 +463,23 @@ export class TeamsService {
     if (!link) throw new NotFoundException('That task is not in this team space.');
 
     // A status must belong to the task's own workflow — the same rule project tasks follow.
+    // The status TYPE is also read here, because completedAt depends on it.
+    let completion: { completedAt?: Date | null } = {};
     if (dto.currentWorkflowStatusId) {
-      const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { workflowId: true } });
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId }, select: { workflowId: true, completedAt: true },
+      });
       const st = await this.prisma.workflowStatus.findFirst({
         where: { id: dto.currentWorkflowStatusId, ...(task?.workflowId ? { workflowId: task.workflowId } : {}) },
-        select: { id: true },
+        select: { id: true, type: true },
       });
       if (!st) throw new BadRequestException('That status does not belong to this task\'s workflow.');
+      // Team work counts toward performance like any other, so its completion date has to be as
+      // truthful as a project task's. Set on close, cleared on reopen, and left alone when moving
+      // between two closed statuses — the work finished when it finished.
+      completion = st.type === 'CLOSED'
+        ? (task?.completedAt ? {} : { completedAt: new Date() })
+        : (task?.completedAt ? { completedAt: null } : {});
     }
     // Assignees must be members of the space — same rule as creating.
     const assigneeIds = dto.assigneeIds ? [...new Set(dto.assigneeIds)] : undefined;
@@ -493,6 +503,7 @@ export class TeamsService {
           ...(dto.estimatedHours !== undefined ? { estimatedHours: dto.estimatedHours } : {}),
           ...(dto.completionPercentage !== undefined ? { completionPercentage: dto.completionPercentage } : {}),
           ...(dto.currentWorkflowStatusId !== undefined ? { currentWorkflowStatusId: dto.currentWorkflowStatusId } : {}),
+          ...completion,
           // Whoever changes the assignees is the person who delegated the work.
           ...(assigneeIds ? { assignedById: actorId } : {}),
         },

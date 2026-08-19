@@ -846,7 +846,12 @@ export type AuditLogItem = {
 export type PerformanceKpis = {
   tasksAssigned: number; tasksCompleted: number; tasksOpen: number; tasksOverdue: number;
   onTimeCompletionRate: number; completionRate: number;
-  hoursLogged: number; billableHours: number; billablePct: number;
+  hoursLogged: number; billableHours: number;
+  /** null when the person did no client work at all — team-space hours can never be billable,
+   *  so a percentage would be 0 by construction rather than by performance. */
+  billablePct: number | null;
+  /** Hours on client matters — the denominator billablePct is measured against. */
+  clientHours?: number;
   issuesReported: number; issuesResolved: number;
   commentsPosted: number; activityVolume: number;
 };
