@@ -2403,6 +2403,16 @@ model Policy {
   body           String?
   documentId     String?
   requiresAck    Boolean  @default(false)
+  // WHICH TEXT PEOPLE AGREED TO.
+  //
+  // An acknowledgement recorded only who clicked and when. So HR could rewrite a policy from top
+  // to bottom and everyone who accepted the OLD wording still counted as having accepted — "27
+  // people have accepted the leave policy" could mean 27 people accepted a different document.
+  // For the one feature whose entire purpose is a record of agreement, that is the wrong answer.
+  //
+  // Bumped only when the BODY or the attached document changes. Renaming a policy or fixing its
+  // category is not a change of terms and must not invalidate consent people genuinely gave.
+  version        Int      @default(1)
   publishedBy    String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -2420,6 +2430,10 @@ model PolicyAcknowledgement {
   policyId       String
   userId         String
   acknowledgedAt DateTime @default(now())
+  // The version of the text this person actually read. Older rows predate versioning and carry 1,
+  // which is the honest reading: they agreed to whatever the policy said at the time, and that
+  // was version 1 by definition.
+  version        Int      @default(1)
 
   policy Policy @relation(fields: [policyId], references: [id], onDelete: Cascade)
 
