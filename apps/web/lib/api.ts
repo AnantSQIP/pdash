@@ -539,6 +539,10 @@ export type LedgerEffective = {
   billableHours: number;
   billableHoursSource: 'derived' | 'override';
   amount: number | null;
+  /** Where the value came from, so an estimate is never shown as an agreed sum. */
+  amountSource?: 'stated' | 'derived' | 'none';
+  /** The rate the derivation used. Null when the client has no rate on file. */
+  rate?: number | null;
   currency: string;
   /** How far the derived figure has moved since the statement. Null = nothing stated. */
   driftHours?: number | null;
@@ -567,7 +571,20 @@ export type LedgerUnattributed = {
   totalHours: number; billableHours: number;
   awaitingPid: number; onClientlessProjects: number; projectCount: number;
 };
-export type LedgerRow = {
+/** The facts a person maintains about a client, as opposed to the ones the ledger derives. */
+export type ClientProfile = {
+  contactName?: string | null; contactEmail?: string | null; contactPhone?: string | null;
+  website?: string | null; country?: string | null; address?: string | null;
+  industry?: string | null; notes?: string | null;
+  /** Hourly rate. The one field that turns hours into money. */
+  billingRate?: number | null;
+  billingCurrency?: string;
+  /** When the relationship began — not when the row was created. */
+  engagementStart?: string | null;
+  accountManagerId?: string | null;
+  accountManager?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation'> | null;
+};
+export type LedgerRow = ClientProfile & {
   id: string; code: string; name?: string | null; archivedAt?: string | null; createdAt: string;
   derived: LedgerDerived; override: LedgerOverride | null; effective: LedgerEffective;
 };
@@ -575,9 +592,55 @@ export type LedgerProject = {
   id: string; code?: string | null; title: string; projectPhase: string; projectType?: string | null;
   startDate?: string | null; dueDate?: string | null; completedAt?: string | null;
   workingHours?: number | null; actualHours?: number | null;
+  /** Which round this project is under its PID — one PID can group several. */
+  roundSeq?: number;
+  /**
+   * Why there is no PID, so the screen can say something better than a dash:
+   * 'assigned' it has one · 'requested' an authority has been asked · 'missing' nobody has asked.
+   */
+  pidStatus?: 'assigned' | 'requested' | 'missing';
+  pidRequestedAt?: string | null;
   billableHours: number; nonBillableHours: number; totalHours: number;
 };
 export type LedgerDetail = LedgerRow & { patentCount: number; projects: LedgerProject[] };
+
+// ─── Feedback ────────────────────────────────────────────────────────────────
+export type FeedbackKind = 'PRAISE' | 'CONCERN' | 'OBSERVATION';
+type FeedbackPerson = Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>;
+export type FeedbackItem = {
+  id: string; kind: FeedbackKind; body: string; rating?: number | null;
+  about: FeedbackPerson; author: FeedbackPerson;
+  acknowledgedAt?: string | null; acknowledgedBy?: string | null;
+  createdAt: string; updatedAt: string;
+  authorId: string; aboutUserId: string;
+};
+export type FeedbackSummary = {
+  total: number; open: number;
+  byKind: { kind: FeedbackKind; count: number }[];
+};
+
+// ─── Patent numbers, for the people doing the work ───────────────────────────
+/**
+ * A patent WITH its real number, for somebody staffed on a project it is tagged to. The client is
+ * deliberately absent: knowing which patent you are searching is what the work needs; knowing
+ * whose it is, is commercial information and a separate grant.
+ */
+export type PatentNumberForMember = {
+  id: string; handle: string; serial: number; realNumber: string; formerHandles: string[];
+  /** Which project entitled you to see it. Null when you hold patent.manage. */
+  viaProjectId?: string | null;
+  clientVisible: false;
+};
+export type PatentNumberLookup = {
+  results: { id: string; handle: string; serial: number; realNumber: string; viaProjectId: string | null }[];
+  searchedFor: string;
+  clientVisible: false;
+};
+export type ProjectPatentNumbers = {
+  project: { id: string; code: string | null; title: string };
+  patents: PatentNumberForMember[];
+  clientVisible: false;
+};
 
 /** Non-secret patent handle (for the project picker + project detail).
  *  `formerHandles` = IDs this patent used to have, kept so an ID quoted from an old email
@@ -1301,8 +1364,18 @@ export const api = {
       req<PendingApproval[]>('/projects/pending-approvals'),
     /** People who can be nominated as a project's manager (they can approve it). Session-scoped. */
     eligibleManagers: () =>
-      req<Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>[]>(
-        '/projects/eligible-managers'),
+      req<{
+        /** True when the caller may name THEMSELVES as the manager — the "I'll manage it" option. */
+        canManageOwn: boolean;
+        /**
+         * True when the caller mints the PID themselves. When false the form must still ask who
+         * will: running a project and issuing its number are separate jobs held by different
+         * people, and naming yourself as manager does not conjure a PID.
+         */
+        canIssuePid: boolean;
+        managers: (Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>
+          & { isSelf: boolean; youAreDefault: boolean })[];
+      }>('/projects/eligible-managers'),
     delete: (id: string) => req<void>(`/projects/${id}`, { method: 'DELETE' }),
     // The approver is the verified cookie actor server-side; only an optional reason is sent.
     approve: (id: string, reason?: string) =>
@@ -1425,10 +1498,19 @@ export const api = {
   clients: {
     list: () => req<ClientSummary[]>('/clients'),
     /** Advisory code suggestion + look-alike clients for a typed name. Creates nothing. */
-    codeSuggestion: (name: string) =>
-      req<{ code: string; similar: { id: string; name?: string | null; code: string }[] }>(
-        `/clients/code-suggestion?name=${encodeURIComponent(name)}`),
-    create: (data: { code: string; name?: string }) =>
+    codeSuggestion: (name: string, typed?: string) =>
+      req<{
+        /** The recommended opaque code — says nothing about the client. */
+        code: string;
+        /** More opaque candidates, so picking another does not mean reloading the form. */
+        options: string[];
+        /** Derived from the name: readable, and therefore a hint. Offered, not recommended. */
+        mnemonic: string;
+        similar: { id: string; name?: string | null; code: string }[];
+        /** A verdict on what has been typed so far — the SAME check the save runs. */
+        typed: { code: string; ok: boolean; reason: string | null; readable: boolean } | null;
+      }>(`/clients/code-suggestion?name=${encodeURIComponent(name)}${typed ? `&typed=${encodeURIComponent(typed)}` : ''}`),
+    create: (data: { code: string; name?: string } & ClientProfile) =>
       req<ClientSummary>('/clients', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { code?: string; name?: string }) =>
       req<ClientSummary>(`/clients/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -1444,6 +1526,44 @@ export const api = {
    * portal: this one never touches real patent numbers, so it needs no passcode, but it is keyed
    * by client and so stays behind patent.manage (Super Admin).
    */
+  /**
+   * Feedback about a colleague. Anyone may write it; who may READ it is decided server-side —
+   * the author, HR, and the subject's reporting manager, and deliberately not the subject.
+   */
+  feedback: {
+    list: (params?: { aboutUserId?: string; mine?: boolean }) => {
+      const q = new URLSearchParams();
+      if (params?.aboutUserId) q.set('aboutUserId', params.aboutUserId);
+      if (params?.mine) q.set('mine', 'true');
+      const qs = q.toString();
+      return req<FeedbackItem[]>(`/feedback${qs ? `?${qs}` : ''}`);
+    },
+    summary: () => req<FeedbackSummary>('/feedback/summary'),
+    create: (data: { aboutUserId: string; kind?: FeedbackKind; body: string; rating?: number }) =>
+      req<FeedbackItem>('/feedback', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { kind?: FeedbackKind; body?: string; rating?: number }) =>
+      req<FeedbackItem>(`/feedback/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    acknowledge: (id: string) => req<FeedbackItem>(`/feedback/${id}/acknowledge`, { method: 'POST' }),
+    remove: (id: string) => req<{ ok: boolean }>(`/feedback/${id}`, { method: 'DELETE' }),
+  },
+
+  /**
+   * Patent numbers for the people doing the work — the tier between "handle only" and the
+   * Super-Admin portal. Membership of the project is the gate, and every read is audited.
+   */
+  patentNumbers: {
+    forProject: (projectId: string) =>
+      req<ProjectPatentNumbers>(`/projects/${projectId}/patent-numbers`),
+    forPatent: (patentId: string) =>
+      req<PatentNumberForMember>(`/patents/${patentId}/number`),
+    /**
+     * "I have the patent number — which ID do I quote?" Scoped the same way: a match comes back
+     * only when you share a project with that patent.
+     */
+    findByNumber: (q: string) =>
+      req<PatentNumberLookup>(`/patents/find-by-number?q=${encodeURIComponent(q)}`),
+  },
+
   clientLedger: {
     list: (includeArchived = true) =>
       req<LedgerRow[]>(`/client-ledger?includeArchived=${includeArchived}`),
@@ -1458,6 +1578,13 @@ export const api = {
     setOverride: (clientId: string, data: {
       billableHours?: number | null; amount?: number | null; currency?: string; note?: string | null;
     }) => req<LedgerDetail>(`/client-ledger/${clientId}/override`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /**
+     * Edit the client's own details. No passcode — nothing here can change the CODE, which is the
+     * only client field whose change rewrites identifiers already sent outside the firm.
+     * An omitted key is left alone; an explicit `null` clears the field.
+     */
+    setProfile: (clientId: string, data: ClientProfile) =>
+      req<LedgerDetail>(`/client-ledger/${clientId}/profile`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 
   // Confidential coded patents. `list` is the passcode-free OVERVIEW (patent IDs, no real

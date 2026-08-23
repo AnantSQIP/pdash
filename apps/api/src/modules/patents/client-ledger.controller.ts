@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { ClientLedgerService } from './client-ledger.service';
-import { UpdateLedgerOverrideDto } from './dto';
+import { PatentsService } from './patents.service';
+import { UpdateClientDto, UpdateLedgerOverrideDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { getActorId } from '../../common/context/request-context';
@@ -17,6 +18,7 @@ import { getActorId } from '../../common/context/request-context';
 export class ClientLedgerController {
   constructor(
     private readonly ledger: ClientLedgerService,
+    private readonly patents: PatentsService,
     private readonly actor: ActorContextService,
   ) {}
 
@@ -54,5 +56,22 @@ export class ClientLedgerController {
   @Patch(':clientId/override') @RequirePermission('patent.manage')
   async setOverride(@Param('clientId') clientId: string, @Body() dto: UpdateLedgerOverrideDto) {
     return this.ledger.setOverride(await this.actor.requireOrgId(), getActorId()!, clientId, dto);
+  }
+
+  /**
+   * Edit the client's own details — contact, country, rate, account manager, notes.
+   *
+   * NO PASSCODE, unlike `PATCH /clients/:id` in the portal, and the difference is deliberate. The
+   * step-up there guards ONE thing: changing the client CODE re-mints every patent handle, which
+   * rewrites identifiers already quoted in documents outside the firm. Nothing on this route can
+   * do that — the code and the name are refused below — so the passcode would be protecting a
+   * phone number. Asking for it anyway is how people learn to type it without reading the prompt,
+   * which is exactly what makes it useless when it guards something real.
+   */
+  @Patch(':clientId/profile') @RequirePermission('patent.manage')
+  async setProfile(@Param('clientId') clientId: string, @Body() dto: UpdateClientDto) {
+    const { code: _code, name: _name, ...profile } = dto;
+    await this.patents.updateClient(await this.actor.requireOrgId(), clientId, profile);
+    return this.ledger.detail(await this.actor.requireOrgId(), clientId);
   }
 }

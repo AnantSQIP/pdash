@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Loader, Search, Pencil, Check } from 'lucide-react';
-import { api, type ApiProject, type PatentOption, type ClientSummary } from '@/lib/api';
+import { X, Loader, Search, Pencil, Check, Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { api, type ApiProject, type PatentOption, type ClientSummary, type PatentNumberLookup, type ProjectPatentNumbers } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { patentMatches, matchedFormerHandle } from '@/lib/patent-search';
@@ -24,6 +24,7 @@ export function PatentTagsEditor({ project }: { project: ApiProject }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [showNumbers, setShowNumbers] = useState(false);
 
   const tagged = useMemo(
     () => (project.patents ?? []).map(p => p.patent).slice().sort((a, b) => a.serial - b.serial),
@@ -37,6 +38,25 @@ export function PatentTagsEditor({ project }: { project: ApiProject }) {
   const mayTag = can('patent.view') && can('project.update')
     && !['COMPLETED', 'CLOSED'].includes(project.projectPhase);
 
+  /**
+   * The real numbers behind the handles — fetched only when somebody asks for them.
+   *
+   * Not eagerly: every call is written to the audit log as "this person looked at this client's
+   * patent numbers", and a log where every project visit produces an entry records nothing
+   * useful. Asking is the signal worth keeping.
+   */
+  const { data: numbers, isFetching: numbersLoading, error: numbersError } =
+    useQuery<ProjectPatentNumbers>({
+      queryKey: ['project-patent-numbers', project.id],
+      queryFn: () => api.patentNumbers.forProject(project.id),
+      enabled: showNumbers && tagged.length > 0,
+      staleTime: 5 * 60_000,
+    });
+  const numberOf = useMemo(
+    () => new Map((numbers?.patents ?? []).map(p => [p.id, p.realNumber])),
+    [numbers],
+  );
+
   if (!project.patents) return null;
 
   return (
@@ -44,12 +64,40 @@ export function PatentTagsEditor({ project }: { project: ApiProject }) {
       <ClientLine project={project} />
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         <span className="text-[11px] text-gray-400">Patents:</span>
-        {tagged.map(patent => (
-          <span key={patent.id} className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-100">
-            {patent.handle}
-          </span>
-        ))}
+        {tagged.map(patent => {
+          const real = numberOf.get(patent.id);
+          return (
+            <span
+              key={patent.id}
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-mono font-medium bg-amber-50 text-amber-700 ring-1 ring-amber-100"
+            >
+              {patent.handle}
+              {real && (
+                <>
+                  <span className="text-amber-300">→</span>
+                  <span className="text-amber-900 font-semibold">{real}</span>
+                </>
+              )}
+            </span>
+          );
+        })}
         {tagged.length === 0 && <span className="text-[11px] text-gray-300">none tagged</span>}
+        {/* The handle alone is unusable for the person doing the search: it says WHICH matter, and
+            never WHICH PATENT. Only a Super Admin could resolve it, so an analyst staffed on a
+            prior-art search could not see the thing they were searching for. Being on the project
+            is now the grant — the same membership that let them open this page at all. */}
+        {tagged.length > 0 && (
+          <button
+            onClick={() => setShowNumbers(v => !v)}
+            title={showNumbers ? 'Hide the real patent numbers' : 'Show the real patent numbers for this project'}
+            className="inline-flex items-center gap-1 text-[11px] font-medium text-brand-600 hover:text-brand-700 ml-0.5"
+          >
+            {numbersLoading
+              ? <Loader size={10} className="animate-spin" />
+              : showNumbers ? <EyeOff size={11} /> : <Eye size={11} />}
+            {showNumbers ? 'Hide numbers' : 'Show numbers'}
+          </button>
+        )}
         {mayTag && (
           <button
             onClick={() => setOpen(true)}
@@ -60,6 +108,22 @@ export function PatentTagsEditor({ project }: { project: ApiProject }) {
           </button>
         )}
       </div>
+
+      {/* Said once, under the numbers, where somebody is actually looking at them. */}
+      {showNumbers && !numbersLoading && (
+        numbersError ? (
+          <p className="mt-1.5 text-[11px] text-red-600 flex items-start gap-1">
+            <ShieldAlert size={11} className="mt-0.5 shrink-0" />
+            {numbersError instanceof Error ? numbersError.message : 'Could not load the patent numbers.'}
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-gray-400 leading-relaxed">
+            Visible to you because you are on this project. The client behind these patents is not
+            shown here, and every reveal is written to the audit log.
+          </p>
+        )
+      )}
+
       {open && (
         <PatentTagsModal
           projectId={project.id}
@@ -195,6 +259,42 @@ function PatentTagsModal({ projectId, initial, alreadyTagged, onClose, onSaved }
   // Retired IDs match too — see lib/patent-search.
   const filtered = useMemo(() => all.filter(p => patentMatches(p, search)), [all, search]);
 
+  /**
+   * Searching by the REAL patent number, not just the handle.
+   *
+   * This picker only ever matched handles, which assumes the person already knows which handle
+   * they want — and "which handle do I want" is precisely the thing they came here not knowing.
+   * An analyst holding US 10,123,456 had no way in. The server answers only for patents on
+   * projects they are already on, so the search cannot be used to discover the firm's portfolio.
+   *
+   * Only fired for something that looks like a number: a handle search would otherwise cost a
+   * round trip and an audit-log entry on every keystroke.
+   */
+  const looksLikeNumber = search.trim().length >= 3 && /\d/.test(search);
+  const { data: byNumber } = useQuery<PatentNumberLookup>({
+    queryKey: ['patent-by-number', search.trim()],
+    queryFn: () => api.patentNumbers.findByNumber(search.trim()),
+    enabled: looksLikeNumber,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const numberHits = useMemo(
+    () => new Map((byNumber?.results ?? []).map(r => [r.id, r.realNumber])),
+    [byNumber],
+  );
+  // A number match may point at a patent the handle filter has excluded — that is the whole point
+  // of the lookup, so it is unioned in rather than intersected.
+  const shown = useMemo(() => {
+    const byId = new Map(filtered.map(p => [p.id, p]));
+    for (const r of byNumber?.results ?? []) {
+      if (!byId.has(r.id)) {
+        const known = all.find(p => p.id === r.id);
+        if (known) byId.set(r.id, known);
+      }
+    }
+    return [...byId.values()].sort((a, b) => a.handle.localeCompare(b.handle));
+  }, [filtered, byNumber, all]);
+
   const save = useMutation({
     mutationFn: () => api.projects.setPatents(projectId, picked),
     onSuccess: onSaved,
@@ -217,7 +317,7 @@ function PatentTagsModal({ projectId, initial, alreadyTagged, onClose, onSaved }
         <div className="relative border-b border-gray-100">
           <Search size={13} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
-            value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patent ID…"
+            value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by patent ID or patent number…"
             className="w-full pl-9 pr-3 py-2.5 text-sm focus:outline-none"
           />
         </div>
@@ -225,17 +325,28 @@ function PatentTagsModal({ projectId, initial, alreadyTagged, onClose, onSaved }
         <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
           {isLoading ? (
             <p className="px-4 py-4 text-xs text-gray-400">Loading…</p>
-          ) : filtered.length === 0 ? (
+          ) : shown.length === 0 ? (
             <p className="px-4 py-5 text-xs text-gray-400 text-center">
-              {all.length === 0 ? 'No patents registered yet.' : `No patents match “${search}”.`}
+              {all.length === 0
+                ? 'No patents registered yet.'
+                : looksLikeNumber
+                  ? `Nothing you can see matches “${search}”. If that patent is with another team, ask them for its ID.`
+                  : `No patents match “${search}”.`}
             </p>
-          ) : filtered.map(p => (
+          ) : shown.map(p => (
             <label key={p.id} className="flex items-center gap-2.5 px-4 py-2 hover:bg-gray-50 cursor-pointer">
               <input
                 type="checkbox" checked={picked.includes(p.id)} onChange={() => toggle(p.id)}
                 className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
               />
               <span className="text-sm font-mono text-gray-700">{p.handle}</span>
+              {/* Only shown for a patent the number search actually matched — the point is to
+                  confirm "yes, this handle is the patent you typed", not to list every number. */}
+              {numberHits.get(p.id) && (
+                <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                  {numberHits.get(p.id)}
+                </span>
+              )}
               {matchedFormerHandle(p, search) && (
                 <span className="text-[11px] text-gray-400">was {matchedFormerHandle(p, search)}</span>
               )}

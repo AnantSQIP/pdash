@@ -50,6 +50,7 @@ import { PatentsModule } from './modules/patents/patents.module';
 import { TeamsModule } from './modules/teams/teams.module';
 import { DealsModule } from './modules/deals/deals.module';
 import { OptionalHolidaysModule } from './modules/optional-holidays/optional-holidays.module';
+import { FeedbackModule } from './modules/feedback/feedback.module';
 
 @Module({
   imports: [
@@ -102,6 +103,7 @@ import { OptionalHolidaysModule } from './modules/optional-holidays/optional-hol
     TagsModule,
     CompanyModule,
     AppraisalsModule,
+    FeedbackModule,
     // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
     SequenceModule,
     PatentsModule,

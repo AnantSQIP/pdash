@@ -38,9 +38,16 @@ export type EffectiveLedger = {
   billableHours: number;
   /** Where the billable-hours figure came from — the UI shows the derived one beside it. */
   billableHoursSource: 'derived' | 'override';
-  /** Money is only ever stated, never derived: null means nobody has said. */
+  /**
+   * What the work is worth. Stated if somebody stated it, otherwise DERIVED from the client's
+   * rate — hours × rate — and null only when neither exists.
+   */
   amount: number | null;
+  /** Where that figure came from, so the screen never presents an estimate as an agreed sum. */
+  amountSource: 'stated' | 'derived' | 'none';
   currency: string;
+  /** The rate the derivation used. Null when the client has no rate on file. */
+  rate: number | null;
   /** How far the derived figure has moved since the statement was made. Null = nothing stated. */
   driftHours: number | null;
   /** The statement is far enough behind the data to be worth revisiting. */
@@ -59,7 +66,11 @@ export class ClientLedgerService {
    * alongside, so the screen can show "we derive 412h; you stated 380h" rather than presenting
    * one number and hiding the other.
    */
-  private effective(derived: DerivedLedger, override: LedgerOverrideRow | null): EffectiveLedger {
+  private effective(
+    derived: DerivedLedger,
+    override: LedgerOverrideRow | null,
+    rate?: { billingRate: number | null; billingCurrency: string } | null,
+  ): EffectiveLedger {
     const stated = override?.billableHours;
     // Drift is measured against what the data said WHEN the statement was made, not against the
     // stated figure itself — otherwise every deliberate write-down would look like an error.
@@ -67,11 +78,24 @@ export class ClientLedgerService {
     const drift = stated != null && snapshot != null
       ? Math.round((derived.billableHours - snapshot) * 100) / 100
       : null;
+    // Value follows hours. Where a rate exists the ledger can finally price the work itself,
+    // instead of holding a hand-typed total that stopped being true the next time anyone logged
+    // an hour. A stated amount still wins — somebody who types a figure has agreed something the
+    // rate does not know about — but it is now the exception rather than the only option.
+    const billable = stated ?? derived.billableHours;
+    const rateValue = rate?.billingRate != null && rate.billingRate > 0
+      ? round2(billable * rate.billingRate)
+      : null;
+    const statedAmount = override?.amount ?? null;
     return {
-      billableHours: stated ?? derived.billableHours,
+      billableHours: billable,
       billableHoursSource: stated == null ? 'derived' : 'override',
-      amount: override?.amount ?? null,
-      currency: override?.currency ?? 'INR',
+      amount: statedAmount ?? rateValue,
+      amountSource: statedAmount != null ? 'stated' : rateValue != null ? 'derived' : 'none',
+      rate: rate?.billingRate ?? null,
+      // The override's currency only means anything when the override states an amount; otherwise
+      // the client's own billing currency is the one the derived figure is in.
+      currency: statedAmount != null ? (override?.currency ?? 'INR') : (rate?.billingCurrency ?? 'INR'),
       driftHours: drift,
       // A statement is "stale" once the work underneath it has moved enough to matter. One hour
       // of drift is noise; a full day means the number is describing a different engagement.
@@ -86,7 +110,7 @@ export class ClientLedgerService {
   async list(organizationId: string, includeArchived = true) {
     const clients = await this.prisma.client.findMany({
       where: { organizationId, deletedAt: null, ...(includeArchived ? {} : { archivedAt: null }) },
-      select: { id: true, code: true, name: true, archivedAt: true, createdAt: true },
+      select: CLIENT_LEDGER_SELECT,
       orderBy: [{ archivedAt: 'asc' }, { code: 'asc' }],
     });
     if (!clients.length) return [];
@@ -95,7 +119,7 @@ export class ClientLedgerService {
     return clients.map(c => {
       const d = derived.get(c.id) ?? EMPTY_LEDGER();
       const o = overrides.get(c.id) ?? null;
-      return { ...c, derived: d, override: o, effective: this.effective(d, o) };
+      return { ...c, derived: d, override: o, effective: this.effective(d, o, c) };
     });
   }
 
@@ -325,7 +349,7 @@ export class ClientLedgerService {
   async detail(organizationId: string, clientId: string) {
     const client = await this.prisma.client.findFirst({
       where: { id: clientId, organizationId, deletedAt: null },
-      select: { id: true, code: true, name: true, archivedAt: true, createdAt: true },
+      select: CLIENT_LEDGER_SELECT,
     });
     if (!client) throw new NotFoundException('Client not found.');
 
@@ -337,8 +361,17 @@ export class ClientLedgerService {
         select: {
           id: true, code: true, title: true, projectPhase: true, projectType: true,
           startDate: true, dueDate: true, completedAt: true, workingHours: true, actualHours: true,
+          // One PID can group several projects as "rounds". Without the sequence the ledger shows
+          // two rows carrying the identical code and nothing to tell them apart, which reads as a
+          // duplicate rather than as round 1 and round 2.
+          roundSeq: true,
+          // A project can exist before its PID does — created while a PID request sits with an
+          // authority, or created and never given one at all. The ledger showed both as a bare
+          // dash, which says "no data" when the truth is either "waiting on Ritik" or "nobody
+          // ever asked". Those need different actions, so they need different words.
+          pidRequest: { select: { status: true, assigneeId: true, createdAt: true } },
         },
-        orderBy: [{ createdAt: 'desc' }],
+        orderBy: [{ code: 'asc' }, { roundSeq: 'asc' }],
       }),
       this.prisma.patent.count({ where: { clientId, deletedAt: null } }),
     ]);
@@ -367,11 +400,20 @@ export class ClientLedgerService {
       patentCount,
       derived: d,
       override: o,
-      effective: this.effective(d, o),
+      effective: this.effective(d, o, client),
       projects: projects.map(p => {
         const h = hoursByProject.get(p.id) ?? { billable: 0, nonBillable: 0 };
+        const { pidRequest, ...rest } = p;
         return {
-          ...p,
+          ...rest,
+          /**
+           * Why there is no PID, in one word the screen can act on:
+           *   'assigned'  — it has one;
+           *   'requested' — a request is open with a PID authority;
+           *   'missing'   — nobody has asked, and these hours are one step from being stranded.
+           */
+          pidStatus: p.code ? 'assigned' : pidRequest?.status === 'PENDING' ? 'requested' : 'missing',
+          pidRequestedAt: p.code ? null : pidRequest?.createdAt ?? null,
           billableHours: round2(h.billable),
           nonBillableHours: round2(h.nonBillable),
           totalHours: round2(h.billable + h.nonBillable),
@@ -463,6 +505,19 @@ export type Unattributed = {
 const EMPTY_UNATTRIBUTED = (): Unattributed => ({
   totalHours: 0, billableHours: 0, awaitingPid: 0, onClientlessProjects: 0, projectCount: 0,
 });
+
+/**
+ * What the ledger needs about a client: identity, the relationship facts a person maintains, and
+ * the rate the value is derived from. The account manager is resolved to a name here rather than
+ * left as an id — "who owns this relationship" is only useful as a person.
+ */
+const CLIENT_LEDGER_SELECT = {
+  id: true, code: true, name: true, archivedAt: true, createdAt: true,
+  contactName: true, contactEmail: true, contactPhone: true, website: true,
+  country: true, address: true, industry: true, notes: true,
+  billingRate: true, billingCurrency: true, engagementStart: true, accountManagerId: true,
+  accountManager: { select: { id: true, firstName: true, lastName: true, designation: true } },
+} as const;
 
 const OVERRIDE_SELECT = {
   clientId: true, billableHours: true, amount: true, currency: true, note: true,

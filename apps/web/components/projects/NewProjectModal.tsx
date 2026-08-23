@@ -108,15 +108,25 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
     [authorities, currentUser],
   );
 
-  // The people who can be nominated/delegated as Project Manager — alphabetical, self excluded.
-  // A requester sees only equal-or-higher seniority; a PID authority (admin) sees EVERYONE (they
-  // can delegate to anyone). All enforced server-side. Separate from PID authority.
-  const { data: managers = [] } = useQuery({
+  // Everyone who may be Project Manager — the caller INCLUDED. Running a project and being
+  // allowed to mint its PID are different things, and the list used to conflate them by silently
+  // dropping you: somebody who could perfectly well manage their own matter was told to hand it
+  // to a colleague purely because they could not issue the number. The PID request still goes to
+  // an authority either way.
+  const { data: managerData } = useQuery({
     queryKey: ['eligible-managers', org?.id],
     queryFn: () => api.projects.eligibleManagers(),
     enabled: !!org?.id,
     staleTime: 5 * 60_000,
   });
+  const managers = managerData?.managers ?? [];
+  // Can the caller be named manager at all? Only if they appear in the list, which means they
+  // hold project.approve. Somebody who may not manage projects still cannot manage this one.
+  const selfEligible = managers.some(u => u.isSelf);
+  // "Me" goes FIRST, not wherever the alphabet puts it. The option exists so somebody can keep
+  // their own project in one click; buried between two colleagues' names it is an option they
+  // have to go looking for, which is most of the way back to not having it.
+  const managerOptions = [...managers].sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
 
   async function generatePid() {
     setGenerating(true); setError('');
@@ -463,15 +473,21 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
               onChange={e => setManagerId(e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
             >
-              <option value="">{canGeneratePid ? 'Me — I’ll manage it' : 'Select a project manager…'}</option>
-              {managers.map(u => (
-                <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
+              <option value="">
+                {canGeneratePid ? 'Me — I’ll manage it' : 'Select a project manager…'}
+              </option>
+              {managerOptions.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.isSelf ? 'Me — I’ll manage it' : fullName(u)}{!u.isSelf && u.designation ? ` — ${u.designation}` : ''}
+                </option>
               ))}
             </select>
             <p className="text-[11px] text-gray-400 mt-1">
               {canGeneratePid
                 ? 'Delegate this project to anyone in the organization, or leave blank to manage it yourself.'
-                : 'The senior owner of this project. Only people at your level or above are listed.'}
+                : selfEligible
+                  ? 'Who owns this project. You can name yourself — the PID request still goes to whoever you choose below.'
+                  : 'Who owns this project. Managing a project needs the Project Manager permission, which your role does not carry.'}
             </p>
           </div>
 

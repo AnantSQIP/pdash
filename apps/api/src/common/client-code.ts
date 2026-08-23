@@ -116,6 +116,54 @@ export function suggestClientCode(name: string, taken: Iterable<string> = []): s
   return ''; // nine collisions on one stem — let the human choose
 }
 
+/**
+ * An OPAQUE client code — one that says nothing about who the client is.
+ *
+ * WHY THIS EXISTS ALONGSIDE suggestClientCode
+ *
+ * The mnemonic suggestion above is good for readability and bad for concealment, and the whole
+ * point of a patent handle is concealment. `suggestClientCode("Mailike")` returns `MLK` — the
+ * consonants of the name — so `Pat_MLK_001` quietly carries a hint of the client on every screen,
+ * every task title and every email it is quoted in. Anybody who learns one pairing can read it on
+ * every handle thereafter, and nothing in the system can take that back.
+ *
+ * This generates a code with no relationship to the name at all.
+ *
+ * WHAT IT AVOIDS, AND WHY
+ *
+ *   • Vowels — so it cannot accidentally spell a word, in English or otherwise. A code that reads
+ *     as something is a code somebody will remember and repeat.
+ *   • The digits 0/1 and the letters I/O/S/Z — the pairs people mistype when reading a code off a
+ *     screen and into an email. A patent ID that arrives at a client subtly wrong is worse than
+ *     one that is hard to guess.
+ *
+ * Existing clients keep the codes they have: their handles are already on documents that have
+ * left the building, and renaming them would break every reference for a benefit that is already
+ * lost. `formerHandles` means a rename stays resolvable if that decision is ever revisited.
+ */
+const OPAQUE_ALPHABET = 'BCDFGHJKLMNPQRTVWXY2346789';
+
+export function opaqueClientCode(taken: Iterable<string> = [], length = 3): string {
+  const used = new Set([...taken].map(c => c.toUpperCase()));
+  const blocked = (c: string) => used.has(c) || RESERVED.has(c);
+
+  // Enough attempts to make an unlucky run vanishingly unlikely, and a bounded loop rather than
+  // a `while (true)` that could hang on an exhausted alphabet.
+  for (let attempt = 0; attempt < 200; attempt++) {
+    let code = '';
+    for (let i = 0; i < length; i++) {
+      code += OPAQUE_ALPHABET[Math.floor(Math.random() * OPAQUE_ALPHABET.length)];
+    }
+    // At least one letter, same rule the mnemonic path applies: an all-digit code tells nobody
+    // anything and reads like a serial number.
+    if (!HAS_LETTER.test(code)) continue;
+    if (!blocked(code)) return code;
+  }
+  // 200 collisions at this length means the space is genuinely crowded — widen it rather than
+  // return nothing and make the caller guess why.
+  return length < CLIENT_CODE_MAX ? opaqueClientCode(taken, length + 1) : '';
+}
+
 export type CodeProblem = 'empty' | 'too_short' | 'too_long' | 'charset' | 'reserved' | 'taken';
 
 /**
@@ -149,4 +197,17 @@ export function findSimilarClients<T extends { name?: string | null; code: strin
     if (!other) return false;
     return other === key || other.includes(key) || key.includes(other);
   });
+}
+
+/**
+ * Does this code read as a word or an abbreviation of one?
+ *
+ * A rough test, and deliberately so — it exists to WARN, never to refuse. Any code containing a
+ * vowel can be pronounced, and a pronounceable code is one somebody remembers and repeats, which
+ * is precisely what a patent handle is supposed to prevent. "MLK" passes; "MILK" and "TCS3" get a
+ * note saying what choosing them costs. The person still chooses.
+ */
+export function isReadableCode(code: string): boolean {
+  const c = (code || '').toUpperCase();
+  return [...c].some(ch => VOWELS.has(ch));
 }
