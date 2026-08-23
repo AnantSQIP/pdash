@@ -37,7 +37,13 @@ const ROSTER: Record<string, Person> = {
   'nitin.goel@squarkip.com':          { designation: 'Manager (Delivery)',                     role: 'Manager' },
   'neha.shukla@squarkip.com':         { designation: 'Senior Consultant',                      role: 'Senior Consultant' },
 
-  'ajay.sharma@squarkip.com':         { designation: 'Senior Associate Consultant',            role: 'Consultant' },
+  // Senior Consultant RIGHTS on a Senior Associate Consultant title — decided 23 Aug 2026. Same
+  // deliberate grant as the Product Development pair below: the designation is unchanged, so this
+  // is capability, not a promotion. What it adds over Consultant: project.approve and
+  // project.update (so he can run a matter and be named its Project Manager), task.assign,
+  // task.delete, tasklist.delete, profile.view, and deadline.view.client — the client-committed
+  // date, which is redacted server-side from anyone without it.
+  'ajay.sharma@squarkip.com':         { designation: 'Senior Associate Consultant',            role: 'Senior Consultant' },
   'ritik.sharma@squarkip.com':        { designation: 'Senior BD Executive',                    role: 'Business Development' },
   // Product Development: decided 17 Aug 2026 to carry Senior Consultant RIGHTS. The designations
   // below are unchanged — this is a deliberate grant of system capability, not a promotion, and it
