@@ -1,0 +1,355 @@
+<meta charset="utf-8">
+<title>Phase 1 & 2 — Complete Record</title>
+<style>
+  :root {
+    --ink:#16202b; --ink-soft:#55636f; --ink-faint:#7d8a96;
+    --paper:#ffffff; --panel:#f2f5f8; --rule:#d9e0e7; --rule-soft:#eaeff4;
+    --brand:#2f6fb5; --brand-deep:#1f4f85;
+    --done:#1c7049; --done-bg:#e8f4ed;
+    --part:#a86608; --part-bg:#fdf2e0;
+    --none:#a83228; --none-bg:#fbeae8;
+    --info:#4d5a67; --info-bg:#eef1f4;
+    --serif:Georgia,'Times New Roman',serif;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+       font-size:10.5pt;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .sheet{max-width:52rem;margin:0 auto;padding:2.4rem 2rem 4rem}
+
+  .masthead{border-bottom:2.5px solid var(--ink);padding-bottom:1.1rem}
+  .eyebrow{font-family:var(--mono);font-size:7.5pt;letter-spacing:.14em;text-transform:uppercase;
+           color:var(--brand);margin:0 0 .5rem}
+  h1{font-family:var(--serif);font-size:27pt;line-height:1.08;font-weight:700;
+     letter-spacing:-.015em;margin:0 0 .5rem;text-wrap:balance}
+  .standfirst{font-family:var(--serif);font-size:12pt;font-style:italic;color:var(--ink-soft);
+              margin:0;max-width:40rem}
+  .stamp{display:flex;flex-wrap:wrap;gap:.35rem 1.4rem;font-family:var(--mono);font-size:7.5pt;
+         color:var(--ink-faint);margin-top:1rem;padding-top:.7rem;border-top:1px solid var(--rule-soft)}
+  .stamp b{color:var(--ink-soft);font-weight:600}
+
+  h2{font-family:var(--serif);font-size:16.5pt;font-weight:700;letter-spacing:-.01em;
+     margin:2.5rem 0 .3rem;padding-top:1.1rem;border-top:1px solid var(--rule)}
+  h2 .num{font-family:var(--mono);font-size:8pt;font-weight:400;color:var(--brand);
+          letter-spacing:.1em;display:block;margin-bottom:.35rem}
+  .masthead + h2{border-top:0;padding-top:0;margin-top:2rem}
+  .lede{color:var(--ink-soft);margin:0 0 1.2rem;max-width:42rem}
+  h3{font-size:10.5pt;font-weight:700;margin:1.5rem 0 .35rem}
+  h4{font-family:var(--mono);font-size:7.5pt;letter-spacing:.11em;text-transform:uppercase;
+     color:var(--ink-faint);margin:1rem 0 .3rem;font-weight:600}
+  p{margin:0 0 .7rem}
+  ul,ol{margin:.2rem 0 .75rem;padding-left:1.15rem}
+  li{margin-bottom:.3rem}
+  li::marker{color:var(--ink-faint)}
+  code{font-family:var(--mono);font-size:8.6pt;background:var(--panel);padding:.08em .32em;
+       border-radius:2px;color:var(--brand-deep)}
+
+  .score{display:flex;gap:.6rem;margin:1.5rem 0 0}
+  .score>div{flex:1;border:1px solid var(--rule);border-top:3px solid;border-radius:3px;
+             padding:.75rem .85rem .8rem}
+  .score .n{font-family:var(--serif);font-size:25pt;font-weight:700;line-height:1;
+            font-variant-numeric:tabular-nums}
+  .score .k{font-family:var(--mono);font-size:7pt;letter-spacing:.1em;text-transform:uppercase;
+            color:var(--ink-faint);margin-top:.3rem}
+  .score .d{font-size:8.5pt;color:var(--ink-soft);margin-top:.35rem;line-height:1.45}
+  .s-done{border-top-color:var(--done)!important} .s-done .n{color:var(--done)}
+  .s-part{border-top-color:var(--part)!important} .s-part .n{color:var(--part)}
+  .s-none{border-top-color:var(--none)!important} .s-none .n{color:var(--none)}
+
+  .tbl-wrap{overflow-x:auto;margin:1.1rem 0 0}
+  table{width:100%;border-collapse:collapse;font-size:9.4pt}
+  thead th{font-family:var(--mono);font-size:7pt;letter-spacing:.1em;text-transform:uppercase;
+           color:var(--ink-faint);text-align:left;padding:0 .55rem .45rem;
+           border-bottom:1.5px solid var(--ink);font-weight:600;white-space:nowrap}
+  tbody td{padding:.5rem .55rem;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  tbody tr:last-child td{border-bottom:1px solid var(--rule)}
+  td.n{font-family:var(--mono);font-size:8pt;color:var(--ink-faint);
+       font-variant-numeric:tabular-nums;width:1.5rem;padding-top:.6rem}
+  td.mod{font-family:var(--mono);font-size:7.5pt;text-transform:uppercase;color:var(--ink-soft);
+         white-space:nowrap;letter-spacing:.04em}
+  td.item{font-weight:600}
+  td.note{color:var(--ink-soft);font-size:9pt}
+
+  .pill{display:inline-block;font-family:var(--mono);font-size:6.8pt;letter-spacing:.07em;
+        text-transform:uppercase;font-weight:700;padding:.16rem .42rem;border-radius:2px;white-space:nowrap}
+  .p-done{background:var(--done-bg);color:var(--done)}
+  .p-part{background:var(--part-bg);color:var(--part)}
+  .p-none{background:var(--none-bg);color:var(--none)}
+  .p-info{background:var(--info-bg);color:var(--info)}
+
+  .card{border:1px solid var(--rule);border-left:3px solid var(--brand);border-radius:3px;
+        padding:1rem 1.1rem;margin:1rem 0;break-inside:avoid}
+  .card.done{border-left-color:var(--done)}
+  .card.part{border-left-color:var(--part)}
+  .card.none{border-left-color:var(--none)}
+  .card-head{display:flex;align-items:baseline;gap:.6rem;margin-bottom:.5rem;flex-wrap:wrap}
+  .card-head .ref{font-family:var(--mono);font-size:8pt;color:var(--ink-faint)}
+  .card-head .ttl{font-family:var(--serif);font-size:13pt;font-weight:700;letter-spacing:-.01em}
+  .card p{margin:0 0 .5rem}
+  .card>*:last-child{margin-bottom:0}
+
+  .row{display:flex;gap:.6rem;margin-bottom:.4rem}
+  .row:last-child{margin-bottom:0}
+  .row b{font-family:var(--mono);font-size:7.2pt;letter-spacing:.06em;text-transform:uppercase;
+         color:var(--ink-faint);min-width:6.2rem;padding-top:.18rem;flex-shrink:0;font-weight:600}
+  .row span{flex:1}
+  .row.need b{color:var(--brand)}
+
+  pre{background:var(--panel);border-radius:3px;padding:.7rem .85rem;font-family:var(--mono);
+      font-size:7.9pt;line-height:1.65;overflow-x:auto;margin:.5rem 0;color:var(--ink)}
+
+  .callout{border-left:3px solid var(--part);background:var(--part-bg);padding:.7rem .9rem;
+           border-radius:0 3px 3px 0;margin:1rem 0;font-size:9.4pt}
+  .callout strong{color:#7d4c05}
+  .callout.blue{border-left-color:var(--brand);background:var(--panel)}
+  .callout.blue strong{color:var(--brand-deep)}
+
+  .footer{margin-top:2.6rem;padding-top:.9rem;border-top:1px solid var(--rule);
+          font-family:var(--mono);font-size:7.5pt;color:var(--ink-faint);line-height:1.7}
+
+  @page{size:A4;margin:15mm 14mm}
+  @media print{
+    body{font-size:9.6pt}
+    .sheet{max-width:none;padding:0}
+    h2,h3,h4{break-after:avoid}
+    .card,.callout,tbody tr,pre{break-inside:avoid}
+    .brk{break-before:page}
+  }
+</style><style>
+  /* ── Timeline ─────────────────────────────────────────────────────── */
+  .tl{margin:1.2rem 0 0;border-left:2px solid var(--rule);padding-left:0}
+  .tl-block{position:relative;padding:0 0 1.15rem 1.35rem;break-inside:avoid}
+  .tl-block:last-child{padding-bottom:.2rem}
+  .tl-block::before{content:'';position:absolute;left:-5px;top:.42rem;width:8px;height:8px;
+    border-radius:50%;background:var(--brand);box-shadow:0 0 0 2.5px var(--paper)}
+  .tl-block.p1::before{background:var(--brand)}
+  .tl-block.p2::before{background:var(--done)}
+  .tl-block.mark::before{width:11px;height:11px;left:-6.5px;background:var(--none)}
+  .tl-date{font-family:var(--mono);font-size:7.6pt;letter-spacing:.06em;font-weight:600;
+    color:var(--brand);text-transform:uppercase}
+  .tl-block.p2 .tl-date{color:var(--done)}
+  .tl-block.mark .tl-date{color:var(--none)}
+  .tl-head{font-weight:700;font-size:10pt;margin:.08rem 0 .18rem}
+  .tl-body{font-size:9.1pt;color:var(--ink-soft);line-height:1.55;margin:0}
+  .tl-body b{color:var(--ink);font-weight:600}
+  .tl-tag{float:right;font-family:var(--mono);font-size:6.8pt;letter-spacing:.06em;
+    color:var(--ink-faint);text-transform:uppercase;padding-top:.1rem}
+
+  .bars{margin:1.1rem 0 0}
+  .bar-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.16rem}
+  .bar-d{font-family:var(--mono);font-size:7pt;color:var(--ink-faint);width:3.6rem;
+    text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums}
+  .bar-t{height:8px;border-radius:1px;background:var(--brand);flex-shrink:0;min-width:2px}
+  .bar-t.p2{background:var(--done)}
+  .bar-n{font-family:var(--mono);font-size:6.8pt;color:var(--ink-faint);
+    font-variant-numeric:tabular-nums}
+  .legend{display:flex;gap:1.1rem;font-family:var(--mono);font-size:7pt;color:var(--ink-faint);
+    text-transform:uppercase;letter-spacing:.07em;margin-top:.7rem}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:.3rem;
+    vertical-align:-1px;font-style:normal}
+</style>
+<div class="sheet">
+
+  <header class="masthead">
+    <p class="eyebrow">Squark Dashboard · Phase 1 &amp; Phase 2 · Complete record</p>
+    <h1>Two months, two phases, and the four things still open</h1>
+    <p class="standfirst">A dated account of what was built and when — from the first commit on 24 June to today. Phase 1 is closed. Phase 2 is nearly finished, and what remains is mostly waiting on a decision rather than on work.</p>
+    <div class="stamp">
+      <span><b>Period</b> 24 Jun – 24 Aug 2026</span>
+      <span><b>Working days</b> 37</span>
+      <span><b>Commits</b> 222</span>
+      <span><b>Live at</b> 217.76.59.244.sslip.io</span>
+    </div>
+  </header>
+
+  <h2><span class="num">At a glance</span>Where everything stands</h2>
+
+  <div class="score">
+    <div class="s-done"><div class="n">22</div><div class="k">Phase 1 modules</div><div class="d">Closed 12 Aug, in daily use</div></div>
+    <div class="s-done"><div class="n">10</div><div class="k">Phase 2 rows done</div><div class="d">Of your twelve-row timeline</div></div>
+    <div class="s-part"><div class="n">4</div><div class="k">Still open</div><div class="d">Three need a decision, not effort</div></div>
+    <div class="s-none"><div class="n">6</div><div class="k">Phase 1 debt</div><div class="d">One has a hard deadline</div></div>
+  </div>
+
+  <div class="callout">
+    <strong>The one dated item.</strong> There are no holidays loaded for 2027. On <b>1 January 2027</b> every holiday becomes an ordinary working day — attendance marks the whole firm absent, capacity shows everyone available. Everything else on these pages degrades quietly; this one breaks on a specific morning. It must be done by 31 December 2026.
+  </div>
+
+  <h2><span class="num">Timeline</span>What was worked on, and when</h2>
+  <p class="lede">Grouped by working period. Dates and counts are taken from the commit history, so this is what actually happened rather than what was planned.</p>
+
+  <div class="tl">
+<div class="tl-block p1"><span class="tl-tag">3 days</span><div class="tl-date">24 – 28 Jun</div><div class="tl-head">The system starts</div><p class="tl-body">Project scaffold and a live API on real Postgres. <b>Auth, RBAC, attendance and performance</b> land in the first week — the four things everything else depends on.</p></div>
+<div class="tl-block p1"><span class="tl-tag">5 days</span><div class="tl-date">6 – 11 Jul</div><div class="tl-head">Production, and the first audit</div><p class="tl-body">Docker stack, security hardening and the Contabo deploy. A deep audit follows immediately and <b>87 of 88 findings are remediated</b>. File attachments and the organisation step-up passcode.</p></div>
+<div class="tl-block p1"><span class="tl-tag">24 commits</span><div class="tl-date">13 – 14 Jul</div><div class="tl-head">Capacity, deadlines, and the PII boundary</div><p class="tl-body">The team capacity board, dual internal/client deadlines, overdue alerts. Roster changes. <b>First-login profile collection with a hard PII boundary</b> — personal details removed server-side, not merely hidden. Mobile tables made usable.</p></div>
+<div class="tl-block p1"><span class="tl-tag">11 commits</span><div class="tl-date">15 – 17 Jul</div><div class="tl-head">People operations fill out</div><p class="tl-body">Attendance regularisation with HR approval. Project completion lifecycle and emergency-leave cover. Comp-off. Renamed to Squark Dashboard. Performance reworked with explained metrics. <b>The expenses module</b>, and WFH became a work mode rather than a leave type.</p></div>
+<div class="tl-block p1"><span class="tl-tag">17 commits</span><div class="tl-date">19 – 20 Jul</div><div class="tl-head">Collaboration and HR modules</div><p class="tl-body">Three rounds of Teams-inspired work — chat, presence, polls, voice clips, read receipts. Then the TeamNest HR set: announcements, a policy library, org chart, appraisal cycles. <b>Milestones removed entirely</b>; Issues repurposed as non-billable technical time.</p></div>
+<div class="tl-block p1"><span class="tl-tag">12 commits</span><div class="tl-date">22 – 23 Jul</div><div class="tl-head">Patents arrive</div><p class="tl-body">QA remediation across authz and validation. The Senior Research Associate role. Timesheets promoted to its own module. Project types with auto-generated task lists. Then the big one: <b>the PID system and the confidential Patent portal</b>.</p></div>
+<div class="tl-block p1"><span class="tl-tag">17 commits</span><div class="tl-date">24 – 25 Jul</div><div class="tl-head">A fourteen-agent QA sweep</div><p class="tl-body">Workspace rebuild — PID flow, Gurgaon/Jaipur offices, a server-enforced profile gate. A deep-test sweep across every module found <b>four critical confidentiality holes</b>, all closed the same day. AWS-readiness switches added behind config gates.</p></div>
+<div class="tl-block p1"><span class="tl-tag">42 commits</span><div class="tl-date">27 – 29 Jul</div><div class="tl-head">Two feedback rounds</div><p class="tl-body">Log Time rebuilt around two options. The PID lifecycle allocator with expiry and tail-reclaim. Task screen consolidated. Then rounds two and three of your feedback: <b>timesheet backfill windows with Super-Admin approval</b>, PID reopen, project chat mentions, and the permission matrix applied.</p></div>
+<div class="tl-block p1"><span class="tl-tag">25 commits</span><div class="tl-date">30 Jul – 4 Aug</div><div class="tl-head">Ledger, digest, calendar</div><p class="tl-body">PID Ledger lifecycle states and search. Timesheets rewritten. Comp-off half-days. <b>The daily digest with an editable send time.</b> A colour-consistency pass. The Team Calendar rebuilt three times before the date bar behaved.</p></div>
+<div class="tl-block p1"><span class="tl-tag">16 commits</span><div class="tl-date">5 – 7 Aug</div><div class="tl-head">Clients, first attempt</div><p class="tl-body">Attendance truth pass and multi-round PIDs. <b>Delivery clients — one client, many PIDs</b> — with identity behind a lock. Leaves, Attendance and Expenses reshaped. Technology domains as a second axis beside project type.</p></div>
+<div class="tl-block mark"><span class="tl-tag">13 commits</span><div class="tl-date">12 Aug</div><div class="tl-head">PHASE 1 CLOSED</div><p class="tl-body">Twenty-two modules live and in daily use. The line is written down in <code>PHASES.md</code> along with the seven items Phase 1 did <b>not</b> finish. Roles become the roster’s decision, not the seed’s.</p></div>
+<div class="tl-block p2"><span class="tl-tag">7 commits</span><div class="tl-date">13 Aug</div><div class="tl-head">Phase 2 part one and two, same day</div><p class="tl-body"><b>Clients and patents:</b> archive vs remove, tagging after creation, the client ledger, <code>formerHandles</code>. Then the scope widens: <b>team spaces</b> for work that is not client delivery, and a full <b>BD pipeline</b> with stages, forecasting and win/loss.</p></div>
+<div class="tl-block p2"><span class="tl-tag">10 commits</span><div class="tl-date">16 – 18 Aug</div><div class="tl-head">Measurement, and the calendar</div><p class="tl-body">Internal work counts in timesheets, capacity and performance without pretending to be client work. A review catches that <b>team tasks could never be closed</b>. The real 2026 calendar with genuinely optional holidays. <b>Reporting lines — and the appraisal module works for the first time.</b></p></div>
+<div class="tl-block p2"><span class="tl-tag">PRs #83–#99</span><div class="tl-date">19 Aug</div><div class="tl-head">Fourteen commits, eight pull requests</div><p class="tl-body">The heaviest day. Business Development as a role. Departments you can manage and an org chart that exists. <b>Four concurrency races that were one bug.</b> Performance was measuring the wrong things and one metric was always zero. The four ledgers connected. And the deploy that took the site down made impossible to repeat.</p></div>
+<div class="tl-block p2"><span class="tl-tag">PR #100</span><div class="tl-date">23 Aug</div><div class="tl-head">The patent mapping</div><p class="tl-body"><b>Analysts could see a handle and never the patent it stood for.</b> Three visibility tiers with project membership as the grant. A feedback module. The client ledger gains a rate, so value is derived rather than typed. Self-as-project-manager. Ajay Sharma on Senior Consultant rights.</p></div>
+<div class="tl-block p2"><span class="tl-tag">current</span><div class="tl-date">24 Aug</div><div class="tl-head">Documentation</div><p class="tl-body">This record, the deploy runbook, and the phase summaries.</p></div>
+  </div>
+
+  <h2 class="brk"><span class="num">Activity</span>Commits per working day</h2>
+  <p class="lede">Thirty-seven working days across two months. The shape shows where the effort concentrated — the two heaviest days were 27 July (the QA and PID-lifecycle push) and 19 August (eight pull requests merged in one day).</p>
+
+  <div class="bars">
+<div class="bar-row"><span class="bar-d">24 Jun</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">25 Jun</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">28 Jun</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">06 Jul</span><span class="bar-t " style="width:109px"></span><span class="bar-n">7</span></div>
+<div class="bar-row"><span class="bar-d">07 Jul</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">08 Jul</span><span class="bar-t " style="width:78px"></span><span class="bar-n">5</span></div>
+<div class="bar-row"><span class="bar-d">09 Jul</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">10 Jul</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">11 Jul</span><span class="bar-t " style="width:17px"></span><span class="bar-n">1</span></div>
+<div class="bar-row"><span class="bar-d">13 Jul</span><span class="bar-t " style="width:170px"></span><span class="bar-n">11</span></div>
+<div class="bar-row"><span class="bar-d">14 Jul</span><span class="bar-t " style="width:201px"></span><span class="bar-n">13</span></div>
+<div class="bar-row"><span class="bar-d">15 Jul</span><span class="bar-t " style="width:33px"></span><span class="bar-n">2</span></div>
+<div class="bar-row"><span class="bar-d">16 Jul</span><span class="bar-t " style="width:33px"></span><span class="bar-n">2</span></div>
+<div class="bar-row"><span class="bar-d">17 Jul</span><span class="bar-t " style="width:109px"></span><span class="bar-n">7</span></div>
+<div class="bar-row"><span class="bar-d">19 Jul</span><span class="bar-t " style="width:78px"></span><span class="bar-n">5</span></div>
+<div class="bar-row"><span class="bar-d">20 Jul</span><span class="bar-t " style="width:186px"></span><span class="bar-n">12</span></div>
+<div class="bar-row"><span class="bar-d">22 Jul</span><span class="bar-t " style="width:124px"></span><span class="bar-n">8</span></div>
+<div class="bar-row"><span class="bar-d">23 Jul</span><span class="bar-t " style="width:63px"></span><span class="bar-n">4</span></div>
+<div class="bar-row"><span class="bar-d">24 Jul</span><span class="bar-t " style="width:231px"></span><span class="bar-n">15</span></div>
+<div class="bar-row"><span class="bar-d">25 Jul</span><span class="bar-t " style="width:33px"></span><span class="bar-n">2</span></div>
+<div class="bar-row"><span class="bar-d">27 Jul</span><span class="bar-t " style="width:262px"></span><span class="bar-n">17</span></div>
+<div class="bar-row"><span class="bar-d">28 Jul</span><span class="bar-t " style="width:201px"></span><span class="bar-n">13</span></div>
+<div class="bar-row"><span class="bar-d">29 Jul</span><span class="bar-t " style="width:186px"></span><span class="bar-n">12</span></div>
+<div class="bar-row"><span class="bar-d">30 Jul</span><span class="bar-t " style="width:140px"></span><span class="bar-n">9</span></div>
+<div class="bar-row"><span class="bar-d">31 Jul</span><span class="bar-t " style="width:48px"></span><span class="bar-n">3</span></div>
+<div class="bar-row"><span class="bar-d">04 Aug</span><span class="bar-t " style="width:48px"></span><span class="bar-n">3</span></div>
+<div class="bar-row"><span class="bar-d">05 Aug</span><span class="bar-t " style="width:155px"></span><span class="bar-n">10</span></div>
+<div class="bar-row"><span class="bar-d">07 Aug</span><span class="bar-t " style="width:94px"></span><span class="bar-n">6</span></div>
+<div class="bar-row"><span class="bar-d">11 Aug</span><span class="bar-t " style="width:33px"></span><span class="bar-n">2</span></div>
+<div class="bar-row"><span class="bar-d">12 Aug</span><span class="bar-t p2" style="width:170px"></span><span class="bar-n">11</span></div>
+<div class="bar-row"><span class="bar-d">13 Aug</span><span class="bar-t p2" style="width:109px"></span><span class="bar-n">7</span></div>
+<div class="bar-row"><span class="bar-d">16 Aug</span><span class="bar-t p2" style="width:63px"></span><span class="bar-n">4</span></div>
+<div class="bar-row"><span class="bar-d">17 Aug</span><span class="bar-t p2" style="width:48px"></span><span class="bar-n">3</span></div>
+<div class="bar-row"><span class="bar-d">18 Aug</span><span class="bar-t p2" style="width:48px"></span><span class="bar-n">3</span></div>
+<div class="bar-row"><span class="bar-d">19 Aug</span><span class="bar-t p2" style="width:216px"></span><span class="bar-n">14</span></div>
+<div class="bar-row"><span class="bar-d">23 Aug</span><span class="bar-t p2" style="width:63px"></span><span class="bar-n">4</span></div>
+<div class="bar-row"><span class="bar-d">24 Aug</span><span class="bar-t p2" style="width:17px"></span><span class="bar-n">1</span></div>  </div>
+  <div class="legend">
+    <span><i style="background:#2f6fb5"></i>Phase 1</span>
+    <span><i style="background:#1c7049"></i>Phase 2</span>
+  </div>
+
+  <h2 class="brk"><span class="num">Phase 1</span>What it built — closed 12 August</h2>
+  <p class="lede">Twenty-two modules replacing spreadsheets and WhatsApp with one system the whole firm signs into.</p>
+
+  <h4>Access &amp; identity</h4>
+  <p>Cookie/JWT login with real sessions. Nine roles across a four-layer permission model — role presets, per-user grants, per-user denials, project membership — so access is described once and enforced everywhere. An organisation passcode as a second factor on changes that cannot be walked back. A full audit log.</p>
+
+  <h4>Delivery</h4>
+  <p>Projects across nine patent-analysis types, each with a technology domain and a standard task list created on the spot. The PID system minting <code>SQ_26_27_nnn</code> with rounds and a ledger. Tasks and subtasks with staffing. Timesheets with backdating windows — free under a month, approved to three, refused beyond. Patents and clients, held confidentially.</p>
+
+  <h4>People operations</h4>
+  <p>Attendance with punch in/out, WFH as a work mode, and regularisation routed to HR. Leave and comp-off with balances. Expenses through to reimbursement. A people directory with a hard PII boundary. Appraisals, a company feed, and a policy library.</p>
+
+  <h4>Insight</h4>
+  <p>Performance charts and a contribution heatmap. A capacity board answering who is free and when. Reports with CSV and PDF export. A 10pm daily digest. Personal and team calendars.</p>
+
+  <h3>The six items Phase 1 did not finish</h3>
+  <p>Re-checked against the live database on 24 August rather than copied forward. Reporting lines were on this list and are now fixed.</p>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Item</th><th>Consequence</th><th>State</th></tr></thead>
+    <tbody>
+      <tr><td class="item">No 2027 holidays</td><td class="note">Every 2027 holiday counts as a working day — the firm marked absent, and shown as available</td><td><span class="pill p-none">0 rows</span></td></tr>
+      <tr><td class="item">No email transport</td><td class="note">Notifications are in-app only. Someone who does not log in never learns anything happened</td><td><span class="pill p-none">Not installed</span></td></tr>
+      <tr><td class="item">No offboarding function</td><td class="note">Every departure is a manual edit. 25 foreign keys cascade off <code>user</code> — this once destroyed 83 timesheets</td><td><span class="pill p-none">No route</span></td></tr>
+      <tr><td class="item">Shared HR account</td><td class="note"><code>hr@squarkip.com</code> approves leave and reads personal details with no attribution in the audit log</td><td><span class="pill p-none">Active</span></td></tr>
+      <tr><td class="item">Hardcoded escalation address</td><td class="note"><code>attendance.module.ts:84</code> routes every regularisation to one person. If they leave, it fails silently</td><td><span class="pill p-none">Hardcoded</span></td></tr>
+      <tr><td class="item">Punch location kept forever</td><td class="note">Home coordinates on WFH punches, no retention policy. A DPDP exposure</td><td><span class="pill p-none">No policy</span></td></tr>
+      <tr><td class="item">No reporting lines</td><td class="note">Appraisals could not run their manager step; the org chart had nothing to draw</td><td><span class="pill p-done">Fixed 17 Aug</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 class="brk"><span class="num">Phase 2</span>Four parts, opened 12 August</h2>
+
+  <h3>Part 1 — Clients and patents <span style="font-weight:400;color:var(--ink-faint);font-size:9pt">· 13 Aug</span></h3>
+  <p>Typed client codes with a suggested default. Archive and Remove as genuinely different actions — archive is reversible, Remove is refused while any patent or project still points at the client. Patents taggable after creation. The client ledger as its own screen, recomputed on every read rather than stored, with a Super-Admin override that records who stated what and when. <code>formerHandles</code>, so an ID quoted from an old email still resolves after a rename.</p>
+
+  <h3>Part 2 — Team spaces and the BD pipeline <span style="font-weight:400;color:var(--ink-faint);font-size:9pt">· 13–16 Aug</span></h3>
+  <p>Every piece of work in the system was a client project — enforced, not conventional. HR and BD work had nowhere to live but a "General" project in the delivery list. Team spaces became their own destination, deliberately off the delivery spine: no PID, no client, absent from both ledgers. BD got a full pipeline, where losing a deal <em>requires</em> a reason because the aggregate answer to "why do we lose" is the most useful thing it produces. <code>Timesheet.teamId</code> now keeps three states apart that were one ambiguous blank.</p>
+
+  <h3>Part 3 — Your twelve-row timeline <span style="font-weight:400;color:var(--ink-faint);font-size:9pt">· 17–19 Aug</span></h3>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>#</th><th>Module</th><th>Item</th><th>Status</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1</td><td class="mod">Attendance</td><td class="item">Punch-in WFH pop-up</td><td><span class="pill p-done">Done</span></td><td class="note">Already existed; I reported this wrongly at first and corrected it</td></tr>
+      <tr><td class="n">2</td><td class="mod">Project</td><td class="item">Client &amp; Patent IDs</td><td><span class="pill p-done">Done</span></td><td class="note">And now joined up to the ledgers</td></tr>
+      <tr><td class="n">3</td><td class="mod">Project</td><td class="item">Other teams — HR, Sales, BD</td><td><span class="pill p-part">Part</span></td><td class="note">Team spaces and a BD pipeline shipped. Sales never modelled separately</td></tr>
+      <tr><td class="n">4</td><td class="mod">HR</td><td class="item">Holidays</td><td><span class="pill p-done">Done</span></td><td class="note">2026 calendar, with genuinely optional holidays</td></tr>
+      <tr><td class="n">5</td><td class="mod">HR</td><td class="item">Policies</td><td><span class="pill p-done">Done</span></td><td class="note">Ten seeded, versioned so an acknowledgement means something</td></tr>
+      <tr><td class="n">6</td><td class="mod">HR</td><td class="item">Payroll download</td><td><span class="pill p-info">Withdrawn</span></td><td class="note">Removed at your instruction. No payroll data exists anywhere</td></tr>
+      <tr><td class="n">7</td><td class="mod">Training</td><td class="item">Whole module</td><td><span class="pill p-none">Deferred</span></td><td class="note">Parked at your instruction. Nothing built</td></tr>
+      <tr><td class="n">8</td><td class="mod">Company</td><td class="item">Feed, recognition, policies, directory</td><td><span class="pill p-done">Done</span></td><td class="note">Org chart added; directory widened</td></tr>
+      <tr><td class="n">9</td><td class="mod">People</td><td class="item">Departments</td><td><span class="pill p-done">Done</span></td><td class="note">Full management screen. The API existed and was unreachable</td></tr>
+      <tr><td class="n">10</td><td class="mod">Appraisal</td><td class="item">All six sub-items</td><td><span class="pill p-done">Done</span></td><td class="note">Parameters now fully editable, as you asked</td></tr>
+      <tr><td class="n">11</td><td class="mod">Performance</td><td class="item">360° project feedback</td><td><span class="pill p-part">Part</span></td><td class="note">General feedback exists; the project-scoped round does not</td></tr>
+      <tr><td class="n">12</td><td class="mod">Productivity</td><td class="item">Input; billable hours</td><td><span class="pill p-part">Part</span></td><td class="note">Billable hours done. "Input" still undefined</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Part 4 — The latest batch <span style="font-weight:400;color:var(--ink-faint);font-size:9pt">· 23 Aug · PR #100, not yet merged</span></h3>
+  <p><b>Self as project manager.</b> "May run a project" and "may mint the PID" had been folded into one flag, and only Admin and Super Admin can mint — so every Manager and Senior Consultant was told to hand their own matter to an Admin. Now separate.</p>
+  <p><b>Feedback.</b> Anyone may write about a colleague; the author, HR and the subject's reporting manager may read it — the subject cannot, as you specified.</p>
+  <p><b>Client ledger.</b> A client was a code and a name, so nothing knew a rate and money could never be derived. It now carries contact, country, industry, account manager and a rate, so value is hours × rate and moves with the work.</p>
+  <p><b>Patent ID ↔ number.</b> Three tiers with project membership as the grant. A member resolves the real numbers for their own matters, in both directions, without seeing the client. Every reveal audited by count, never by number.</p>
+
+  <h2 class="brk"><span class="num">Remaining</span>The four open items</h2>
+  <p class="lede">Three are waiting on you rather than on build time. Only the 360° round is work.</p>
+
+  <div class="card none">
+    <div class="card-head"><span class="ref">Row 7</span><span class="ttl">Training module</span><span class="pill p-none">Your decision</span></div>
+    <p>Deferred at your instruction. Nothing exists today — not a table, not a screen. It is correctly parked until you say otherwise.</p>
+    <div class="row need"><b>Needs</b><span>Your go-ahead, and a sentence on what a training record should hold.</span></div>
+  </div>
+
+  <div class="card none">
+    <div class="card-head"><span class="ref">Row 3</span><span class="ttl">Sales as a separate function</span><span class="pill p-none">Your decision</span></div>
+    <p>The roster carries one Senior BD Executive and no Sales role at all. Everything built treats BD and Sales as one desk. If they are separate functions, Sales needs its own role, roster entries and a scoped pipeline view.</p>
+    <div class="row need"><b>Needs</b><span>Is Sales distinct from BD, or the same desk under two names?</span></div>
+  </div>
+
+  <div class="card part">
+    <div class="card-head"><span class="ref">Row 11</span><span class="ttl">360° project feedback</span><span class="pill p-part">Now unblocked</span></div>
+    <p>General person-to-person feedback shipped on 23 August. What is not built is the project-scoped round: when a matter closes, everyone who worked on it rates each other. The question that blocked this — can the person see their own rating — you have since answered, and the same answer applies here.</p>
+    <div class="row need"><b>Needs</b><span>Nothing from you. This is a build, and it is ready to start.</span></div>
+  </div>
+
+  <div class="card none">
+    <div class="card-head"><span class="ref">Row 12</span><span class="ttl">Productivity "Input"</span><span class="pill p-none">Needs a definition</span></div>
+    <p>Billable hours are done. Nobody has said what "Input" measures — pages produced? searches run? claims charted? I could invent a definition, but a productivity metric the firm does not recognise is worse than none, because people will be measured by it.</p>
+    <div class="row need"><b>Needs</b><span>One sentence: what does Input count?</span></div>
+  </div>
+
+  <h2><span class="num">Deploying</span>What the live system is missing</h2>
+  <p>The server is current through PR #99. <b>Everything from 23 August is absent from the live system</b> until PR #100 is merged and deployed.</p>
+  <div class="row"><b>Migrations</b><span>Two, both additive and backward-compatible. They run automatically when the API starts.</span></div>
+  <div class="row"><b>Regrant</b><span>Not needed — PR #100 adds no permission codes. Worth running anyway; it is idempotent.</span></div>
+  <div class="row"><b>Roster</b><span><b>Required.</b> Ajay Sharma moves to Senior Consultant rights.</span></div>
+  <div class="row"><b>Order</b><span>Merge → pull → rebuild with <code>--build</code> → roster-align.</span></div>
+  <p style="margin-top:.8rem">The full command sequence, including the two flags whose omission previously took the site down, is in <code>DEPLOY-PR100.md</code>.</p>
+
+  <div class="footer">
+    Squark Dashboard · Phase 1 &amp; Phase 2 complete record · prepared 24 August 2026<br>
+    Dates and counts taken from the commit history. Long-form reasoning behind each decision: PHASES.md in the repository.
+  </div>
+</div>
