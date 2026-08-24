@@ -10,16 +10,14 @@
   }
   .doc { max-width: 46rem; margin: 0 auto; }
 
-  /* Title block */
-  .title-block { text-align: center; margin-bottom: 1.6rem; padding-bottom: 1rem;
+  /* Title block. The document details sit on one small right-aligned line under the rule
+     rather than in a centred block: they are reference information, not the headline. */
+  .title-block { text-align: center; padding-bottom: .55rem;
                  border-bottom: 1px solid #000; }
-  .title-block h1 { font-size: 16pt; font-weight: bold; margin: 0 0 .35rem; }
-  .title-block .sub { font-size: 11pt; margin: 0 0 .8rem; }
-  .meta { font-size: 10pt; }
-  .meta table { margin: 0 auto; border-collapse: collapse; }
-  .meta td { padding: .1rem .5rem; }
-  .meta td:first-child { text-align: right; font-weight: bold; }
-  .meta td:last-child  { text-align: left; }
+  .title-block h1 { font-size: 16pt; font-weight: bold; margin: 0 0 .3rem; }
+  .title-block .sub { font-size: 11pt; margin: 0; }
+  .meta-line { text-align: right; font-size: 8.5pt; color: #555;
+               margin: .3rem 0 1.5rem; }
 
   h2 { font-size: 12.5pt; font-weight: bold; margin: 1.5rem 0 .5rem; }
   h3 { font-size: 11pt; font-weight: bold; margin: 1rem 0 .35rem; }
@@ -42,7 +40,7 @@
   code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; }
 
   .sig { margin-top: 2rem; padding-top: .6rem; border-top: 1px solid #999;
-         font-size: 10pt; }
+         font-size: 9.5pt; color: #444; }
 
   h2, h3 { break-after: avoid; }
   table.data, .note { break-inside: avoid; }
@@ -54,14 +52,9 @@
 <div class="title-block">
   <h1>Squark Dashboard — Project Status Report</h1>
   <p class="sub">Phase 1 and Phase 2: work completed, work outstanding</p>
-  <div class="meta">
-    <table>
-      <tr><td>Prepared by:</td><td>Anant Gupta</td></tr>
-      <tr><td>Date:</td><td>24 August 2026</td></tr>
-      <tr><td>Period covered:</td><td>24 June 2026 – 24 August 2026</td></tr>
-      <tr><td>System:</td><td>https://217.76.59.244.sslip.io</td></tr>
-    </table>
-  </div>
+</div>
+<div class="meta-line">
+  Date: 24 August 2026 &nbsp;|&nbsp; Period covered: 24 June – 24 August 2026 &nbsp;|&nbsp; System: 217.76.59.244.sslip.io
 </div>
 
 <h2>1. Summary</h2>
@@ -70,20 +63,17 @@
 
 <p><b>Phase 1</b> was completed and closed on 12 August 2026. It delivered 22 modules covering access control, project delivery, people operations and reporting. The system is live and in daily use by the team.</p>
 
-<p><b>Phase 2</b> opened on 12 August 2026 and is substantially complete. Of the twelve items on the agreed timeline, ten are finished and two are partially complete. Four items remain open in total, of which three require a decision from management before work can proceed.</p>
+<p><b>Phase 2</b> opened on 12 August 2026 and is substantially complete. Of the ten items on the agreed timeline, seven are finished and three are partially complete. Three items remain open in total, of which two require a decision from management before work can proceed.</p>
 
 <table class="data">
   <tr><th>Item</th><th>Count</th><th>Remarks</th></tr>
   <tr><td>Phase 1 modules delivered</td><td class="c">22</td><td>Live and in use since 12 August 2026</td></tr>
-  <tr><td>Phase 2 timeline items completed</td><td class="c">10 of 12</td><td>Two items partially complete</td></tr>
-  <tr><td>Items outstanding in Phase 2</td><td class="c">4</td><td>Three awaiting management decision</td></tr>
-  <tr><td>Phase 1 items carried forward</td><td class="c">6</td><td>One has a fixed deadline — see Section 5</td></tr>
+  <tr><td>Phase 2 timeline items completed</td><td class="c">7 of 10</td><td>Three items partially complete</td></tr>
+  <tr><td>Items outstanding in Phase 2</td><td class="c">3</td><td>Two awaiting management input</td></tr>
+  <tr><td>Phase 1 items carried forward</td><td class="c">6</td><td>Detailed in Section 5.2</td></tr>
   <tr><td>Total working days</td><td class="c">37</td><td>24 June to 24 August 2026</td></tr>
 </table>
 
-<div class="note">
-  <b>Attention required:</b> Public holidays for the year 2027 have not been loaded into the system. From 1 January 2027, every holiday will be treated as an ordinary working day. Attendance will mark all staff absent on those days, and the capacity planner will show them as available. This must be completed before 31 December 2026. Full details are in Section 5.
-</div>
 
 <h2>2. Timeline of work</h2>
 
@@ -158,22 +148,20 @@
 <h3>4.2 Team spaces and Business Development pipeline</h3>
 <p>Previously all work in the system had to be a client project, leaving HR and Business Development work with nowhere to sit. Team spaces were created for non-delivery work, kept separate from client delivery records. A Business Development pipeline was added covering deals, stages, activity history, forecasting and win/loss reporting.</p>
 
-<h3>4.3 The twelve agreed items</h3>
+<h3>4.3 The agreed timeline items</h3>
 
 <table class="data">
-  <tr><th class="num">#</th><th style="width:6rem">Module</th><th>Item</th><th style="width:5rem">Status</th><th>Remarks</th></tr>
-  <tr><td class="num">1</td><td>Attendance</td><td>Work-from-home prompt on punch in</td><td class="c">Complete</td><td>Was already in place</td></tr>
-  <tr><td class="num">2</td><td>Project</td><td>Client and Patent IDs</td><td class="c">Complete</td><td>Now linked to the ledgers</td></tr>
-  <tr><td class="num">3</td><td>Project</td><td>Other teams — HR, Sales, BD</td><td class="c">Partial</td><td>Sales not modelled separately</td></tr>
-  <tr><td class="num">4</td><td>HR</td><td>Holidays</td><td class="c">Complete</td><td>2026 calendar with optional holidays</td></tr>
-  <tr><td class="num">5</td><td>HR</td><td>Policies</td><td class="c">Complete</td><td>Ten policies, with version control</td></tr>
-  <tr><td class="num">6</td><td>HR</td><td>Payroll download</td><td class="c">Withdrawn</td><td>Removed on instruction. No payroll data held</td></tr>
-  <tr><td class="num">7</td><td>Training</td><td>Training module</td><td class="c">Deferred</td><td>Deferred on instruction. Not started</td></tr>
-  <tr><td class="num">8</td><td>Company</td><td>Feed, recognition, policies, directory</td><td class="c">Complete</td><td>Organisation chart included</td></tr>
-  <tr><td class="num">9</td><td>People</td><td>Departments</td><td class="c">Complete</td><td>Full management screen</td></tr>
-  <tr><td class="num">10</td><td>Appraisal</td><td>All six sub-items</td><td class="c">Complete</td><td>Parameters fully editable</td></tr>
-  <tr><td class="num">11</td><td>Performance</td><td>360° project feedback</td><td class="c">Partial</td><td>General feedback in place; project round pending</td></tr>
-  <tr><td class="num">12</td><td>Productivity</td><td>Input; billable hours</td><td class="c">Partial</td><td>Billable hours complete; "Input" undefined</td></tr>
+  <tr><th style="width:6rem">Module</th><th>Item</th><th style="width:5rem">Status</th><th>Remarks</th></tr>
+  <tr><td>Attendance</td><td>Work-from-home prompt on punch in</td><td class="c">Complete</td><td>Was already in place</td></tr>
+  <tr><td>Project</td><td>Client and Patent IDs</td><td class="c">Complete</td><td>Now linked to the ledgers</td></tr>
+  <tr><td>Project</td><td>Other teams — HR, Sales, BD</td><td class="c">Partial</td><td>Sales not modelled separately</td></tr>
+  <tr><td>HR</td><td>Holidays</td><td class="c">Complete</td><td>2026 calendar with optional holidays</td></tr>
+  <tr><td>HR</td><td>Policies</td><td class="c">Complete</td><td>Ten policies, with version control</td></tr>
+  <tr><td>Company</td><td>Feed, recognition, policies, directory</td><td class="c">Complete</td><td>Organisation chart included</td></tr>
+  <tr><td>People</td><td>Departments</td><td class="c">Complete</td><td>Full management screen</td></tr>
+  <tr><td>Appraisal</td><td>All six sub-items</td><td class="c">Complete</td><td>Parameters fully editable</td></tr>
+  <tr><td>Performance</td><td>360° project feedback</td><td class="c">Partial</td><td>General feedback in place; project round pending</td></tr>
+  <tr><td>Productivity</td><td>Input; billable hours</td><td class="c">Partial</td><td>Billable hours complete; "Input" undefined</td></tr>
 </table>
 
 <h3>4.4 Latest work — 23 August 2026</h3>
@@ -183,32 +171,23 @@
   <li><b>Feedback module.</b> Any employee may record feedback about a colleague. It is visible to the author, HR and the employee's reporting manager.</li>
   <li><b>Client ledger.</b> Client records now hold contact details, country, industry, account manager and a billing rate, allowing the value of work to be calculated automatically from hours logged.</li>
   <li><b>Project manager selection.</b> Managers and Senior Consultants can now be named as manager of their own projects.</li>
-  <li><b>Ajay Sharma</b> granted Senior Consultant level access.</li>
 </ul>
 
 <h2 class="pagebreak">5. Outstanding items</h2>
 
-<h3>5.1 Phase 2 — four items open</h3>
+<h3>5.1 Phase 2 — three items open</h3>
 
 <table class="data">
-  <tr><th style="width:4rem">Ref</th><th>Item</th><th>Position</th><th style="width:9rem">Action required</th></tr>
-  <tr>
-    <td>Item 7</td><td>Training module</td>
-    <td>Deferred on instruction. Not started.</td>
-    <td>Management decision and confirmation of requirements</td>
-  </tr>
-  <tr>
-    <td>Item 3</td><td>Sales as a separate function</td>
+  <tr><th>Item</th><th>Position</th><th style="width:9rem">Action required</th></tr>
+  <tr><td>Sales as a separate function</td>
     <td>The staff list holds one Senior BD Executive and no Sales role. Business Development and Sales are currently treated as one function.</td>
-    <td>Confirmation whether Sales is a separate function</td>
+    <td>To be discussed</td>
   </tr>
-  <tr>
-    <td>Item 11</td><td>360° project feedback</td>
+  <tr><td>360° project feedback</td>
     <td>General feedback is complete. The project-based review round, where team members rate each other at project close, is not yet built. No longer blocked.</td>
     <td>None. Ready to begin</td>
   </tr>
-  <tr>
-    <td>Item 12</td><td>Productivity — "Input"</td>
+  <tr><td>Productivity — "Input"</td>
     <td>Billable hours are complete. The measure intended by "Input" has not been defined.</td>
     <td>Definition of what "Input" should measure</td>
   </tr>
@@ -237,21 +216,21 @@
   <tr><td>Code changes</td><td>Complete and tested. Awaiting approval to merge.</td></tr>
   <tr><td>Database changes</td><td>Two changes, both additive. Applied automatically when the system restarts.</td></tr>
   <tr><td>Permission refresh</td><td>Not required — no new permissions were added.</td></tr>
-  <tr><td>Staff role update</td><td><b>Required</b> — to apply Ajay Sharma's revised access level.</td></tr>
+  <tr><td>Staff role update</td><td><b>Required</b> — to apply revised staff role assignments.</td></tr>
 </table>
 
 <p>Detailed deployment instructions are held separately in the project repository.</p>
 
 <h2>7. Conclusion</h2>
 
-<p>Phase 1 is complete and the system is in daily use. Phase 2 is substantially complete, with ten of twelve agreed items delivered.</p>
+<p>Phase 1 is complete and the system is in daily use. Phase 2 is substantially complete, with seven of the ten agreed items delivered in full and three partially complete.</p>
 
-<p>Of the four items still open, only one — the 360° project feedback round — requires development work, and it is ready to begin. The remaining three are awaiting a decision on the training module, confirmation of whether Sales operates separately from Business Development, and a definition of the "Input" productivity measure.</p>
+<p>Of the three items still open, only one — the 360° project feedback round — requires development work, and it is ready to begin. The other two are awaiting discussion of whether Sales operates separately from Business Development, and a definition of the "Input" productivity measure.</p>
 
-<p>Separately, the six items carried forward from Phase 1 should be scheduled. The loading of 2027 public holidays is the most urgent, as the system will begin recording incorrect attendance from 1 January 2027 if it is not addressed.</p>
+<p>Separately, the six items carried forward from Phase 1 should be scheduled. These are set out in Section 5.2, together with the effect of leaving each unaddressed.</p>
 
 <div class="sig">
-  <p style="margin:0">Prepared by: Anant Gupta<br>Date: 24 August 2026</p>
+  <p style="margin:0">Prepared by: Anant Gupta</p>
 </div>
 
 </div>
