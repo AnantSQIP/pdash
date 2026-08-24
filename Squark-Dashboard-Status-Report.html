@@ -1,0 +1,257 @@
+<meta charset="utf-8">
+<title>Squark Dashboard - Project Status Report</title>
+<style>
+  @page { size: A4; margin: 20mm 18mm 18mm 18mm; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: #000; background: #fff;
+    font-family: Calibri, "Segoe UI", Arial, sans-serif;
+    font-size: 11pt; line-height: 1.45;
+  }
+  .doc { max-width: 46rem; margin: 0 auto; }
+
+  /* Title block */
+  .title-block { text-align: center; margin-bottom: 1.6rem; padding-bottom: 1rem;
+                 border-bottom: 1px solid #000; }
+  .title-block h1 { font-size: 16pt; font-weight: bold; margin: 0 0 .35rem; }
+  .title-block .sub { font-size: 11pt; margin: 0 0 .8rem; }
+  .meta { font-size: 10pt; }
+  .meta table { margin: 0 auto; border-collapse: collapse; }
+  .meta td { padding: .1rem .5rem; }
+  .meta td:first-child { text-align: right; font-weight: bold; }
+  .meta td:last-child  { text-align: left; }
+
+  h2 { font-size: 12.5pt; font-weight: bold; margin: 1.5rem 0 .5rem; }
+  h3 { font-size: 11pt; font-weight: bold; margin: 1rem 0 .35rem; }
+  p  { margin: 0 0 .6rem; text-align: justify; }
+  ul, ol { margin: .3rem 0 .7rem; padding-left: 1.5rem; }
+  li { margin-bottom: .25rem; }
+
+  table.data { width: 100%; border-collapse: collapse; margin: .5rem 0 .9rem;
+               font-size: 10pt; }
+  table.data th, table.data td { border: 1px solid #999; padding: .32rem .45rem;
+                                 vertical-align: top; text-align: left; }
+  table.data th { background: #f0f0f0; font-weight: bold; }
+  table.data td.c { text-align: center; white-space: nowrap; }
+  table.data td.num { text-align: center; width: 2rem; }
+
+  .note { font-size: 10pt; margin: .6rem 0; padding: .5rem .7rem;
+          border: 1px solid #999; background: #f7f7f7; }
+  .note b { font-weight: bold; }
+
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; }
+
+  .sig { margin-top: 2rem; padding-top: .6rem; border-top: 1px solid #999;
+         font-size: 10pt; }
+
+  h2, h3 { break-after: avoid; }
+  table.data, .note { break-inside: avoid; }
+  tr { break-inside: avoid; }
+  .pagebreak { break-before: page; }
+</style>
+<div class="doc">
+
+<div class="title-block">
+  <h1>Squark Dashboard — Project Status Report</h1>
+  <p class="sub">Phase 1 and Phase 2: work completed, work outstanding</p>
+  <div class="meta">
+    <table>
+      <tr><td>Prepared by:</td><td>Anant Gupta</td></tr>
+      <tr><td>Date:</td><td>24 August 2026</td></tr>
+      <tr><td>Period covered:</td><td>24 June 2026 – 24 August 2026</td></tr>
+      <tr><td>System:</td><td>https://217.76.59.244.sslip.io</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>1. Summary</h2>
+
+<p>Development of the Squark Dashboard began on 24 June 2026. The work has been carried out in two phases over approximately two months, covering 37 working days.</p>
+
+<p><b>Phase 1</b> was completed and closed on 12 August 2026. It delivered 22 modules covering access control, project delivery, people operations and reporting. The system is live and in daily use by the team.</p>
+
+<p><b>Phase 2</b> opened on 12 August 2026 and is substantially complete. Of the twelve items on the agreed timeline, ten are finished and two are partially complete. Four items remain open in total, of which three require a decision from management before work can proceed.</p>
+
+<table class="data">
+  <tr><th>Item</th><th>Count</th><th>Remarks</th></tr>
+  <tr><td>Phase 1 modules delivered</td><td class="c">22</td><td>Live and in use since 12 August 2026</td></tr>
+  <tr><td>Phase 2 timeline items completed</td><td class="c">10 of 12</td><td>Two items partially complete</td></tr>
+  <tr><td>Items outstanding in Phase 2</td><td class="c">4</td><td>Three awaiting management decision</td></tr>
+  <tr><td>Phase 1 items carried forward</td><td class="c">6</td><td>One has a fixed deadline — see Section 5</td></tr>
+  <tr><td>Total working days</td><td class="c">37</td><td>24 June to 24 August 2026</td></tr>
+</table>
+
+<div class="note">
+  <b>Attention required:</b> Public holidays for the year 2027 have not been loaded into the system. From 1 January 2027, every holiday will be treated as an ordinary working day. Attendance will mark all staff absent on those days, and the capacity planner will show them as available. This must be completed before 31 December 2026. Full details are in Section 5.
+</div>
+
+<h2>2. Timeline of work</h2>
+
+<p>The table below sets out the work carried out in each period, taken from the development records.</p>
+
+<table class="data">
+  <tr><th style="width:6.5rem">Period</th><th>Work carried out</th><th style="width:4.5rem">Phase</th></tr>
+
+  <tr><td>24 – 28 June</td><td>Initial system setup. Login and authentication, role-based access control, attendance and performance modules.</td><td class="c">Phase 1</td></tr>
+  <tr><td>6 – 11 July</td><td>Deployment to the production server, security hardening, and a full system audit. 87 of 88 audit findings were resolved. File attachments and the organisation passcode were added.</td><td class="c">Phase 1</td></tr>
+  <tr><td>13 – 14 July</td><td>Team capacity planner, internal and client deadlines, overdue alerts. Staff profile collection on first login, with restricted access to personal details. Mobile display corrections.</td><td class="c">Phase 1</td></tr>
+  <tr><td>15 – 17 July</td><td>Attendance regularisation with HR approval. Project completion lifecycle. Compensatory off. Expenses module. Work-from-home recorded as a work mode rather than a leave type.</td><td class="c">Phase 1</td></tr>
+  <tr><td>19 – 20 July</td><td>Internal communication features. HR modules: announcements, policy library, organisation chart, appraisal cycles.</td><td class="c">Phase 1</td></tr>
+  <tr><td>22 – 23 July</td><td>Senior Research Associate role added. Timesheets made a separate module. Project types with standard task lists. <b>Project ID (PID) system and the confidential patent portal.</b></td><td class="c">Phase 1</td></tr>
+  <tr><td>24 – 25 July</td><td>Workspace rebuild covering the PID process, Gurgaon and Jaipur offices, and the profile requirement. A detailed testing sweep identified four serious confidentiality issues, all corrected the same day.</td><td class="c">Phase 1</td></tr>
+  <tr><td>27 – 29 July</td><td>Time logging rebuilt. PID allocation lifecycle. Two rounds of feedback implemented, including timesheet backdating rules with Super Admin approval.</td><td class="c">Phase 1</td></tr>
+  <tr><td>30 July – 4 Aug</td><td>PID Ledger with lifecycle states and search. Timesheets rewritten. Daily digest with configurable send time. Team Calendar.</td><td class="c">Phase 1</td></tr>
+  <tr><td>5 – 7 August</td><td>Attendance corrections and multi-round PIDs. Client records introduced, with client identity access-restricted. Technology domains added alongside project types.</td><td class="c">Phase 1</td></tr>
+  <tr><td><b>12 August</b></td><td><b>Phase 1 closed.</b> 22 modules live. Outstanding items formally recorded. Phase 2 opened the same day.</td><td class="c">—</td></tr>
+  <tr><td>13 August</td><td>Client and patent management: archiving, tagging patents to projects, the client ledger. Team spaces for non-delivery work, and the Business Development pipeline.</td><td class="c">Phase 2</td></tr>
+  <tr><td>16 – 18 Aug</td><td>Internal work included in timesheets, capacity and performance. The 2026 holiday calendar. <b>Reporting lines established, enabling the appraisal module for the first time.</b></td><td class="c">Phase 2</td></tr>
+  <tr><td>19 August</td><td>Business Development role. Departments and organisation chart. Correction of four concurrency defects. Performance metric corrections. Connection of the four ledgers. Deployment process corrected.</td><td class="c">Phase 2</td></tr>
+  <tr><td>23 August</td><td>Patent ID to patent number mapping for project members. Feedback module. Client ledger extended with contact details and billing rate. Project managers able to manage their own projects.</td><td class="c">Phase 2</td></tr>
+  <tr><td>24 August</td><td>Documentation and deployment instructions.</td><td class="c">Phase 2</td></tr>
+</table>
+
+<h2 class="pagebreak">3. Phase 1 — work completed</h2>
+
+<p>Phase 1 delivered 22 modules. These are grouped below by function.</p>
+
+<h3>3.1 Access and identity</h3>
+<ul>
+  <li>Login with secure session handling</li>
+  <li>Nine roles with a four-level permission structure</li>
+  <li>Organisation passcode required for sensitive changes</li>
+  <li>Audit log of all significant actions</li>
+</ul>
+
+<h3>3.2 Project delivery</h3>
+<ul>
+  <li>Projects across nine patent-analysis types, each with a standard task list</li>
+  <li>Project ID (PID) system with multiple rounds and a full ledger</li>
+  <li>Tasks and subtasks with staffing</li>
+  <li>Timesheets with backdating rules</li>
+  <li>Patent and client records, access-restricted</li>
+</ul>
+
+<h3>3.3 People operations</h3>
+<ul>
+  <li>Attendance with punch in and out, and work-from-home</li>
+  <li>Attendance regularisation requests routed to HR</li>
+  <li>Leave and compensatory off with balances and approvals</li>
+  <li>Expenses from submission to reimbursement</li>
+  <li>Staff directory with restricted access to personal details</li>
+  <li>Appraisals, company announcements and policy library</li>
+</ul>
+
+<h3>3.4 Reporting</h3>
+<ul>
+  <li>Performance charts and contribution summary</li>
+  <li>Team capacity planner</li>
+  <li>Reports with export to CSV and PDF</li>
+  <li>Daily digest at 10:00 pm</li>
+  <li>Individual and team calendars</li>
+</ul>
+
+<h2>4. Phase 2 — work completed</h2>
+
+<h3>4.1 Client and patent management</h3>
+<p>Client codes, archiving of inactive clients, tagging of patents to projects after creation, and a client ledger showing work done and its value. Retired patent identifiers continue to resolve after a client code is changed.</p>
+
+<h3>4.2 Team spaces and Business Development pipeline</h3>
+<p>Previously all work in the system had to be a client project, leaving HR and Business Development work with nowhere to sit. Team spaces were created for non-delivery work, kept separate from client delivery records. A Business Development pipeline was added covering deals, stages, activity history, forecasting and win/loss reporting.</p>
+
+<h3>4.3 The twelve agreed items</h3>
+
+<table class="data">
+  <tr><th class="num">#</th><th style="width:6rem">Module</th><th>Item</th><th style="width:5rem">Status</th><th>Remarks</th></tr>
+  <tr><td class="num">1</td><td>Attendance</td><td>Work-from-home prompt on punch in</td><td class="c">Complete</td><td>Was already in place</td></tr>
+  <tr><td class="num">2</td><td>Project</td><td>Client and Patent IDs</td><td class="c">Complete</td><td>Now linked to the ledgers</td></tr>
+  <tr><td class="num">3</td><td>Project</td><td>Other teams — HR, Sales, BD</td><td class="c">Partial</td><td>Sales not modelled separately</td></tr>
+  <tr><td class="num">4</td><td>HR</td><td>Holidays</td><td class="c">Complete</td><td>2026 calendar with optional holidays</td></tr>
+  <tr><td class="num">5</td><td>HR</td><td>Policies</td><td class="c">Complete</td><td>Ten policies, with version control</td></tr>
+  <tr><td class="num">6</td><td>HR</td><td>Payroll download</td><td class="c">Withdrawn</td><td>Removed on instruction. No payroll data held</td></tr>
+  <tr><td class="num">7</td><td>Training</td><td>Training module</td><td class="c">Deferred</td><td>Deferred on instruction. Not started</td></tr>
+  <tr><td class="num">8</td><td>Company</td><td>Feed, recognition, policies, directory</td><td class="c">Complete</td><td>Organisation chart included</td></tr>
+  <tr><td class="num">9</td><td>People</td><td>Departments</td><td class="c">Complete</td><td>Full management screen</td></tr>
+  <tr><td class="num">10</td><td>Appraisal</td><td>All six sub-items</td><td class="c">Complete</td><td>Parameters fully editable</td></tr>
+  <tr><td class="num">11</td><td>Performance</td><td>360° project feedback</td><td class="c">Partial</td><td>General feedback in place; project round pending</td></tr>
+  <tr><td class="num">12</td><td>Productivity</td><td>Input; billable hours</td><td class="c">Partial</td><td>Billable hours complete; "Input" undefined</td></tr>
+</table>
+
+<h3>4.4 Latest work — 23 August 2026</h3>
+<p>The following was completed on 23 August and is <b>awaiting deployment</b> to the live system.</p>
+<ul>
+  <li><b>Patent ID to patent number mapping.</b> Staff assigned to a project can now see the actual patent numbers for that project. Previously only the Super Admin could, which meant analysts could not identify the patents they were working on. Access is granted by project membership. Client identity remains restricted, and every access is recorded.</li>
+  <li><b>Feedback module.</b> Any employee may record feedback about a colleague. It is visible to the author, HR and the employee's reporting manager.</li>
+  <li><b>Client ledger.</b> Client records now hold contact details, country, industry, account manager and a billing rate, allowing the value of work to be calculated automatically from hours logged.</li>
+  <li><b>Project manager selection.</b> Managers and Senior Consultants can now be named as manager of their own projects.</li>
+  <li><b>Ajay Sharma</b> granted Senior Consultant level access.</li>
+</ul>
+
+<h2 class="pagebreak">5. Outstanding items</h2>
+
+<h3>5.1 Phase 2 — four items open</h3>
+
+<table class="data">
+  <tr><th style="width:4rem">Ref</th><th>Item</th><th>Position</th><th style="width:9rem">Action required</th></tr>
+  <tr>
+    <td>Item 7</td><td>Training module</td>
+    <td>Deferred on instruction. Not started.</td>
+    <td>Management decision and confirmation of requirements</td>
+  </tr>
+  <tr>
+    <td>Item 3</td><td>Sales as a separate function</td>
+    <td>The staff list holds one Senior BD Executive and no Sales role. Business Development and Sales are currently treated as one function.</td>
+    <td>Confirmation whether Sales is a separate function</td>
+  </tr>
+  <tr>
+    <td>Item 11</td><td>360° project feedback</td>
+    <td>General feedback is complete. The project-based review round, where team members rate each other at project close, is not yet built. No longer blocked.</td>
+    <td>None. Ready to begin</td>
+  </tr>
+  <tr>
+    <td>Item 12</td><td>Productivity — "Input"</td>
+    <td>Billable hours are complete. The measure intended by "Input" has not been defined.</td>
+    <td>Definition of what "Input" should measure</td>
+  </tr>
+</table>
+
+<h3>5.2 Phase 1 — six items carried forward</h3>
+
+<p>These were recorded as outstanding when Phase 1 closed and have been verified as still open as at 24 August 2026.</p>
+
+<table class="data">
+  <tr><th style="width:11rem">Item</th><th>Effect if not addressed</th><th style="width:6rem">Priority</th></tr>
+  <tr><td>Holidays for 2027 not loaded</td><td>From 1 January 2027 every holiday is treated as a working day. All staff will be marked absent and shown as available in the capacity planner.</td><td class="c"><b>High</b><br>By 31 Dec 2026</td></tr>
+  <tr><td>No email facility</td><td>All notifications are within the system only. Staff who do not log in receive no information.</td><td class="c">Medium</td></tr>
+  <tr><td>No exit process</td><td>Each departure requires manual database edits. An earlier departure resulted in the loss of 83 timesheet records.</td><td class="c">Medium</td></tr>
+  <tr><td>Shared HR account</td><td>The account <code>hr@squarkip.com</code> approves leave and views personal details without individual attribution in the audit log.</td><td class="c">Medium</td></tr>
+  <tr><td>Fixed escalation address</td><td>All attendance regularisations are routed to one named individual. If that person leaves, routing fails without warning.</td><td class="c">Low</td></tr>
+  <tr><td>Punch location retained indefinitely</td><td>Home addresses are captured on work-from-home punches and retained without a deletion policy. A data protection concern.</td><td class="c">Medium</td></tr>
+</table>
+
+<h2>6. Deployment status</h2>
+
+<p>The live system is current up to 19 August 2026. The work completed on 23 August is built and tested but has not yet been deployed.</p>
+
+<table class="data">
+  <tr><th style="width:11rem">Step</th><th>Position</th></tr>
+  <tr><td>Code changes</td><td>Complete and tested. Awaiting approval to merge.</td></tr>
+  <tr><td>Database changes</td><td>Two changes, both additive. Applied automatically when the system restarts.</td></tr>
+  <tr><td>Permission refresh</td><td>Not required — no new permissions were added.</td></tr>
+  <tr><td>Staff role update</td><td><b>Required</b> — to apply Ajay Sharma's revised access level.</td></tr>
+</table>
+
+<p>Detailed deployment instructions are held separately in the project repository.</p>
+
+<h2>7. Conclusion</h2>
+
+<p>Phase 1 is complete and the system is in daily use. Phase 2 is substantially complete, with ten of twelve agreed items delivered.</p>
+
+<p>Of the four items still open, only one — the 360° project feedback round — requires development work, and it is ready to begin. The remaining three are awaiting a decision on the training module, confirmation of whether Sales operates separately from Business Development, and a definition of the "Input" productivity measure.</p>
+
+<p>Separately, the six items carried forward from Phase 1 should be scheduled. The loading of 2027 public holidays is the most urgent, as the system will begin recording incorrect attendance from 1 January 2027 if it is not addressed.</p>
+
+<div class="sig">
+  <p style="margin:0">Prepared by: Anant Gupta<br>Date: 24 August 2026</p>
+</div>
+
+</div>
