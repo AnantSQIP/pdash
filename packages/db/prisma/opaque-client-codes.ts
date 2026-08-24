@@ -33,7 +33,70 @@
 // Without --yes it prints the plan and changes nothing.
 
 import { PrismaClient } from '@prisma/client';
-import { opaqueClientCode, suggestClientCode } from '../../../apps/api/src/common/client-code';
+
+/**
+ * The code rules, restated here rather than imported.
+ *
+ * `apps/api/src/common/client-code.ts` holds the authoritative versions, and importing them would
+ * be better — but the two builds have disjoint roots (`apps/api` compiles with rootDir ./src,
+ * `packages/db` with rootDir ./prisma) and neither declares a path mapping to the other, so a
+ * cross-tree import fails the container build with TS6059. Duplicating ~30 lines was the smaller
+ * evil against reorganising both tsconfigs to ship one maintenance script.
+ *
+ * These must stay in step with that file. They only govern what this script PROPOSES; every code
+ * it writes is still validated by the API on the way in, so a drift here produces a bad suggestion,
+ * never a bad record.
+ */
+
+/** No vowels, so a code cannot spell a word; no 0/1/I/O/S/Z, the pairs people mistype. */
+const OPAQUE_ALPHABET = 'BCDFGHJKLMNPQRTVWXY2346789';
+const RESERVED = new Set(['NEW', 'ALL', 'NONE', 'NULL', 'TEST', 'TEMP', 'PAT', 'SQ', 'TBD', 'NA']);
+const STOP_WORDS = new Set([
+  'the', 'and', 'of', 'for', 'a', 'an', 'inc', 'incorporated', 'ltd', 'limited', 'llc', 'llp',
+  'plc', 'corp', 'corporation', 'company', 'co', 'gmbh', 'ag', 'sa', 'nv', 'bv', 'pvt', 'private',
+  'pte', 'group', 'holdings', 'holding', 'international', 'global',
+]);
+const VOWEL_SET = new Set(['A', 'E', 'I', 'O', 'U']);
+
+function normalizeName(raw: string): string {
+  return (raw || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Mirror of suggestClientCode: initials for a multi-word name, first letter + consonants for one. */
+function suggestClientCode(name: string): string {
+  const cleaned = normalizeName(name);
+  if (!cleaned) return '';
+  const words = cleaned.split(' ').filter(Boolean);
+  const significant = words.filter(w => !STOP_WORDS.has(w.toLowerCase()));
+  const parts = significant.length ? significant : words;
+  if (!parts.length) return '';
+  if (parts.length >= 2) return parts.map(w => w[0]).join('').slice(0, 5);
+  const w = parts[0];
+  let out = w[0];
+  for (let i = 1; i < w.length && out.length < 3; i++) {
+    const ch = w[i];
+    if (VOWEL_SET.has(ch) || ch === w[i - 1]) continue;
+    out += ch;
+  }
+  return out.length >= 2 ? out : w.slice(0, 3);
+}
+
+/** Mirror of opaqueClientCode: a code with no relationship to the client's name. */
+function opaqueClientCode(taken: Iterable<string>, length = 3): string {
+  const used = new Set([...taken].map(c => c.toUpperCase()));
+  const blocked = (c: string) => used.has(c) || RESERVED.has(c);
+  for (let attempt = 0; attempt < 200; attempt++) {
+    let code = '';
+    for (let i = 0; i < length; i++) {
+      code += OPAQUE_ALPHABET[Math.floor(Math.random() * OPAQUE_ALPHABET.length)];
+    }
+    if (!/[A-Z]/.test(code)) continue;
+    if (!blocked(code)) return code;
+  }
+  return length < 5 ? opaqueClientCode(taken, length + 1) : '';
+}
 
 const prisma = new PrismaClient();
 
@@ -42,8 +105,6 @@ const onlyArg = process.argv.indexOf('--only');
 const ONLY = onlyArg > -1 && process.argv[onlyArg + 1]
   ? new Set(process.argv[onlyArg + 1].split(',').map(c => c.trim().toUpperCase()))
   : null;
-
-const VOWELS = new Set(['A', 'E', 'I', 'O', 'U']);
 
 /**
  * Is this code readable off the client's name?
@@ -55,11 +116,11 @@ const VOWELS = new Set(['A', 'E', 'I', 'O', 'U']);
  *     a word is a code somebody carries out of the building in their head.
  */
 function isGuessable(code: string, name: string | null): { risky: boolean; why: string } {
-  if ([...code.toUpperCase()].some(ch => VOWELS.has(ch))) {
+  if ([...code.toUpperCase()].some(ch => VOWEL_SET.has(ch))) {
     return { risky: true, why: 'pronounceable' };
   }
   if (!name) return { risky: false, why: '' };
-  const m = suggestClientCode(name, []);
+  const m = suggestClientCode(name);
   if (m && (m === code.toUpperCase() || code.toUpperCase().startsWith(m.slice(0, 2)))) {
     return { risky: true, why: `derives from "${name}"` };
   }
