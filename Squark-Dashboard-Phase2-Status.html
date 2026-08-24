@@ -1,0 +1,610 @@
+<meta charset="utf-8">
+<title>Phase 2 Line by Line</title>
+<style>
+  :root {
+    --ink: #16202b;
+    --ink-soft: #55636f;
+    --ink-faint: #7d8a96;
+    --paper: #ffffff;
+    --panel: #f2f5f8;
+    --panel-deep: #e7edf3;
+    --rule: #d9e0e7;
+    --rule-soft: #eaeff4;
+    --brand: #2f6fb5;
+    --brand-deep: #1f4f85;
+    --done: #1c7049;
+    --done-bg: #e8f4ed;
+    --part: #a86608;
+    --part-bg: #fdf2e0;
+    --none: #a83228;
+    --none-bg: #fbeae8;
+    --serif: Georgia, 'Times New Roman', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 10.5pt;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet { max-width: 52rem; margin: 0 auto; padding: 2.4rem 2rem 4rem; }
+
+  /* ── Masthead ─────────────────────────────────────────── */
+  .masthead { border-bottom: 2.5px solid var(--ink); padding-bottom: 1.1rem; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 7.5pt;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--brand);
+    margin: 0 0 0.5rem;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: 27pt;
+    line-height: 1.1;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 0 0 0.5rem;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-family: var(--serif);
+    font-size: 12pt;
+    font-style: italic;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 40rem;
+  }
+  .stamp {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.4rem;
+    font-family: var(--mono);
+    font-size: 7.5pt;
+    color: var(--ink-faint);
+    margin-top: 1rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .stamp b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ── Section headings ─────────────────────────────────── */
+  h2 {
+    font-family: var(--serif);
+    font-size: 16.5pt;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 2.6rem 0 0.3rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid var(--rule);
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 8pt;
+    font-weight: 400;
+    color: var(--brand);
+    letter-spacing: 0.1em;
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+  .lede { color: var(--ink-soft); margin: 0 0 1.2rem; max-width: 42rem; }
+  /* The masthead already closes with a heavy rule — a second hairline under it reads as a mistake. */
+  .masthead + h2 { border-top: 0; padding-top: 0; margin-top: 2rem; }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 10.5pt;
+    font-weight: 700;
+    margin: 1.5rem 0 0.35rem;
+    letter-spacing: -0.005em;
+  }
+  h4 {
+    font-family: var(--mono);
+    font-size: 7.5pt;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 1.1rem 0 0.3rem;
+    font-weight: 600;
+  }
+  p { margin: 0 0 0.7rem; }
+  a { color: var(--brand-deep); }
+
+  /* ── Scoreboard ───────────────────────────────────────── */
+  .score { display: flex; gap: 0.6rem; margin: 1.6rem 0 0; }
+  .score > div {
+    flex: 1;
+    border: 1px solid var(--rule);
+    border-top: 3px solid;
+    border-radius: 3px;
+    padding: 0.75rem 0.85rem 0.8rem;
+    background: var(--paper);
+  }
+  .score .n {
+    font-family: var(--serif);
+    font-size: 25pt;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .score .k {
+    font-family: var(--mono);
+    font-size: 7pt;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-top: 0.3rem;
+  }
+  .score .d { font-size: 8.5pt; color: var(--ink-soft); margin-top: 0.35rem; line-height: 1.45; }
+  .s-done { border-top-color: var(--done) !important; }
+  .s-done .n { color: var(--done); }
+  .s-part { border-top-color: var(--part) !important; }
+  .s-part .n { color: var(--part); }
+  .s-none { border-top-color: var(--none) !important; }
+  .s-none .n { color: var(--none); }
+
+  /* ── Status table ─────────────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; margin: 1.1rem 0 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 7pt;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    text-align: left;
+    padding: 0 0.55rem 0.45rem;
+    border-bottom: 1.5px solid var(--ink);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody td { padding: 0.5rem 0.55rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
+  td.n {
+    font-family: var(--mono);
+    font-size: 8pt;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+    width: 1.6rem;
+    padding-top: 0.62rem;
+  }
+  td.mod {
+    font-family: var(--mono);
+    font-size: 7.5pt;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  td.item { font-weight: 600; }
+  td.note { color: var(--ink-soft); font-size: 9pt; }
+
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 6.8pt;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    font-weight: 700;
+    padding: 0.16rem 0.42rem;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .p-done { background: var(--done-bg); color: var(--done); }
+  .p-part { background: var(--part-bg); color: var(--part); }
+  .p-none { background: var(--none-bg); color: var(--none); }
+
+  /* ── Item cards ───────────────────────────────────────── */
+  .card {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--brand);
+    border-radius: 3px;
+    padding: 1.05rem 1.15rem 1.1rem;
+    margin: 1.1rem 0;
+    background: var(--paper);
+    break-inside: avoid;
+  }
+  .card.done { border-left-color: var(--done); }
+  .card.part { border-left-color: var(--part); }
+  .card.none { border-left-color: var(--none); }
+  .card-head { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.55rem; flex-wrap: wrap; }
+  .card-head .ref {
+    font-family: var(--mono);
+    font-size: 8pt;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .card-head .ttl { font-family: var(--serif); font-size: 13pt; font-weight: 700; letter-spacing: -0.01em; }
+  .card p { margin: 0 0 0.55rem; }
+  .card > *:last-child { margin-bottom: 0; }
+
+  ul, ol { margin: 0.2rem 0 0.75rem; padding-left: 1.15rem; }
+  li { margin-bottom: 0.28rem; }
+  li::marker { color: var(--ink-faint); }
+
+  code {
+    font-family: var(--mono);
+    font-size: 8.6pt;
+    background: var(--panel);
+    padding: 0.08em 0.32em;
+    border-radius: 2px;
+    color: var(--brand-deep);
+  }
+
+  /* ── Flow strip ───────────────────────────────────────── */
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 0.3rem;
+    margin: 0.55rem 0 0.85rem;
+    font-size: 8.4pt;
+  }
+  .flow span {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 0.3rem 0.5rem;
+    font-family: var(--mono);
+    font-size: 7.6pt;
+    color: var(--ink);
+  }
+  .flow i { color: var(--ink-faint); align-self: center; font-style: normal; font-size: 9pt; }
+
+  /* ── Assumption / deviation blocks ────────────────────── */
+  .assume {
+    background: var(--panel);
+    border-radius: 3px;
+    padding: 0.7rem 0.85rem;
+    margin: 0.8rem 0 0;
+    font-size: 9.2pt;
+  }
+  .assume h4 { margin-top: 0; }
+  .assume ul { margin-bottom: 0; }
+
+  .dev {
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    margin: 0.85rem 0;
+    break-inside: avoid;
+    overflow: hidden;
+  }
+  .dev-top {
+    background: var(--panel);
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    gap: 0.6rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .dev-top .tag {
+    font-family: var(--mono);
+    font-size: 6.8pt;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+    padding: 0.14rem 0.4rem;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .t-mine { background: var(--none-bg); color: var(--none); }
+  .t-yours { background: var(--done-bg); color: var(--done); }
+  .dev-top .h { font-weight: 700; font-size: 10pt; }
+  .dev-body { padding: 0.75rem 0.9rem 0.8rem; font-size: 9.4pt; }
+  .dev-body .row { display: flex; gap: 0.5rem; margin-bottom: 0.35rem; }
+  .dev-body .row:last-child { margin-bottom: 0; }
+  .dev-body .row b {
+    font-family: var(--mono);
+    font-size: 7.2pt;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    min-width: 5.3rem;
+    padding-top: 0.16rem;
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+  .dev-body .row span { flex: 1; }
+
+  .callout {
+    border-left: 3px solid var(--part);
+    background: var(--part-bg);
+    padding: 0.7rem 0.9rem;
+    border-radius: 0 3px 3px 0;
+    margin: 1rem 0;
+    font-size: 9.4pt;
+  }
+  .callout strong { color: #7d4c05; }
+
+  .footer {
+    margin-top: 2.8rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 7.5pt;
+    color: var(--ink-faint);
+    line-height: 1.7;
+  }
+
+  /* ── Print ────────────────────────────────────────────── */
+  @page { size: A4; margin: 15mm 14mm; }
+  @media print {
+    body { font-size: 9.6pt; }
+    .sheet { max-width: none; padding: 0; }
+    h2 { break-after: avoid; }
+    h3, h4 { break-after: avoid; }
+    .card, .dev, .assume, .callout, tbody tr { break-inside: avoid; }
+    .brk { break-before: page; }
+    .score { gap: 0.5rem; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <p class="eyebrow">Squark Dashboard · Delivery Audit, revision 2</p>
+    <h1>Phase&nbsp;2, line by line</h1>
+    <p class="standfirst">Your timeline table re-checked after your corrections — with two of my earlier calls overturned, three rows built to completion, and every issue testing turned up, including the ones in my own new code.</p>
+    <div class="stamp">
+      <span><b>Date</b> 19 August 2026</span>
+      <span><b>Audited at</b> main @ e7f4995</span>
+      <span><b>Supersedes</b> revision 1</span>
+      <span><b>Amended</b> 19 Aug, after testing</span>
+      <span><b>Method</b> code read, then executed against a live API</span>
+    </div>
+  </header>
+
+  <h2><span class="num">First</span>Two things I got wrong</h2>
+  <p class="lede">You challenged two rows in revision 1. You were right on both, and the reasons differ in a way worth recording.</p>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">I was wrong</span><span class="h">Row 1, the WFH pop-up, was already finished</span></div>
+    <div class="dev-body">
+      <div class="row"><b>I said</b><span>Not built. "The server accepts a work mode; no pop-up ever asks for one."</span></div>
+      <div class="row"><b>You said</b><span>It is in the first pop-up that appears when someone signs in for the day.</span></div>
+      <div class="row"><b>Truth</b><span><code>PunchInPrompt.tsx</code> — a first-login-of-the-day modal with three choices, the middle one being <b>"Punch In — Working from home"</b>. Mounted in <code>AppShell</code>, so it is on every page.</span></div>
+      <div class="row"><b>How I missed it</b><span>Two compounding mistakes. I searched for <code>PunchPrompt</code>; the file is <code>PunchInPrompt</code>. Then I checked the wrong function — <code>doPunch()</code> in the button component, which indeed never passes a mode — while the prompt calls <code>punch.mutate('WFH')</code> directly and never goes through it. Finding one negative and stopping is how a search becomes a conclusion it has not earned.</span></div>
+      <div class="row"><b>Verified since</b><span>Ran it: WFH is recorded; an invalid mode is refused; no choice defaults to Office; and an approved WFH request overrides an Office choice, exactly as the code claims.</span></div>
+    </div>
+  </div>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">I was wrong</span><span class="h">Row 5, Policies, was not "done" — it was empty</span></div>
+    <div class="dev-body">
+      <div class="row"><b>I said</b><span>Done. "Already existed. Verified, with acknowledgement tracking."</span></div>
+      <div class="row"><b>You said</b><span>"Where are the policies, I haven't provided you anything and I can't see anything on the dashboard either."</span></div>
+      <div class="row"><b>Truth</b><span>The library works — publish, edit, categorise, acknowledge, see who has acknowledged. It contained <b>nothing</b>. The tab renders "No policies published yet."</span></div>
+      <div class="row"><b>The mistake</b><span>I checked that the code existed and called the row done. That is precisely the error I flagged for row 8 in the same document — and then made myself one row earlier. A feature with no content in it is not delivered, because nobody can tell it apart from a broken one.</span></div>
+      <div class="row"><b>Fixed</b><span>Ten policies now seeded — see the section below for exactly what they are and what they are not.</span></div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>One correction in my favour, for accuracy:</strong> revision 1 listed "two optional holidays a year" as my assumption. It is not — the allowance is stated on the Squark IP calendar you provided, and the code cites it. I was over-cautious there rather than wrong.
+  </div>
+
+  <h2 class="brk"><span class="num">Now</span>Where the table stands</h2>
+  <p class="lede">Payroll is removed at your instruction and Training is deferred at your instruction, so ten rows remain live.</p>
+
+  <div class="score">
+    <div class="s-done">
+      <div class="n">7</div>
+      <div class="k">Finished</div>
+      <div class="d">Built, tested, permission-checked, merged.</div>
+    </div>
+    <div class="s-part">
+      <div class="n">1</div>
+      <div class="k">Part way</div>
+      <div class="d">Productivity — blocked on one answer from you.</div>
+    </div>
+    <div class="s-none">
+      <div class="n">2</div>
+      <div class="k">Not started</div>
+      <div class="d">360° feedback live; Training deferred by you.</div>
+    </div>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr><th></th><th>Module</th><th>Row</th><th>Was</th><th>Now</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="n">1</td><td class="mod">Attendance</td><td class="item">Punch in — WFH pop-up</td><td><span class="pill p-none">Not built</span></td><td><span class="pill p-done">Done</span></td><td class="note">My error. It was already there and works.</td></tr>
+        <tr><td class="n">2</td><td class="mod">Project</td><td class="item">Client &amp; Patent IDs</td><td><span class="pill p-done">Done</span></td><td><span class="pill p-done">Done</span></td><td class="note">Unchanged.</td></tr>
+        <tr><td class="n">3</td><td class="mod">Project</td><td class="item">Other teams — HR, Sales, BD</td><td><span class="pill p-part">Part way</span></td><td><span class="pill p-part">Part way</span></td><td class="note">Sales still not modelled separately.</td></tr>
+        <tr><td class="n">4</td><td class="mod">HR</td><td class="item">Holidays</td><td><span class="pill p-done">Done</span></td><td><span class="pill p-done">Done</span></td><td class="note">Unchanged.</td></tr>
+        <tr><td class="n">5</td><td class="mod">HR</td><td class="item">Policies</td><td><span class="pill p-done">Done</span></td><td><span class="pill p-done">Done</span></td><td class="note">Was empty. 10 policies now in it.</td></tr>
+        <tr><td class="n">6</td><td class="mod">HR</td><td class="item">Payroll download</td><td><span class="pill p-part">Part way</span></td><td><span class="pill p-none">Removed</span></td><td class="note">Dropped at your instruction. Nothing to strip out.</td></tr>
+        <tr><td class="n">7</td><td class="mod">Training</td><td class="item">Whole module</td><td><span class="pill p-none">Not built</span></td><td><span class="pill p-none">Deferred</span></td><td class="note">Parked at your instruction.</td></tr>
+        <tr><td class="n">8</td><td class="mod">Company</td><td class="item">Feed, recognition, policies, directory</td><td><span class="pill p-part">Part way</span></td><td><span class="pill p-done">Done</span></td><td class="note">Tested; org chart added; directory widened.</td></tr>
+        <tr><td class="n">9</td><td class="mod">People</td><td class="item">Department</td><td><span class="pill p-part">Part way</span></td><td><span class="pill p-done">Done</span></td><td class="note">Full management screen; API completed.</td></tr>
+        <tr><td class="n">10</td><td class="mod">Appraisal</td><td class="item">All six sub-items</td><td><span class="pill p-done">Done</span></td><td><span class="pill p-done">Done</span></td><td class="note">Unchanged.</td></tr>
+        <tr><td class="n">11</td><td class="mod">Performance</td><td class="item">360° project feedback</td><td><span class="pill p-none">Not built</span></td><td><span class="pill p-none">Not built</span></td><td class="note">Still the readiest of the unbuilt work.</td></tr>
+        <tr><td class="n">12</td><td class="mod">Productivity</td><td class="item">Input; billable hours</td><td><span class="pill p-part">Part way</span></td><td><span class="pill p-part">Part way</span></td><td class="note">Blocked: I still don't know what "Input" means.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 class="brk"><span class="num">Built</span>What I made this round</h2>
+
+  <div class="card done">
+    <div class="card-head"><span class="ref">Row 09</span><span class="ttl">Departments</span><span class="pill p-done">Done</span></div>
+    <p>The API for this has existed since Phase 1 and the web client called exactly one method of it — <code>list</code>. So departments could be read and never created, and the card carried a <b>"Manage in Admin →"</b> link to a page that has no department management on it. Meanwhile the People table showed a Department column computed from job titles by a <code>switch</code> statement, which looked like the feature working and would have disagreed with the real records the moment anybody made one.</p>
+
+    <h4>What you can now do</h4>
+    <div class="flow"><span>Create</span><i>→</i><span>Rename / describe</span><i>→</i><span>Add members</span><i>→</i><span>Name a head</span><i>→</i><span>Remove / delete</span></div>
+    <p>The panel also lists anybody in <b>no department at all</b>, because a structure covering half the firm looks complete on screen while quietly leaving people out of anything scoped by it.</p>
+
+    <h4>What I had to add to the API</h4>
+    <ul>
+      <li><code>PATCH /:id</code> and <code>DELETE /:id</code> — neither existed, so a department could be created and then never renamed or removed.</li>
+      <li>A case-insensitive duplicate-name guard answering <b>409 with the clashing name</b>, rather than letting a database constraint surface as a 500.</li>
+      <li>Soft-deleted people excluded from reads. They were not, so somebody offboarded stayed on the card and in its member count indefinitely.</li>
+      <li>Delete refuses while projects are attached; membership cascades away, because a membership means nothing once the department is gone, but a project pointing at one is real attribution.</li>
+      <li>Removing the head clears the headship <b>in the same transaction</b>.</li>
+    </ul>
+
+    <h4>The head was a regular expression</h4>
+    <p><code>/head|lead|manager/i</code> run over each member's free-text role. "Team Lead<b>er</b>" matched on <i>lead</i>. A coordinator titled "Manager, vendor relations" matched on <i>manager</i>. Where two people matched, the winner was whoever joined first. Who runs a department is a decision somebody makes, so it is a column now.</p>
+    <p>The migration <b>backfills exactly what the regex would have chosen</b>, so nothing is lost, and de-duplicates names <b>before</b> creating the unique index — otherwise it would fail on data already in your table.</p>
+  </div>
+
+  <div class="card done">
+    <div class="card-head"><span class="ref">Row 08</span><span class="ttl">The org chart</span><span class="pill p-done">Done</span></div>
+    <p>The Company page has said "Announcements, HR policies and <b>the org chart</b>" in its subtitle since the module was built. There was no org chart. There could not have been — <code>user_manager</code> was empty until Phase 2 wrote the lines, so a chart would have drawn 26 disconnected people.</p>
+    <p>It draws from flat edges rather than a nested tree, because the chart legitimately has more than one root: the person at the top, plus anyone whose line is not yet recorded. On your data: <b>27 people, one root, deepest chain five levels</b> — Mohit → Nitin → Ajay → Amritpal → Aman.</p>
+
+    <h4>Testing it found a bug in my own code</h4>
+    <p>I planted a cycle — two people managing each other — to check the chart survived it. It did not crash. It did something worse: <b>11 of 27 people silently disappeared</b>. My "not placed" group only caught people whose manager was empty, and someone caught in a loop <i>has</i> a manager, so they and everyone beneath them simply were not drawn, with nothing to say so.</p>
+    <p>Placement is decided by reachability now, and everyone the tree cannot hold is named in one of two groups — <b>no line recorded</b> or <b>caught in a loop</b> — because the causes and the fixes are different. Re-tested: 27 of 27 accounted for.</p>
+  </div>
+
+  <div class="card done">
+    <div class="card-head"><span class="ref">Row 05</span><span class="ttl">Ten policies</span><span class="pill p-done">Done</span></div>
+    <p>You are right that you never gave me any, and I am not going to write your staff handbook. So these are something narrower and defensible.</p>
+    <p><b>Each one describes a rule the software already enforces</b>, with the source cited so anybody can check it. Nothing is invented HR policy. The numbers are read from the implementation:</p>
+    <ul>
+      <li>A day under <b>4 hours</b> is a half day — <code>HALF_DAY_HOURS</code></li>
+      <li>Timesheets: free to <b>31 days</b>, Super&nbsp;Admin approval to <b>92</b>, blocked after — <code>SELF_FILL_DAYS</code>, <code>APPROVAL_MAX_DAYS</code></li>
+      <li><b>12</b> casual, <b>8</b> sick, <b>15</b> earned — the configured leave quotas</li>
+      <li><b>2</b> optional holidays a year — your published calendar</li>
+      <li>WFH approved by holders of <code>attendance.manage</code> — HR, Admin, Super&nbsp;Admin</li>
+    </ul>
+    <p>The ten cover attendance and punching, working from home, leave, holidays, comp-off, timesheets, client confidentiality and patent handles, expenses, personal data and who can see it, and how an appraisal runs.</p>
+    <p><b>Acknowledgement is deliberately switched off on all of them.</b> Acknowledging a policy records that somebody accepted a term of employment; asking 27 people to sign a description of software behaviour before HR has read it would make that record mean less, not more. HR turns it on per policy once they have reviewed. Every one is editable and deletable like any other.</p>
+    <p class="assume" style="margin-top:.8rem"><b>One is deliberately incomplete.</b> The expenses policy states the workflow the system enforces and then says plainly that the firm's spending limits are not encoded anywhere and need filling in by HR. I would rather ship a policy that admits a gap than one that invents a number.</p>
+  </div>
+
+  <div class="card done">
+    <div class="card-head"><span class="ref">Row 08</span><span class="ttl">Feed, recognition, directory</span><span class="pill p-done">Done</span></div>
+    <p>All three existed and I had never tested them. Now tested — results in the table below. The directory was thin: name, designation, email, phone. It now also shows <b>department, office and reporting manager</b>, all three of which were already recorded and none of which was displayed. Search covers the new fields.</p>
+    <p>Checked deliberately: the directory leaks <b>no personal data</b>. Address, date of birth and next of kin stay behind the HR/Admin boundary; I confirmed the response contains none of them for an ordinary employee.</p>
+  </div>
+
+  <h2 class="brk"><span class="num">Testing</span>What I ran, and what it found</h2>
+  <p class="lede">Everything below was executed against a real API on a scratch database, signed in as six different people. Not a code read.</p>
+
+  <div class="callout">
+    <strong>On "A/B testing":</strong> I did not do it, and it is worth saying why rather than quietly substituting something else. A/B testing means showing two variants to real users and comparing behaviour — it needs live traffic and a measurable outcome. What is useful here instead is what I ran: permission testing across roles, boundary and edge cases, and deliberately hostile data. If what you meant was "test it every way you can", that is what follows.
+  </div>
+
+  <h3>Results</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>What</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td class="item">Department permissions — 6 roles × 5 operations</td><td class="note">Correct throughout. Everyone views; only Super Admin and HR create/update/set-head; only Super Admin deletes.</td></tr>
+        <tr><td class="item">Duplicate names — exact, different case, padded</td><td class="note">409 on all three, naming the clash.</td></tr>
+        <tr><td class="item">Empty, whitespace-only, 81-character names</td><td class="note">400 on each.</td></tr>
+        <tr><td class="item">Head set before the person is a member</td><td class="note">Refused, with instructions.</td></tr>
+        <tr><td class="item">Head removed from the department</td><td class="note">Headship cleared in the same transaction.</td></tr>
+        <tr><td class="item">Adding the same person twice</td><td class="note">409 "already in this department" (was a raw 500).</td></tr>
+        <tr><td class="item">Delete with a project attached</td><td class="note">409; detached, then 200; zero orphaned memberships.</td></tr>
+        <tr><td class="item">Migration against planted bad data</td><td class="note">Head backfilled to the regex's own pick; the later "Manager" correctly did not win; case-collision renamed, not deleted; index live.</td></tr>
+        <tr><td class="item">Org chart, clean data</td><td class="note">27 people, 1 root, 0 dangling manager ids, deepest chain 5.</td></tr>
+        <tr><td class="item">Org chart, planted cycle</td><td class="note"><b>Found a bug</b> — 11 people vanished. Fixed; now 27 of 27 accounted for.</td></tr>
+        <tr><td class="item">Policies — read, publish, acknowledge, ack status</td><td class="note">All six roles read; only <code>policy.manage</code> publishes; ack status HR-only; seed is idempotent.</td></tr>
+        <tr><td class="item">Recognition — self-award, bad category</td><td class="note">Self-award refused with a clear message; bad category 400.</td></tr>
+        <tr><td class="item">WFH punch, four ways</td><td class="note">WFH recorded; invalid mode 400; no choice defaults to Office; an approved request beats an Office choice.</td></tr>
+        <tr><td class="item">Directory as a plain Employee</td><td class="note">No personal data in the response.</td></tr>
+        <tr><td class="item">Web production build</td><td class="note">Passes.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 class="brk"><span class="num">Issues</span>Everything testing turned up</h2>
+  <p class="lede">Ordered by severity. Two are fixed; the rest are open, and three are about the system rather than this batch.</p>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">Fixed</span><span class="h">A reporting loop silently deleted 11 people from the org chart</span></div>
+    <div class="dev-body">
+      <div class="row"><b>Severity</b><span>High — a chart that omits people without saying so is worse than one that refuses to draw.</span></div>
+      <div class="row"><b>Cause</b><span>My "not placed" group only caught an empty manager. Someone in a loop has a manager, so they and their whole subtree were unreachable and unlisted.</span></div>
+      <div class="row"><b>Fix</b><span>Placement decided by reachability; two distinct warning groups. Re-tested at 27 of 27.</span></div>
+    </div>
+  </div>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">Fixed</span><span class="h">A department could keep an offboarded person on its card forever</span></div>
+    <div class="dev-body">
+      <div class="row"><b>Severity</b><span>Medium — the member count and the avatars showed the roster as it had been, not as it is.</span></div>
+      <div class="row"><b>Cause</b><span><code>addMember</code> filtered on <code>deletedAt: null</code>; the read paths did not.</span></div>
+      <div class="row"><b>Fix</b><span>Both read paths filter now.</span></div>
+    </div>
+  </div>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">Open · operational</span><span class="h">The preview copy's .env points at the LIVE database and the LIVE port</span></div>
+    <div class="dev-body">
+      <div class="row"><b>Severity</b><span>High, and nothing to do with this batch — it is a footgun in how the machine is set up.</span></div>
+      <div class="row"><b>What happened</b><span><code>~/pdash-preview/.env</code> contains <code>API_PORT=4000</code> and a <code>DATABASE_URL</code> pointing at the live <code>pdash</code> database. Starting the preview API without explicit overrides makes it try to seize the live API's port and connect to the live data. Mine did exactly that once and was saved only by the port already being occupied.</span></div>
+      <div class="row"><b>Checked</b><span>Nothing leaked. The live database has no <code>headUserId</code> column and none of my test rows. Verified directly.</span></div>
+      <div class="row"><b>Recommend</b><span>Point that file at a scratch database and a non-conflicting port. A copy of the app meant for testing should not be one forgotten variable away from the real one.</span></div>
+    </div>
+  </div>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-yours">Now fixed</span><span class="h">Two departments differing only by capital letters</span></div>
+    <div class="dev-body">
+      <div class="row"><b>Then</b><span>I called this theoretical, and proposed leaving it: a case-insensitive index would mean permanent schema noise on every future migration.</span></div>
+      <div class="row"><b>Since</b><span>Testing reproduced it on the first attempt — six concurrent requests created four departments. It was not theoretical.</span></div>
+      <div class="row"><b>Fixed</b><span>A transaction now closes the race, so no index is needed and the objection went away. Six concurrent attempts create one, and refuse five.</span></div>
+    </div>
+  </div>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">I was wrong</span><span class="h">The shared HR login — it does not exist in production</span></div>
+    <div class="dev-body">
+      <div class="row"><b>I reported</b><span>That <code>hr@squarkip.com</code> is shared, approves leave with no attribution, and shows on the org chart with no reporting line.</span></div>
+      <div class="row"><b>Actually</b><span>It is <b>not in the production database at all</b>. It exists only in the seeded scratch database I was testing against, where it has never been logged into and has approved nothing.</span></div>
+      <div class="row"><b>Shaveta</b><span>Already has her own named HR account with the same role — the arrangement the finding was asking for.</span></div>
+      <div class="row"><b>Action</b><span>None. The finding was an artefact of my test data, corrected here rather than left standing.</span></div>
+    </div>
+  </div>
+
+  <div class="dev">
+    <div class="dev-top"><span class="tag t-mine">Open · your decision</span><span class="h">Nobody is in a department, so the new screen opens empty</span></div>
+    <div class="dev-body">
+      <div class="row"><b>Severity</b><span>Not a defect — but you will see it immediately, so it should not be a surprise.</span></div>
+      <div class="row"><b>State</b><span>Your live database has four seeded departments (Search &amp; Analytics, Prosecution, Trademarks, Operations) and <b>no members in any of them</b>.</span></div>
+      <div class="row"><b>What to do</b><span>Either staff those four, rename them to your real structure, or delete them and start fresh. All three are now possible on the screen; none of them was before.</span></div>
+    </div>
+  </div>
+
+  <h2><span class="num">Deploy</span>What to run</h2>
+  <p class="lede">One additive migration. No permission re-grant — <code>department.delete</code> already existed and was already granted to Super Admin and Admin.</p>
+  <pre style="background:var(--panel);border-radius:4px;padding:.85rem 1rem;font-family:var(--mono);font-size:8.4pt;line-height:1.7;overflow-x:auto;margin:0 0 .8rem">ssh -p 2222 root@217.76.59.244
+cd /opt/pdash
+git pull origin main
+docker compose up -d --build          # runs the migration on boot
+
+# optional — fills the policy library
+docker compose exec api node packages/db/prisma/dist/seed-policies-2026-08.js</pre>
+  <p>The migration is safe against your live data: it de-duplicates names <b>before</b> creating the unique index, so it cannot fail on rows already there, and it backfills each department's head to whatever the old regex would have picked.</p>
+  <p>The policy seed is idempotent and matches on title — so if HR later rewrites a policy but keeps its title, re-running would overwrite their version. Run it once, then leave it alone.</p>
+
+  <h2><span class="num">Left</span>The three rows still open</h2>
+  <ol>
+    <li><b>Productivity (row 12)</b> — billable hours are computed and shown. I still do not know what "Input" means. My guess is billable hours ÷ expected available hours, where capacity already computes the denominator; if that is right it is quick. But it could equally be a screen where someone types a target, and those are different features.</li>
+    <li><b>360° feedback (row 11)</b> — nothing built, but the reviewer/analyst pairing is already recorded on every task assignment, so the data exists. The blocker is a people decision: <b>is a rating visible to the person rated?</b> That changes the design substantially.</li>
+    <li><b>Sales (row 3)</b> — still folded into BD. If Sales is a separate function with its own process, it is unbuilt, and that was my call rather than yours.</li>
+  </ol>
+
+  <div class="footer">
+    Squark Dashboard · Phase 2 delivery audit, revision 2 · 19 August 2026<br>
+    Verified against main @ e7f4995 by reading source and then executing it against a live API on a scratch database, signed in as six roles.<br>
+    Supersedes revision 1, which was wrong about rows 1 and 5.
+  </div>
+
+</div>

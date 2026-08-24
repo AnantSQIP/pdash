@@ -85,18 +85,65 @@ export class ProjectsService {
    *
    * Self is still excluded: the field exists to name someone ELSE as accountable for the work.
    */
+  /**
+   * Who can be named Project Manager on a new project — and whether the caller is one of them.
+   *
+   * The caller used to be filtered out of this list unconditionally, which read as "you may not
+   * manage your own project". That was never the rule. Somebody who can issue a PID becomes the
+   * manager BY DEFAULT and the list is only there to delegate away; the exclusion hid the default
+   * rather than enforcing anything.
+   *
+   * So the caller is returned like anybody else, with `isSelf` and `youAreDefault` alongside, and
+   * the screen can offer "Myself" as the pre-selected option it always effectively was.
+   *
+   * For somebody who CANNOT issue a PID the rule is real and stays: the manager is the person who
+   * attaches the PID, so they must nominate an authority. `canManageOwn` says which case they are
+   * in, so the screen can explain it instead of silently omitting an option.
+   */
   async eligibleManagers(organizationId: string) {
     const actorId = getActorId();
+    // TWO different permissions, and conflating them is what made "I'll manage it" unavailable to
+    // the people who most wanted it.
+    //   • project.approve      — may run a project. Manager, Senior Consultant, Admin, Super Admin.
+    //   • project.generate_pid — may mint the PID. Admin and Super Admin only.
+    // A Manager holds the first and not the second. Reporting PID authority as "can you manage
+    // your own project" told every Manager and Senior Consultant to hand their matter to an Admin
+    // purely because they cannot mint a number, which is not what managing a project means.
+    const [canManageOwn, canIssuePid] = actorId
+      ? await Promise.all([
+          this.permissions.check(actorId, 'project.approve'),
+          this.permissions.check(actorId, 'project.generate_pid'),
+        ])
+      : [false, false];
+
     const users = await this.prisma.user.findMany({
       where: {
         organizationId, deletedAt: null, status: 'ACTIVE',
-        ...(actorId ? { id: { not: actorId } } : {}),
         userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'project.approve' } } } } } },
       },
       select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true },
     });
-    return users.sort((a, b) =>
+
+    const sorted = users.sort((a, b) =>
       `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase()));
+
+    return {
+      /** True when the caller may name themselves — the "I'll manage it" option. */
+      canManageOwn,
+      /**
+       * True when the caller mints the PID themselves. When false the form must still ask who
+       * will, because managing the project and issuing its number remain separate jobs — naming
+       * yourself as manager does not conjure a PID.
+       */
+      canIssuePid,
+      managers: sorted.map(u => ({
+        ...u,
+        isSelf: u.id === actorId,
+        // For a PID authority, leaving the field blank already means "me"; for everybody else the
+        // field is required, so "you are the default" would be a lie.
+        youAreDefault: canIssuePid && u.id === actorId,
+      })),
+    };
   }
 
   /**
@@ -479,9 +526,15 @@ export class ProjectsService {
       //     Checked against the same permission the picker lists, NOT against designation
       //     seniority as before — otherwise a name offered by the dropdown could still be
       //     refused here the moment someone's job title and their role disagreed.
+      //     You MAY name yourself. Issuing a PID and running a project are different things —
+      //     the code already treats them as different fields — and refusing the creator conflated
+      //     them: a Senior Consultant holds project.approve, can perfectly well run their own
+      //     matter, and was told to hand it to somebody else purely because they could not mint
+      //     the number. The PID request still routes to an authority either way; that governance
+      //     control is untouched. project.approve below is the real rule and it still applies, so
+      //     somebody who may not manage a project still cannot manage this one.
       managerId = dto.managerId?.trim() || '';
       if (!managerId) throw new BadRequestException('Select a Project Manager for this project.');
-      if (managerId === creator.id) throw new BadRequestException('Choose a Project Manager other than yourself.');
       const manager = await this.prisma.user.findFirst({
         where: { id: managerId, organizationId, deletedAt: null, status: 'ACTIVE' },
         select: { id: true, designation: true },
@@ -512,11 +565,14 @@ export class ProjectsService {
     // Requester → nominated manager leads, requester is a member. Authority → the authority leads
     // unless they DELEGATED to someone else, in which case that person leads and the authority
     // joins as a member (so they keep access to the project they set up).
-    const members = !canGeneratePid
-      ? [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }]
-      : managerId
-        ? [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }]
-        : [{ userId: creator.id, projectRole: 'MANAGER' }];
+    // The creator may now name THEMSELVES as manager, so the two roles can land on one person.
+    // Adding them twice would put the same user on the project as MANAGER and as MEMBER — which
+    // is at best a duplicate row and at worst a unique-constraint failure at the moment of
+    // creating a project. One person, one row, and MANAGER is the one that matters.
+    const managerIsCreator = !managerId || managerId === creator.id;
+    const members = managerIsCreator
+      ? [{ userId: creator.id, projectRole: 'MANAGER' }]
+      : [{ userId: managerId, projectRole: 'MANAGER' }, { userId: creator.id, projectRole: 'MEMBER' }];
 
     // A "coming soon" type (MONETIZATION) is shown-but-disabled in the UI; reject it server-side
     // too so a direct API call can't create a live project of an unbuilt type.

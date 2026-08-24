@@ -379,5 +379,10 @@ Nothing in the agreed scope. Both PRs await review and merge.
 
 ---
 
-*Last updated 16 August 2026 — Phase 2: clients/patents complete; team spaces, the BD pipeline
-and measurement integration all built. Nothing in the agreed scope remains. No Phase 3 opened.*
+*Last updated 23 August 2026. Phase 2 has since taken on a third and fourth part — the 12-row
+timeline and the batch shipped as PR #100. Four items remain open, three of them waiting on a
+decision rather than on build time.*
+
+> **For the short version, read `PHASE-SUMMARY.md`.** It carries the current status of every row,
+> what is left, and the Phase 1 debt still outstanding — re-verified 23 August. This file stays
+> the long record of *why* each decision was made; the summary is the one to hand to somebody.

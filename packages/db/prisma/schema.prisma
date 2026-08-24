@@ -40,6 +40,7 @@ model Organization {
 
   users               User[]
   departments         Department[]
+  feedback            Feedback[]
   teams               Team[]
   roles               Role[]
   permissionGroups    PermissionGroup[]
@@ -107,6 +108,9 @@ model User {
   manages                   UserManager[]              @relation("ManagerUsers")
   departmentMemberships     DepartmentMember[]
   departmentsHeaded         Department[]               @relation("DepartmentHead")
+  managedClients   Client[] @relation("ClientAccountManager")
+  feedbackAbout             Feedback[]                 @relation("FeedbackAbout")
+  feedbackWritten           Feedback[]                 @relation("FeedbackAuthor")
   teamMemberships           TeamMember[]
   projectMemberships        ProjectMember[]
   taskAssignments           TaskAssignee[]
@@ -708,10 +712,48 @@ model Client {
   // any patent or project still points here, because Patent.clientId cascades.
   archivedAt     DateTime?
   deletedAt      DateTime?
+
+  // ── The relationship, as opposed to the code ──────────────────────────────────────────────
+  //
+  // A Client used to be two fields: a code and a name. That was enough to mint patent handles and
+  // nothing else, so everything a person actually knows about the client — who to call, what was
+  // agreed, what we charge — lived outside the system, and the ledger could report hours but never
+  // what they were worth. These are the facts that make the ledger a commercial record rather than
+  // a timesheet total with a label on it.
+  //
+  // All optional. A client created for one patent search does not need an address, and demanding
+  // one would only get a row of full stops typed into the box.
+  contactName    String?
+  contactEmail   String?
+  contactPhone   String?
+  website        String?
+  /// Where the client is, which is also which jurisdiction the work usually concerns.
+  country        String?
+  address        String?
+  industry       String?
+  /// Anything that does not fit a field: the history, the quirks, who introduced us.
+  notes          String?
+
+  // ── What the work is worth ────────────────────────────────────────────────────────────────
+  //
+  // The ledger could count hours and never price them, because nothing in the system knew a rate.
+  // A Super Admin could type a total by hand, and that figure went stale the moment more work was
+  // logged. One number here makes value DERIVED — hours × rate, recomputed on every read, moving
+  // with the work instead of behind it. A stated total still wins where one exists; this is the
+  // default that means most clients no longer need one.
+  billingRate    Float?
+  billingCurrency String  @default("INR")
+  /// When the relationship began, which is not when somebody got round to creating the row.
+  /// `createdAt` was standing in for this and quietly answering a different question.
+  engagementStart DateTime?
+  /// Who owns the relationship. Not an access grant — a name to ask, shown on the ledger.
+  accountManagerId String?
+
   patents        Patent[]
   projects       Project[]
   ledgerOverride ClientLedgerOverride?
   deals          Deal[]
+  accountManager User? @relation("ClientAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, code])
   @@index([organizationId, deletedAt])
@@ -2622,4 +2664,47 @@ model Reward {
   @@index([organizationId, awardedAt])
   @@index([recipientId])
   @@map("reward")
+}
+
+/// FEEDBACK ABOUT A COLLEAGUE — written by anyone, at any time, about anyone.
+///
+/// Distinct from an appraisal, deliberately. An appraisal happens twice a year, runs between one
+/// person and their manager, and produces a rating. This is the other thing: the observation
+/// somebody wants to record in March about a colleague on another team, which by October nobody
+/// remembers precisely enough to be fair about.
+///
+/// WHO CAN READ IT. The author, HR, and the SUBJECT'S REPORTING MANAGER — not the subject, and
+/// not their colleagues. That was the instruction, and the trade-off it carries is worth stating:
+/// feedback somebody cannot see is feedback they cannot answer or act on. It is the right shape
+/// for "HR should know this happened" and the wrong shape for "I want this person to improve".
+/// The form says as much to whoever is writing it, so the choice is made knowingly.
+model Feedback {
+  id             String    @id @default(cuid())
+  organizationId String
+  /// Who it is about.
+  aboutUserId    String
+  /// Who wrote it. Always recorded: feedback with no author cannot be weighed, and anonymity here
+  /// would be false anyway, since HR can already see everything else this person does.
+  authorId       String
+  /// PRAISE | CONCERN | OBSERVATION. Coarse on purpose — a longer list invites people to file
+  /// things by category instead of saying what actually happened.
+  kind           String    @default("OBSERVATION")
+  body           String
+  /// Optional 1-5. Most feedback is a sentence rather than a score, so it is never required.
+  rating         Int?
+  /// Set when HR has read and dealt with it, so the queue can drain.
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  about        User         @relation("FeedbackAbout", fields: [aboutUserId], references: [id], onDelete: Cascade)
+  author       User         @relation("FeedbackAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([aboutUserId])
+  @@index([authorId])
+  @@map("feedback")
 }

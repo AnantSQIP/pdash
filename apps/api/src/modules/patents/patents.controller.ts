@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, Uploaded
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { PatentsService } from './patents.service';
+import { PatentVisibilityService } from './patent-visibility.service';
 import { CreateClientDto, RegisterPatentsDto, UpdateClientDto, UpdatePatentDto } from './dto';
 import { MAX_FILE_BYTES, isInlineSafe, type UploadedFileLike } from '../documents/documents.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -20,6 +21,7 @@ import { getActorId } from '../../common/context/request-context';
 export class PatentsController {
   constructor(
     private readonly patents: PatentsService,
+    private readonly visibility: PatentVisibilityService,
     private readonly actor: ActorContextService,
   ) {}
 
@@ -34,8 +36,8 @@ export class PatentsController {
   /** Advisory: a suggested code for a name + any clients that look like the same company.
    *  Read-only and creates nothing, so no passcode — the passcode guards the save. */
   @Get('clients/code-suggestion') @RequirePermission('patent.manage')
-  async codeSuggestion(@Query('name') name?: string) {
-    return this.patents.suggestCode(await this.actor.requireOrgId(), name ?? '');
+  async codeSuggestion(@Query('name') name?: string, @Query('typed') typed?: string) {
+    return this.patents.suggestCode(await this.actor.requireOrgId(), name ?? '', typed);
   }
 
   @Post('clients') @RequirePermission('patent.manage') @RequirePasscode()
@@ -93,6 +95,42 @@ export class PatentsController {
   @Get('patents/resolve') @RequirePermission('patent.view')
   async resolve(@Query('handle') handle?: string) {
     return this.patents.resolveHandle(await this.actor.requireOrgId(), handle ?? '');
+  }
+
+  /**
+   * The patents on ONE PROJECT, with their real numbers, for a member of that project.
+   *
+   * `patent.view` is the floor; project membership is the actual gate, checked in the service
+   * against the same function that decides whether you may open the project at all. An analyst
+   * could previously see that their task concerned Pat_ABC_001 and had no way to learn which
+   * patent that was — they could not see the thing they were searching for.
+   */
+  @Get('projects/:projectId/patent-numbers') @RequirePermission('patent.view')
+  async patentNumbersForProject(@Param('projectId') projectId: string) {
+    return this.visibility.forProject(await this.actor.requireOrgId(), projectId);
+  }
+
+  /**
+   * "I have the patent number — which ID do I quote?"
+   *
+   * The reverse lookup, scoped the same way: a match is returned only when the caller shares a
+   * project with that patent. Declared BEFORE `patents/:id/...` routes would shadow it — Nest
+   * matches in declaration order, and `find-by-number` would otherwise be read as an `:id`.
+   */
+  @Get('patents/find-by-number') @RequirePermission('patent.view')
+  async findByNumber(@Query('q') q?: string) {
+    return this.visibility.lookupByNumber(await this.actor.requireOrgId(), q ?? '');
+  }
+
+  /**
+   * One patent's real number, for somebody staffed on any project it is tagged to.
+   *
+   * Resolves the other way round from the route above, so a handle met in a task title, a comment
+   * or a search result can be looked up without first knowing which project to ask about.
+   */
+  @Get('patents/:id/number') @RequirePermission('patent.view')
+  async patentNumber(@Param('id') id: string) {
+    return this.visibility.revealForMember(await this.actor.requireOrgId(), id);
   }
 
   /** Handle-only options for the project picker. patent.view. */

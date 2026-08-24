@@ -1,5 +1,6 @@
 import {
-  ArrayMaxSize, ArrayNotEmpty, IsArray, IsIn, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, MinLength,
+  ArrayMaxSize, ArrayNotEmpty, IsArray, IsDateString, IsEmail, IsIn, IsNumber, IsOptional, IsString,
+  IsUrl, Matches, Max, MaxLength, Min, MinLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
@@ -19,6 +20,57 @@ export class CreateClientDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MaxLength(100)
   name?: string; // "Malikie"
+
+  // ── The relationship ────────────────────────────────────────────────────────────────────────
+  // All optional, and all nullable on the way in: sending null CLEARS a field, which is the only
+  // way to unset one. An omitted key leaves the stored value alone.
+  @IsOptional() @IsString() @MaxLength(120)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  contactName?: string | null;
+
+  // A bad address here is worse than an empty one — it looks like a way to reach the client and
+  // is not — so it is validated rather than merely trimmed.
+  @IsOptional() @IsEmail({}, { message: 'Contact email does not look like an email address.' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() || null : value))
+  contactEmail?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  contactPhone?: string | null;
+
+  @IsOptional() @IsUrl({ require_protocol: false }, { message: 'Website does not look like a URL.' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  website?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  country?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(400)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  address?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(80)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  industry?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  notes?: string | null;
+
+  // The rate is what turns hours into money. Capped high rather than left open: a mistyped rate
+  // silently multiplies every figure on the ledger, and 100,000 an hour is not a rate.
+  @IsOptional() @IsNumber() @Min(0) @Max(100000)
+  billingRate?: number | null;
+
+  @IsOptional() @IsIn(['INR', 'USD', 'EUR', 'GBP'])
+  billingCurrency?: string;
+
+  @IsOptional() @IsDateString()
+  engagementStart?: string | null;
+
+  @IsOptional() @IsString()
+  accountManagerId?: string | null;
 }
 
 export class UpdateClientDto {
@@ -36,6 +88,57 @@ export class UpdateClientDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MaxLength(100)
   name?: string;
+
+  // ── The relationship ────────────────────────────────────────────────────────────────────────
+  // All optional, and all nullable on the way in: sending null CLEARS a field, which is the only
+  // way to unset one. An omitted key leaves the stored value alone.
+  @IsOptional() @IsString() @MaxLength(120)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  contactName?: string | null;
+
+  // A bad address here is worse than an empty one — it looks like a way to reach the client and
+  // is not — so it is validated rather than merely trimmed.
+  @IsOptional() @IsEmail({}, { message: 'Contact email does not look like an email address.' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() || null : value))
+  contactEmail?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  contactPhone?: string | null;
+
+  @IsOptional() @IsUrl({ require_protocol: false }, { message: 'Website does not look like a URL.' })
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  website?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  country?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(400)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  address?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(80)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  industry?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || null : value))
+  notes?: string | null;
+
+  // The rate is what turns hours into money. Capped high rather than left open: a mistyped rate
+  // silently multiplies every figure on the ledger, and 100,000 an hour is not a rate.
+  @IsOptional() @IsNumber() @Min(0) @Max(100000)
+  billingRate?: number | null;
+
+  @IsOptional() @IsIn(['INR', 'USD', 'EUR', 'GBP'])
+  billingCurrency?: string;
+
+  @IsOptional() @IsDateString()
+  engagementStart?: string | null;
+
+  @IsOptional() @IsString()
+  accountManagerId?: string | null;
 }
 
 export class RegisterPatentsDto {

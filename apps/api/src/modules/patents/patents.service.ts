@@ -4,9 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { EventService } from '../audit-events/event.service';
 import { formatPatentHandle, patentScope } from '../../common/financial-year';
-import {
-  suggestClientCode, validateClientCode, findSimilarClients, CLIENT_CODE_MIN, CLIENT_CODE_MAX,
-} from '../../common/client-code';
+import { CLIENT_CODE_MAX, CLIENT_CODE_MIN, findSimilarClients, isReadableCode, opaqueClientCode, suggestClientCode, validateClientCode } from '../../common/client-code';
 import { isPatentNumber, normalizePatentNumber } from '../../common/patent-number';
 import { CreateClientDto, RegisterPatentsDto, UpdateClientDto, UpdatePatentDto } from './dto';
 import { DocumentsService, type UploadedFileLike } from '../documents/documents.service';
@@ -27,6 +25,48 @@ const PATENT_FULL_SELECT = {
   documentId: true, documentName: true, formerHandles: true,
 } as const;
 const CLIENT_MINI = { id: true, name: true, code: true } as const;
+
+/**
+ * Everything a client row carries. Used wherever a client is returned for editing, so the form
+ * that saves a field is guaranteed to get it back — the failure mode otherwise is a save that
+ * works and a screen that reverts, which reads as a bug in the save.
+ */
+const CLIENT_FULL = {
+  id: true, name: true, code: true, archivedAt: true, createdAt: true,
+  contactName: true, contactEmail: true, contactPhone: true, website: true,
+  country: true, address: true, industry: true, notes: true,
+  billingRate: true, billingCurrency: true, engagementStart: true,
+  accountManagerId: true,
+  accountManager: { select: { id: true, firstName: true, lastName: true, designation: true } },
+} as const;
+
+/**
+ * The relationship fields, pulled off a create/update DTO in one place.
+ *
+ * An OMITTED key is left alone; an explicit `null` clears the field. Those have to stay
+ * distinguishable, or there is no way to empty a box once it has been filled — hence the
+ * `!== undefined` test on every line rather than a truthiness check.
+ */
+type ClientProfileInput = Partial<Pick<CreateClientDto,
+  'contactName' | 'contactEmail' | 'contactPhone' | 'website' | 'country' | 'address' |
+  'industry' | 'notes' | 'billingRate' | 'billingCurrency' | 'engagementStart' | 'accountManagerId'
+>>;
+
+function profileData(dto: ClientProfileInput): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const passthrough = [
+    'contactName', 'contactEmail', 'contactPhone', 'website',
+    'country', 'address', 'industry', 'notes', 'billingRate', 'accountManagerId',
+  ] as const;
+  for (const key of passthrough) if (dto[key] !== undefined) out[key] = dto[key] ?? null;
+  // Currency is NOT nullable — clearing it would leave a rate with no unit, which is worse than
+  // a wrong one because it looks like a number rather than an ambiguity.
+  if (dto.billingCurrency !== undefined && dto.billingCurrency) out.billingCurrency = dto.billingCurrency;
+  if (dto.engagementStart !== undefined) {
+    out.engagementStart = dto.engagementStart ? new Date(dto.engagementStart) : null;
+  }
+  return out;
+}
 
 @Injectable()
 export class PatentsService {
@@ -126,15 +166,76 @@ export class PatentsService {
    * Advisory only — the caller may ignore both. The duplicate warning is the point: two codes
    * for one company splits its patent portfolio in two, and nothing downstream detects that.
    */
-  async suggestCode(organizationId: string, name: string) {
+  /**
+   * What code to give a new client.
+   *
+   * The OPAQUE code leads, because the handle built from it is the system's whole concealment
+   * mechanism and a mnemonic defeats it: `suggestClientCode("Mailike")` returns MLK — the
+   * consonants of the name — so `Pat_MLK_001` carries a hint of the client into every task title
+   * and every email it is quoted in.
+   *
+   * The mnemonic is still returned as `mnemonic`, because it is genuinely easier for staff to
+   * recognise and this is the firm's trade-off to make, not mine. The screen offers the opaque one
+   * and says plainly what choosing the readable alternative costs.
+   */
+  async suggestCode(organizationId: string, name: string, typed?: string) {
     const clients = await this.prisma.client.findMany({
       where: { organizationId, deletedAt: null },
       select: { id: true, name: true, code: true },
     });
+    const taken = clients.map(c => c.code);
+
+    // SEVERAL opaque candidates, not one. A single generated code is a take-it-or-leave-it, and
+    // the only way to leave it was to reload the whole form; three at each of two lengths is a
+    // choice somebody can make in one glance. Each is generated against the ones before it so the
+    // shortlist itself cannot contain a duplicate.
+    const shortlist: string[] = [];
+    for (const length of [3, 4]) {
+      for (let i = 0; i < 3; i++) {
+        const candidate = opaqueClientCode([...taken, ...shortlist], length);
+        if (candidate) shortlist.push(candidate);
+      }
+    }
+
     return {
-      code: suggestClientCode(name, clients.map(c => c.code)),
+      /** Says nothing about the client. This is the default. */
+      code: shortlist[0] ?? opaqueClientCode(taken),
+      /** More of the same, so picking a different one does not mean reloading the form. */
+      options: shortlist,
+      /** Derived from the name — readable, and therefore a hint. Offered, not recommended. */
+      mnemonic: suggestClientCode(name, taken),
       similar: findSimilarClients(name, clients),
+      /**
+       * A verdict on whatever the person has typed so far, so the form can say "already used by
+       * MLK" while they type instead of after they submit. Null when nothing is typed.
+       */
+      typed: typed ? await this.judgeCode(organizationId, typed) : null,
     };
+  }
+
+  /**
+   * Why a typed code will or will not be accepted — the SAME check the save runs, not a second
+   * copy of it.
+   *
+   * The alternative was a parallel list of rules and messages beside `assertCodeUsable`, and two
+   * copies of a rule drift: the form would eventually green-light a code the save then refuses,
+   * which is the most annoying possible way to learn a rule. Running the real check and catching
+   * its message costs one query and cannot disagree with itself. It also picks up the retired-code
+   * rule, which pure validation cannot see at all — a code can be perfectly well-formed and free
+   * and still be refused because patent IDs were once issued under it.
+   */
+  private async judgeCode(organizationId: string, raw: string) {
+    const code = raw.trim().toUpperCase();
+    try {
+      await this.assertCodeUsable(organizationId, code);
+      return { code, ok: true, reason: null, readable: isReadableCode(code) };
+    } catch (e) {
+      return {
+        code, ok: false,
+        reason: e instanceof BadRequestException ? e.message : 'That client code cannot be used.',
+        readable: isReadableCode(code),
+      };
+    }
   }
 
   // ── Client codes (patent.manage) ──────────────────────────────────────────
@@ -168,10 +269,26 @@ export class PatentsService {
 
   async createClient(organizationId: string, actorId: string, dto: CreateClientDto) {
     await this.assertCodeUsable(organizationId, dto.code);
+    await this.assertAccountManager(organizationId, dto.accountManagerId);
     return this.prisma.client.create({
-      data: { organizationId, name: dto.name ?? null, code: dto.code, createdBy: actorId },
-      select: { id: true, name: true, code: true, archivedAt: true },
+      data: {
+        organizationId, name: dto.name ?? null, code: dto.code, createdBy: actorId,
+        ...profileData(dto),
+      },
+      select: CLIENT_FULL,
     });
+  }
+
+  /**
+   * An account manager has to be a real, active colleague. Without the check the field accepts any
+   * string, and a mistyped id becomes a client nobody owns that still looks owned on screen.
+   */
+  private async assertAccountManager(organizationId: string, userId?: string | null) {
+    if (!userId) return;
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, organizationId, deletedAt: null, status: 'ACTIVE' }, select: { id: true },
+    });
+    if (!user) throw new BadRequestException('That account manager is not an active member of this organisation.');
   }
 
   /**
@@ -230,17 +347,33 @@ export class PatentsService {
     const client = await this.requireClient(organizationId, id);
     // Count EVERY patent row, including soft-deleted ones — the cascade does not respect
     // deletedAt, so a "removed" patent is destroyed just the same.
-    const [patents, projects] = await Promise.all([
+    const [patents, livePatents, projects, liveProjects] = await Promise.all([
       this.prisma.patent.count({ where: { clientId: id } }),
+      this.prisma.patent.count({ where: { clientId: id, deletedAt: null } }),
       this.prisma.project.count({ where: { clientId: id } }),
+      this.prisma.project.count({ where: { clientId: id, deletedAt: null } }),
     ]);
     if (patents || projects) {
+      // Say WHICH records, live or removed. Counting the soft-deleted ones is right — the cascade
+      // destroys them all the same — but reporting only the total told a Super Admin looking at a
+      // client with an empty patent list that it "still has 1 patent", which reads as a bug in the
+      // list rather than as the removed row it actually is.
+      const describe = (total: number, live: number, noun: string) => {
+        if (!total) return '';
+        const plural = total === 1 ? '' : 's';
+        if (live === total) return `${total} ${noun}${plural}`;
+        if (live === 0) return `${total} removed ${noun}${plural}`;
+        return `${total} ${noun}${plural} (${total - live} already removed)`;
+      };
       const held = [
-        patents ? `${patents} patent${patents === 1 ? '' : 's'}` : '',
-        projects ? `${projects} project${projects === 1 ? '' : 's'}` : '',
+        describe(patents, livePatents, 'patent'),
+        describe(projects, liveProjects, 'project'),
       ].filter(Boolean).join(' and ');
+      const removedOnly = livePatents === 0 && liveProjects === 0;
       throw new BadRequestException(
-        `${client.code} still has ${held} — removing it would destroy those records. Archive it instead.`,
+        `${client.code} still has ${held} — removing it would destroy those records${
+          removedOnly ? ' for good, and a removed record is still recoverable until then' : ''
+        }. Archive it instead.`,
       );
     }
     await this.prisma.client.delete({ where: { id } });
@@ -259,7 +392,8 @@ export class PatentsService {
   async updateClient(organizationId: string, id: string, dto: UpdateClientDto) {
     const client = await this.requireClient(organizationId, id);
 
-    const data: { name?: string | null; code?: string } = {};
+    await this.assertAccountManager(organizationId, dto.accountManagerId);
+    const data: Record<string, unknown> = { ...profileData(dto) };
     if (dto.name !== undefined) data.name = dto.name || null;
     const newCode = dto.code && dto.code !== client.code ? dto.code : null;
     if (newCode) {
@@ -267,7 +401,7 @@ export class PatentsService {
       data.code = newCode;
     }
     if (!Object.keys(data).length) {
-      return this.prisma.client.findUnique({ where: { id }, select: { id: true, name: true, code: true, archivedAt: true } });
+      return this.prisma.client.findUnique({ where: { id }, select: CLIENT_FULL });
     }
     await this.prisma.$transaction(async (tx) => {
       await tx.client.update({ where: { id }, data });
@@ -296,7 +430,7 @@ export class PatentsService {
         action: 'patent.client_recoded', entityType: 'CLIENT', entityId: id, organizationId, metadata: { from: client.code, to: newCode },
       });
     }
-    return this.prisma.client.findUnique({ where: { id }, select: { id: true, name: true, code: true, archivedAt: true } });
+    return this.prisma.client.findUnique({ where: { id }, select: CLIENT_FULL });
   }
 
   // ── Patents ───────────────────────────────────────────────────────────────

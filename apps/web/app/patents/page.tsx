@@ -7,8 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   FileLock2, Plus, Trash2, Loader, ShieldAlert, KeyRound, Eye, EyeOff, Pencil, Check, X, Hash, FileText, Paperclip, Upload,
-  Archive, ArchiveRestore, Search,
-} from 'lucide-react';
+  Archive, ArchiveRestore, Search, ChevronDown} from 'lucide-react';
 import { api, type ClientSummary, type PatentOverview } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 
@@ -40,12 +39,32 @@ export default function PatentsPortalPage() {
     const t = setTimeout(() => setNameForSuggest(newName.trim()), 350);
     return () => clearTimeout(t);
   }, [newName]);
+  // The typed code is debounced too, so the live verdict costs one request per pause rather
+  // than one per keystroke.
+  const [codeForCheck, setCodeForCheck] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setCodeForCheck(newCode.trim()), 350);
+    return () => clearTimeout(t);
+  }, [newCode]);
   const { data: suggestion } = useQuery({
-    queryKey: ['client-code-suggestion', nameForSuggest],
-    queryFn: () => api.clients.codeSuggestion(nameForSuggest),
-    enabled: nameForSuggest.length >= 2,
+    queryKey: ['client-code-suggestion', nameForSuggest, codeForCheck],
+    queryFn: () => api.clients.codeSuggestion(nameForSuggest, codeForCheck || undefined),
+    enabled: nameForSuggest.length >= 2 || codeForCheck.length >= 2,
     staleTime: 60_000,
   });
+  // The relationship facts, offered at creation rather than only afterwards on the ledger. All
+  // optional: a client created for one search does not need an address, and demanding one only
+  // produces a row of full stops.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [extra, setExtra] = useState<{
+    contactName: string; contactEmail: string; contactPhone: string;
+    website: string; country: string; industry: string; billingRate: string; billingCurrency: string;
+  }>({ contactName: '', contactEmail: '', contactPhone: '', website: '', country: '', industry: '', billingRate: '', billingCurrency: 'INR' });
+  const setExtraField = (k: keyof typeof extra) => (v: string) => setExtra(p => ({ ...p, [k]: v }));
+  // Only trust a verdict that is about the code CURRENTLY in the box — the debounce means a stale
+  // one can otherwise be on screen for a moment, marking a good code red or a bad code fine.
+  const codeVerdict = suggestion?.typed && suggestion.typed.code === newCode.trim().toUpperCase()
+    ? suggestion.typed : null;
   // Fill the code only while the user hasn't touched it — never clobber what they typed.
   useEffect(() => {
     if (!codeTouched && suggestion?.code) setNewCode(suggestion.code);
@@ -76,8 +95,23 @@ export default function PatentsPortalPage() {
   }
 
   const createClient = useMutation({
-    mutationFn: () => api.clients.create({ code: newCode.trim(), name: newName.trim() || undefined }),
-    onSuccess: (c) => { setNewCode(''); setNewName(''); setErr(''); qc.invalidateQueries({ queryKey: ['clients'] }); pick(c.id); },
+    mutationFn: () => api.clients.create({
+      code: newCode.trim(),
+      name: newName.trim() || undefined,
+      contactName: extra.contactName.trim() || null,
+      contactEmail: extra.contactEmail.trim() || null,
+      contactPhone: extra.contactPhone.trim() || null,
+      website: extra.website.trim() || null,
+      country: extra.country.trim() || null,
+      industry: extra.industry.trim() || null,
+      billingRate: extra.billingRate.trim() === '' ? null : Number(extra.billingRate),
+      billingCurrency: extra.billingCurrency,
+    }),
+    onSuccess: (c) => {
+      setNewCode(''); setNewName(''); setErr(''); setMoreOpen(false); setCodeTouched(false);
+      setExtra({ contactName: '', contactEmail: '', contactPhone: '', website: '', country: '', industry: '', billingRate: '', billingCurrency: 'INR' });
+      qc.invalidateQueries({ queryKey: ['clients'] }); pick(c.id);
+    },
     onError: e => setErr(msg(e)),
   });
   const removeClient = useMutation({
@@ -207,12 +241,115 @@ export default function PatentsPortalPage() {
                 value={newCode}
                 onChange={e => { setCodeTouched(true); setNewCode(e.target.value.toUpperCase()); }}
                 placeholder="Client code * (e.g. MLK)"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg font-mono focus:outline-none focus:border-brand-500"
+                className={clsx('w-full px-3 py-2 text-sm border rounded-lg font-mono focus:outline-none',
+                  codeVerdict && !codeVerdict.ok ? 'border-red-300 focus:border-red-500' : 'border-gray-300 focus:border-brand-500')}
               />
-              {!codeTouched && newCode && (
-                <p className="text-[11px] text-gray-400 mt-1">Suggested from the name — edit it if you prefer another.</p>
+              {/* The verdict runs the SAME check the save runs, so the form can never green-light
+                  a code the save then refuses — including the retired-code rule, which plain
+                  validation cannot see (a code can be free and still be unusable because patent
+                  IDs were once issued under it). */}
+              {codeVerdict && !codeVerdict.ok && (
+                <p className="text-[11px] text-red-600 mt-1">{codeVerdict.reason}</p>
+              )}
+              {codeVerdict?.ok && codeVerdict.readable && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  This code can be pronounced, so it is a code people remember — and every patent ID
+                  built from it carries that hint outside the firm. Fine if you want it readable.
+                </p>
+              )}
+              {!codeTouched && newCode && !codeVerdict && (
+                <p className="text-[11px] text-gray-400 mt-1">Suggested — it says nothing about the client.</p>
+              )}
+
+              {/* Alternatives, so choosing a different code is one click rather than a reload. */}
+              {(suggestion?.options?.length || suggestion?.mnemonic) && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                  <span className="text-[10px] uppercase tracking-wide text-gray-400 mr-0.5">Or:</span>
+                  {(suggestion?.options ?? []).filter(o => o !== newCode).slice(0, 4).map(o => (
+                    <button
+                      key={o} onClick={() => { setCodeTouched(true); setNewCode(o); }}
+                      className="px-1.5 py-0.5 text-[11px] font-mono rounded border border-gray-200 text-gray-600 hover:bg-white hover:border-brand-300"
+                    >
+                      {o}
+                    </button>
+                  ))}
+                  {suggestion?.mnemonic && suggestion.mnemonic !== newCode && (
+                    <button
+                      onClick={() => { setCodeTouched(true); setNewCode(suggestion.mnemonic); }}
+                      title="Readable, and therefore a hint at the client's name on every patent ID."
+                      className="px-1.5 py-0.5 text-[11px] font-mono rounded border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    >
+                      {suggestion.mnemonic} ·  readable
+                    </button>
+                  )}
+                </div>
               )}
             </div>
+
+            {/* Everything else about the client. Collapsed, because a code and a name are all
+                that is REQUIRED to mint handles — but available here, because the alternative is
+                creating the client and then going to a second screen to say who they are. */}
+            <button
+              onClick={() => setMoreOpen(v => !v)}
+              className="w-full flex items-center justify-between text-[11px] font-medium text-gray-500 hover:text-gray-700 px-0.5"
+            >
+              <span>Contact, country and rate {moreOpen ? '' : '(optional)'}</span>
+              <ChevronDown size={12} className={clsx('transition-transform', moreOpen && 'rotate-180')} />
+            </button>
+            {moreOpen && (
+              <div className="space-y-2">
+                <input
+                  value={extra.contactName} onChange={e => setExtraField('contactName')(e.target.value)}
+                  placeholder="Contact person"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                />
+                <input
+                  value={extra.contactEmail} onChange={e => setExtraField('contactEmail')(e.target.value)}
+                  placeholder="Email" type="email"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={extra.contactPhone} onChange={e => setExtraField('contactPhone')(e.target.value)}
+                    placeholder="Phone"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                  />
+                  <input
+                    value={extra.country} onChange={e => setExtraField('country')(e.target.value)}
+                    placeholder="Country"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={extra.website} onChange={e => setExtraField('website')(e.target.value)}
+                    placeholder="Website"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                  />
+                  <input
+                    value={extra.industry} onChange={e => setExtraField('industry')(e.target.value)}
+                    placeholder="Industry"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <select
+                    value={extra.billingCurrency} onChange={e => setExtraField('billingCurrency')(e.target.value)}
+                    className="px-2 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500"
+                  >
+                    {['INR', 'USD', 'EUR', 'GBP'].map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input
+                    value={extra.billingRate} onChange={e => setExtraField('billingRate')(e.target.value)}
+                    placeholder="Hourly rate" inputMode="decimal"
+                    className="flex-1 min-w-0 px-3 py-2 text-sm border border-gray-300 rounded-lg tabular-nums focus:outline-none focus:border-brand-500"
+                  />
+                </div>
+                <p className="text-[11px] text-gray-400">
+                  A rate lets the client ledger price the hours instead of waiting for someone to type a total.
+                </p>
+              </div>
+            )}
             {/* The failure this prevents: a second code for a company we already have, which
                 silently splits that client's patents across two portfolios. */}
             {suggestion?.similar?.length ? (
@@ -223,7 +360,7 @@ export default function PatentsPortalPage() {
             ) : null}
             <button
               onClick={() => createClient.mutate()}
-              disabled={createClient.isPending || !newCode.trim()}
+              disabled={createClient.isPending || !newCode.trim() || codeVerdict?.ok === false}
               className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50"
             >
               {createClient.isPending ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Add code
