@@ -123,14 +123,22 @@ export class PatentsController {
   }
 
   /**
-   * One patent's real number, for somebody staffed on any project it is tagged to.
+   * "What is this patent?" — by internal id or by handle, for any colleague with `patent.view`.
    *
-   * Resolves the other way round from the route above, so a handle met in a task title, a comment
-   * or a search result can be looked up without first knowing which project to ask about.
+   * Open to the whole organisation on purpose. A patent NUMBER is public information; what this
+   * firm protects is the association between a patent and a CLIENT, and that never appears in
+   * this response at any tier. Gating the number itself only produced the workaround of pasting
+   * it into task titles, which puts it somewhere far worse.
    */
+  @Get('patents/resolve-number') @RequirePermission('patent.view')
+  async resolveNumber(@Query('handle') handle?: string, @Query('id') id?: string) {
+    return this.visibility.resolve(await this.actor.requireOrgId(), { handle, patentId: id });
+  }
+
+  /** Same lookup addressed by path, for a screen that already holds the patent's id. */
   @Get('patents/:id/number') @RequirePermission('patent.view')
   async patentNumber(@Param('id') id: string) {
-    return this.visibility.revealForMember(await this.actor.requireOrgId(), id);
+    return this.visibility.resolve(await this.actor.requireOrgId(), { patentId: id });
   }
 
   /** Handle-only options for the project picker. patent.view. */

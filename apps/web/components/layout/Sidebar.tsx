@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
-  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, Users2, TrendingUp, type LucideIcon, MessageSquareHeart,
+  ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, Users2, TrendingUp, type LucideIcon, MessageSquareHeart, ScanSearch,
 } from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
@@ -54,6 +54,10 @@ const NAV: NavItem[] = [
   // can READ is narrowed server-side — the author, HR, and the subject's reporting manager. A
   // permission gate here would hide the page from the very people it exists for.
   { href: '/feedback',    icon: MessageSquareHeart, label: 'Feedback' },
+  // The handle <-> number directory. Gated on patent.view, which every role but HR holds — the
+  // point of the screen is that anybody asked "what is Pat_ABC_001?" can answer it themselves
+  // rather than interrupting a Super Admin. It resolves; it cannot list.
+  { href: '/patent-lookup', icon: ScanSearch,     label: 'Patent Lookup', perm: 'patent.view' },
 ];
 
 // Permission-gated admin entries (shown only when the actor can access them).

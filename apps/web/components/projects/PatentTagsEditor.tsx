@@ -118,8 +118,9 @@ export function PatentTagsEditor({ project }: { project: ApiProject }) {
           </p>
         ) : (
           <p className="mt-1.5 text-[11px] text-gray-400 leading-relaxed">
-            Visible to you because you are on this project. The client behind these patents is not
-            shown here, and every reveal is written to the audit log.
+            The client behind these patents is not shown here — that stays with Super Admins. A
+            patent number is public information; the client association is not. Every reveal is
+            written to the audit log.
           </p>
         )
       )}

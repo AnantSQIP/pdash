@@ -109,20 +109,51 @@ export class ProjectsService {
     // A Manager holds the first and not the second. Reporting PID authority as "can you manage
     // your own project" told every Manager and Senior Consultant to hand their matter to an Admin
     // purely because they cannot mint a number, which is not what managing a project means.
-    const [canManageOwn, canIssuePid] = actorId
-      ? await Promise.all([
-          this.permissions.check(actorId, 'project.approve'),
-          this.permissions.check(actorId, 'project.generate_pid'),
-        ])
-      : [false, false];
+    const canIssuePid = actorId
+      ? await this.permissions.check(actorId, 'project.generate_pid')
+      : false;
+
+    const MANAGER_SELECT = {
+      id: true, firstName: true, lastName: true, designation: true, profilePhoto: true,
+    } as const;
 
     const users = await this.prisma.user.findMany({
       where: {
         organizationId, deletedAt: null, status: 'ACTIVE',
         userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'project.approve' } } } } } },
       },
-      select: { id: true, firstName: true, lastName: true, designation: true, profilePhoto: true },
+      select: MANAGER_SELECT,
     });
+
+    /**
+     * THE CREATOR IS ALWAYS ELIGIBLE TO MANAGE THEIR OWN PROJECT.
+     *
+     * `project.approve` is held by four roles, and project.create by eight. So an Employee,
+     * Consultant, Senior Research Associate or BD Executive could start a project and then be
+     * told to hand it to somebody else — the option to keep it simply was not in the list, which
+     * is what "there must be an option to select themselves" was reporting.
+     *
+     * Managing a project you created is not an escalation. It grants nothing outside that one
+     * project: the project MANAGER role is scoped to its own row, the PID is still minted by an
+     * authority, and every capability inside the project (creating tasks, logging time, tagging
+     * patents) is still gated on the permissions the person already holds. What it does grant is
+     * ownership of a matter they started, which is the ordinary case.
+     *
+     * Added here rather than by widening `project.approve`, because that permission also governs
+     * who may be nominated to run SOMEBODY ELSE'S project — a different question, and one this
+     * change deliberately leaves alone.
+     */
+    if (actorId && !users.some(u => u.id === actorId)) {
+      const me = await this.prisma.user.findFirst({
+        where: { id: actorId, organizationId, deletedAt: null, status: 'ACTIVE' },
+        select: MANAGER_SELECT,
+      });
+      if (me) users.push(me);
+    }
+    // True for everybody who is actually in the list, which — after the block above — is anybody
+    // creating a project. Kept as a field because the screen still words the option differently
+    // for a PID authority, whose blank selection already means "me".
+    const canManageOwn = actorId ? users.some(u => u.id === actorId) : false;
 
     const sorted = users.sort((a, b) =>
       `${a.firstName} ${a.lastName}`.toLowerCase().localeCompare(`${b.firstName} ${b.lastName}`.toLowerCase()));
@@ -526,13 +557,19 @@ export class ProjectsService {
       //     Checked against the same permission the picker lists, NOT against designation
       //     seniority as before — otherwise a name offered by the dropdown could still be
       //     refused here the moment someone's job title and their role disagreed.
-      //     You MAY name yourself. Issuing a PID and running a project are different things —
-      //     the code already treats them as different fields — and refusing the creator conflated
-      //     them: a Senior Consultant holds project.approve, can perfectly well run their own
-      //     matter, and was told to hand it to somebody else purely because they could not mint
-      //     the number. The PID request still routes to an authority either way; that governance
-      //     control is untouched. project.approve below is the real rule and it still applies, so
-      //     somebody who may not manage a project still cannot manage this one.
+      //
+      //     TWO DIFFERENT QUESTIONS, and only one of them is `project.approve`:
+      //
+      //       "may I keep the project I just created?"   — always yes
+      //       "may I put SOMEBODY ELSE in charge of it?" — needs project.approve on that person
+      //
+      //     project.create is held by eight roles and project.approve by four, so requiring the
+      //     second for both questions told an Employee, Consultant, SRA or BD Executive to hand
+      //     away a matter they had just started. Keeping your own project is not an escalation:
+      //     the MANAGER row is scoped to that one project, the PID is still minted by an
+      //     authority, and everything done inside the project remains gated on the permissions
+      //     the person already had. Nominating a colleague is the case that still needs the
+      //     permission, and it is unchanged.
       managerId = dto.managerId?.trim() || '';
       if (!managerId) throw new BadRequestException('Select a Project Manager for this project.');
       const manager = await this.prisma.user.findFirst({
@@ -540,7 +577,8 @@ export class ProjectsService {
         select: { id: true, designation: true },
       });
       if (!manager) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
-      if (!(await this.permissions.check(manager.id, 'project.approve'))) {
+      const managingOwn = manager.id === creator.id;
+      if (!managingOwn && !(await this.permissions.check(manager.id, 'project.approve'))) {
         throw new BadRequestException('That person cannot be a Project Manager — choose a Manager, Senior Consultant or Admin.');
       }
     }

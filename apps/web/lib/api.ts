@@ -627,15 +627,17 @@ export type FeedbackSummary = {
  */
 export type PatentNumberForMember = {
   id: string; handle: string; serial: number; realNumber: string; formerHandles: string[];
-  /** Which project entitled you to see it. Null when you hold patent.manage. */
-  viaProjectId?: string | null;
   clientVisible: false;
 };
 export type PatentNumberLookup = {
-  results: { id: string; handle: string; serial: number; realNumber: string; viaProjectId: string | null }[];
+  results: PatentNumberForMember[];
   searchedFor: string;
+  /** True when the result cap was reached — the screen should say "narrow your search". */
+  truncated?: boolean;
   clientVisible: false;
 };
+/** One patent resolved from a handle or an id. `current` is false for a retired handle. */
+export type PatentResolved = PatentNumberForMember & { current: boolean; searchedFor: string };
 export type ProjectPatentNumbers = {
   project: { id: string; code: string | null; title: string };
   patents: PatentNumberForMember[];
@@ -1555,7 +1557,10 @@ export const api = {
     forProject: (projectId: string) =>
       req<ProjectPatentNumbers>(`/projects/${projectId}/patent-numbers`),
     forPatent: (patentId: string) =>
-      req<PatentNumberForMember>(`/patents/${patentId}/number`),
+      req<PatentResolved>(`/patents/${patentId}/number`),
+    /** Resolve a handle — including one a client-code rename has since retired. */
+    byHandle: (handle: string) =>
+      req<PatentResolved>(`/patents/resolve-number?handle=${encodeURIComponent(handle)}`),
     /**
      * "I have the patent number — which ID do I quote?" Scoped the same way: a match comes back
      * only when you share a project with that patent.
