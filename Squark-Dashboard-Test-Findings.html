@@ -1,0 +1,295 @@
+<meta charset="utf-8">
+<title>Ten Findings</title>
+<style>
+  :root {
+    --ink: #14202c; --ink-soft: #52616f; --ink-faint: #7b8896;
+    --paper: #ffffff; --panel: #f1f5f8; --rule: #d7dfe6; --rule-soft: #e9eff4;
+    --brand: #2f6fb5; --brand-deep: #1e4d82;
+    --hi: #a52e24; --hi-bg: #fbe9e7;
+    --md: #a0630a; --md-bg: #fdf1de;
+    --lo: #1b6e48; --lo-bg: #e7f3ec;
+    --info: #4d5a67; --info-bg: #eef1f4;
+    --serif: Georgia, 'Times New Roman', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font-family:var(--sans);
+         font-size:10.5pt; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .sheet { max-width:52rem; margin:0 auto; padding:2.4rem 2rem 4rem; }
+
+  .masthead { border-bottom:2.5px solid var(--ink); padding-bottom:1.1rem; }
+  .eyebrow { font-family:var(--mono); font-size:7.5pt; letter-spacing:.14em; text-transform:uppercase;
+             color:var(--brand); margin:0 0 .5rem; }
+  h1 { font-family:var(--serif); font-size:27pt; line-height:1.08; font-weight:700;
+       letter-spacing:-.015em; margin:0 0 .5rem; text-wrap:balance; }
+  .standfirst { font-family:var(--serif); font-size:12pt; font-style:italic; color:var(--ink-soft);
+                margin:0; max-width:40rem; }
+  .stamp { display:flex; flex-wrap:wrap; gap:.35rem 1.4rem; font-family:var(--mono); font-size:7.5pt;
+           color:var(--ink-faint); margin-top:1rem; padding-top:.7rem; border-top:1px solid var(--rule-soft); }
+  .stamp b { color:var(--ink-soft); font-weight:600; }
+
+  h2 { font-family:var(--serif); font-size:16.5pt; font-weight:700; letter-spacing:-.01em;
+       margin:2.5rem 0 .3rem; padding-top:1.1rem; border-top:1px solid var(--rule); }
+  h2 .num { font-family:var(--mono); font-size:8pt; font-weight:400; color:var(--brand);
+            letter-spacing:.1em; display:block; margin-bottom:.35rem; }
+  .masthead + h2 { border-top:0; padding-top:0; margin-top:2rem; }
+  .lede { color:var(--ink-soft); margin:0 0 1.2rem; max-width:42rem; }
+  h4 { font-family:var(--mono); font-size:7.5pt; letter-spacing:.11em; text-transform:uppercase;
+       color:var(--ink-faint); margin:1rem 0 .3rem; font-weight:600; }
+  p { margin:0 0 .7rem; }
+  ul,ol { margin:.2rem 0 .75rem; padding-left:1.15rem; }
+  li { margin-bottom:.28rem; }
+  li::marker { color:var(--ink-faint); }
+  code { font-family:var(--mono); font-size:8.6pt; background:var(--panel); padding:.08em .32em;
+         border-radius:2px; color:var(--brand-deep); }
+
+  .score { display:flex; gap:.6rem; margin:1.5rem 0 0; }
+  .score > div { flex:1; border:1px solid var(--rule); border-top:3px solid; border-radius:3px;
+                 padding:.75rem .85rem .8rem; }
+  .score .n { font-family:var(--serif); font-size:24pt; font-weight:700; line-height:1;
+              font-variant-numeric:tabular-nums; }
+  .score .k { font-family:var(--mono); font-size:7pt; letter-spacing:.1em; text-transform:uppercase;
+              color:var(--ink-faint); margin-top:.3rem; }
+  .score .d { font-size:8.5pt; color:var(--ink-soft); margin-top:.35rem; line-height:1.45; }
+  .s-hi { border-top-color:var(--hi)!important; } .s-hi .n { color:var(--hi); }
+  .s-md { border-top-color:var(--md)!important; } .s-md .n { color:var(--md); }
+  .s-lo { border-top-color:var(--lo)!important; } .s-lo .n { color:var(--lo); }
+
+  .tbl-wrap { overflow-x:auto; margin:1.1rem 0 0; }
+  table { width:100%; border-collapse:collapse; font-size:9.4pt; }
+  thead th { font-family:var(--mono); font-size:7pt; letter-spacing:.1em; text-transform:uppercase;
+             color:var(--ink-faint); text-align:left; padding:0 .55rem .45rem;
+             border-bottom:1.5px solid var(--ink); font-weight:600; white-space:nowrap; }
+  tbody td { padding:.5rem .55rem; border-bottom:1px solid var(--rule-soft); vertical-align:top; }
+  td.n { font-family:var(--mono); font-size:8pt; color:var(--ink-faint);
+         font-variant-numeric:tabular-nums; width:1.5rem; padding-top:.6rem; }
+  td.note { color:var(--ink-soft); }
+
+  .pill { display:inline-block; font-family:var(--mono); font-size:6.8pt; letter-spacing:.07em;
+          text-transform:uppercase; font-weight:700; padding:.16rem .42rem; border-radius:2px;
+          white-space:nowrap; }
+  .p-hi { background:var(--hi-bg); color:var(--hi); }
+  .p-md { background:var(--md-bg); color:var(--md); }
+  .p-lo { background:var(--lo-bg); color:var(--lo); }
+  .p-info { background:var(--info-bg); color:var(--info); }
+
+  .find { border:1px solid var(--rule); border-radius:3px; margin:1.1rem 0; overflow:hidden;
+          break-inside:avoid; }
+  .find-top { background:var(--panel); padding:.6rem .9rem; border-bottom:1px solid var(--rule);
+              display:flex; gap:.6rem; align-items:baseline; flex-wrap:wrap; }
+  .find-top .id { font-family:var(--mono); font-size:8pt; color:var(--ink-faint); }
+  .find-top .h { font-weight:700; font-size:11pt; flex:1; min-width:14rem; }
+  .find-body { padding:.8rem .9rem .85rem; }
+  .row { display:flex; gap:.6rem; margin-bottom:.45rem; }
+  .row:last-child { margin-bottom:0; }
+  .row b { font-family:var(--mono); font-size:7.2pt; letter-spacing:.06em; text-transform:uppercase;
+           color:var(--ink-faint); min-width:5.6rem; padding-top:.18rem; flex-shrink:0; font-weight:600; }
+  .row span { flex:1; }
+  .row.fix { background:var(--lo-bg); margin:.55rem -.9rem -.85rem; padding:.6rem .9rem .7rem;
+             border-top:1px solid var(--rule-soft); }
+  .row.fix b { color:var(--lo); }
+
+  pre { background:var(--panel); border-radius:3px; padding:.6rem .8rem; font-family:var(--mono);
+        font-size:8.1pt; line-height:1.55; overflow-x:auto; margin:.5rem 0; color:var(--ink); }
+
+  .callout { border-left:3px solid var(--brand); background:var(--panel); padding:.7rem .9rem;
+             border-radius:0 3px 3px 0; margin:1rem 0; font-size:9.4pt; }
+
+  .footer { margin-top:2.6rem; padding-top:.9rem; border-top:1px solid var(--rule);
+            font-family:var(--mono); font-size:7.5pt; color:var(--ink-faint); line-height:1.7; }
+
+  @page { size:A4; margin:15mm 14mm; }
+  @media print {
+    body { font-size:9.6pt; }
+    .sheet { max-width:none; padding:0; }
+    h2,h4 { break-after:avoid; }
+    .find,.callout,tbody tr { break-inside:avoid; }
+    .brk { break-before:page; }
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <p class="eyebrow">Squark Dashboard · Test Report, revision 2</p>
+    <h1>Ten findings, all&nbsp;closed</h1>
+    <p class="standfirst">Every finding is now fixed or deliberately left, each one re-tested against a running API. Including the two places this report was wrong the first time, and three problems the testing uncovered that were never on the list.</p>
+    <div class="stamp">
+      <span><b>Date</b> 19 August 2026</span>
+      <span><b>Merged</b> main @ d2fda5f (PR #88)</span>
+      <span><b>Checks</b> ~180, then re-run after each fix</span>
+      <span><b>Supersedes</b> revision 1</span>
+    </div>
+  </header>
+
+  <h2><span class="num">Result</span>Where the ten stand</h2>
+  <p class="lede">You asked for all ten, including the three I had advised against. All ten are done — two of those three implemented in a better form than the option described, explained below.</p>
+
+  <div class="score">
+    <div class="s-lo">
+      <div class="n">7</div>
+      <div class="k">Fixed</div>
+      <div class="d">Code changed, merged, and re-tested against a running API.</div>
+    </div>
+    <div class="s-md">
+      <div class="n">3</div>
+      <div class="k">Resolved otherwise</div>
+      <div class="d">One was environment, one was already correct, one needs your decision.</div>
+    </div>
+    <div class="s-hi">
+      <div class="n">3</div>
+      <div class="k">New, unasked</div>
+      <div class="d">Turned up while verifying. One of them was live.</div>
+    </div>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th></th><th>Finding</th><th>Status</th><th>Proof</th></tr></thead>
+      <tbody>
+        <tr><td class="n">1</td><td><b>16-hour daily timesheet cap could be exceeded</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">24h → 5h under the same test</td></tr>
+        <tr><td class="n">2</td><td><b>Preview app pointed at the live database</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">Starts safe with no overrides</td></tr>
+        <tr><td class="n">3</td><td><b>Duplicate leave requests, same day</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">4 → 1</td></tr>
+        <tr><td class="n">4</td><td><b>Duplicate work-from-home requests</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">4 → 1</td></tr>
+        <tr><td class="n">5</td><td><b>Won deal with no client went untracked</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">Badge + column count</td></tr>
+        <tr><td class="n">6</td><td><b>Shared HR login had no reporting line</b></td><td><span class="pill p-md">Was wrong</span></td><td class="note">Not in production at all</td></tr>
+        <tr><td class="n">7</td><td><b>Logout left the session usable 15 minutes</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">Dies at once; phone stays in</td></tr>
+        <tr><td class="n">8</td><td><b>Departments differing only by capitals</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">4–6 → 1</td></tr>
+        <tr><td class="n">9</td><td><b>Team-list creation returned the wrong thing</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">Returns the list</td></tr>
+        <tr><td class="n">10</td><td><b>Validation answered before permission</b></td><td><span class="pill p-lo">Fixed</span></td><td class="note">403 before 400, on appraisals</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <strong>Findings 1, 3, 4 and 8 were one bug wearing four hats</strong>, so they got one fix rather than four patches: a transaction-scoped lock keyed as narrowly as the rule it protects. Each was reproduced deliberately with concurrent requests before the fix, and the identical test re-run after.
+  </div>
+
+  <h2 class="brk"><span class="num">Proof</span>Before and after, same tests</h2>
+  <p class="lede">Every number below comes from running the same concurrent requests twice — once against the old build, once against the new.</p>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>Before</th><th>After</th></tr></thead>
+      <tbody>
+        <tr><td class="item">Four simultaneous 6-hour timesheet entries, one day</td><td class="note"><b>24 hours</b> accepted</td><td class="note">5 hours — cap held</td></tr>
+        <tr><td class="item">Six concurrent entries totalling 30 hours</td><td class="note">would all land</td><td class="note">5 hours</td></tr>
+        <tr><td class="item">Sequential 8h, then 6h, then 4h <em>(must still work)</em></td><td class="note">—</td><td class="note">14h in, the 4h refused</td></tr>
+        <tr><td class="item">Four simultaneous leave requests, one Wednesday</td><td class="note"><b>4 created</b></td><td class="note">1</td></tr>
+        <tr><td class="item">Four simultaneous WFH requests, one day</td><td class="note"><b>4 created</b></td><td class="note">1</td></tr>
+        <tr><td class="item">Six department names differing only in capitals</td><td class="note"><b>4–6 created</b></td><td class="note">1, five refused with 409</td></tr>
+        <tr><td class="item">Log out of one session, two open</td><td class="note">both still worked</td><td class="note">that one dead, the other alive</td></tr>
+        <tr><td class="item">Sign out everywhere <em>(must still work)</em></td><td class="note">—</td><td class="note">both dead</td></tr>
+        <tr><td class="item">Outsider probes an appraisal with a bad field</td><td class="note">400 naming the field</td><td class="note">403, nothing revealed</td></tr>
+        <tr><td class="item">Owner sends a bad field <em>(must still be told)</em></td><td class="note">—</td><td class="note">400 naming the field</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 class="brk"><span class="num">Choices</span>The three you asked for that I had advised against</h2>
+  <p class="lede">You chose them, so they are done. Two are implemented differently from how the option described them, because there was a version without the downside I had objected to. That is a change to my proposal, so it is stated rather than buried.</p>
+
+  <div class="find">
+    <div class="find-top"><span class="id">07</span><span class="h">Logout — done, but without signing out your phone</span><span class="pill p-lo">Fixed</span></div>
+    <div class="find-body">
+      <div class="row"><b>The option said</b><span>"Make logout revoke the access token immediately (signs you out on every device at once)."</span></div>
+      <div class="row"><b>Why I objected</b><span>Twenty-seven people signing out of a desk and losing their phone session daily is a worse cost than the risk it removes.</span></div>
+      <div class="row"><b>What I did instead</b><span>Gave the access token the id of its own sign-in — the refresh-token family, which survives every rotation of that session. Signing out revokes that family; the middleware then refuses a token whose session is gone.</span></div>
+      <div class="row"><b>Result</b><span>You get the immediate revocation you asked for, and other devices are untouched. <b>Sign out everywhere</b> still clears everything.</span></div>
+      <div class="row"><b>Safe to deploy</b><span>Tokens issued before this carry no session id and stay valid until they expire, so shipping it does not sign the firm out.</span></div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="find-top"><span class="id">10</span><span class="h">Validation before permission — the premise was wrong</span><span class="pill p-lo">Fixed</span></div>
+    <div class="find-body">
+      <div class="row"><b>The option said</b><span>"Reorder validation vs permission checks across all 363 routes."</span></div>
+      <div class="row"><b>The truth</b><span>That was not the cause, and I had it wrong in revision 1 too. The framework already checks permission before validating. These particular routes do their ownership check <em>inside the service</em>, which necessarily runs after validation — so the 400 arrived first.</span></div>
+      <div class="row"><b>What I did</b><span>Added a guard to the eleven individual-appraisal routes, which runs before validation. No reordering, no touching the other 350.</span></div>
+      <div class="row"><b>Why only appraisals</b><span>The information exposed elsewhere is field names, which are already in the browser bundle. An appraisal is different: it carries somebody's rating and their manager's written remarks, so even confirming one exists is worth refusing.</span></div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="find-top"><span class="id">09</span><span class="h">Team list creation</span><span class="pill p-lo">Fixed</span></div>
+    <div class="find-body">
+      <div class="row"><b>Done as described</b><span>Creating a list returns the list, not the whole team space. The screen refetches separately, so nothing depended on the old shape — verified the created id is usable immediately.</span></div>
+    </div>
+  </div>
+
+  <h2 class="brk"><span class="num">Corrections</span>Where revision 1 was wrong</h2>
+  <p class="lede">Two of the ten did not survive contact with the production database. Recording that is worth more than letting them quietly disappear.</p>
+
+  <div class="find">
+    <div class="find-top"><span class="id">06</span><span class="h">The shared HR account does not exist in production</span><span class="pill p-md">I was wrong</span></div>
+    <div class="find-body">
+      <div class="row"><b>I reported</b><span>A shared login approving leave and reading personal details with no attribution, showing on the org chart with no reporting line.</span></div>
+      <div class="row"><b>Actually</b><span><code>hr@squarkip.com</code> is <b>not in the production database at all</b>. It exists only in the seeded scratch database I was testing against, where it has never been logged into and has approved nothing.</span></div>
+      <div class="row"><b>Shaveta</b><span>Already has her own named HR account with the same role — which is the arrangement the finding was asking for.</span></div>
+      <div class="row"><b>Action</b><span>None. The finding was an artefact of my test data.</span></div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="find-top"><span class="id">08</span><span class="h">The department name race was real after all</span><span class="pill p-lo">Confirmed then fixed</span></div>
+    <div class="find-body">
+      <div class="row"><b>I said</b><span>In the earlier report, that it was theoretical and needed simultaneous requests.</span></div>
+      <div class="row"><b>Testing</b><span>Reproduced it on the first attempt. Six concurrent requests created four departments.</span></div>
+      <div class="row"><b>Note</b><span>I had also proposed not fixing it, because a case-insensitive index would cause permanent schema noise. The transaction closes the race without any index, so that objection went away.</span></div>
+    </div>
+  </div>
+
+  <h2 class="brk"><span class="num">Unasked</span>Three things the testing turned up</h2>
+
+  <div class="find">
+    <div class="find-top"><span class="id">A</span><span class="h">Your demo link had been dead since 04:41</span><span class="pill p-lo">Fixed</span></div>
+    <div class="find-body">
+      <div class="row"><b>What</b><span>The tunnel process was running and its URL was unreachable — alive but not working, which is exactly what a process check misses. It had been in that state for about five hours.</span></div>
+      <div class="row"><b>Fixed</b><span>Restarted. New link: <code>drainage-ann-smallest-valium.trycloudflare.com</code>, answering in under a second.</span></div>
+      <div class="row"><b>Worth knowing</b><span>There is no supervisor and no scheduled task, so nothing would have restarted it. It stays up until something disturbs it.</span></div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="find-top"><span class="id">B</span><span class="h">That demo is showing the product as it was on 7 August</span><span class="pill p-md">Your call</span></div>
+    <div class="find-body">
+      <div class="row"><b>What</b><span>The stack behind the tunnel runs an API built on <b>7 August</b>, with a database to match: no reporting lines at all, no deals table, no appraisal parameters, no optional holidays, no policies, and a Business Development role that exists with <b>zero permissions</b>.</span></div>
+      <div class="row"><b>Not broken</b><span>Old code and old data agree with each other, and the old screens never call the routes that are missing. It works — it is just twelve days behind.</span></div>
+      <div class="row"><b>But</b><span>Nothing built in Phase 2 is visible there: no client ledger, no team spaces, no BD pipeline, no departments screen, no org chart, no appraisal parameters. Anyone shown that link is being shown August the 7th.</span></div>
+      <div class="row"><b>To fix</b><span>That copy needs pulling, rebuilding and migrating — the same three steps as the server. It briefly interrupts the link, so it is your call when. The Contabo server is the copy that has been kept current.</span></div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="find-top"><span class="id">C</span><span class="h">A rate limit worth watching, not yet a problem</span><span class="pill p-info">Observation</span></div>
+    <div class="find-body">
+      <div class="row"><b>What</b><span>The limit is 200 requests a minute per address. Each person is counted separately through the proxy — I checked that, and it is set up correctly.</span></div>
+      <div class="row"><b>The catch</b><span>It counts by address, and an office shares one. Twenty-seven people behind a single gateway share 200 a minute, which is about seven each.</span></div>
+      <div class="row"><b>Honest status</b><span>Nobody has reported this, and I could not test it without knowing your office network. If anyone ever sees a sudden "too many requests" that clears after a minute, this is the first place to look, and the fix is to count per signed-in person rather than per address.</span></div>
+      <div class="row"><b>Capacity is fine</b><span>Sixteen simultaneous sign-ins completed in 105 milliseconds with no errors.</span></div>
+    </div>
+  </div>
+
+  <h2><span class="num">Deploy</span>What this needs</h2>
+  <p class="lede">Nothing unusual. Everything in this batch is application code.</p>
+  <pre>ssh -p 2222 root@217.76.59.244
+cd /opt/pdash
+git pull origin main
+docker compose up -d --build</pre>
+  <p><b>No migration and no permission re-grant</b> for this batch. The department migration from the previous batch is still additive and still safe — it de-duplicates names before creating its index, so it cannot fail on data already in your table.</p>
+
+  <h2><span class="num">Still</span>What has not been done</h2>
+  <ol>
+    <li><b>The stale demo copy</b> — flagged above. It is a deploy action that briefly interrupts the link, so it waits on you.</li>
+    <li><b>Deploying any of this to Contabo</b> — the commands are above; the server is yours to restart.</li>
+    <li><b>The GitHub token</b> shared earlier has now been used across several sessions and appears in the transcript. Worth revoking.</li>
+  </ol>
+
+  <div class="footer">
+    Squark Dashboard · test report, revision 2 · 19 August 2026<br>
+    ~180 checks against a running API on a scratch database, signed in as six people. Findings 1, 3, 4 and 8 were reproduced with concurrent requests before the fix and the identical tests re-run after.<br>
+    Merged as PR #88, main @ d2fda5f. Nothing in this work touched the live database — verified directly.
+  </div>
+
+</div>

@@ -1,0 +1,313 @@
+<meta charset="utf-8">
+<title>Phase 2 Closing Position</title>
+<style>
+  :root {
+    --ink:#16202b; --ink-soft:#55636f; --ink-faint:#7d8a96;
+    --paper:#ffffff; --panel:#f2f5f8; --rule:#d9e0e7; --rule-soft:#eaeff4;
+    --brand:#2f6fb5; --brand-deep:#1f4f85;
+    --done:#1c7049; --done-bg:#e8f4ed;
+    --part:#a86608; --part-bg:#fdf2e0;
+    --none:#a83228; --none-bg:#fbeae8;
+    --info:#4d5a67; --info-bg:#eef1f4;
+    --serif:Georgia,'Times New Roman',serif;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+       font-size:10.5pt;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .sheet{max-width:52rem;margin:0 auto;padding:2.4rem 2rem 4rem}
+
+  .masthead{border-bottom:2.5px solid var(--ink);padding-bottom:1.1rem}
+  .eyebrow{font-family:var(--mono);font-size:7.5pt;letter-spacing:.14em;text-transform:uppercase;
+           color:var(--brand);margin:0 0 .5rem}
+  h1{font-family:var(--serif);font-size:27pt;line-height:1.08;font-weight:700;
+     letter-spacing:-.015em;margin:0 0 .5rem;text-wrap:balance}
+  .standfirst{font-family:var(--serif);font-size:12pt;font-style:italic;color:var(--ink-soft);
+              margin:0;max-width:40rem}
+  .stamp{display:flex;flex-wrap:wrap;gap:.35rem 1.4rem;font-family:var(--mono);font-size:7.5pt;
+         color:var(--ink-faint);margin-top:1rem;padding-top:.7rem;border-top:1px solid var(--rule-soft)}
+  .stamp b{color:var(--ink-soft);font-weight:600}
+
+  h2{font-family:var(--serif);font-size:16.5pt;font-weight:700;letter-spacing:-.01em;
+     margin:2.5rem 0 .3rem;padding-top:1.1rem;border-top:1px solid var(--rule)}
+  h2 .num{font-family:var(--mono);font-size:8pt;font-weight:400;color:var(--brand);
+          letter-spacing:.1em;display:block;margin-bottom:.35rem}
+  .masthead + h2{border-top:0;padding-top:0;margin-top:2rem}
+  .lede{color:var(--ink-soft);margin:0 0 1.2rem;max-width:42rem}
+  h3{font-size:10.5pt;font-weight:700;margin:1.5rem 0 .35rem}
+  h4{font-family:var(--mono);font-size:7.5pt;letter-spacing:.11em;text-transform:uppercase;
+     color:var(--ink-faint);margin:1rem 0 .3rem;font-weight:600}
+  p{margin:0 0 .7rem}
+  ul,ol{margin:.2rem 0 .75rem;padding-left:1.15rem}
+  li{margin-bottom:.3rem}
+  li::marker{color:var(--ink-faint)}
+  code{font-family:var(--mono);font-size:8.6pt;background:var(--panel);padding:.08em .32em;
+       border-radius:2px;color:var(--brand-deep)}
+
+  .score{display:flex;gap:.6rem;margin:1.5rem 0 0}
+  .score>div{flex:1;border:1px solid var(--rule);border-top:3px solid;border-radius:3px;
+             padding:.75rem .85rem .8rem}
+  .score .n{font-family:var(--serif);font-size:25pt;font-weight:700;line-height:1;
+            font-variant-numeric:tabular-nums}
+  .score .k{font-family:var(--mono);font-size:7pt;letter-spacing:.1em;text-transform:uppercase;
+            color:var(--ink-faint);margin-top:.3rem}
+  .score .d{font-size:8.5pt;color:var(--ink-soft);margin-top:.35rem;line-height:1.45}
+  .s-done{border-top-color:var(--done)!important} .s-done .n{color:var(--done)}
+  .s-part{border-top-color:var(--part)!important} .s-part .n{color:var(--part)}
+  .s-none{border-top-color:var(--none)!important} .s-none .n{color:var(--none)}
+
+  .tbl-wrap{overflow-x:auto;margin:1.1rem 0 0}
+  table{width:100%;border-collapse:collapse;font-size:9.4pt}
+  thead th{font-family:var(--mono);font-size:7pt;letter-spacing:.1em;text-transform:uppercase;
+           color:var(--ink-faint);text-align:left;padding:0 .55rem .45rem;
+           border-bottom:1.5px solid var(--ink);font-weight:600;white-space:nowrap}
+  tbody td{padding:.5rem .55rem;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  tbody tr:last-child td{border-bottom:1px solid var(--rule)}
+  td.n{font-family:var(--mono);font-size:8pt;color:var(--ink-faint);
+       font-variant-numeric:tabular-nums;width:1.5rem;padding-top:.6rem}
+  td.mod{font-family:var(--mono);font-size:7.5pt;text-transform:uppercase;color:var(--ink-soft);
+         white-space:nowrap;letter-spacing:.04em}
+  td.item{font-weight:600}
+  td.note{color:var(--ink-soft);font-size:9pt}
+
+  .pill{display:inline-block;font-family:var(--mono);font-size:6.8pt;letter-spacing:.07em;
+        text-transform:uppercase;font-weight:700;padding:.16rem .42rem;border-radius:2px;white-space:nowrap}
+  .p-done{background:var(--done-bg);color:var(--done)}
+  .p-part{background:var(--part-bg);color:var(--part)}
+  .p-none{background:var(--none-bg);color:var(--none)}
+  .p-info{background:var(--info-bg);color:var(--info)}
+
+  .card{border:1px solid var(--rule);border-left:3px solid var(--brand);border-radius:3px;
+        padding:1rem 1.1rem;margin:1rem 0;break-inside:avoid}
+  .card.done{border-left-color:var(--done)}
+  .card.part{border-left-color:var(--part)}
+  .card.none{border-left-color:var(--none)}
+  .card-head{display:flex;align-items:baseline;gap:.6rem;margin-bottom:.5rem;flex-wrap:wrap}
+  .card-head .ref{font-family:var(--mono);font-size:8pt;color:var(--ink-faint)}
+  .card-head .ttl{font-family:var(--serif);font-size:13pt;font-weight:700;letter-spacing:-.01em}
+  .card p{margin:0 0 .5rem}
+  .card>*:last-child{margin-bottom:0}
+
+  .row{display:flex;gap:.6rem;margin-bottom:.4rem}
+  .row:last-child{margin-bottom:0}
+  .row b{font-family:var(--mono);font-size:7.2pt;letter-spacing:.06em;text-transform:uppercase;
+         color:var(--ink-faint);min-width:6.2rem;padding-top:.18rem;flex-shrink:0;font-weight:600}
+  .row span{flex:1}
+  .row.need b{color:var(--brand)}
+
+  pre{background:var(--panel);border-radius:3px;padding:.7rem .85rem;font-family:var(--mono);
+      font-size:7.9pt;line-height:1.65;overflow-x:auto;margin:.5rem 0;color:var(--ink)}
+
+  .callout{border-left:3px solid var(--part);background:var(--part-bg);padding:.7rem .9rem;
+           border-radius:0 3px 3px 0;margin:1rem 0;font-size:9.4pt}
+  .callout strong{color:#7d4c05}
+  .callout.blue{border-left-color:var(--brand);background:var(--panel)}
+  .callout.blue strong{color:var(--brand-deep)}
+
+  .footer{margin-top:2.6rem;padding-top:.9rem;border-top:1px solid var(--rule);
+          font-family:var(--mono);font-size:7.5pt;color:var(--ink-faint);line-height:1.7}
+
+  @page{size:A4;margin:15mm 14mm}
+  @media print{
+    body{font-size:9.6pt}
+    .sheet{max-width:none;padding:0}
+    h2,h3,h4{break-after:avoid}
+    .card,.callout,tbody tr,pre{break-inside:avoid}
+    .brk{break-before:page}
+  }
+</style>
+
+<div class="sheet">
+
+  <header class="masthead">
+    <p class="eyebrow">Squark Dashboard · Phase 2 Closing Position</p>
+    <h1>What is done, what is not, and what each remaining thing needs</h1>
+    <p class="standfirst">Your twelve-row timeline, plus everything built beyond it. Each pending item says plainly whether it is waiting on work or waiting on a decision only you can make.</p>
+    <div class="stamp">
+      <span><b>Date</b> 19 August 2026</span>
+      <span><b>Code</b> main @ ecd707c</span>
+      <span><b>Server</b> live, current through #96</span>
+      <span><b>Pull requests merged</b> 16</span>
+    </div>
+  </header>
+
+  <h2><span class="num">Summary</span>Where Phase 2 stands</h2>
+  <p class="lede">Ten of your twelve rows are finished. Two remain, and both are blocked on a decision rather than on effort — I cannot build either correctly without an answer from you.</p>
+
+  <div class="score">
+    <div class="s-done">
+      <div class="n">10</div>
+      <div class="k">Finished</div>
+      <div class="d">Built, tested, merged, and running on the server.</div>
+    </div>
+    <div class="s-part">
+      <div class="n">2</div>
+      <div class="k">Waiting on you</div>
+      <div class="d">Neither can be built correctly without a decision.</div>
+    </div>
+    <div class="s-none">
+      <div class="n">2</div>
+      <div class="k">Withdrawn</div>
+      <div class="d">Payroll removed and Training deferred, both at your instruction.</div>
+    </div>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th></th><th>Module</th><th>Row</th><th>Status</th><th>Where it stands</th></tr></thead>
+      <tbody>
+        <tr><td class="n">1</td><td class="mod">Attendance</td><td class="item">Punch in — WFH pop-up</td><td><span class="pill p-done">Done</span></td><td class="note">Already existed; I had reported this wrongly and corrected it.</td></tr>
+        <tr><td class="n">2</td><td class="mod">Project</td><td class="item">Client &amp; Patent IDs</td><td><span class="pill p-done">Done</span></td><td class="note">Now also joined up — see the ledger section.</td></tr>
+        <tr><td class="n">3</td><td class="mod">Project</td><td class="item">Other teams — HR, Sales, BD</td><td><span class="pill p-part">Part</span></td><td class="note">Team spaces and a full BD pipeline. Sales never modelled separately.</td></tr>
+        <tr><td class="n">4</td><td class="mod">HR</td><td class="item">Holidays</td><td><span class="pill p-done">Done</span></td><td class="note">2026 calendar; optional holidays, two per year.</td></tr>
+        <tr><td class="n">5</td><td class="mod">HR</td><td class="item">Policies</td><td><span class="pill p-done">Done</span></td><td class="note">Ten seeded, plus versioning so an agreement means something.</td></tr>
+        <tr><td class="n">6</td><td class="mod">HR</td><td class="item">Payroll download</td><td><span class="pill p-none">Withdrawn</span></td><td class="note">Removed at your instruction. No payroll data exists anywhere in the system.</td></tr>
+        <tr><td class="n">7</td><td class="mod">Training</td><td class="item">Whole module</td><td><span class="pill p-none">Deferred</span></td><td class="note">Parked at your instruction. Nothing built.</td></tr>
+        <tr><td class="n">8</td><td class="mod">Company</td><td class="item">Feed, recognition, policies, directory</td><td><span class="pill p-done">Done</span></td><td class="note">Tested; org chart added; directory widened.</td></tr>
+        <tr><td class="n">9</td><td class="mod">People</td><td class="item">Department</td><td><span class="pill p-done">Done</span></td><td class="note">Full management screen. The API had existed and was unreachable.</td></tr>
+        <tr><td class="n">10</td><td class="mod">Appraisal</td><td class="item">All six sub-items</td><td><span class="pill p-done">Done</span></td><td class="note">Parameters now fully editable, as you asked.</td></tr>
+        <tr><td class="n">11</td><td class="mod">Performance</td><td class="item">360° project feedback</td><td><span class="pill p-part">Blocked</span></td><td class="note">Needs one decision from you. Detail below.</td></tr>
+        <tr><td class="n">12</td><td class="mod">Productivity</td><td class="item">Input; billable hours</td><td><span class="pill p-part">Blocked</span></td><td class="note">Billable hours done. "Input" still undefined.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 class="brk"><span class="num">Beyond the table</span>What else was built or fixed</h2>
+  <p class="lede">Roughly half this phase's work was not on your list. It came out of testing the things that were.</p>
+
+  <h3>Defects found and fixed</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>What was wrong</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr><td class="item">"Hours logged" in Performance was <b>always zero</b></td><td class="note">A NULL-unsafe filter excluded every ordinary timesheet entry — all 1,225 of them in the test data. Nobody noticed because zero looks plausible next to a chart.</td></tr>
+        <tr><td class="item">The ranking rewarded hours and clicks, not output</td><td class="note">One person ranked second in the firm having completed nothing. Eight clicks scored the same as finishing a piece of work.</td></tr>
+        <tr><td class="item">No record of when a task was finished</td><td class="note">Editing a closed task moved it into the current month and could make an on-time delivery retroactively late — and that rate feeds appraisals.</td></tr>
+        <tr><td class="item">Four concurrency races</td><td class="note">The 16-hour daily cap could be breached (24h recorded), and duplicate leave, WFH and department records could all be created.</td></tr>
+        <tr><td class="item">Editing a policy kept every old acknowledgement</td><td class="note">"27 people accepted this" could mean 27 people accepted a different document.</td></tr>
+        <tr><td class="item">Signing out did not end the session</td><td class="note">The access token stayed usable for up to fifteen minutes.</td></tr>
+        <tr><td class="item">Billable % showed 0% for HR and BD</td><td class="note">Their hours sat in the denominator but could never be in the numerator. Not a worse performance — a different kind of work.</td></tr>
+        <tr><td class="item">A deploy could take the whole site down</td><td class="note">A missing flag silently blanked every secret; the error on screen talked about health, not configuration. It cost an outage.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Capability added that you did not ask for</h3>
+  <ul>
+    <li><b>The BD pipeline says something back.</b> Stale deals, overdue next steps, where deals slow down, which kinds of work you win — and a delivery outlook that crosses each deal's close date against the capacity board. No external CRM can do that last one, because none of them knows your timesheets.</li>
+    <li><b>The four ledgers are joined up.</b> Client, patent handle, PID and hour were four dead-end screens with no links between them. Every identifier is now a route to what it refers to, and a panel reports where the chain was never joined.</li>
+    <li><b>An org chart.</b> The Company page had promised one in its subtitle since the module was built and never had one — it could not, because reporting lines were empty until this phase.</li>
+    <li><b>Reports have a period.</b> There was no date filtering at all, so "export the report" meant "export everything and filter it in a spreadsheet".</li>
+  </ul>
+
+  <div class="callout">
+    <strong>A correction you should have.</strong> I earlier told you the client ledger was "understating by 2,560 hours". That figure came from the <b>seeded test database</b> I was working against, not from your live server — I could not query Contabo's data and should have said so at the time. The <em>feature</em> is real and now runs on your server; the numbers it shows you will be your own, and I do not know what they are.
+  </div>
+
+  <h2 class="brk"><span class="num">Pending</span>The two rows still open</h2>
+  <p class="lede">Both are blocked on a decision, not on effort. Each says exactly what I need from you and what happens once I have it.</p>
+
+  <div class="card part">
+    <div class="card-head"><span class="ref">Row 11</span><span class="ttl">360° project feedback</span><span class="pill p-part">Blocked</span></div>
+    <p>Reviewer-on-analyst and analyst-on-reviewer ratings, per matter.</p>
+    <div class="row"><b>Ready</b><span>The hard part is already there. Every task assignment records a role of <code>PM</code>, <code>REVIEWER</code> or <code>ANALYST</code>, so <em>who worked with whom, in which direction, on which matter</em> is already answerable. The appraisal parameter table already accepts weighted inputs, so a 360° score could feed an appraisal directly.</span></div>
+    <div class="row need"><b>I need</b><span><b>Is a rating visible to the person rated?</b> That single answer changes the whole design — anonymous aggregate, attributed and open, or visible only to the manager. Build it wrong and people either stop being honest or feel surveilled, and neither is recoverable by editing the screen afterwards.</span></div>
+    <div class="row need"><b>Also worth deciding</b><span>Whether feedback is requested at the point a task closes, or gathered in a round like the appraisal cycle. The first gets better recall; the second gets better response rates.</span></div>
+    <div class="row"><b>Then</b><span>A rating record, a prompt, and a place to read the results. Days, not weeks — the data model is the part that usually takes the time and it already exists.</span></div>
+  </div>
+
+  <div class="card part">
+    <div class="card-head"><span class="ref">Row 12</span><span class="ttl">Productivity calculation</span><span class="pill p-part">Blocked</span></div>
+    <p>Half of this row is finished: <b>actual billable hours</b> are computed and shown, per person and per period, with internal team work correctly excluded.</p>
+    <div class="row"><b>Not built</b><span>"Input". There is no productivity figure anywhere, and I could not tell from the word what it means.</span></div>
+    <div class="row need"><b>I need</b><span><b>What is "Input"?</b> My guess is <em>productivity = billable hours ÷ expected available hours</em>, where the denominator comes from working hours less leave and holidays. If that is right it is quick, because the capacity board already computes that denominator. But "Input" could equally mean a screen where somebody types a target, and those are different features.</span></div>
+    <div class="row"><b>Then</b><span>If it is the ratio: a day or two, mostly presentation. If it is a target-entry screen: longer, and it needs to know who sets the target and how often.</span></div>
+  </div>
+
+  <h2><span class="num">Also pending</span>Four smaller things</h2>
+
+  <div class="card part">
+    <div class="card-head"><span class="ttl">Sales was folded into BD</span><span class="pill p-part">My call</span></div>
+    <div class="row"><b>What happened</b><span>Your row said "HR, Sales, BD team". I built a generic team space plus a BD-specific pipeline and treated Sales as the same function. I decided that rather than asking, and I should have asked.</span></div>
+    <div class="row need"><b>I need</b><span>Whether Sales is a separate function at Squark with its own process. If it is one thing with BD, nothing to do. If not, it is unbuilt.</span></div>
+  </div>
+
+  <div class="card part">
+    <div class="card-head"><span class="ttl">The teams and departments are empty</span><span class="pill p-info">Data, not code</span></div>
+    <p>Team spaces, departments and the BD pipeline are all built and running, and all empty. The containers exist; nobody has been put in them.</p>
+    <div class="row need"><b>Needs</b><span>Somebody to create the HR and BD team spaces and add people, staff the four departments, and add <b>Ritik to the BD team space</b> — his role grants pipeline access, but team membership is separate. All of it is a short session in the app, not development work.</span></div>
+  </div>
+
+  <div class="card part">
+    <div class="card-head"><span class="ttl">The local demo copy is five weeks behind</span><span class="pill p-part">Your call</span></div>
+    <p>The stack behind the Cloudflare tunnel runs an API built on <b>7 August</b>, from source that was never committed anywhere — its git history says "Initial commit" while its working tree carries 221 uncommitted changes. Nothing from Phase 2 is visible there.</p>
+    <div class="row need"><b>I need</b><span>Whether to keep it. My recommendation is to retire it and use the Contabo server as the single environment: two copies drifted apart because both had to be updated by hand and only one was. If you want it kept, rebuilding it is straightforward but the link drops for a few minutes.</span></div>
+  </div>
+
+  <div class="card none">
+    <div class="card-head"><span class="ttl">The GitHub token is still live</span><span class="pill p-none">Do this one</span></div>
+    <p>The token shared in conversation carries <code>admin:org</code>, <code>admin:enterprise</code>, <code>workflow</code> and <code>delete_repo</code> — full account administration, not repository access. It is not committed anywhere in the repository and not in any credential file; the exposure is the conversation itself.</p>
+    <div class="row need"><b>Needs</b><span>Revoking at <span style="font-family:var(--mono);font-size:8.6pt">github.com/settings/tokens</span>. A fine-grained token limited to this repository with contents and pull-request write would cover everything it has been used for.</span></div>
+  </div>
+
+  <h2 class="brk"><span class="num">Deploy</span>Bringing the server up to date</h2>
+  <p class="lede">The server is live and current through #96. Two more have merged since: the complete runbook, and the fixes that stop a deploy taking the site down.</p>
+
+  <pre>ssh -p 2222 root@217.76.59.244
+cd ~/pdash
+
+git pull origin main
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+
+docker compose --env-file .env.production -f docker-compose.prod.yml logs -f api
+#   Ctrl-C once it prints "listening on :4000"
+
+docker compose --env-file .env.production -f docker-compose.prod.yml ps
+#   postgres must read (healthy) before going on
+
+docker compose --env-file .env.production -f docker-compose.prod.yml exec api node packages/db/prisma/dist/regrant-roles.js
+docker compose --env-file .env.production -f docker-compose.prod.yml exec api node packages/db/prisma/dist/roster-align-2026-08.js
+docker compose --env-file .env.production -f docker-compose.prod.yml exec api node packages/db/prisma/dist/reporting-lines-2026-08.js
+
+# optional — fills the policy library
+docker compose --env-file .env.production -f docker-compose.prod.yml exec api node packages/db/prisma/dist/seed-policies-2026-08.js</pre>
+
+  <div class="callout blue">
+    <strong>After this deploy the two flags stop being necessary.</strong> The compose file now takes its secrets from <code>.env.production</code> directly instead of interpolating them, so a future deploy is just <code>docker compose -f docker-compose.prod.yml up -d --build</code> — and it fails loudly if the environment file is missing, rather than blanking every secret and taking the site down. Keep using both flags for <em>this</em> run; they are harmless, and the change only takes effect once the new file is on the server.
+  </div>
+
+  <h3>The one check that tells you it worked</h3>
+  <p><code>regrant-roles</code> must list <b>nine</b> roles, ending with:</p>
+  <pre>Business Development 1 role(s) × 42 perms</pre>
+  <p>Eight roles means the containers did not rebuild and nothing after that step will do anything. <b>0 perms</b> means the role exists but the regrant never ran. Both are real failure modes that have happened.</p>
+  <p><code>reporting-lines</code> should show <b>Ajay Sharma → Nitin Goel</b>, not → Mohit Kalra.</p>
+
+  <h3>Migrations — all automatic</h3>
+  <p>Four have accumulated, and the API container applies them on boot. You never run them by hand. All are additive: new nullable or defaulted columns, nothing renamed or destroyed.</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Migration</th><th>Adds</th></tr></thead>
+      <tbody>
+        <tr><td class="item">20260925 department head</td><td class="note">Explicit head; one name per organisation. De-duplicates names <em>before</em> creating its index, so it cannot fail on existing rows.</td></tr>
+        <tr><td class="item">20260926 deal next action</td><td class="note">Next-action date and note, expected kind of work.</td></tr>
+        <tr><td class="item">20260927 task completedAt</td><td class="note">When work actually finished. Backfilled from last-edited, which is what the old figure already used.</td></tr>
+        <tr><td class="item">20260928 policy versioning</td><td class="note">Which version of a policy somebody agreed to.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2><span class="num">Closing</span>Three things to take away</h2>
+  <ol>
+    <li><b>Ten of twelve rows are finished and running.</b> The two that are not are waiting on you, not on me — one question each.</li>
+    <li><b>Most of what was fixed was never on the list.</b> Performance had been reporting zero hours for everyone; the ranking rewarded logging time over doing work; four guards could be raced; and a deploy could take the site down over a missing flag. None of that was visible from the timeline.</li>
+    <li><b>The system is now built but largely unpopulated.</b> Team spaces, departments and the pipeline all work and all sit empty. The next useful hour is somebody spending it in the app, not more development.</li>
+  </ol>
+
+  <div class="footer">
+    Squark Dashboard · Phase 2 closing position · 19 August 2026<br>
+    Code at main @ ecd707c, sixteen pull requests merged this phase. Server verified live and current through #96 by probing its routes, with a control request to prove the probe meant something.<br>
+    Findings quoted from the seeded test database are labelled as such. I could not query the live server's data.
+  </div>
+
+</div>
