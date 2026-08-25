@@ -151,7 +151,12 @@ async function blobReq(
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type OrgSummary = { id: string; name: string; code: string; status: string; timezone?: string; brandColor?: string };
+export type OrgSummary = {
+  id: string; name: string; code: string; status: string;
+  timezone?: string; brandColor?: string;
+  /** The firm's logo as an image data URL. Null/absent when none has been set. */
+  logo?: string | null;
+};
 
 export type UserSummary = {
   id: string; firstName: string; lastName: string; email: string;
@@ -1263,7 +1268,8 @@ export const api = {
 
   orgs: {
     list: () => req<OrgSummary[]>('/organizations'),
-    update: (id: string, data: { name?: string; timezone?: string; brandColor?: string }) =>
+    // An empty string for `logo` REMOVES it; omitting the key leaves it alone.
+    update: (id: string, data: { name?: string; timezone?: string; brandColor?: string; logo?: string }) =>
       req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 

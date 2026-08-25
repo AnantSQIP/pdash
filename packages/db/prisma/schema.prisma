@@ -29,6 +29,9 @@ model Organization {
   status               String   @default("ACTIVE")
   timezone             String   @default("UTC") // M25: persisted Settings → General
   brandColor           String   @default("#3d8de2")
+  /// The firm's logo, as an image data URL. Same storage as User.profilePhoto: small enough to
+  /// sit in the row, and it travels with the org record rather than needing a file service.
+  logo                 String?
   // Hour (IST, 0–23) at which the daily admin digest is sent. Admin-editable. Default 10pm.
   digestHourIst        Int      @default(22)
   // Step-up "big change" passcode — argon2id hash of the org-wide passcode required

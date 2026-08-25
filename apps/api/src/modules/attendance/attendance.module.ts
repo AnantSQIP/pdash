@@ -79,9 +79,22 @@ const MAX_NAME = 160;
 const COMPOFF_MAX_AGE_DAYS = 90;
 
 const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
-// Escalation owner who is copied on attendance regularisations and comp-off claims
-// (in addition to HR / managers). Matched by login account.
-const ESCALATION_EMAIL = 'yash@squarkip.com';
+/**
+ * Escalation owner copied on attendance regularisations and comp-off claims, in addition to HR
+ * and anyone holding user.manage_access.
+ *
+ * Configurable, because it was a string literal in this file: changing who the firm escalates to
+ * meant editing source and shipping a release, and the day that person left the constant would
+ * quietly match nobody. Set ATTENDANCE_ESCALATION_EMAIL to change it; set it empty to drop the
+ * extra recipient entirely.
+ *
+ * Worth being precise about the failure mode, because it is better than it looks: this address is
+ * ADDITIVE. HR is matched by role and admins by permission, so if it resolves to nobody the
+ * requests still reach everyone who must act on them — one named person simply stops being copied.
+ * That is a degradation, not a silent drop.
+ */
+const ESCALATION_EMAIL = (process.env.ATTENDANCE_ESCALATION_EMAIL ?? 'yash@squarkip.com')
+  .trim().toLowerCase();
 
 // A day is a full "present" only if at least this many hours were worked; below it,
 // the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
@@ -167,7 +180,9 @@ export class AttendanceService {
           { userRoles: { some: { role: { name: 'HR' } } } },
           // Admins / Super Admins (user.manage_access) are always notified too.
           { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
-          { email: ESCALATION_EMAIL },
+          // Skipped entirely when unset — an empty string here would be a filter that matches
+          // nothing useful and invites a "why is this in the OR" question later.
+          ...(ESCALATION_EMAIL ? [{ email: ESCALATION_EMAIL }] : []),
         ],
       },
       select: { id: true },
@@ -1367,7 +1382,9 @@ export class LeaveService {
         OR: [
           { userRoles: { some: { role: { name: { in: ['HR', 'Manager'] } } } } },
           { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
-          { email: ESCALATION_EMAIL },
+          // Skipped entirely when unset — an empty string here would be a filter that matches
+          // nothing useful and invites a "why is this in the OR" question later.
+          ...(ESCALATION_EMAIL ? [{ email: ESCALATION_EMAIL }] : []),
         ],
       },
       select: { id: true },

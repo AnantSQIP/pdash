@@ -79,7 +79,7 @@ const STORAGE_KEY = 'sidebar-collapsed';
 
 export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void } = {}) {
   const path = usePathname();
-  const { currentUser } = useOrg();
+  const { currentUser, org } = useOrg();
   const { can, isSuperAdmin } = usePermissions();
   // A nav entry is visible when its permission passes, or when it's Super-Admin-only and you are one.
   const navVisible = (n: NavItem) => (n.superAdminOnly ? isSuperAdmin : !n.perm || can(n.perm));
@@ -143,7 +143,12 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
       >
       {/* Logo + collapse toggle */}
       <div className={clsx('flex items-center border-b border-white/10 py-5', collapsed ? 'justify-center px-0' : 'gap-2.5 px-4')}>
-        <Image src="/fav.png" alt="Squark Dashboard" width={32} height={32} className="rounded-lg shrink-0" />
+        {/* The org's own logo when one has been set, otherwise the product mark. `next/image`
+            cannot take a data URL, so an uploaded logo renders as a plain <img>. */}
+        {org?.logo
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={org.logo} alt={org.name} width={32} height={32} className="rounded-lg shrink-0 object-contain bg-white" />
+          : <Image src="/fav.png" alt="Squark Dashboard" width={32} height={32} className="rounded-lg shrink-0" />}
         {!collapsed && <span className="font-bold text-lg tracking-tight flex-1">Squark Dashboard</span>}
         {!collapsed && (
           <>
