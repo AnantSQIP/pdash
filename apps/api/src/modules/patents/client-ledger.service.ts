@@ -248,7 +248,11 @@ export class ClientLedgerService {
         select: {
           id: true, handle: true, createdAt: true,
           client: { select: { id: true, code: true, name: true } },
-          projectLinks: { select: { projectId: true } },
+          // Only LIVE work counts. Filtering here rather than after the fact is what keeps this
+          // report agreeing with the patent portal, which computes the same "unused" flag from
+          // live projects — the two screens previously disagreed about whether a patent whose
+          // only project had been deleted was still in use.
+          projectLinks: { where: { project: { deletedAt: null } }, select: { projectId: true } },
         },
         orderBy: { serial: 'asc' },
       }),
