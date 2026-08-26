@@ -1081,8 +1081,17 @@ export class LeaveService {
         }
       } else if (type.annualQuota > 0) {
         // Enforce the annual quota for regular leave types (CL/SL/EL …). Count both pending
-        // and approved days this year so stacked requests can't collectively exceed it.
-        const year = new Date().getUTCFullYear();
+        // and approved days that year so stacked requests can't collectively exceed it.
+        //
+        // The year comes from the LEAVE, not from today. Taken from `new Date()` it asked the
+        // wrong bucket for anything booked across a year boundary: somebody who had spent their
+        // 2026 allowance could not book a single day in January 2027, because the January request
+        // was measured against 2026's usage. Every December — exactly when people book the new
+        // year's holidays — that refused the whole firm.
+        //
+        // A leave that straddles 31 December is attributed to the year it STARTS in, which is the
+        // same rule the aggregate below groups by, so the two cannot disagree.
+        const year = start.getUTCFullYear();
         const yStart = new Date(Date.UTC(year, 0, 1));
         const yEnd = new Date(Date.UTC(year + 1, 0, 1));
         const usedAgg = await tx.leaveRequest.aggregate({
@@ -1326,7 +1335,9 @@ export class LeaveService {
   async balances(userId: string) {
     const organizationId = await this.orgOf(userId);
     if (!organizationId) return [];
-    const year = new Date().getUTCFullYear();
+    // The IST year, not the UTC one — for the first five and a half hours of 1 January, UTC is
+    // still 31 December, so the card would open the new year showing the old year's balance.
+    const year = istDay(new Date()).getUTCFullYear();
     const start = new Date(Date.UTC(year, 0, 1));
     const end = new Date(Date.UTC(year + 1, 0, 1));
     // Comp Off was only created the first time a claim was APPROVED, so until then the type was
