@@ -13,6 +13,18 @@ import { PermissionService } from '../permissions/permission.service';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
+/**
+ * The UTC calendar day a moment falls on.
+ *
+ * Correct for NORMALISING a value already stored in a date-only column — those are written as UTC
+ * midnight, so re-normalising them is a no-op that keeps comparisons total.
+ *
+ * WRONG for "what day is it now". The org runs on IST (UTC+5:30), so between 00:00 and 05:30 IST
+ * this returns YESTERDAY. Seven call sites asked it that question: the Home punch card fetched the
+ * wrong row, marking or regularising the current day was refused as "in the future", and comp-off
+ * for today was rejected as not yet worked — every night, for five and a half hours. Use istDay()
+ * for now; use this only on a date you read out of the database.
+ */
 function utcDay(d: Date): Date { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
 function parseDay(s: string): Date { return new Date(`${s}T00:00:00.000Z`); }
 function round(n: number, p = 1): number { const f = 10 ** p; return Math.round((n ?? 0) * f) / f; }
@@ -191,7 +203,7 @@ export class AttendanceService {
   }
 
   async getToday(userId: string) {
-    const today = utcDay(new Date());
+    const today = istDay(new Date());
     return this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
   }
 
@@ -278,7 +290,7 @@ export class AttendanceService {
   /** Admin/manual mark for a specific user+date. */
   async mark(data: { userId: string; date: string; status: string; note?: string }) {
     const date = parseDayStrict(data.date, 'date');
-    if (date > utcDay(new Date())) throw new BadRequestException('Cannot mark attendance for a future date.');
+    if (date > istDay(new Date())) throw new BadRequestException('Cannot mark attendance for a future date.');
     if (!MARK_STATUSES.includes(data.status)) {
       throw new BadRequestException(`status must be one of: ${MARK_STATUSES.join(', ')}`);
     }
@@ -324,7 +336,7 @@ export class AttendanceService {
     const requestType = data.requestType ?? 'OTHER';
     if (!REG_TYPES.includes(requestType)) throw new BadRequestException(`requestType must be one of: ${REG_TYPES.join(', ')}`);
     const date = parseDayStrict(data.date, 'date');
-    if (date > utcDay(new Date())) throw new BadRequestException('Cannot regularise a future date.');
+    if (date > istDay(new Date())) throw new BadRequestException('Cannot regularise a future date.');
     const checkIn = parseInstant(data.checkIn);
     const checkOut = parseInstant(data.checkOut);
     // Times MUST fall on the day being regularised. Otherwise an unrelated-date check-out
@@ -465,7 +477,7 @@ export class AttendanceService {
     const start = parseDayStrict(data.startDate, 'startDate');
     const end = parseDayStrict(data.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
-    if (end < utcDay(new Date())) throw new BadRequestException('Cannot request work-from-home for dates in the past.');
+    if (end < istDay(new Date())) throw new BadRequestException('Cannot request work-from-home for dates in the past.');
     // A runaway range would silently turn everything WFH — long arrangements go through HR.
     if ((end.getTime() - start.getTime()) / 86_400_000 > 31) {
       throw new BadRequestException('WFH requests are limited to 31 days — please arrange longer periods with HR directly.');
@@ -735,7 +747,7 @@ export class AttendanceService {
     });
     const days: string[] = [];
     for (const d = new Date(fromD); d <= toD; d.setUTCDate(d.getUTCDate() + 1)) days.push(dayKey(d));
-    const todayKey = dayKey(utcDay(new Date()));
+    const todayKey = dayKey(istDay(new Date()));
 
     const rows = users.map(u => {
       let present = 0, absent = 0, onLeave = 0, holiday = 0, hours = 0, half = 0;
@@ -772,7 +784,7 @@ export class AttendanceService {
 
   /** Every member's punch-in/out LOCATION for a given day (default today) — HR/Admin only. */
   async orgPunchLocations(organizationId: string, dateStr?: string) {
-    const day = dateStr ? parseDay(dateStr) : utcDay(new Date());
+    const day = dateStr ? parseDay(dateStr) : istDay(new Date());
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true, designation: true, office: true },
@@ -971,7 +983,7 @@ export class LeaveService {
     const end = parseDayStrict(dto.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
     // M4: reject leave that is entirely in the past (approval would retroactively debit balance).
-    if (end < utcDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
+    if (end < istDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
     if (dto.reason && dto.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
     // A runaway range would loop the business-day counter unbounded and debit an absurd
     // balance — a single leave never spans more than a year.
@@ -1440,8 +1452,8 @@ export class LeaveService {
       throw new BadRequestException('Hours worked must be between 0 and 24.');
     }
     const workDate = parseDayStrict(data.workDate, 'workDate');
-    if (workDate > utcDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
-    if ((utcDay(new Date()).getTime() - workDate.getTime()) / 86_400_000 > COMPOFF_MAX_AGE_DAYS) {
+    if (workDate > istDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
+    if ((istDay(new Date()).getTime() - workDate.getTime()) / 86_400_000 > COMPOFF_MAX_AGE_DAYS) {
       throw new BadRequestException(`Comp-off must be claimed within ${COMPOFF_MAX_AGE_DAYS} days of the day worked.`);
     }
     const organizationId = await this.orgOf(userId);
