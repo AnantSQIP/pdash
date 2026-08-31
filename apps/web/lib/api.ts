@@ -609,6 +609,46 @@ export type LedgerProject = {
 };
 export type LedgerDetail = LedgerRow & { patentCount: number; projects: LedgerProject[] };
 
+// ─── Employment lifecycle ───────────────────────────────────────────────────
+export type ProbationStatus = 'confirmed' | 'on-probation' | 'due' | 'overdue' | 'unknown';
+export type LifecyclePerson = {
+  id: string; firstName: string; lastName: string; email: string;
+  designation?: string | null; profilePhoto?: string | null; office?: string | null; status: string;
+  joiningDate?: string | null; probationMonths?: number | null;
+  /** Derived from joiningDate + probationMonths — never stored, so it cannot go stale. */
+  probationEndsOn?: string | null;
+  probationStatus: ProbationStatus;
+  daysToProbationEnd?: number | null;
+  confirmedAt?: string | null; confirmedBy?: string | null; confirmationNote?: string | null;
+  resignationDate?: string | null; noticeDays?: number | null; lastWorkingDay?: string | null;
+  exitReason?: string | null; exitCompletedAt?: string | null;
+  onNotice: boolean; daysToLastWorkingDay?: number | null;
+};
+export type LifecycleBoard = {
+  probation: LifecyclePerson[];
+  leaving: LifecyclePerson[];
+  /** Nothing tenure-based works without a joining date, so the gap is surfaced. */
+  missingJoiningDate: { id: string; firstName: string; lastName: string; designation?: string | null }[];
+  counts: {
+    total: number; confirmed: number; onProbation: number; due: number;
+    overdue: number; onNotice: number; noJoiningDate: number;
+  };
+};
+export type Handover = {
+  person: LifecyclePerson;
+  summary: {
+    items: { key: string; label: string; count: number; blocking: boolean }[];
+    clearToRelease: boolean; blockingCount: number;
+  };
+  openTasks: { id: string; title: string; dueDate?: string | null; priority?: string | null;
+               status?: string | null; project?: { id: string; code: string | null; title: string } | null }[];
+  projectsManaged: { id: string; code: string | null; title: string; projectPhase: string; dueDate?: string | null }[];
+  projectsMember: { id: string; code: string | null; title: string; projectPhase: string }[];
+  clientsOwned: { id: string; code: string; name?: string | null }[];
+  unsubmittedTime: { id: string; date: string; hoursLogged: number; notes?: string | null }[];
+  pendingLeave: { id: string; leaveType: string; startDate: string; endDate: string; numDays: number }[];
+};
+
 // ─── Feedback ────────────────────────────────────────────────────────────────
 export type FeedbackKind = 'PRAISE' | 'CONCERN' | 'OBSERVATION';
 type FeedbackPerson = Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>;
@@ -1573,6 +1613,24 @@ export const api = {
      */
     findByNumber: (q: string) =>
       req<PatentNumberLookup>(`/patents/find-by-number?q=${encodeURIComponent(q)}`),
+  },
+
+  /**
+   * Employment lifecycle — probation, confirmation and leaving.
+   * Gated on user.update, the same permission the rest of people-operations sits behind.
+   */
+  lifecycle: {
+    board: (all?: boolean) => req<LifecycleBoard>(`/lifecycle/board${all ? '?all=true' : ''}`),
+    person: (userId: string) => req<LifecyclePerson>(`/lifecycle/${userId}`),
+    setProbation: (userId: string, data: { joiningDate?: string; probationMonths?: number }) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/probation`, { method: 'POST', body: JSON.stringify(data) }),
+    confirm: (userId: string, data: { note?: string; confirmedAt?: string }) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/confirm`, { method: 'POST', body: JSON.stringify(data) }),
+    resign: (userId: string, data: { resignationDate: string; noticeDays?: number; lastWorkingDay?: string; reason?: string }) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/resign`, { method: 'POST', body: JSON.stringify(data) }),
+    handover: (userId: string) => req<Handover>(`/lifecycle/${userId}/handover`),
+    completeExit: (userId: string) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/exit-complete`, { method: 'POST' }),
   },
 
   clientLedger: {

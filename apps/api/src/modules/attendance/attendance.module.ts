@@ -8,6 +8,7 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { serialize, leaveKeyFor, wfhKeyFor } from '../../common/db/serialize';
+import { entitlementsFor } from './leave-entitlement';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 import { PermissionService } from '../permissions/permission.service';
 
@@ -1079,7 +1080,7 @@ export class LeaveService {
         if (available < numDays) {
           throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
         }
-      } else if (type.annualQuota > 0) {
+      } else if (type.annualQuota > 0 || type.accrualMode === 'MONTHLY') {
         // Enforce the annual quota for regular leave types (CL/SL/EL …). Count both pending
         // and approved days that year so stacked requests can't collectively exceed it.
         //
@@ -1099,9 +1100,23 @@ export class LeaveService {
           _sum: { numDays: true },
         });
         const used = usedAgg._sum.numDays ?? 0;
-        if (used + numDays > type.annualQuota) {
-          const remaining = Math.max(0, type.annualQuota - used);
-          throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
+        // The SAME calculation the balance card renders. Both used to read annualQuota directly,
+        // which was fine while entitlement was a flat number and would have drifted the moment it
+        // stopped being one — a card promising days the save then refuses is the worst version of
+        // this bug, because the person has no way to tell which half is wrong.
+        const ent = await entitlementsFor(this.prisma, userId, organizationId ?? '', year);
+        const mine = ent.get(dto.leaveType);
+        const entitled = mine ? mine.entitled : type.annualQuota;
+        if (used + numDays > entitled) {
+          const remaining = Math.max(0, entitled - used);
+          const because = mine?.basis === 'monthly'
+            ? ` (earned at ${mine.policy.monthlyRate}/month over ${mine.monthsCounted} month${mine.monthsCounted === 1 ? '' : 's'})`
+            : mine?.basis === 'annual-prorated'
+              ? ` (pro-rated to ${mine.monthsCounted} month${mine.monthsCounted === 1 ? '' : 's'} of service)`
+              : '';
+          throw new BadRequestException(
+            `This exceeds your ${type.name} entitlement of ${entitled} day${entitled === 1 ? '' : 's'}${because} — ${remaining} remaining.`,
+          );
         }
       }
       return tx.leaveRequest.create({
@@ -1344,6 +1359,7 @@ export class LeaveService {
     // invisible — people couldn't see a zero balance, or find "Comp-off" in the leave dropdown.
     await this.ensureCompOffType(organizationId);
     const types = await this.prisma.leaveType.findMany({ where: { organizationId }, orderBy: { name: 'asc' } });
+    const ent = await entitlementsFor(this.prisma, userId, organizationId, year);
     // Approved and pending are counted SEPARATELY but both reduce what is left to book. The
     // card used to show approved days only, while create() refused anything over approved +
     // pending — so it could read "8 of 8 remaining" and still reject the next request.
@@ -1373,9 +1389,16 @@ export class LeaveService {
       }
       const used = usedByCode.get(t.code) ?? 0;
       const pending = pendingByCode.get(t.code) ?? 0;
+      const e = ent.get(t.code);
+      const quota = e ? e.entitled : t.annualQuota;
       return {
-        code: t.code, name: t.name, quota: t.annualQuota, used, pending,
-        remaining: Math.max(0, t.annualQuota - used - pending), colorHex: t.colorHex,
+        code: t.code, name: t.name, quota, used, pending,
+        remaining: Math.max(0, quota - used - pending), colorHex: t.colorHex,
+        // Shown so the card can explain a number that is no longer simply "the annual quota" —
+        // carried-forward days and a part-year entitlement both make it something a person would
+        // otherwise have to ask about.
+        accrued: e?.accrued, opening: e?.opening, basis: e?.basis,
+        monthsCounted: e?.monthsCounted, assumedFullYear: e?.assumedFullYear,
       };
     }));
   }
