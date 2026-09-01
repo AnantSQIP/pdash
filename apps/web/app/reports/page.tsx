@@ -336,14 +336,16 @@ export default function ReportsPage() {
         {/* Stats row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: 'Total Projects',   value: stats?.totalProjects   ?? 0,       Icon: FolderOpen, iconBg: 'bg-brand-50',  iconColor: 'text-brand-500'  },
-            { label: 'Active Projects',  value: stats?.activeProjects  ?? 0,       Icon: TrendingUp, iconBg: 'bg-green-50',  iconColor: 'text-green-600'  },
-            { label: 'Avg Completion',   value: `${stats?.avgCompletion ?? 0}%`,   Icon: BarChart2,  iconBg: 'bg-amber-50',  iconColor: 'text-amber-600'  },
-            { label: 'Total Tasks',      value: stats?.totalTasks      ?? 0,       Icon: CheckSquare,iconBg: 'bg-purple-50', iconColor: 'text-purple-600' },
+            // One neutral well for all four. Four different hues here said nothing about the
+            // four numbers — it just used up the colour budget before the data got any.
+            { label: 'Total Projects',   value: stats?.totalProjects   ?? 0,       Icon: FolderOpen, iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
+            { label: 'Active Projects',  value: stats?.activeProjects  ?? 0,       Icon: TrendingUp, iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
+            { label: 'Avg Completion',   value: `${stats?.avgCompletion ?? 0}%`,   Icon: BarChart2,  iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
+            { label: 'Total Tasks',      value: stats?.totalTasks      ?? 0,       Icon: CheckSquare,iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
           ].map(({ label, value, Icon, iconBg, iconColor }) => (
-            <div key={label} className="bg-white rounded-xl border border-gray-200 px-5 py-4 flex items-center gap-4">
-              <div className={clsx('w-11 h-11 rounded-full flex items-center justify-center shrink-0', iconBg)}>
-                <Icon size={20} className={iconColor} />
+            <div key={label} className="bg-white rounded-xl ring-1 ring-gray-950/[0.06] shadow-xs px-5 py-4 flex items-center gap-4">
+              <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ring-1 ring-inset ring-gray-950/[0.04]', iconBg)}>
+                <Icon size={18} className={iconColor} />
               </div>
               <div>
                 {loading
@@ -413,11 +415,11 @@ export default function ReportsPage() {
 
           {/* Weekly hours */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Time Tracking Summary</h3>
+            <h3 className="text-[13.5px] font-semibold tracking-[-0.01em] text-gray-900 mb-4">Time Tracking Summary</h3>
             <div className="space-y-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center shrink-0">
-                  <Clock size={18} className="text-brand-600" />
+                <div className="w-10 h-10 rounded-xl bg-gray-50 ring-1 ring-inset ring-gray-950/[0.04] flex items-center justify-center shrink-0">
+                  <Clock size={18} className="text-gray-400" />
                 </div>
                 <div>
                   {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900">{Math.round(stats?.hoursLoggedThisWeek ?? 0)}h</p>}
@@ -425,17 +427,17 @@ export default function ReportsPage() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center shrink-0">
-                  <CheckSquare size={18} className="text-red-500" />
+                <div className="w-10 h-10 rounded-xl bg-gray-50 ring-1 ring-inset ring-gray-950/[0.04] flex items-center justify-center shrink-0">
+                  <CheckSquare size={18} className="text-gray-400" />
                 </div>
                 <div>
-                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900">{stats?.overdueCount ?? 0}</p>}
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className={clsx('text-[22px] font-semibold tracking-[-0.02em] tabular-nums', (stats?.overdueCount ?? 0) > 0 ? 'text-red-600' : 'text-gray-900')}>{stats?.overdueCount ?? 0}</p>}
                   <p className="text-xs text-gray-500">Overdue tasks</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center shrink-0">
-                  <Users size={18} className="text-orange-500" />
+                <div className="w-10 h-10 rounded-xl bg-gray-50 ring-1 ring-inset ring-gray-950/[0.04] flex items-center justify-center shrink-0">
+                  <Users size={18} className="text-gray-400" />
                 </div>
                 <div>
                   {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900">{stats?.tasksDueToday ?? 0}</p>}

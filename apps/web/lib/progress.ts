@@ -1,5 +1,5 @@
 // Progress → colour scale.
-// Interpolates a project's progress bar from RED (low) through AMBER to GREEN (100%).
+// Interpolates a project's progress bar from CORAL (low) through amber to TEAL (100%).
 // Priority skews the curve: CRITICAL/HIGH projects stay red longer at low progress,
 // LOW-priority projects warm up to amber/green sooner. At 100% everything is green.
 
@@ -22,14 +22,27 @@ export function progressColor(pct: number, priority: string = 'MEDIUM'): string 
   const p = Math.max(0, Math.min(100, pct ?? 0)) / 100;
   const exp = PRIORITY_EXPONENT[priority] ?? 1;
   const eased = Math.pow(p, exp);
-  const hue = Math.round(eased * 120); // 0 = red … 120 = green
-  return `hsl(${hue} 78% 45%)`;
+  // Was `hsl(hue 78% 45%)` sweeping hue 0→120: pure red to pure green at near-maximum
+  // saturation. Two problems. It was the loudest thing on any page it appeared on, louder
+  // than the numbers it was describing. And a scale whose entire meaning is carried by red
+  // versus green is unreadable for the ~8% of men with a deficiency in exactly that pair.
+  //
+  // Now it runs coral → amber → teal, which separates by LIGHTNESS as well as hue, so it
+  // still reads as a scale in greyscale. Saturation and lightness travel with the hue so
+  // both ends belong to the same family as the rest of the palette.
+  const hue = Math.round(6 + eased * 164);          // 6 = coral … 170 = teal
+  const sat = Math.round(58 + eased * 10);
+  const light = Math.round(56 - eased * 14);
+  return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
-/** Soft track tint matching the progress colour (for the unfilled portion). */
-export function progressTrack(pct: number, priority: string = 'MEDIUM'): string {
-  const p = Math.max(0, Math.min(100, pct ?? 0)) / 100;
-  const exp = PRIORITY_EXPONENT[priority] ?? 1;
-  const hue = Math.round(Math.pow(p, exp) * 120);
-  return `hsl(${hue} 60% 94%)`;
+/**
+ * The unfilled portion. Now a NEUTRAL, not a tint of the fill.
+ *
+ * A track tinted to match its bar means a bar at 5% sits on a track that is already almost
+ * the same colour, so the reader cannot see where the fill ends — the one thing the control
+ * exists to show. A neutral track makes the fill legible at every value.
+ */
+export function progressTrack(_pct?: number, _priority?: string): string {
+  return 'rgba(16, 24, 40, 0.07)';
 }

@@ -95,24 +95,24 @@ export function PeriodFilter({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <CalendarRange size={14} className="text-gray-400 shrink-0" />
+      <CalendarRange size={14} className="text-gray-400 shrink-0 mr-0.5" />
       {periods.map(p => (
         <button
           key={p.key} onClick={() => onChange(p)}
-          className={clsx('px-2.5 py-1 text-xs rounded-lg border transition-colors',
+          className={clsx('px-2.5 py-1.5 text-[12px] rounded-md transition-colors',
             value.key === p.key
-              ? 'border-brand-400 bg-brand-50 text-brand-700 font-medium'
-              : 'border-gray-200 text-gray-600 hover:bg-gray-50')}
+              ? 'bg-white text-gray-900 shadow-[0_1px_2px_0_rgb(16_24_40_/_0.06),0_1px_3px_0_rgb(16_24_40_/_0.04)] font-medium'
+              : 'text-gray-500 hover:text-gray-800')}
         >
           {p.label}
         </button>
       ))}
       <button
         onClick={() => setShowCustom(v => !v)}
-        className={clsx('px-2.5 py-1 text-xs rounded-lg border transition-colors',
+        className={clsx('px-2.5 py-1.5 text-[12px] rounded-md transition-colors',
           value.key === 'custom'
-            ? 'border-brand-400 bg-brand-50 text-brand-700 font-medium'
-            : 'border-gray-200 text-gray-600 hover:bg-gray-50')}
+            ? 'bg-white text-gray-900 shadow-[0_1px_2px_0_rgb(16_24_40_/_0.06),0_1px_3px_0_rgb(16_24_40_/_0.04)] font-medium'
+            : 'text-gray-500 hover:text-gray-800')}
       >
         {value.key === 'custom' ? value.label : 'Custom…'}
       </button>

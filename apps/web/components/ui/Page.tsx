@@ -188,7 +188,7 @@ export function Panel({ children, className, padded = true }: {
   children: ReactNode; className?: string; padded?: boolean;
 }) {
   return (
-    <div className={clsx('rounded-xl bg-white ring-1 ring-gray-950/[0.06]', padded && 'p-5', className)}>
+    <div className={clsx('rounded-xl bg-white ring-1 ring-gray-950/[0.06] shadow-xs', padded && 'p-5', className)}>
       {children}
     </div>
   );

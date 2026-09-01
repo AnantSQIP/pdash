@@ -189,11 +189,11 @@ export function OrgView({ days = 30 }: { days?: number }) {
 
       {/* Org KPI strip — clickable cross-filter */}
       <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3">
-        <KpiTile label="Team Members" value={t.users} Icon={RiTeamLine} tint="bg-brand-50 text-brand-600" />
-        <KpiTile label={METRIC_LABEL.tasksCompleted} value={t.tasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-green-100 text-green-600" active={focus === 'tasksCompleted'} onClick={() => setFocus('tasksCompleted')} delta={t.tasksCompleted - orgPerf.previousTotals.tasksCompleted} spark={trendSpark('completed')} sparkColor={C.green} info={METRIC_HELP.tasksCompleted} />
-        <KpiTile label={METRIC_LABEL.hoursLogged} value={`${t.hoursLogged}h`} Icon={RiTimeLine} tint="bg-blue-50 text-blue-600" active={focus === 'hoursLogged'} onClick={() => setFocus('hoursLogged')} delta={round1(t.hoursLogged - orgPerf.previousTotals.hoursLogged)} spark={trendSpark('hours')} sparkColor={C.brand} info={METRIC_HELP.hoursLogged} />
-        <KpiTile label="Active Projects" value={t.activeProjects} Icon={RiFolder3Line} tint="bg-amber-50 text-amber-600" />
-        <KpiTile label={METRIC_LABEL.onTimeRate} value={`${t.avgOnTimeRate}%`} Icon={RiTrophyLine} tint="bg-teal-50 text-teal-600" hero active={focus === 'onTimeRate'} onClick={() => setFocus('onTimeRate')} info={METRIC_HELP.onTimeRate} />
+        <KpiTile label="Team Members" value={t.users} Icon={RiTeamLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" />
+        <KpiTile label={METRIC_LABEL.tasksCompleted} value={t.tasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" active={focus === 'tasksCompleted'} onClick={() => setFocus('tasksCompleted')} delta={t.tasksCompleted - orgPerf.previousTotals.tasksCompleted} spark={trendSpark('completed')} sparkColor={C.green} info={METRIC_HELP.tasksCompleted} />
+        <KpiTile label={METRIC_LABEL.hoursLogged} value={`${t.hoursLogged}h`} Icon={RiTimeLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" active={focus === 'hoursLogged'} onClick={() => setFocus('hoursLogged')} delta={round1(t.hoursLogged - orgPerf.previousTotals.hoursLogged)} spark={trendSpark('hours')} sparkColor={C.brand} info={METRIC_HELP.hoursLogged} />
+        <KpiTile label="Active Projects" value={t.activeProjects} Icon={RiFolder3Line} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" />
+        <KpiTile label={METRIC_LABEL.onTimeRate} value={`${t.avgOnTimeRate}%`} Icon={RiTrophyLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" hero active={focus === 'onTimeRate'} onClick={() => setFocus('onTimeRate')} info={METRIC_HELP.onTimeRate} />
       </div>
       <p className="text-xs text-gray-400 -mt-3">Tip: click a metric tile to re-rank the comparison charts & table{filterActive ? ' · filters applied to ranking & table' : ''}.</p>
 

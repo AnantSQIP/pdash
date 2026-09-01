@@ -115,10 +115,10 @@ export function OrgStatsRow() {
   if (!allowed) return null;
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 px-4 sm:px-6 pt-4 sm:pt-6">
-      <StatTile label="Total projects"  value={fmtNum(stats?.totalProjects)} Icon={FolderKanban} iconBg="bg-brand-50"  iconColor="text-brand-600" loading={isLoading} error={isError} />
-      <StatTile label="Active projects" value={fmtNum(stats?.activeProjects)} Icon={Activity}     iconBg="bg-green-100" iconColor="text-green-600" loading={isLoading} error={isError} />
-      <StatTile label="Avg completion"  value={fmtPct(stats?.avgCompletion)}  Icon={TrendingUp}   iconBg="bg-amber-50"  iconColor="text-amber-600" loading={isLoading} error={isError} />
-      <StatTile label="Total tasks"     value={fmtNum(stats?.totalTasks)}     Icon={CheckSquare}  iconBg="bg-brand-50"  iconColor="text-brand-600" loading={isLoading} error={isError} />
+      <StatTile label="Total projects"  value={fmtNum(stats?.totalProjects)} Icon={FolderKanban} loading={isLoading} error={isError} />
+      <StatTile label="Active projects" value={fmtNum(stats?.activeProjects)} Icon={Activity} loading={isLoading} error={isError} />
+      <StatTile label="Avg completion"  value={fmtPct(stats?.avgCompletion)}  Icon={TrendingUp} loading={isLoading} error={isError} />
+      <StatTile label="Total tasks"     value={fmtNum(stats?.totalTasks)}     Icon={CheckSquare} loading={isLoading} error={isError} />
     </div>
   );
 }
@@ -400,7 +400,7 @@ export function MyExpensesCard() {
     .reduce((sum, r) => sum + r.amount, 0);
   return (
     <Card>
-      <CardHeader title="My Expenses" icon={Receipt} iconColor="text-rose-600" href="/expenses" linkLabel="View all" />
+      <CardHeader title="My Expenses" icon={Receipt} href="/expenses" linkLabel="View all" />
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Awaiting approval', value: fmtNum(n('PENDING')),    badge: BADGE.warn },
         { label: 'Approved',          value: fmtNum(n('APPROVED')),   badge: BADGE.good },
@@ -428,7 +428,7 @@ export function OrgPerformanceCard() {
   const leaders = [...(data?.leaderboard ?? [])].sort((a, b) => b.tasksCompleted - a.tasksCompleted).slice(0, 3);
   return (
     <Card>
-      <CardHeader title="Team Performance" icon={Award} iconColor="text-amber-500" href="/performance" linkLabel="View details" />
+      <CardHeader title="Team Performance" icon={Award} href="/performance" linkLabel="View details" />
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Tasks completed', value: fmtNum(t?.tasksCompleted) },
         { label: 'Hours logged',    value: fmtHours(t?.hoursLogged) },
@@ -467,7 +467,7 @@ export function TeamAttendanceCard() {
   const notIn = Math.max(0, rows.length - present - onLeave);
   return (
     <Card>
-      <CardHeader title="Team Attendance" icon={Users} iconColor="text-green-600" href="/attendance" linkLabel="View all" />
+      <CardHeader title="Team Attendance" icon={Users} href="/attendance" linkLabel="View all" />
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Present today', value: fmtNum(present), badge: BADGE.good },
         { label: 'On leave',      value: fmtNum(onLeave), badge: BADGE.warn },
@@ -647,7 +647,7 @@ export function PeopleOpsCard() {
   const upcoming = holidays.filter(h => h.date.slice(0, 10) >= todayUtc()).sort((a, b) => a.date.localeCompare(b.date));
   return (
     <Card>
-      <CardHeader title="People" icon={UserPlus} iconColor="text-teal-600" href="/users" linkLabel="Directory" />
+      <CardHeader title="People" icon={UserPlus} href="/users" linkLabel="Directory" />
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Team members',   value: fmtNum(users.length), badge: BADGE.info },
         { label: 'Holidays ahead', value: fmtNum(upcoming.length), badge: BADGE.warn },
@@ -689,7 +689,7 @@ export function AdminShortcutsCard() {
   if (links.length === 0) return null;
   return (
     <Card>
-      <CardHeader title="Administration" icon={Shield} iconColor="text-brand-600" />
+      <CardHeader title="Administration" icon={Shield} />
       <div className="divide-y divide-gray-100">
         {links.map(({ href, Icon, label, sub }) => (
           <Link key={href} href={href} className="px-5 py-3 flex items-center gap-3 hover:bg-gray-50 transition-colors">
@@ -780,7 +780,7 @@ export function TeamAvailabilityCard() {
   const soon = rows.filter(r => !r.availableNow && r.nextFreeDate).slice(0, 3);
   return (
     <Card>
-      <CardHeader title="Team Availability" icon={Activity} iconColor="text-emerald-600" href="/capacity" linkLabel="Capacity board" />
+      <CardHeader title="Team Availability" icon={Activity} href="/capacity" linkLabel="Capacity board" />
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Available now', value: fmtNum(freeNow.length), badge: BADGE.good },
         { label: 'Freeing soon',  value: fmtNum(rows.filter(r => !r.availableNow && r.nextFreeDate).length), badge: BADGE.info },
