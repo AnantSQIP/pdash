@@ -969,7 +969,13 @@ export class ProjectsService {
         completedAt: true, closedAt: true, clientDeliveryDate: true, workingHours: true, actualHours: true,
         client: { select: { name: true, code: true } },
         members: { where: { isActive: true }, select: { projectRole: true, user: { select: { firstName: true, lastName: true } } } },
-        patents: { select: { patent: { select: { handle: true } } } },
+        // Deleting a patent leaves its link row — a soft delete does not cascade — so without
+        // this filter a removed patent goes on appearing as a live tag, and the handle it shows
+        // resolves to nothing. The patent portal has always filtered them; these did not.
+        patents: {
+          where: { patent: { deletedAt: null } },
+          select: { patent: { select: { handle: true } } },
+        },
       },
     }) : [];
     // Hours actually LOGGED against each project. Without this the ledger shows only the
@@ -1404,7 +1410,13 @@ export class ProjectsService {
           where: { isActive: true },
           select: { projectRole: true, user: { select: { id: true, firstName: true, lastName: true, designation: true } } },
         },
-        patents: { select: { patent: { select: { handle: true } } } },
+        // Deleting a patent leaves its link row — a soft delete does not cascade — so without
+        // this filter a removed patent goes on appearing as a live tag, and the handle it shows
+        // resolves to nothing. The patent portal has always filtered them; these did not.
+        patents: {
+          where: { patent: { deletedAt: null } },
+          select: { patent: { select: { handle: true } } },
+        },
         projectTasks: {
           where: { task: { deletedAt: null } },
           select: {
@@ -1550,6 +1562,7 @@ export class ProjectsService {
         // Linked patents — HANDLES ONLY. clientId is omitted too, so a member without
         // patent.manage can't correlate the hidden client from the network payload (S2).
         patents: {
+          where: { patent: { deletedAt: null } },
           select: { patent: { select: { id: true, handle: true, serial: true } } },
         },
         _count: { select: { projectTasks: { where: { task: { deletedAt: null } } }, members: true } },
@@ -2036,6 +2049,48 @@ export class ProjectsService {
    * client is either inferred from its patents or stated on its own, never both, so the two can
    * never end up disagreeing about who the work is for.
    */
+
+  /**
+   * A PID identifies ONE matter for ONE client. Refuse anything that would make it mean two.
+   *
+   * `Project.code` is the PID, and it is deliberately not unique: a returning client's next piece
+   * of work is a new Project row under the same code — "round 2". Every round is therefore the
+   * same engagement for the same client, and the PID is what the firm quotes on reports and
+   * invoices to identify it.
+   *
+   * `addRound` copies the client and the patent links, so a round starts out correct. Nothing
+   * stopped it being changed AFTERWARDS. Re-tagging round 2 to another client's patent, or naming
+   * a different client directly, silently left one PID spanning two clients — the ledger then
+   * attributed round 1's hours to one and round 2's to another under a single identifier, and two
+   * people quoting the same PID meant different matters.
+   *
+   * Checked against the OTHER live rounds only. A single-round project has nothing to disagree
+   * with, and soft-deleted rounds are excluded: a round that has been removed should not veto a
+   * correction to the one that remains.
+   */
+  private async assertPidClientConsistent(
+    projectId: string,
+    code: string | null,
+    nextClientId: string | null,
+  ): Promise<void> {
+    // No PID, or no client being set, means there is nothing a sibling could contradict.
+    if (!code || !nextClientId) return;
+
+    const siblings = await this.prisma.project.findMany({
+      where: { code, deletedAt: null, id: { not: projectId }, clientId: { not: null } },
+      select: { roundSeq: true, clientId: true, client: { select: { code: true } } },
+      orderBy: { roundSeq: 'asc' },
+    });
+    const conflicting = siblings.find(sib => sib.clientId !== nextClientId);
+    if (!conflicting) return;
+
+    throw new BadRequestException(
+      `${code} already belongs to client ${conflicting.client?.code ?? 'another client'} `
+      + `(round ${conflicting.roundSeq}). Every round under one Project ID is the same client's `
+      + 'work — start a new project instead of re-pointing this one.',
+    );
+  }
+
   async setClient(projectId: string, clientId: string | null) {
     const actorId = getActorId();
     await this.access.assertProjectAccess(actorId, projectId);
@@ -2057,6 +2112,10 @@ export class ProjectsService {
     if (!clientId && !(await this.permissions.check(actorId, 'patent.manage'))) {
       throw new ForbiddenException('You are not permitted to change a project\'s client.');
     }
+    const { code } = await this.prisma.project.findUniqueOrThrow({
+      where: { id: projectId }, select: { code: true },
+    });
+    await this.assertPidClientConsistent(projectId, code, resolved);
     await this.prisma.project.update({ where: { id: projectId }, data: { clientId: resolved } });
     await this.events.emit({
       action: 'project.client_changed', entityType: 'PROJECT', entityId: projectId,
@@ -2119,6 +2178,13 @@ export class ProjectsService {
       throw new BadRequestException('Selected patents belong to different clients — a project maps to one client.');
     }
     const derivedClientId = clientIds[0] ?? null;
+
+    // Same rule as setClient, and it has to be here too: tagging is the OTHER way a project's
+    // client changes, and it is the one people actually use.
+    const { code: pid } = await this.prisma.project.findUniqueOrThrow({
+      where: { id: projectId }, select: { code: true },
+    });
+    await this.assertPidClientConsistent(projectId, pid, derivedClientId);
 
     await this.prisma.$transaction([
       ...(removed.length ? [this.prisma.projectPatent.deleteMany({ where: { projectId, patentId: { in: removed } } })] : []),

@@ -24,10 +24,33 @@
 #
 # The web container proxies /api/* to the api container over the compose network, so only
 # the web port is published. Postgres and the API are not exposed to the host.
+#
+# RESOURCE LIMITS, LOG ROTATION AND HEALTHCHECKS
+#
+# All three services share one VPS with Postgres. Without ceilings a leak or a runaway query in
+# the API starves the database, so a recoverable fault in one process becomes a total outage.
+# The limits below suit a 4 GB box; check `free -h` on the server and override via .env.production
+# if yours differs. They are ceilings, not reservations — nothing is consumed by setting them.
+#
+# Docker's default json-file log driver grows without bound. On a VPS that ends exactly one way:
+# the disk fills, Postgres cannot write, and everything stops. Rotation is three lines per service.
+#
+# `restart: unless-stopped` restarts a CRASHED container and does nothing for a HUNG one. A
+# healthcheck is what turns "the process is alive" into "the service is answering" — the precise
+# failure already seen twice with the tunnel, where the process ran and the service was dead.
+# node is used rather than curl or wget because node:20-slim ships neither.
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Postgres gets the largest share: it is the one process whose failure loses data rather than
+    # merely serving an error.
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # POSTGRES_USER / _PASSWORD / _DB come from here. Compose refuses to start if the file is
     # absent, which is the right answer for a missing production environment.
     env_file:
@@ -49,6 +72,20 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
+    mem_limit: ${API_MEM_LIMIT:-768m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Answering, not merely running. start_period covers boot: the API runs `prisma migrate
+    # deploy` before it listens, and a slow migration must not be read as a failed service.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4000/api/v1/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,10 +114,23 @@ services:
         # Baked into the Next standalone build so /api/* proxies to the api service (not localhost).
         API_ORIGIN: http://api:4000
     restart: unless-stopped
+    mem_limit: ${WEB_MEM_LIMIT:-512m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # /login is unauthenticated and server-rendered, so a 200 means Next is actually serving
+    # pages rather than just holding the port open.
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/login',r=>process.exit(r.statusCode<400?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     depends_on:
-      - api
-    environment:
-      NODE_ENV: production
+      api:
+        condition: service_healthy
       # Server-side proxy target — the api service on the compose network.
       API_ORIGIN: http://api:4000
     ports:

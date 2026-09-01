@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Settings2,
   Users,
@@ -230,13 +230,42 @@ function GeneralTab() {
   const [showSaved, setShowSaved] = useState(false);
   const [saveErr, setSaveErr] = useState('');
   const [saving, setSaving] = useState(false);
+  const [logo, setLogo] = useState<string | null>(null);
+  const [logoErr, setLogoErr] = useState('');
+  const logoInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setLogo(org?.logo ?? null); }, [org?.logo]);
+
+  /**
+   * Read the chosen file straight into a data URL.
+   *
+   * The size check happens BEFORE the read, not after: a 20 MB file would otherwise be loaded
+   * into memory and base64-expanded by a third before anything told the user it was too big.
+   * 600 KB of file is roughly 800 KB encoded, which sits under the API's 900 KB cap.
+   */
+  function onPickLogo(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // so picking the same file twice still fires onChange
+    if (!file) return;
+    setLogoErr('');
+    if (!file.type.startsWith('image/')) { setLogoErr('That is not an image file.'); return; }
+    if (file.size > 600_000) { setLogoErr('That image is too large — please use one under 600 KB.'); return; }
+    const reader = new FileReader();
+    reader.onerror = () => setLogoErr('Could not read that file.');
+    reader.onload = () => setLogo(typeof reader.result === 'string' ? reader.result : null);
+    reader.readAsDataURL(file);
+  }
 
   async function handleSave() {
     if (!org || !orgName.trim() || saving) return;
     setSaving(true); setSaveErr('');
     try {
       const brandColor = COLOR_SWATCHES.find(s => s.id === selectedColor)?.hex ?? '#3d8de2';
-      await api.orgs.update(org.id, { name: orgName.trim(), timezone: orgTimezone, brandColor });
+      // '' clears the logo server-side; undefined would leave the stored one untouched, so a
+      // removal has to travel as an explicit empty string.
+      await api.orgs.update(org.id, {
+        name: orgName.trim(), timezone: orgTimezone, brandColor, logo: logo ?? '',
+      });
       await qc.invalidateQueries({ queryKey: ['orgs'] }); // reflect changes app-wide
       setShowSaved(true);
       setTimeout(() => setShowSaved(false), 2000);
@@ -322,13 +351,37 @@ function GeneralTab() {
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Logo</label>
-          <div
-            onClick={() => alert('Upload coming soon')}
-            className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center cursor-pointer hover:border-gray-400 transition-colors"
-          >
-            <ImageIcon className="w-6 h-6 text-gray-400" />
-            <span className="text-xs text-gray-400 mt-1">Upload</span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              ref={logoInput} type="file" accept="image/*" onChange={onPickLogo} className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => logoInput.current?.click()}
+              title={logo ? 'Choose a different image' : 'Choose an image'}
+              className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center overflow-hidden hover:border-gray-400 transition-colors bg-white"
+            >
+              {logo
+                // eslint-disable-next-line @next/next/no-img-element
+                ? <img src={logo} alt="Organisation logo" className="w-full h-full object-contain p-1" />
+                : <><ImageIcon className="w-6 h-6 text-gray-400" />
+                    <span className="text-xs text-gray-400 mt-1">Upload</span></>}
+            </button>
+            <div className="text-xs text-gray-500">
+              <p>PNG or SVG, under 600 KB.</p>
+              <p className="mt-0.5">Shown beside the organisation name.</p>
+              {logo && (
+                <button
+                  type="button" onClick={() => { setLogo(null); setLogoErr(''); }}
+                  className="mt-1 font-medium text-red-600 hover:text-red-700"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
+          {logoErr && <p className="text-xs text-red-600 mt-1.5">{logoErr}</p>}
+          <p className="text-[11px] text-gray-400 mt-1.5">Takes effect when you press Save Changes.</p>
         </div>
 
         <div>
@@ -349,18 +402,6 @@ function GeneralTab() {
         </div>
       </div>
 
-      {/* Danger Zone */}
-      <div className="bg-white rounded-xl border border-red-200 p-4 sm:p-6">
-        <h2 className="text-base font-semibold text-red-700 mb-4">Danger Zone</h2>
-        <button
-          onClick={() => {
-            if (window.confirm('Archive this org?')) alert('Archive coming soon');
-          }}
-          className="border border-red-300 text-red-600 px-4 py-2 rounded-lg hover:bg-red-50 text-sm"
-        >
-          Archive Organization
-        </button>
-      </div>
     </div>
   );
 }

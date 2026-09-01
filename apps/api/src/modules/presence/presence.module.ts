@@ -9,9 +9,17 @@ const AWAY_MS = 10 * 60_000;    // seen within 10 min → away; older → offlin
 // Availability values a user may set manually. OFFLINE = "appear offline".
 const MANUAL = new Set(['AVAILABLE', 'BUSY', 'DND', 'BRB', 'OFFLINE']);
 
-function utcToday(): Date {
-  const n = new Date();
-  return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+/**
+ * Today, as the IST calendar day — the firm's timezone, not the server's.
+ *
+ * Used to ask "is this person on leave or working from home right now", against date-only columns
+ * stored at UTC midnight. Computed in UTC it returned yesterday between 00:00 and 05:30 IST, so on
+ * the first morning of someone's leave their presence did not reflect it.
+ */
+const IST_OFFSET_MS = 5.5 * 3_600_000;
+function istToday(): Date {
+  const ist = new Date(Date.now() + IST_OFFSET_MS);
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()));
 }
 
 type PresenceRow = { status: string | null; statusMessage: string | null; statusExpiresAt: Date | null; lastSeenAt: Date } | null;
@@ -88,7 +96,7 @@ export class PresenceService {
   }
 
   async myPresence(userId: string) {
-    const today = utcToday();
+    const today = istToday();
     const [p, leave, wfh] = await Promise.all([
       this.prisma.presence.findUnique({ where: { userId } }),
       this.prisma.leaveRequest.findFirst({ where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { id: true } }),
@@ -112,7 +120,7 @@ export class PresenceService {
     });
     const ids = users.map(u => u.id);
     if (!ids.length) return [];
-    const today = utcToday();
+    const today = istToday();
     const [pres, leaves, wfhs] = await Promise.all([
       this.prisma.presence.findMany({ where: { userId: { in: ids } } }),
       this.prisma.leaveRequest.findMany({ where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { userId: true } }),

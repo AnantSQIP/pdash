@@ -8,11 +8,24 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { serialize, leaveKeyFor, wfhKeyFor } from '../../common/db/serialize';
+import { entitlementsFor } from './leave-entitlement';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 import { PermissionService } from '../permissions/permission.service';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
+/**
+ * The UTC calendar day a moment falls on.
+ *
+ * Correct for NORMALISING a value already stored in a date-only column — those are written as UTC
+ * midnight, so re-normalising them is a no-op that keeps comparisons total.
+ *
+ * WRONG for "what day is it now". The org runs on IST (UTC+5:30), so between 00:00 and 05:30 IST
+ * this returns YESTERDAY. Seven call sites asked it that question: the Home punch card fetched the
+ * wrong row, marking or regularising the current day was refused as "in the future", and comp-off
+ * for today was rejected as not yet worked — every night, for five and a half hours. Use istDay()
+ * for now; use this only on a date you read out of the database.
+ */
 function utcDay(d: Date): Date { return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
 function parseDay(s: string): Date { return new Date(`${s}T00:00:00.000Z`); }
 function round(n: number, p = 1): number { const f = 10 ** p; return Math.round((n ?? 0) * f) / f; }
@@ -79,9 +92,22 @@ const MAX_NAME = 160;
 const COMPOFF_MAX_AGE_DAYS = 90;
 
 const WORKING = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE'];
-// Escalation owner who is copied on attendance regularisations and comp-off claims
-// (in addition to HR / managers). Matched by login account.
-const ESCALATION_EMAIL = 'yash@squarkip.com';
+/**
+ * Escalation owner copied on attendance regularisations and comp-off claims, in addition to HR
+ * and anyone holding user.manage_access.
+ *
+ * Configurable, because it was a string literal in this file: changing who the firm escalates to
+ * meant editing source and shipping a release, and the day that person left the constant would
+ * quietly match nobody. Set ATTENDANCE_ESCALATION_EMAIL to change it; set it empty to drop the
+ * extra recipient entirely.
+ *
+ * Worth being precise about the failure mode, because it is better than it looks: this address is
+ * ADDITIVE. HR is matched by role and admins by permission, so if it resolves to nobody the
+ * requests still reach everyone who must act on them — one named person simply stops being copied.
+ * That is a degradation, not a silent drop.
+ */
+const ESCALATION_EMAIL = (process.env.ATTENDANCE_ESCALATION_EMAIL ?? 'yash@squarkip.com')
+  .trim().toLowerCase();
 
 // A day is a full "present" only if at least this many hours were worked; below it,
 // the day is a HALF_DAY. Punch-in → immediate punch-out (~0h) therefore is not a full day.
@@ -167,7 +193,9 @@ export class AttendanceService {
           { userRoles: { some: { role: { name: 'HR' } } } },
           // Admins / Super Admins (user.manage_access) are always notified too.
           { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
-          { email: ESCALATION_EMAIL },
+          // Skipped entirely when unset — an empty string here would be a filter that matches
+          // nothing useful and invites a "why is this in the OR" question later.
+          ...(ESCALATION_EMAIL ? [{ email: ESCALATION_EMAIL }] : []),
         ],
       },
       select: { id: true },
@@ -176,7 +204,7 @@ export class AttendanceService {
   }
 
   async getToday(userId: string) {
-    const today = utcDay(new Date());
+    const today = istDay(new Date());
     return this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
   }
 
@@ -263,7 +291,7 @@ export class AttendanceService {
   /** Admin/manual mark for a specific user+date. */
   async mark(data: { userId: string; date: string; status: string; note?: string }) {
     const date = parseDayStrict(data.date, 'date');
-    if (date > utcDay(new Date())) throw new BadRequestException('Cannot mark attendance for a future date.');
+    if (date > istDay(new Date())) throw new BadRequestException('Cannot mark attendance for a future date.');
     if (!MARK_STATUSES.includes(data.status)) {
       throw new BadRequestException(`status must be one of: ${MARK_STATUSES.join(', ')}`);
     }
@@ -309,7 +337,7 @@ export class AttendanceService {
     const requestType = data.requestType ?? 'OTHER';
     if (!REG_TYPES.includes(requestType)) throw new BadRequestException(`requestType must be one of: ${REG_TYPES.join(', ')}`);
     const date = parseDayStrict(data.date, 'date');
-    if (date > utcDay(new Date())) throw new BadRequestException('Cannot regularise a future date.');
+    if (date > istDay(new Date())) throw new BadRequestException('Cannot regularise a future date.');
     const checkIn = parseInstant(data.checkIn);
     const checkOut = parseInstant(data.checkOut);
     // Times MUST fall on the day being regularised. Otherwise an unrelated-date check-out
@@ -450,7 +478,7 @@ export class AttendanceService {
     const start = parseDayStrict(data.startDate, 'startDate');
     const end = parseDayStrict(data.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
-    if (end < utcDay(new Date())) throw new BadRequestException('Cannot request work-from-home for dates in the past.');
+    if (end < istDay(new Date())) throw new BadRequestException('Cannot request work-from-home for dates in the past.');
     // A runaway range would silently turn everything WFH — long arrangements go through HR.
     if ((end.getTime() - start.getTime()) / 86_400_000 > 31) {
       throw new BadRequestException('WFH requests are limited to 31 days — please arrange longer periods with HR directly.');
@@ -720,7 +748,7 @@ export class AttendanceService {
     });
     const days: string[] = [];
     for (const d = new Date(fromD); d <= toD; d.setUTCDate(d.getUTCDate() + 1)) days.push(dayKey(d));
-    const todayKey = dayKey(utcDay(new Date()));
+    const todayKey = dayKey(istDay(new Date()));
 
     const rows = users.map(u => {
       let present = 0, absent = 0, onLeave = 0, holiday = 0, hours = 0, half = 0;
@@ -757,7 +785,7 @@ export class AttendanceService {
 
   /** Every member's punch-in/out LOCATION for a given day (default today) — HR/Admin only. */
   async orgPunchLocations(organizationId: string, dateStr?: string) {
-    const day = dateStr ? parseDay(dateStr) : utcDay(new Date());
+    const day = dateStr ? parseDay(dateStr) : istDay(new Date());
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true, designation: true, office: true },
@@ -956,7 +984,7 @@ export class LeaveService {
     const end = parseDayStrict(dto.endDate, 'endDate');
     if (end < start) throw new BadRequestException('endDate must be on or after startDate');
     // M4: reject leave that is entirely in the past (approval would retroactively debit balance).
-    if (end < utcDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
+    if (end < istDay(new Date())) throw new BadRequestException('Cannot request leave for dates in the past.');
     if (dto.reason && dto.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
     // A runaway range would loop the business-day counter unbounded and debit an absurd
     // balance — a single leave never spans more than a year.
@@ -1052,10 +1080,19 @@ export class LeaveService {
         if (available < numDays) {
           throw new BadRequestException(`Not enough comp-off credits — you have ${available} day${available === 1 ? '' : 's'} available.`);
         }
-      } else if (type.annualQuota > 0) {
+      } else if (type.annualQuota > 0 || type.accrualMode === 'MONTHLY') {
         // Enforce the annual quota for regular leave types (CL/SL/EL …). Count both pending
-        // and approved days this year so stacked requests can't collectively exceed it.
-        const year = new Date().getUTCFullYear();
+        // and approved days that year so stacked requests can't collectively exceed it.
+        //
+        // The year comes from the LEAVE, not from today. Taken from `new Date()` it asked the
+        // wrong bucket for anything booked across a year boundary: somebody who had spent their
+        // 2026 allowance could not book a single day in January 2027, because the January request
+        // was measured against 2026's usage. Every December — exactly when people book the new
+        // year's holidays — that refused the whole firm.
+        //
+        // A leave that straddles 31 December is attributed to the year it STARTS in, which is the
+        // same rule the aggregate below groups by, so the two cannot disagree.
+        const year = start.getUTCFullYear();
         const yStart = new Date(Date.UTC(year, 0, 1));
         const yEnd = new Date(Date.UTC(year + 1, 0, 1));
         const usedAgg = await tx.leaveRequest.aggregate({
@@ -1063,9 +1100,23 @@ export class LeaveService {
           _sum: { numDays: true },
         });
         const used = usedAgg._sum.numDays ?? 0;
-        if (used + numDays > type.annualQuota) {
-          const remaining = Math.max(0, type.annualQuota - used);
-          throw new BadRequestException(`This exceeds your ${type.name} quota — ${remaining} day${remaining === 1 ? '' : 's'} remaining this year.`);
+        // The SAME calculation the balance card renders. Both used to read annualQuota directly,
+        // which was fine while entitlement was a flat number and would have drifted the moment it
+        // stopped being one — a card promising days the save then refuses is the worst version of
+        // this bug, because the person has no way to tell which half is wrong.
+        const ent = await entitlementsFor(this.prisma, userId, organizationId ?? '', year);
+        const mine = ent.get(dto.leaveType);
+        const entitled = mine ? mine.entitled : type.annualQuota;
+        if (used + numDays > entitled) {
+          const remaining = Math.max(0, entitled - used);
+          const because = mine?.basis === 'monthly'
+            ? ` (earned at ${mine.policy.monthlyRate}/month over ${mine.monthsCounted} month${mine.monthsCounted === 1 ? '' : 's'})`
+            : mine?.basis === 'annual-prorated'
+              ? ` (pro-rated to ${mine.monthsCounted} month${mine.monthsCounted === 1 ? '' : 's'} of service)`
+              : '';
+          throw new BadRequestException(
+            `This exceeds your ${type.name} entitlement of ${entitled} day${entitled === 1 ? '' : 's'}${because} — ${remaining} remaining.`,
+          );
         }
       }
       return tx.leaveRequest.create({
@@ -1299,13 +1350,16 @@ export class LeaveService {
   async balances(userId: string) {
     const organizationId = await this.orgOf(userId);
     if (!organizationId) return [];
-    const year = new Date().getUTCFullYear();
+    // The IST year, not the UTC one — for the first five and a half hours of 1 January, UTC is
+    // still 31 December, so the card would open the new year showing the old year's balance.
+    const year = istDay(new Date()).getUTCFullYear();
     const start = new Date(Date.UTC(year, 0, 1));
     const end = new Date(Date.UTC(year + 1, 0, 1));
     // Comp Off was only created the first time a claim was APPROVED, so until then the type was
     // invisible — people couldn't see a zero balance, or find "Comp-off" in the leave dropdown.
     await this.ensureCompOffType(organizationId);
     const types = await this.prisma.leaveType.findMany({ where: { organizationId }, orderBy: { name: 'asc' } });
+    const ent = await entitlementsFor(this.prisma, userId, organizationId, year);
     // Approved and pending are counted SEPARATELY but both reduce what is left to book. The
     // card used to show approved days only, while create() refused anything over approved +
     // pending — so it could read "8 of 8 remaining" and still reject the next request.
@@ -1335,9 +1389,16 @@ export class LeaveService {
       }
       const used = usedByCode.get(t.code) ?? 0;
       const pending = pendingByCode.get(t.code) ?? 0;
+      const e = ent.get(t.code);
+      const quota = e ? e.entitled : t.annualQuota;
       return {
-        code: t.code, name: t.name, quota: t.annualQuota, used, pending,
-        remaining: Math.max(0, t.annualQuota - used - pending), colorHex: t.colorHex,
+        code: t.code, name: t.name, quota, used, pending,
+        remaining: Math.max(0, quota - used - pending), colorHex: t.colorHex,
+        // Shown so the card can explain a number that is no longer simply "the annual quota" —
+        // carried-forward days and a part-year entitlement both make it something a person would
+        // otherwise have to ask about.
+        accrued: e?.accrued, opening: e?.opening, basis: e?.basis,
+        monthsCounted: e?.monthsCounted, assumedFullYear: e?.assumedFullYear,
       };
     }));
   }
@@ -1367,7 +1428,9 @@ export class LeaveService {
         OR: [
           { userRoles: { some: { role: { name: { in: ['HR', 'Manager'] } } } } },
           { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
-          { email: ESCALATION_EMAIL },
+          // Skipped entirely when unset — an empty string here would be a filter that matches
+          // nothing useful and invites a "why is this in the OR" question later.
+          ...(ESCALATION_EMAIL ? [{ email: ESCALATION_EMAIL }] : []),
         ],
       },
       select: { id: true },
@@ -1423,8 +1486,8 @@ export class LeaveService {
       throw new BadRequestException('Hours worked must be between 0 and 24.');
     }
     const workDate = parseDayStrict(data.workDate, 'workDate');
-    if (workDate > utcDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
-    if ((utcDay(new Date()).getTime() - workDate.getTime()) / 86_400_000 > COMPOFF_MAX_AGE_DAYS) {
+    if (workDate > istDay(new Date())) throw new BadRequestException('You can only claim comp-off for a day you have already worked.');
+    if ((istDay(new Date()).getTime() - workDate.getTime()) / 86_400_000 > COMPOFF_MAX_AGE_DAYS) {
       throw new BadRequestException(`Comp-off must be claimed within ${COMPOFF_MAX_AGE_DAYS} days of the day worked.`);
     }
     const organizationId = await this.orgOf(userId);

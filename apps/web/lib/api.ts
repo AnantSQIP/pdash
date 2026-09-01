@@ -151,7 +151,12 @@ async function blobReq(
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type OrgSummary = { id: string; name: string; code: string; status: string; timezone?: string; brandColor?: string };
+export type OrgSummary = {
+  id: string; name: string; code: string; status: string;
+  timezone?: string; brandColor?: string;
+  /** The firm's logo as an image data URL. Null/absent when none has been set. */
+  logo?: string | null;
+};
 
 export type UserSummary = {
   id: string; firstName: string; lastName: string; email: string;
@@ -603,6 +608,46 @@ export type LedgerProject = {
   billableHours: number; nonBillableHours: number; totalHours: number;
 };
 export type LedgerDetail = LedgerRow & { patentCount: number; projects: LedgerProject[] };
+
+// ─── Employment lifecycle ───────────────────────────────────────────────────
+export type ProbationStatus = 'confirmed' | 'on-probation' | 'due' | 'overdue' | 'unknown';
+export type LifecyclePerson = {
+  id: string; firstName: string; lastName: string; email: string;
+  designation?: string | null; profilePhoto?: string | null; office?: string | null; status: string;
+  joiningDate?: string | null; probationMonths?: number | null;
+  /** Derived from joiningDate + probationMonths — never stored, so it cannot go stale. */
+  probationEndsOn?: string | null;
+  probationStatus: ProbationStatus;
+  daysToProbationEnd?: number | null;
+  confirmedAt?: string | null; confirmedBy?: string | null; confirmationNote?: string | null;
+  resignationDate?: string | null; noticeDays?: number | null; lastWorkingDay?: string | null;
+  exitReason?: string | null; exitCompletedAt?: string | null;
+  onNotice: boolean; daysToLastWorkingDay?: number | null;
+};
+export type LifecycleBoard = {
+  probation: LifecyclePerson[];
+  leaving: LifecyclePerson[];
+  /** Nothing tenure-based works without a joining date, so the gap is surfaced. */
+  missingJoiningDate: { id: string; firstName: string; lastName: string; designation?: string | null }[];
+  counts: {
+    total: number; confirmed: number; onProbation: number; due: number;
+    overdue: number; onNotice: number; noJoiningDate: number;
+  };
+};
+export type Handover = {
+  person: LifecyclePerson;
+  summary: {
+    items: { key: string; label: string; count: number; blocking: boolean }[];
+    clearToRelease: boolean; blockingCount: number;
+  };
+  openTasks: { id: string; title: string; dueDate?: string | null; priority?: string | null;
+               status?: string | null; project?: { id: string; code: string | null; title: string } | null }[];
+  projectsManaged: { id: string; code: string | null; title: string; projectPhase: string; dueDate?: string | null }[];
+  projectsMember: { id: string; code: string | null; title: string; projectPhase: string }[];
+  clientsOwned: { id: string; code: string; name?: string | null }[];
+  unsubmittedTime: { id: string; date: string; hoursLogged: number; notes?: string | null }[];
+  pendingLeave: { id: string; leaveType: string; startDate: string; endDate: string; numDays: number }[];
+};
 
 // ─── Feedback ────────────────────────────────────────────────────────────────
 export type FeedbackKind = 'PRAISE' | 'CONCERN' | 'OBSERVATION';
@@ -1263,7 +1308,8 @@ export const api = {
 
   orgs: {
     list: () => req<OrgSummary[]>('/organizations'),
-    update: (id: string, data: { name?: string; timezone?: string; brandColor?: string }) =>
+    // An empty string for `logo` REMOVES it; omitting the key leaves it alone.
+    update: (id: string, data: { name?: string; timezone?: string; brandColor?: string; logo?: string }) =>
       req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   },
 
@@ -1567,6 +1613,24 @@ export const api = {
      */
     findByNumber: (q: string) =>
       req<PatentNumberLookup>(`/patents/find-by-number?q=${encodeURIComponent(q)}`),
+  },
+
+  /**
+   * Employment lifecycle — probation, confirmation and leaving.
+   * Gated on user.update, the same permission the rest of people-operations sits behind.
+   */
+  lifecycle: {
+    board: (all?: boolean) => req<LifecycleBoard>(`/lifecycle/board${all ? '?all=true' : ''}`),
+    person: (userId: string) => req<LifecyclePerson>(`/lifecycle/${userId}`),
+    setProbation: (userId: string, data: { joiningDate?: string; probationMonths?: number }) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/probation`, { method: 'POST', body: JSON.stringify(data) }),
+    confirm: (userId: string, data: { note?: string; confirmedAt?: string }) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/confirm`, { method: 'POST', body: JSON.stringify(data) }),
+    resign: (userId: string, data: { resignationDate: string; noticeDays?: number; lastWorkingDay?: string; reason?: string }) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/resign`, { method: 'POST', body: JSON.stringify(data) }),
+    handover: (userId: string) => req<Handover>(`/lifecycle/${userId}/handover`),
+    completeExit: (userId: string) =>
+      req<LifecyclePerson>(`/lifecycle/${userId}/exit-complete`, { method: 'POST' }),
   },
 
   clientLedger: {

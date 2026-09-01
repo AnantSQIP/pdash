@@ -29,6 +29,9 @@ model Organization {
   status               String   @default("ACTIVE")
   timezone             String   @default("UTC") // M25: persisted Settings → General
   brandColor           String   @default("#3d8de2")
+  /// The firm's logo, as an image data URL. Same storage as User.profilePhoto: small enough to
+  /// sit in the row, and it travels with the org record rather than needing a file service.
+  logo                 String?
   // Hour (IST, 0–23) at which the daily admin digest is sent. Admin-editable. Default 10pm.
   digestHourIst        Int      @default(22)
   // Step-up "big change" passcode — argon2id hash of the org-wide passcode required
@@ -96,6 +99,37 @@ model User {
   // Null until the user has filled in their joining details. AppShell blocks the app on
   // first sign-in until this is set (after the forced password change).
   profileCompletedAt       DateTime?
+
+  // ── Employment lifecycle ──────────────────────────────────────────────────────
+  //
+  // A quarter of this firm is on an internship, and interns convert. None of that was tracked:
+  // joiningDate existed and was empty for all 28 people, so nothing could be derived from tenure
+  // — not probation, not pro-rated leave, not notice.
+  //
+  // Probation END is deliberately DERIVED (joiningDate + probationMonths) rather than stored.
+  // A stored end date is a second copy of the same fact that goes stale the moment a joining
+  // date is corrected, and joining dates get corrected.
+  /// Months of probation from the joining date. Null = the org default applies.
+  probationMonths          Int?
+  /// Set when somebody confirms this person. Null while still on probation.
+  confirmedAt              DateTime?
+  /// Who confirmed them — a record, not an access grant.
+  confirmedBy              String?
+  confirmationNote         String?
+
+  // ── Exit ──────────────────────────────────────────────────────────────────────
+  //
+  // Withdrawing ACCESS already works correctly: setting status INACTIVE kills a held token on the
+  // very next request. What was missing is the part only this system can answer — what the person
+  // was still holding on the day they left.
+  /// The day they resigned, not the day they leave.
+  resignationDate          DateTime?
+  /// Contractual notice in days, so the last working day can be proposed rather than typed.
+  noticeDays               Int?
+  lastWorkingDay           DateTime?
+  exitReason               String?
+  /// Set when the handover has been reviewed and signed off — not when the person leaves.
+  exitCompletedAt          DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
   deletedAt                DateTime?
@@ -109,6 +143,7 @@ model User {
   departmentMemberships     DepartmentMember[]
   departmentsHeaded         Department[]               @relation("DepartmentHead")
   managedClients   Client[] @relation("ClientAccountManager")
+  leaveOpeningBalances LeaveOpeningBalance[]
   feedbackAbout             Feedback[]                 @relation("FeedbackAbout")
   feedbackWritten           Feedback[]                 @relation("FeedbackAuthor")
   teamMemberships           TeamMember[]
@@ -1535,13 +1570,60 @@ model LeaveType {
   code           String
   annualQuota    Int      @default(12)
   colorHex       String   @default("#3d8de2")
+
+  /// How entitlement is earned.
+  ///   ANNUAL  — the whole allowance exists from 1 January (today's behaviour, and the default)
+  ///   MONTHLY — earned at `monthlyRate` per completed month of service
+  /// Left configurable rather than hard-coded because the firm's written policy ("1.5 CL,
+  /// 0.5 SL") and the quotas actually stored here (12 and 8) describe different schemes, and
+  /// guessing at somebody's entitlement is not a decision code should make on its own.
+  accrualMode    String   @default("ANNUAL")
+  /// Days earned per completed month when accrualMode is MONTHLY. e.g. 1.5
+  monthlyRate    Float?
+  /// PRO-RATE for a mid-year joiner. Without this a person joining in October receives a full
+  /// year's allowance for three months of service — which, with a quarter of the firm on
+  /// internships, is the difference that matters most.
+  prorateOnJoin  Boolean  @default(false)
+  /// Does an unused balance survive 31 December?
+  carryForward   Boolean  @default(false)
+  /// The most that may be carried, in days. Null = uncapped.
+  carryForwardCap Int?
+
   createdAt      DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  openingBalances LeaveOpeningBalance[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
   @@map("leave_type")
+}
+
+/// What a person carried into a leave year, and where it came from.
+///
+/// Stored rather than derived. Deriving it would mean recomputing every prior year on every
+/// balance read, and — worse — a change to policy or quota would silently rewrite history that
+/// people have already been told. A row here is a statement: on this date, this many days were
+/// carried, by this rule, and here is who ran it.
+model LeaveOpeningBalance {
+  id          String   @id @default(cuid())
+  userId      String
+  leaveTypeId String
+  /// The year the balance is available IN (carried out of year-1).
+  year        Int
+  days        Float
+  /// How it arose — 'CARRY_FORWARD' from a year-end run, or 'ADJUSTMENT' set by HR.
+  source      String   @default("CARRY_FORWARD")
+  note        String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, leaveTypeId, year])
+  @@index([year])
+  @@map("leave_opening_balance")
 }
 
 // A day the FIRM IS CLOSED. Everything in this table is a non-working day for everyone — twelve

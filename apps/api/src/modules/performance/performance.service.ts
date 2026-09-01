@@ -238,7 +238,9 @@ export class PerformanceService {
 
   /** Last `days` daily points — from UserMetricDaily, falling back to live timesheet/event scans. */
   async getTrend(userId: string, days: number) {
-    const since = utcDay(new Date());
+    // Anchored on the IST calendar day. In UTC the window slid a day back between 00:00 and
+    // 05:30 IST — the trend dropped today and carried an extra past day instead.
+    const since = new Date(`${istDayKey(new Date())}T00:00:00.000Z`);
     since.setUTCDate(since.getUTCDate() - (days - 1));
 
     const snapshots = await this.prisma.userMetricDaily.findMany({
