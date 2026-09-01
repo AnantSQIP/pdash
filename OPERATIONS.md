@@ -13,12 +13,15 @@ destructive migration has already destroyed 83 timesheet rows on this system onc
 
 ```bash
 cd ~/pdash
-chmod +x scripts/backup.sh scripts/restore-drill.sh
 mkdir -p /var/backups/pdash
 
 # run it by hand first, so a failure surfaces now rather than at 2am
 ./scripts/backup.sh
 ```
+
+Do not `chmod +x` these scripts — the executable bit is committed. Setting it locally registers as
+an uncommitted change to a tracked file, and the next `git pull` that touches the script aborts
+rather than merging, leaving the old version running while the pull output scrolls past.
 
 Then schedule it:
 
