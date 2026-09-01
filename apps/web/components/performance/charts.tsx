@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { RiArrowUpSLine, RiArrowDownSLine, RiArrowRightSLine, RiInformationLine } from '@remixicon/react';
 import { C, DONUT_COLORS, rateColor, round1, toCSV, downloadCSV, METRIC_GLOSSARY } from './tokens';
+import { AXIS, TOOLTIP } from '@/lib/chart-theme';
 
 /** Compact colour key (legend) for a chart — a row of swatch+label pairs. */
 export function ColorKey({ items }: { items: { color: string; label: string }[] }) {
@@ -167,7 +168,7 @@ export function GaugeCard({ value, label, color, size = 112 }: { value: number; 
         <ResponsiveContainer width="100%" height="100%">
           <RadialBarChart innerRadius="72%" outerRadius="100%" data={[{ v }]} startAngle={90} endAngle={-270}>
             <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
-            <RadialBar dataKey="v" cornerRadius={20} fill={color ?? rateColor(v)} background={{ fill: '#f1f5f9' }} />
+            <RadialBar dataKey="v" cornerRadius={20} fill={color ?? rateColor(v)} background={{ fill: AXIS.empty }} />
           </RadialBarChart>
         </ResponsiveContainer>
         <div className="absolute inset-0 flex items-center justify-center">
@@ -242,7 +243,7 @@ function InteractiveDonut({ data, centerValue, centerLabel, colors = DONUT_COLOR
               isAnimationActive={false}
             >
               {(has ? items : [{ value: 1 }]).map((d: any, i) => (
-                <Cell key={i} fill={has ? (d.color ?? colors[i % colors.length]) : '#e5e7eb'} />
+                <Cell key={i} fill={has ? (d.color ?? colors[i % colors.length]) : AXIS.empty} />
               ))}
             </Pie>
           </PieChart>
@@ -288,10 +289,10 @@ export function LineCard({ data, xKey, series, height = 220, xFmt }: {
   return (
     <ResponsiveContainer width="100%" height={height}>
       <LineChart data={data} margin={{ left: -16, right: 8, top: 4, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+        <CartesianGrid stroke={AXIS.grid} vertical={false} />
         <XAxis dataKey={xKey} tickFormatter={xFmt} tick={{ fontSize: 10, fill: C.slate }} />
         <YAxis tick={{ fontSize: 10, fill: C.slate }} allowDecimals={false} />
-        <Tooltip />
+        <Tooltip contentStyle={TOOLTIP.contentStyle} labelStyle={TOOLTIP.labelStyle} itemStyle={TOOLTIP.itemStyle} />
         {series.length > 1 && <Legend iconType="plainline" wrapperStyle={{ fontSize: 11 }} />}
         {series.map(s => <Line key={s.key} type="monotone" dataKey={s.key} name={s.name} stroke={s.color} strokeWidth={2} dot={false} />)}
       </LineChart>
@@ -316,10 +317,10 @@ export function AreaCard({ data, xKey, series, stacked, height = 220, xFmt }: {
             </linearGradient>
           ))}
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+        <CartesianGrid stroke={AXIS.grid} vertical={false} />
         <XAxis dataKey={xKey} tickFormatter={xFmt} tick={{ fontSize: 10, fill: C.slate }} />
         <YAxis tick={{ fontSize: 10, fill: C.slate }} allowDecimals={false} />
-        <Tooltip />
+        <Tooltip contentStyle={TOOLTIP.contentStyle} labelStyle={TOOLTIP.labelStyle} itemStyle={TOOLTIP.itemStyle} />
         {series.length > 1 && <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />}
         {series.map((s, i) => (
           <Area key={s.key} type="monotone" dataKey={s.key} name={s.name}
@@ -343,16 +344,16 @@ export function BarCard({ data, categoryKey, valueKey, color = C.brand, height, 
   return (
     <ResponsiveContainer width="100%" height={h}>
       <BarChart data={data} layout="vertical" margin={{ left: 8, right: showValues ? 32 : 16, top: 4, bottom: 4 }} barCategoryGap={12}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
+        <CartesianGrid stroke={AXIS.grid} horizontal={false} />
         <XAxis type="number" tick={{ fontSize: 10, fill: C.slate }} allowDecimals={false} />
-        <YAxis type="category" dataKey={categoryKey} tick={{ fontSize: 11, fill: '#334155' }} width={labelWidth} tickFormatter={truncTick} interval={0} />
-        <Tooltip cursor={{ fill: '#f8fafc' }} />
+        <YAxis type="category" dataKey={categoryKey} tick={{ fontSize: AXIS.tickSize, fill: AXIS.tick }} width={labelWidth} tickFormatter={truncTick} interval={0} />
+        <Tooltip cursor={{ fill: AXIS.cursor }} contentStyle={TOOLTIP.contentStyle} labelStyle={TOOLTIP.labelStyle} itemStyle={TOOLTIP.itemStyle} />
         <Bar dataKey={valueKey} radius={[0, 4, 4, 0]} barSize={barSize} cursor={onBarClick ? 'pointer' : undefined}
           onClick={onBarClick ? (d: any) => onBarClick(d?.payload ?? d) : undefined}>
           {data.map((row, i) => (
             <Cell key={i} fill={highlightKey && row[highlightKey] === highlightValue ? C.accent : (row.color ?? color)} />
           ))}
-          {showValues && <LabelList dataKey={valueKey} position="right" style={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} />}
+          {showValues && <LabelList dataKey={valueKey} position="right" style={{ fontSize: AXIS.tickSize, fill: AXIS.tick, fontWeight: 600 }} />}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -368,15 +369,15 @@ export function ColumnCard({ data, categoryKey, series, stacked, height = 220, x
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ left: -16, right: 8, top: showValues ? 18 : 4, bottom: 0 }} barCategoryGap={data.length > 6 ? '18%' : '30%'}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+        <CartesianGrid stroke={AXIS.grid} vertical={false} />
         <XAxis dataKey={categoryKey} tickFormatter={xFmt} tick={{ fontSize: 10, fill: C.slate }} interval={0} />
         <YAxis tick={{ fontSize: 10, fill: C.slate }} allowDecimals={false} />
-        <Tooltip cursor={{ fill: '#f8fafc' }} />
+        <Tooltip cursor={{ fill: AXIS.cursor }} contentStyle={TOOLTIP.contentStyle} labelStyle={TOOLTIP.labelStyle} itemStyle={TOOLTIP.itemStyle} />
         {!single && <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />}
         {series.map((s, si) => (
           <Bar key={s.key} dataKey={s.key} name={s.name} stackId={stacked ? 's' : undefined} fill={s.color} radius={stacked ? undefined : [4, 4, 0, 0]} maxBarSize={48}>
             {single && data.map((row, i) => <Cell key={i} fill={row.color ?? s.color} />)}
-            {showValues && single && si === 0 && <LabelList dataKey={s.key} position="top" style={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} />}
+            {showValues && single && si === 0 && <LabelList dataKey={s.key} position="top" style={{ fontSize: AXIS.tickSize, fill: AXIS.tick, fontWeight: 600 }} />}
           </Bar>
         ))}
       </BarChart>

@@ -1,22 +1,34 @@
 // Shared palette + helpers for the Performance dashboard.
 // Single source of truth for SVG chart fills (Tailwind brand-*/accent-* mirror these).
 
+/**
+ * These were raw Tailwind-500 values — #22c55e, #ef4444, #ec4899, #0ea5e9 — every one of them
+ * at maximum chroma. Eight such colours on one screen have no hierarchy: each shouts as loudly
+ * as the next, so the eye finds no way in and the chart reads as decoration.
+ *
+ * Retuned to a single family: one lightness band, one saturation band, spaced far enough apart
+ * in hue to stay separable. Nothing here relies on telling red from green alone, so the charts
+ * still work for the ~8% of men with a red/green deficiency.
+ *
+ * This is the single source of truth for SVG fills across the Performance module.
+ */
 export const C = {
-  brand: '#3d8de2', // primary blue
-  accent: '#fe841f', // orange
-  green: '#22c55e',
-  amber: '#f59e0b',
-  red: '#ef4444',
-  purple: '#9334e6',
-  teal: '#14b8a6',
-  indigo: '#6366f1',
-  pink: '#ec4899',
-  sky: '#0ea5e9',
-  slate: '#94a3b8',
+  brand:  '#3d8de2', // primary blue — unchanged, it is the brand
+  accent: '#e8873a', // orange, pulled back from #fe841f so it stops outshouting the blue
+  green:  '#16a394',
+  amber:  '#e8a33d',
+  red:    '#dc4b45',
+  purple: '#8b7bf0',
+  teal:   '#16a394',
+  indigo: '#6f7ce0',
+  pink:   '#c079d8',
+  sky:    '#59b8e8',
+  slate:  '#7f93ad',
 };
 
-// Rotating palette for part-to-whole charts.
-export const DONUT_COLORS = [C.brand, C.accent, C.green, C.purple, C.teal, C.amber, C.pink, C.indigo, C.sky, C.slate];
+// Rotating palette for part-to-whole charts. Ordered so ADJACENT slices are far apart in hue —
+// the commonest failure of a donut is two neighbouring wedges that are nearly the same colour.
+export const DONUT_COLORS = [C.brand, C.purple, C.green, C.amber, C.red, C.slate, C.sky, C.pink, C.indigo, C.accent];
 
 // Categorical colour maps (used for status / priority / severity widgets).
 export const PRIORITY_COLORS: Record<string, string> = {

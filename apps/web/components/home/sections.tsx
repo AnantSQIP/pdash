@@ -58,20 +58,26 @@ export function PersonaBanner() {
   const h = hourIST();
   const greeting = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
   return (
-    <header className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-start justify-between gap-4">
-      <div className="flex items-start gap-3 min-w-0">
+    <header className="bg-white border-b border-gray-950/[0.06] px-4 sm:px-6 pt-6 pb-5 flex items-start justify-between gap-4">
+      <div className="flex items-start gap-3.5 min-w-0">
         {/* Wrap the avatar so the responsive hide lives on a container — passing a `display`
             class straight to <Avatar> overrides its own flex and makes the initials overflow. */}
-        <div className="hidden sm:block shrink-0"><Avatar user={currentUser} size={40} /></div>
+        <div className="hidden sm:block shrink-0 mt-0.5"><Avatar user={currentUser} size={42} /></div>
         <div className="min-w-0">
-          {/* Greeting + date are pinned to IST and stamped consistently on server & client. */}
-          <h1 suppressHydrationWarning className="text-2xl font-bold text-gray-900 truncate">
+          {/* Greeting + date are pinned to IST and stamped consistently on server & client.
+              Scale and tracking carry the emphasis here, not weight: `font-bold` at this size
+              reads as a shout, where a tightly-tracked semibold reads as typeset. */}
+          <h1 suppressHydrationWarning className="text-[28px] leading-tight font-semibold tracking-[-0.03em] text-gray-900 truncate">
             {greeting}, {currentUser?.firstName?.trim() || 'there'}
           </h1>
-          <p suppressHydrationWarning className="text-sm text-gray-500 mt-0.5">{longDateIST()}</p>
-          <div className="flex flex-wrap items-center gap-2 mt-2">
-            <span className="inline-block text-xs font-semibold text-brand-700 bg-brand-50 px-3 py-1 rounded-full">{persona.label}</span>
-            <span className="text-xs text-gray-500">{currentUser?.designation?.trim() || persona.sub}</span>
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-2 text-[12.5px]">
+            {/* The role was a filled brand pill — the loudest colour on the page spent on a
+                label. It is metadata, so it is set as metadata, separated by a hairline dot. */}
+            <span className="font-medium text-gray-700">{persona.label}</span>
+            <span className="text-gray-300" aria-hidden>&middot;</span>
+            <span className="text-gray-500">{currentUser?.designation?.trim() || persona.sub}</span>
+            <span className="text-gray-300" aria-hidden>&middot;</span>
+            <span suppressHydrationWarning className="text-gray-400 tabular-nums">{longDateIST()}</span>
           </div>
         </div>
       </div>
