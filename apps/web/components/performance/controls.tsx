@@ -16,17 +16,19 @@ export function FilterBar({ children, className }: { children: ReactNode; classN
 export function PeriodPicker({ value, onChange, options = [7, 30, 90] }: {
   value: number; onChange: (d: number) => void; options?: number[];
 }) {
+  // Same segmented language as the page tabs: selection shown by elevation, not by colour.
   return (
-    <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-      <span className="text-xs text-gray-400 px-2">Period</span>
+    <div className="inline-flex items-center gap-1 rounded-lg bg-gray-100/80 p-1 ring-1 ring-inset ring-gray-950/[0.04]">
       {options.map(d => (
         <button
           key={d}
           onClick={() => onChange(d)}
-          className={clsx('px-3 py-1 rounded-md text-xs font-medium transition-colors',
-            value === d ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-700')}
+          className={clsx('rounded-md px-3 py-1.5 text-[12.5px] font-medium tabular-nums transition-colors',
+            value === d
+              ? 'bg-white text-gray-900 shadow-[0_1px_2px_0_rgb(16_24_40_/_0.06),0_1px_3px_0_rgb(16_24_40_/_0.04)]'
+              : 'text-gray-500 hover:text-gray-800')}
         >
-          {d}d
+          {d} days
         </button>
       ))}
     </div>

@@ -13,17 +13,23 @@ import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
 import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
 import { PeriodFilter, buildPeriods, inPeriod, type Period } from '@/components/reports/PeriodFilter';
+import { PageHeader } from '@/components/ui/Page';
+import { STATUS, PRIORITY } from '@/lib/chart-theme';
 
+// Was a local copy of Google's 2014 Material palette (#1a73e8, #34a853, #fbbc04, #ea4335).
+// Those four are among the most recognisable colours on the web and read as someone else's
+// brand. Both maps now come from the one shared theme, so Reports and Performance agree on
+// what "on hold" looks like.
 const PHASE_COLORS: Record<string, { color: string; label: string }> = {
-  ACTIVE:    { color: '#34a853', label: 'Active'    },
-  COMPLETED: { color: '#1a73e8', label: 'Completed' },
-  ON_HOLD:   { color: '#fbbc04', label: 'On Hold'   },
-  PLANNING:  { color: '#fe841f', label: 'Planning'  },
-  ARCHIVED:  { color: '#bdc1c6', label: 'Archived'  },
+  ACTIVE:    { color: STATUS.ACTIVE,    label: 'Active'    },
+  COMPLETED: { color: STATUS.COMPLETED, label: 'Completed' },
+  ON_HOLD:   { color: STATUS.ON_HOLD,   label: 'On Hold'   },
+  PLANNING:  { color: STATUS.PLANNING,  label: 'Planning'  },
+  ARCHIVED:  { color: STATUS.ARCHIVED,  label: 'Archived'  },
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
-  CRITICAL: '#ea4335', HIGH: '#fa7b17', MEDIUM: '#fbbc04', LOW: '#34a853',
+  CRITICAL: PRIORITY.CRITICAL, HIGH: PRIORITY.HIGH, MEDIUM: PRIORITY.MEDIUM, LOW: PRIORITY.LOW,
 };
 
 function ProgressEditor({ project, onUpdated }: { project: ReportProject; onUpdated: () => void }) {
@@ -314,17 +320,17 @@ export default function ReportsPage() {
 
   return (
     <div className="min-h-full">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Reports</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Project analytics and progress tracking</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {loading && <Loader size={16} className="animate-spin text-gray-400" />}
-          {canExport && <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />}
-        </div>
-      </div>
+      <PageHeader
+        title="Reports"
+        subtitle="Project analytics and progress across the portfolio."
+        sticky={false}
+        actions={
+          <>
+            {loading && <Loader size={16} className="animate-spin text-gray-300" />}
+            {canExport && <ExportMenu getData={() => projectsExport(sorted, exportCaption)} disabled={loading || sorted.length === 0} />}
+          </>
+        }
+      />
 
       <div className="p-4 sm:p-6 space-y-6">
         {/* Stats row */}
@@ -414,7 +420,7 @@ export default function ReportsPage() {
                   <Clock size={18} className="text-brand-600" />
                 </div>
                 <div>
-                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-xl font-bold text-gray-900">{Math.round(stats?.hoursLoggedThisWeek ?? 0)}h</p>}
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900">{Math.round(stats?.hoursLoggedThisWeek ?? 0)}h</p>}
                   <p className="text-xs text-gray-500">Hours logged this week</p>
                 </div>
               </div>
@@ -423,7 +429,7 @@ export default function ReportsPage() {
                   <CheckSquare size={18} className="text-red-500" />
                 </div>
                 <div>
-                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-xl font-bold text-gray-900">{stats?.overdueCount ?? 0}</p>}
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900">{stats?.overdueCount ?? 0}</p>}
                   <p className="text-xs text-gray-500">Overdue tasks</p>
                 </div>
               </div>
@@ -432,7 +438,7 @@ export default function ReportsPage() {
                   <Users size={18} className="text-orange-500" />
                 </div>
                 <div>
-                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-xl font-bold text-gray-900">{stats?.tasksDueToday ?? 0}</p>}
+                  {loading ? <div className="h-6 w-16 bg-gray-100 animate-pulse rounded" /> : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900">{stats?.tasksDueToday ?? 0}</p>}
                   <p className="text-xs text-gray-500">Tasks due today</p>
                 </div>
               </div>

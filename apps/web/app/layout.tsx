@@ -26,7 +26,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={geistSans.variable}>
-      <body className="flex h-screen overflow-hidden bg-gray-50">
+      {/* No bg-* utility here. A class selector (0,1,0) outranks the `body` rule in
+          globals.css (0,0,1), so a utility here silently wins the cascade and the
+          canvas token never applies — which is exactly what happened. */}
+      <body className="flex h-screen overflow-hidden">
         <QueryProvider>
           <AuthProvider>
             <OrgProvider>
