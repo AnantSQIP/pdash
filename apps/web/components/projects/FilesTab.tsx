@@ -19,6 +19,7 @@ import { fullName } from '@/lib/avatar';
 import { formatBytes, isImageMime, fileKind, MAX_FILE_BYTES } from '@/lib/files';
 import { KIND_ICON, KIND_COLOR } from '@/components/files/Attachments';
 import { formatDate } from '@/lib/date';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type Filter = 'All' | 'Images' | 'Documents';
 
@@ -69,7 +70,7 @@ export default function FilesTab({ projectId }: { projectId: string }) {
   }
 
   async function remove(doc: ProjectDocumentItem) {
-    if (!window.confirm(`Delete "${doc.name}"? It will disappear everywhere it is shown.`)) return;
+    if (!await confirmDialog({ title: `Delete "${doc.name}"? It will disappear everywhere it is shown.`, danger: true, confirmLabel: 'Delete' })) return;
     setDeletingId(doc.id);
     try { await api.documents.delete(doc.id); invalidate(); }
     catch (err) { toast(err instanceof Error ? err.message : 'Could not delete the file', 'error'); }

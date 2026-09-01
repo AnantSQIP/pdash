@@ -15,6 +15,8 @@ import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { AddPermissionsWizard } from '@/components/admin/AddPermissionsWizard';
 import { relativePast } from '@/lib/date';
+import { toastError } from '@/components/ui/Toast';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type Tab = 'Users' | 'Roles' | 'Groups' | 'Permissions';
 const MGMT_TABS: { key: Tab; icon: React.ElementType }[] = [
@@ -132,13 +134,13 @@ function UsersTab({ orgId }: { orgId: string }) {
   });
 
   async function resetFor(u: { id: string; firstName: string; lastName: string }) {
-    if (!window.confirm(`Reset ${u.firstName} ${u.lastName}'s password? They will be signed out and must use a new temporary password.`)) return;
+    if (!await confirmDialog(`Reset ${u.firstName} ${u.lastName}'s password? They will be signed out and must use a new temporary password.`)) return;
     try {
       const r = await api.users.resetPassword(u.id);
       setResetResult(r);
       qc.invalidateQueries({ queryKey: ['password-reset-requests'] });
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Could not reset password');
+      toastError(e, 'Could not reset password');
     }
   }
 
@@ -227,7 +229,7 @@ function UsersTab({ orgId }: { orgId: string }) {
                           const next = u.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
                           setMenuFor(null);
                           try { await api.users.update(u.id, { status: next }); qc.invalidateQueries({ queryKey: ['users', orgId] }); }
-                          catch (e) { alert(e instanceof Error ? e.message : 'Could not update status'); }
+                          catch (e) { toastError(e, 'Could not update status'); }
                         }}
                         className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 text-amber-700"
                       >
@@ -271,9 +273,9 @@ function UsersTab({ orgId }: { orgId: string }) {
                         <button
                           onClick={async () => {
                             setMenuFor(null);
-                            if (!window.confirm(`Reset ${fullName(u)}'s password? They will be signed out and must use a new temporary password.`)) return;
+                            if (!await confirmDialog(`Reset ${fullName(u)}'s password? They will be signed out and must use a new temporary password.`)) return;
                             try { const r = await api.users.resetPassword(u.id); setResetResult(r); }
-                            catch (e) { alert(e instanceof Error ? e.message : 'Could not reset password'); }
+                            catch (e) { toastError(e, 'Could not reset password'); }
                           }}
                           className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
                         >
@@ -284,7 +286,7 @@ function UsersTab({ orgId }: { orgId: string }) {
                             const next = u.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
                             setMenuFor(null);
                             try { await api.users.update(u.id, { status: next }); qc.invalidateQueries({ queryKey: ['users', orgId] }); }
-                            catch (e) { alert(e instanceof Error ? e.message : 'Could not update status'); }
+                            catch (e) { toastError(e, 'Could not update status'); }
                           }}
                           className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50 text-amber-700"
                         >
@@ -512,7 +514,7 @@ function CreateRoleModal({ orgId, perms, onClose, onDone }: { orgId: string; per
       onDone();
     } catch (e) {
       setBusy(false);
-      alert(e instanceof Error ? e.message : 'Failed to create role');
+      toastError(e, 'Failed to create role');
     }
   }
   return (
@@ -577,7 +579,7 @@ function GroupsTab({ orgId }: { orgId: string }) {
 function MembersModal({ group, users, onClose, onDone }: { group: GroupSummary; users: UserSummary[]; onClose: () => void; onDone: () => void }) {
   // Preload current members so editing is additive, not a blind full-replace wipe.
   const [ids, setIds] = useState<string[]>(group.memberIds ?? []); const [busy, setBusy] = useState(false);
-  async function save() { setBusy(true); try { await api.groups.setMembers(group.id, ids); onDone(); onClose(); } catch (e) { setBusy(false); alert(e instanceof Error ? e.message : 'Failed to save members'); } }
+  async function save() { setBusy(true); try { await api.groups.setMembers(group.id, ids); onDone(); onClose(); } catch (e) { setBusy(false); toastError(e, 'Failed to save members'); } }
   return (
     <Modal title={`Members — ${group.name}`} onClose={onClose}>
       <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">This replaces the full member list for the group.</p>
@@ -601,7 +603,7 @@ function CreateNamedModal({ title, onClose, onSubmit }: { title: string; onClose
       <div className="space-y-3">
         <input className={inputCls} placeholder="Name" value={name} onChange={e => setName(e.target.value)} />
         <input className={inputCls} placeholder="Description (optional)" value={desc} onChange={e => setDesc(e.target.value)} />
-        <button disabled={busy || !name} onClick={async () => { setBusy(true); try { await onSubmit(name, desc); } catch (e) { setBusy(false); alert(e instanceof Error ? e.message : 'Failed'); } }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Create</button>
+        <button disabled={busy || !name} onClick={async () => { setBusy(true); try { await onSubmit(name, desc); } catch (e) { setBusy(false); toastError(e, 'Failed'); } }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Create</button>
       </div>
     </Modal>
   );
@@ -614,7 +616,7 @@ function EditNamedModal({ title, initial, onClose, onSave }: { title: string; in
       <div className="space-y-3">
         <input className={inputCls} value={name} onChange={e => setName(e.target.value)} />
         <input className={inputCls} placeholder="Description" value={desc} onChange={e => setDesc(e.target.value)} />
-        <button disabled={busy || !name} onClick={async () => { setBusy(true); try { await onSave(name, desc); } catch (e) { setBusy(false); alert(e instanceof Error ? e.message : 'Failed'); } }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Save</button>
+        <button disabled={busy || !name} onClick={async () => { setBusy(true); try { await onSave(name, desc); } catch (e) { setBusy(false); toastError(e, 'Failed'); } }} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">Save</button>
       </div>
     </Modal>
   );

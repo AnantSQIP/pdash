@@ -9,6 +9,7 @@ import { api, type Expense } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
+import { toastError } from '@/components/ui/Toast';
 
 /**
  * Expenses, in the shape the team reads in TeamNest: a status card and an approved-total card
@@ -94,7 +95,7 @@ function MyExpenses() {
 
   async function cancel(id: string) {
     try { await api.expenses.cancel(id); qc.invalidateQueries({ queryKey: ['expenses-mine'] }); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel.'); }
+    catch (e) { toastError(e, 'Could not cancel.'); }
   }
 
   return (
@@ -352,7 +353,7 @@ function ReviewExpenses() {
       qc.invalidateQueries({ queryKey: ['expenses-mine'] });
       qc.invalidateQueries({ queryKey: ['notifications-unread'] });
     }
-    catch (e) { alert(e instanceof Error ? e.message : 'Action failed'); }
+    catch (e) { toastError(e, 'Action failed'); }
     finally { setBusyId(''); }
   }
 

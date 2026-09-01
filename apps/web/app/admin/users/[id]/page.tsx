@@ -21,6 +21,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { avatarColor, fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { ProfileCard } from '@/components/people/ProfileCard';
+import { toastError } from '@/components/ui/Toast';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function moduleOf(code: string) { return code.split('.')[0]; }
@@ -404,7 +405,7 @@ function OverridesTab({ userId, canManage }: { userId: string; canManage: boolea
       qc.invalidateQueries({ queryKey: ['effective-permissions'] }); // M34: refresh the live gate/sidebar
       setSaved(true);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to save overrides');
+      toastError(e, 'Failed to save overrides');
     } finally { setBusy(false); }
   }
 

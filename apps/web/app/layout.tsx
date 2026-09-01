@@ -9,6 +9,7 @@ import { PresenceProvider } from '@/lib/presence-context';
 import { PermissionsProvider } from '@/lib/permissions-context';
 import { PasscodeProvider } from '@/lib/passcode-context';
 import { ToastProvider } from '@/components/ui/Toast';
+import { ConfirmProvider } from '@/components/ui/ConfirmDialog';
 
 const geistSans = localFont({
   src: '../public/fonts/GeistVariable.woff2',
@@ -32,9 +33,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <PresenceProvider>
                 <PermissionsProvider>
                   <ToastProvider>
-                    <PasscodeProvider>
-                      <AppShell>{children}</AppShell>
-                    </PasscodeProvider>
+                    <ConfirmProvider>
+                      <PasscodeProvider>
+                        <AppShell>{children}</AppShell>
+                      </PasscodeProvider>
+                    </ConfirmProvider>
                   </ToastProvider>
                 </PermissionsProvider>
               </PresenceProvider>

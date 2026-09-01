@@ -14,6 +14,7 @@ import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useQueryClient } from '@tanstack/react-query';
 import { fullName } from '@/lib/avatar';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-500', HIGH: 'text-orange-500', MEDIUM: 'text-amber-500', LOW: 'text-gray-300',
@@ -195,7 +196,7 @@ export function OverviewView({ project, tasks }: { project: ApiProject; tasks: A
     finally { setBusy(false); }
   }
   async function removeMember(userId: string) {
-    if (!window.confirm('Remove this member from the project?')) return;
+    if (!await confirmDialog({ title: 'Remove this member from the project?', danger: true, confirmLabel: 'Remove' })) return;
     setBusy(true);
     try { await api.projects.removeMember(project.id, userId); refresh(); toast('Member removed.', 'info'); }
     catch (e) { toast(e instanceof Error ? e.message : 'Could not remove member.', 'error'); }

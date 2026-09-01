@@ -10,6 +10,8 @@ import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandalon
 import { TimesheetCalendar } from '@/components/timesheets/TimesheetCalendar';
 import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
 import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
+import { toastError } from '@/components/ui/Toast';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
@@ -68,10 +70,10 @@ export default function TimesheetsPage() {
   }
 
   async function deleteEntry(id: string) {
-    if (!window.confirm('Delete this time entry?')) return;
+    if (!await confirmDialog({ title: 'Delete this time entry?', danger: true, confirmLabel: 'Delete' })) return;
     setDeletingId(id);
     try { await api.timesheets.delete(id); invalidate(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not delete the entry.'); }
+    catch (e) { toastError(e, 'Could not delete the entry.'); }
     finally { setDeletingId(null); }
   }
 

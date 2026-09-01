@@ -19,6 +19,8 @@ import { DateField } from '@/components/ui/DateField';
 import { LeavesHome } from '@/components/attendance/LeavesHome';
 import { AttendanceHome } from '@/components/attendance/AttendanceHome';
 import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
+import { toastError } from '@/components/ui/Toast';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // ── status styling ──────────────────────────────────────────────────────────────
 const STATUS_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
@@ -107,14 +109,14 @@ export default function AttendancePage() {
     if (busy) return; setBusy(true);
     // Location is mandatory — capture it first; a denial blocks the punch with a clear message.
     try { const loc = await getCurrentLocation(); const area = await reverseGeocode(loc.lat, loc.lng); await api.attendance.punch({ ...loc, area }); invalidate('attn-today', 'attn-month', 'attn-org', 'attn-punch-locations'); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not record your punch.'); }
+    catch (e) { toastError(e, 'Could not record your punch.'); }
     finally { setBusy(false); }
   }
 
   async function cancelReg(id: string) {
     if (busy) return; setBusy(true);
     try { await api.attendance.cancelRegularization(id); invalidate('reg-mine', 'reg-pending'); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel the request.'); }
+    catch (e) { toastError(e, 'Could not cancel the request.'); }
     finally { setBusy(false); }
   }
 
@@ -298,12 +300,12 @@ function HolidayManager({ orgId, year, holidays, canManage }: { orgId?: string; 
     if (!orgId || !name.trim() || !date) return;
     setBusy(true);
     try { await api.leave.createHoliday({ organizationId: orgId, name: name.trim(), date }); setName(''); setDate(''); inv(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Failed to add holiday'); }
+    catch (e) { toastError(e, 'Failed to add holiday'); }
     finally { setBusy(false); }
   }
   async function del(id: string) {
     try { await api.leave.removeHoliday(id); inv(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Failed to delete holiday'); }
+    catch (e) { toastError(e, 'Failed to delete holiday'); }
   }
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden max-w-2xl">
@@ -571,13 +573,13 @@ function WfhCard() {
       await api.attendance.requestWfh({ startDate: form.startDate, endDate: form.endDate, reason: form.reason.trim() });
       setShowForm(false); setForm({ startDate: '', endDate: '', reason: '' });
       inv();
-    } catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the WFH request.'); }
+    } catch (e) { toastError(e, 'Could not submit the WFH request.'); }
     finally { setBusy(false); }
   }
   async function cancel(id: string) {
     setBusy(true);
     try { await api.attendance.cancelWfh(id); inv(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel.'); }
+    catch (e) { toastError(e, 'Could not cancel.'); }
     finally { setBusy(false); }
   }
   const range = (r: WfhRequestItem) => {
@@ -658,13 +660,13 @@ function CompOffCard() {
       await api.leave.requestCompOff(form);
       setShowForm(false); setForm({ workDate: '', reason: '', projectRef: '', dayType: 'FULL' });
       qc.invalidateQueries({ queryKey: ['compoff-mine'] });
-    } catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the comp-off claim.'); }
+    } catch (e) { toastError(e, 'Could not submit the comp-off claim.'); }
     finally { setBusy(false); }
   }
   async function cancel(id: string) {
     setBusy(true);
     try { await api.leave.cancelCompOff(id); qc.invalidateQueries({ queryKey: ['compoff-mine'] }); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel.'); }
+    catch (e) { toastError(e, 'Could not cancel.'); }
     finally { setBusy(false); }
   }
 
@@ -871,7 +873,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
 
   async function cancelLeaveFor(r: LeaveRequestItem) {
     const who = `${r.user?.firstName ?? ''} ${r.user?.lastName ?? ''}`.trim() || 'this person';
-    if (!window.confirm(`Cancel ${who}'s leave?\n\nThe days go back on their balance and they can punch in as normal. They will be notified.`)) return;
+    if (!await confirmDialog(`Cancel ${who}'s leave?\n\nThe days go back on their balance and they can punch in as normal. They will be notified.`)) return;
     setBusyId(r.id);
     try {
       await api.leave.cancel(r.id);
@@ -880,7 +882,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
       qc.invalidateQueries({ queryKey: ['attn-org'] });
       qc.invalidateQueries({ queryKey: ['capacity'] });
       onReviewed();
-    } catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel the leave.'); }
+    } catch (e) { toastError(e, 'Could not cancel the leave.'); }
     finally { setBusyId(''); }
   }
   const yearAgoKey = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
@@ -895,7 +897,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   const { data: punchLoc } = useQuery({ queryKey: ['attn-punch-locations', locDate], queryFn: () => api.attendance.orgPunchLocations(locDate), staleTime: 30_000 });
 
   async function exportAttendanceCsv() {
-    if (expFrom > expTo) { alert('The start date must be on or before the end date.'); return; }
+    if (expFrom > expTo) { toastError('The start date must be on or before the end date.'); return; }
     setExporting(true);
     try {
       const rep = await api.attendance.orgReport(expFrom, expTo);
@@ -911,7 +913,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
       const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob); const a = document.createElement('a');
       a.href = url; a.download = `attendance-${expFrom}_to_${expTo}.csv`; a.click(); URL.revokeObjectURL(url);
-    } catch (e) { alert(e instanceof Error ? e.message : 'Could not export attendance.'); }
+    } catch (e) { toastError(e, 'Could not export attendance.'); }
     finally { setExporting(false); }
   }
   const { data: pendingCompoff = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(), staleTime: 15_000 });
@@ -929,7 +931,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
       }
       qc.invalidateQueries({ queryKey: ['wfh-pending'] });
       qc.invalidateQueries({ queryKey: ['wfh-mine'] });
-    } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
+    } catch (e) { toastError(e, `Could not ${action} the request.`); }
     finally { setBusyId(''); }
   }
   async function reviewCompoff(id: string, action: 'approve' | 'reject') {
@@ -945,13 +947,13 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
       // refresh those surfaces too, not just the claim list.
       ['compoff-pending', 'compoff-mine', 'attn-month', 'attn-org', 'attn-today', 'ts-calendar', 'leave-balances']
         .forEach(k => qc.invalidateQueries({ queryKey: [k] }));
-    } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the claim.`); }
+    } catch (e) { toastError(e, `Could not ${action} the claim.`); }
     finally { setBusyId(''); }
   }
   async function review(id: string, action: 'approve' | 'reject') {
     setBusyId(id);
     try { await (action === 'approve' ? api.leave.approve(id) : api.leave.reject(id)); onReviewed(); }
-    catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
+    catch (e) { toastError(e, `Could not ${action} the request.`); }
     finally { setBusyId(''); }
   }
   async function reviewReg(id: string, action: 'approve' | 'reject') {
@@ -964,7 +966,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
         await api.attendance.approveRegularization(id);
       }
       onRegReviewed();
-    } catch (e) { alert(e instanceof Error ? e.message : `Could not ${action} the request.`); }
+    } catch (e) { toastError(e, `Could not ${action} the request.`); }
     finally { setBusyId(''); }
   }
   const REG_TYPE_LABEL: Record<string, string> = {

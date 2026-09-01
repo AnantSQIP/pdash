@@ -29,6 +29,8 @@ import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { ProfilePhotoCard } from '@/components/ProfilePhotoCard';
 import { ProfileCard } from '@/components/people/ProfileCard';
+import { toastError } from '@/components/ui/Toast';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // Only tabs backed by real functionality are shown. Notifications / Workflows /
 // Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
@@ -547,7 +549,7 @@ function NotificationsTab() {
       });
       qc.invalidateQueries({ queryKey: ['notif-prefs'] });
       setSaved(true); setTimeout(() => setSaved(false), 2000);
-    } catch (e) { alert(e instanceof Error ? e.message : 'Could not save'); }
+    } catch (e) { toastError(e, 'Could not save'); }
     finally { setBusy(false); }
   }
 
@@ -627,15 +629,15 @@ function TagsTab() {
     finally { setBusy(false); }
   }
   async function remove(id: string) {
-    if (!confirm('Delete this tag? People stay; only the group goes away.')) return;
+    if (!await confirmDialog({ title: 'Delete this tag? People stay; only the group goes away.', danger: true, confirmLabel: 'Delete' })) return;
     try { await api.tags.remove(id); invalidate(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not delete'); }
+    catch (e) { toastError(e, 'Could not delete'); }
   }
   async function toggleMember(tag: Tag, userId: string) {
     const has = tag.memberIds.includes(userId);
     const next = has ? tag.memberIds.filter(id => id !== userId) : [...tag.memberIds, userId];
     try { await api.tags.setMembers(tag.id, next); invalidate(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not update members'); }
+    catch (e) { toastError(e, 'Could not update members'); }
   }
 
   return (

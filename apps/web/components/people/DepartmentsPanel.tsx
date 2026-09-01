@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 /**
  * Department management.
@@ -155,7 +156,7 @@ function DepartmentCard({
   const members = dept.members ?? [];
 
   async function removeMember(userId: string, name: string) {
-    if (!confirm(`Remove ${name} from ${dept.name}?`)) return;
+    if (!await confirmDialog({ title: `Remove ${name} from ${dept.name}?`, danger: true, confirmLabel: 'Remove' })) return;
     try {
       const r = await api.departments.removeMember(dept.id, userId);
       toast(r.headCleared ? `${name} removed — the department has no head now` : `${name} removed`);
@@ -172,7 +173,7 @@ function DepartmentCard({
   }
 
   async function del() {
-    if (!confirm(`Delete “${dept.name}”? Its ${members.length} membership${members.length === 1 ? '' : 's'} go with it. People themselves are not affected.`)) return;
+    if (!await confirmDialog({ title: `Delete “${dept.name}”? Its ${members.length} membership${members.length === 1 ? '' : 's'} go with it. People themselves are not affected.`, danger: true, confirmLabel: 'Delete' })) return;
     try { await api.departments.remove(dept.id); toast(`“${dept.name}” deleted`); onChanged(); }
     catch (e) { toast(e instanceof Error ? e.message : 'Could not delete', 'error'); }
   }

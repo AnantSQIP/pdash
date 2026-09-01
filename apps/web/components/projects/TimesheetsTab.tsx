@@ -9,6 +9,7 @@ import { LogTimeModal } from './LogTimeModal';
 import { Avatar } from '@/components/Avatar';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 function fmtHours(h: number): string {
   const whole = Math.floor(h);
@@ -50,7 +51,7 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
   }
 
   async function deleteEntry(id: string) {
-    if (!window.confirm('Delete this time entry?')) return;
+    if (!await confirmDialog({ title: 'Delete this time entry?', danger: true, confirmLabel: 'Delete' })) return;
     setDeletingId(id);
     try {
       await api.timesheets.delete(id);

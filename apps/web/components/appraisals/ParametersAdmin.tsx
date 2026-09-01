@@ -9,6 +9,7 @@ import {
 import { api, type AppraisalParameter, type TeamSpace, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
@@ -237,7 +238,7 @@ export function ParametersAdmin() {
                   <Copy size={12} />
                 </button>
                 <button
-                  onClick={() => { if (confirm(`Retire "${p.name}"? Appraisals already scored against it keep their scores.`)) remove.mutate(p.id); }}
+                  onClick={async () => { if (await confirmDialog({ title: `Retire "${p.name}"? Appraisals already scored against it keep their scores.`, danger: true, confirmLabel: 'Retire' })) remove.mutate(p.id); }}
                   className="p-1 rounded text-gray-300 hover:text-red-500 shrink-0" title="Retire"
                 ><Trash2 size={12} /></button>
               </li>

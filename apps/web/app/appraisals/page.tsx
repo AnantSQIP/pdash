@@ -15,6 +15,7 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 function fmtDate(iso?: string | null) { return iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'; }
 
@@ -91,7 +92,7 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
   }
   async function submitSelf() {
-    if (!confirm('Submit your self-assessment? You will not be able to edit it after.')) return;
+    if (!await confirmDialog('Submit your self-assessment? You will not be able to edit it after.')) return;
     try {
       await api.appraisals.submitSelf(id, {
         selfComments: selfComments.trim() || undefined,
@@ -105,7 +106,7 @@ function AppraisalDetail({ id, currentUserId, onClose, onChanged }: { id: string
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
   }
   async function submitManager() {
-    if (!confirm('Submit this review? The employee will be able to see it.')) return;
+    if (!await confirmDialog('Submit this review? The employee will be able to see it.')) return;
     try {
       await api.appraisals.submitManager(id, {
         managerComments: mgrComments.trim() || undefined,
@@ -404,12 +405,12 @@ function CyclesTab({ onOpenAppraisal }: { onOpenAppraisal: (id: string) => void 
   const refresh = () => { qc.invalidateQueries({ queryKey: ['cycles'] }); if (expanded) qc.invalidateQueries({ queryKey: ['cycle', expanded] }); };
 
   async function launch(c: AppraisalCycle) {
-    if (!confirm('Launch this cycle for all active employees? This creates a self-assessment for each.')) return;
+    if (!await confirmDialog('Launch this cycle for all active employees? This creates a self-assessment for each.')) return;
     try { const r = await api.appraisals.launch(c.id); toast(`Created ${r.created} appraisal(s)`); refresh(); }
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
   }
   async function close(c: AppraisalCycle) { try { await api.appraisals.closeCycle(c.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
-  async function del(c: AppraisalCycle) { if (!confirm('Delete this cycle and all its appraisals?')) return; try { await api.appraisals.deleteCycle(c.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
+  async function del(c: AppraisalCycle) { if (!await confirmDialog({ title: 'Delete this cycle and all its appraisals?', danger: true, confirmLabel: 'Delete' })) return; try { await api.appraisals.deleteCycle(c.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
 
   return (
     <div className="max-w-3xl space-y-4">

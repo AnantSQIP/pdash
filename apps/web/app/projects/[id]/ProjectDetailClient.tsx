@@ -37,6 +37,7 @@ import { useToast } from '@/components/ui/Toast';
 import { isTaskClosed, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 // Timesheets is a core, frequently-used tab, so it sits up front (3rd) rather than buried.
@@ -80,7 +81,7 @@ export function ProjectDetailClient({ projectId }: Props) {
       reinitialize: 'Re-initialize this project for a returning client? It reopens with the SAME Project ID and reuses all the existing data.',
     };
     const msg = confirms[action];
-    if (msg && !window.confirm(msg)) return;
+    if (msg && !await confirmDialog(msg)) return;
     setLifecycleBusy(true);
     try {
       if (action === 'complete') await api.projects.complete(projectId, completion);

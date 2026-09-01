@@ -11,27 +11,32 @@ import { Avatar } from '@/components/Avatar';
 // badge treatments — the cards used to hand-roll each of these, which drifted.
 
 export const PHASE_COLORS: Record<string, { bg: string; text: string; label: string }> = {
-  ACTIVE:    { bg: 'bg-green-100',  text: 'text-green-700',  label: 'Active'    },
-  PLANNING:  { bg: 'bg-blue-100',   text: 'text-blue-700',   label: 'Planning'  },
-  ON_HOLD:   { bg: 'bg-yellow-100', text: 'text-yellow-700', label: 'On Hold'   },
-  COMPLETED: { bg: 'bg-gray-100',   text: 'text-gray-600',   label: 'Completed' },
-  CLOSED:    { bg: 'bg-slate-100',  text: 'text-slate-600',  label: 'Closed'    },
-  CANCELLED: { bg: 'bg-rose-100',   text: 'text-rose-600',   label: 'Cancelled' },
-  ARCHIVED:  { bg: 'bg-gray-100',   text: 'text-gray-500',   label: 'Archived'  },
+  ACTIVE:    { bg: 'bg-emerald-50 ring-1 ring-inset ring-emerald-600/15', text: 'text-emerald-700', label: 'Active'    },
+  PLANNING:  { bg: 'bg-brand-50 ring-1 ring-inset ring-brand-600/15',     text: 'text-brand-700',   label: 'Planning'  },
+  ON_HOLD:   { bg: 'bg-amber-50 ring-1 ring-inset ring-amber-600/15',     text: 'text-amber-700',   label: 'On Hold'   },
+  COMPLETED: { bg: 'bg-gray-50 ring-1 ring-inset ring-gray-950/10',       text: 'text-gray-600',    label: 'Completed' },
+  CLOSED:    { bg: 'bg-slate-50 ring-1 ring-inset ring-slate-600/15',     text: 'text-slate-600',   label: 'Closed'    },
+  CANCELLED: { bg: 'bg-rose-50 ring-1 ring-inset ring-rose-600/15',       text: 'text-rose-700',    label: 'Cancelled' },
+  ARCHIVED:  { bg: 'bg-gray-50 ring-1 ring-inset ring-gray-950/10',       text: 'text-gray-500',    label: 'Archived'  },
 };
 
 /** A human phase label + colours for any phase, falling back gracefully for unknowns. */
 export function phaseChip(phase: string): { bg: string; text: string; label: string } {
-  return PHASE_COLORS[phase] ?? { bg: 'bg-gray-100', text: 'text-gray-600', label: phase.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) };
+  return PHASE_COLORS[phase] ?? { bg: 'bg-gray-50 ring-1 ring-inset ring-gray-950/10', text: 'text-gray-600', label: phase.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) };
 }
 
 /** Consistent badge palettes so the same meaning reads the same colour across cards. */
+/**
+ * Badge palettes. The 100/700 pairs these replace were solid blocks of colour — five of them
+ * on one card fought each other and the data. A 50-level tint with an inset ring reads as the
+ * same status at a glance while letting the numbers stay the loudest thing on screen.
+ */
 export const BADGE = {
-  good:    'bg-green-100 text-green-700',
-  info:    'bg-blue-100 text-blue-700',
-  warn:    'bg-amber-100 text-amber-700',
-  danger:  'bg-red-100 text-red-600',
-  neutral: 'bg-gray-100 text-gray-600',
+  good:    'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/15',
+  info:    'bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600/15',
+  warn:    'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/15',
+  danger:  'bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/15',
+  neutral: 'bg-gray-50 text-gray-600 ring-1 ring-inset ring-gray-950/10',
 } as const;
 
 export function priorityDotClass(priority: string): string {
@@ -40,8 +45,16 @@ export function priorityDotClass(priority: string): string {
   return 'bg-gray-300';
 }
 
+/**
+ * A hairline ring, not a 1px grey border.
+ *
+ * `border-gray-200` draws a hard line that reads as a boundary you are meant to notice; on a
+ * page of fourteen cards that is fourteen competing rectangles. A near-transparent ring plus
+ * the contact shadow from globals.css separates the surface without announcing itself, which
+ * is the whole difference between a dashboard that looks assembled and one that looks drawn.
+ */
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={clsx('bg-white rounded-xl border border-gray-200', className)}>{children}</div>;
+  return <div className={clsx('bg-white rounded-xl ring-1 ring-gray-950/[0.06]', className)}>{children}</div>;
 }
 
 /**
@@ -53,8 +66,10 @@ export function CardHeader({ title, icon: Icon, iconColor, href, linkLabel, badg
   badge?: ReactNode; actions?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 px-5 py-3.5 border-b border-gray-100">
-      <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2 min-w-0">
+    <div className="flex items-center justify-between gap-2 px-5 py-3.5 border-b border-gray-950/[0.05]">
+      {/* Card titles are labels, not headlines. Dropping from 16px to 13.5px lets the DATA be
+          the largest thing in the card, which is the point of the card. */}
+      <h2 className="text-[13.5px] font-semibold tracking-[-0.01em] text-gray-900 flex items-center gap-2 min-w-0">
         {Icon && <Icon size={16} className={clsx('shrink-0', iconColor ?? 'text-brand-600')} />}
         <span className="truncate">{title}</span>
         {badge}
@@ -80,15 +95,17 @@ export function StatTile({ label, value, Icon, iconBg, iconColor, loading, error
   iconBg: string; iconColor: string; loading?: boolean; error?: boolean;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 flex items-center gap-4 min-w-0">
-      <div className={clsx('w-11 h-11 rounded-full flex items-center justify-center shrink-0', iconBg)}>
-        <Icon size={20} className={iconColor} />
+    <div className="bg-white rounded-xl ring-1 ring-gray-950/[0.06] px-5 py-4 flex items-center gap-4 min-w-0">
+      {/* Squircle rather than a circle: it sits better beside rounded cards, and the icon only
+          supports the number, so it stays small and quiet. */}
+      <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center shrink-0', iconBg)}>
+        <Icon size={18} className={iconColor} />
       </div>
       <div className="min-w-0">
         {loading
-          ? <div className="h-7 w-12 bg-gray-100 animate-pulse rounded" />
-          : <p className="text-2xl font-bold text-gray-900 leading-none truncate">{error ? '—' : value}</p>}
-        <p className="text-xs text-gray-500 mt-1 truncate">{label}</p>
+          ? <div className="h-7 w-12 bg-gray-100 animate-pulse rounded-md" />
+          : <p className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums text-gray-900 leading-none truncate">{error ? '—' : value}</p>}
+        <p className="text-[12px] text-gray-500 mt-1.5 truncate">{label}</p>
       </div>
     </div>
   );
