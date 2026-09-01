@@ -131,6 +131,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      NODE_ENV: production
       # Server-side proxy target — the api service on the compose network.
       API_ORIGIN: http://api:4000
     ports:
