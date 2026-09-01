@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Loader, Eye, EyeOff, ArrowLeft, MailCheck } from 'lucide-react';
-import { RiShieldUserLine } from '@remixicon/react';
 import { useAuth } from '@/lib/auth-context';
 import { api } from '@/lib/api';
 
@@ -51,18 +50,25 @@ export default function LoginPage() {
   // so make the way out obvious exactly when they hit it.
   const lockedOut = /locked/i.test(error);
 
+  // A single soft wash from the top rather than a three-stop diagonal gradient. A visible
+  // gradient behind a form is the oldest "we styled it" tell there is; this one reads as
+  // light falling on a surface, which is what a gradient is meant to imitate.
   return (
-    <div className="min-h-full w-full flex items-center justify-center bg-gradient-to-br from-gray-50 via-white to-brand-50 px-4 py-10">
-      <div className="w-full max-w-md">
+    <div className="relative min-h-full w-full flex items-center justify-center px-4 py-10 bg-[#F4F6F9]">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(61,141,226,0.10),transparent_70%)]"
+      />
+      <div className="relative w-full max-w-[400px]">
         {/* Brand */}
         <div className="flex flex-col items-center mb-8">
-          <Image src="/fav.png" alt="Squark Dashboard" width={48} height={48} className="rounded-xl mb-3" />
-          <h1 className="text-2xl font-bold text-gray-900">Squark Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-1">Sign in to your workspace</p>
+          <Image src="/fav.png" alt="" width={44} height={44} className="rounded-xl mb-4" />
+          <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-gray-900">Squark Dashboard</h1>
+          <p className="text-[13px] text-gray-500 mt-1.5">Sign in to your workspace</p>
         </div>
 
         {/* Card */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-7">
+        <div className="bg-white rounded-2xl ring-1 ring-gray-950/[0.06] shadow-[0_4px_6px_-2px_rgb(16_24_40_/_0.05),0_12px_24px_-4px_rgb(16_24_40_/_0.09)] p-7">
 
         {/* ── The request has been raised; an admin has to act on it. ───────────── */}
         {mode === 'requested' ? (
@@ -86,16 +92,13 @@ export default function LoginPage() {
         ) : mode === 'forgot' ? (
           /* ── Can't get in: raise a hand. There is no reset email — an admin does it. ── */
           <>
-            <div className="flex items-center gap-2 mb-2 text-brand-600">
-              <RiShieldUserLine size={18} />
-              <span className="text-sm font-semibold">Can&apos;t sign in?</span>
-            </div>
+            <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-gray-900 mb-1.5">Can&apos;t sign in?</h2>
             <p className="text-xs text-gray-500 mb-5 leading-relaxed">
               Enter your work email and we&apos;ll notify an administrator to reset your password.
             </p>
             <form onSubmit={requestReset} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Email</label>
+                <label className="block text-[12.5px] font-medium text-gray-700 mb-1.5">Email</label>
                 <input
                   type="email"
                   required
@@ -103,16 +106,16 @@ export default function LoginPage() {
                   onChange={e => setEmail(e.target.value)}
                   placeholder="you@squarkip.com"
                   autoComplete="username"
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-gray-200 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-400"
+                  className="w-full px-3.5 py-2.5 rounded-lg bg-white text-[14px] text-gray-900 ring-1 ring-inset ring-gray-950/[0.10] placeholder:text-gray-400 transition-shadow focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-500"
                 />
               </div>
               {error && (
-                <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</div>
+                <div className="text-[12.5px] leading-relaxed text-red-700 bg-red-50 ring-1 ring-inset ring-red-600/15 rounded-lg px-3 py-2.5">{error}</div>
               )}
               <button
                 type="submit"
                 disabled={loading || !email.trim()}
-                className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors"
+                className="w-full flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-[13.5px] font-medium py-2.5 rounded-lg transition-colors"
               >
                 {loading && <Loader size={15} className="animate-spin" />}
                 Notify an administrator
@@ -127,26 +130,21 @@ export default function LoginPage() {
           </>
         ) : (
           <>
-          <div className="flex items-center gap-2 mb-5 text-brand-600">
-            <RiShieldUserLine size={18} />
-            <span className="text-sm font-semibold">Admin Sign In</span>
-          </div>
-
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Email</label>
+              <label className="block text-[12.5px] font-medium text-gray-700 mb-1.5">Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 placeholder="you@squarkip.com"
                 autoComplete="username"
-                className="w-full px-3.5 py-2.5 rounded-lg border border-gray-200 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-400"
+                className="w-full px-3.5 py-2.5 rounded-lg bg-white text-[14px] text-gray-900 ring-1 ring-inset ring-gray-950/[0.10] placeholder:text-gray-400 transition-shadow focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1.5">Password</label>
+              <label className="block text-[12.5px] font-medium text-gray-700 mb-1.5">Password</label>
               <div className="relative">
                 <input
                   type={showPw ? 'text' : 'password'}
@@ -154,7 +152,7 @@ export default function LoginPage() {
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
                   autoComplete="current-password"
-                  className="w-full px-3.5 py-2.5 pr-10 rounded-lg border border-gray-200 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-400"
+                  className="w-full px-3.5 py-2.5 pr-10 rounded-lg bg-white text-[14px] text-gray-900 ring-1 ring-inset ring-gray-950/[0.10] placeholder:text-gray-400 transition-shadow focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-500"
                 />
                 <button
                   type="button"
@@ -168,7 +166,7 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+              <div className="text-[12.5px] leading-relaxed text-red-700 bg-red-50 ring-1 ring-inset ring-red-600/15 rounded-lg px-3 py-2.5">
                 {error}
                 {lockedOut && (
                   <button
@@ -185,7 +183,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors"
+              className="w-full flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-[13.5px] font-medium py-2.5 rounded-lg transition-colors"
             >
               {loading && <Loader size={15} className="animate-spin" />}
               Sign In

@@ -82,15 +82,12 @@ h1, h2, h3 { text-wrap: balance; }
 /* ═══════════════════════════════════════════════════════════════════════════
    Surfaces
    ═══════════════════════════════════════════════════════════════════════════ */
-@layer components {
-  /* Cards get a hairline ring plus a contact shadow. The ring is what keeps
-     a white card legible on a light canvas without resorting to a heavy
-     border or a dark drop shadow.                                          */
-  .bg-white.rounded-xl,
-  .bg-white.rounded-2xl {
-    box-shadow: 0 0 0 1px var(--hairline), var(--shadow-xs);
-  }
-}
+/* No blanket card rule here.
+   A `.bg-white.rounded-xl` selector in @layer components is overridden by ANY shadow or ring
+   utility on the same element — utilities win the layer order — so it silently did nothing on
+   exactly the cards that mattered while looking like it was working. Surfaces state their own
+   depth with `ring-1 ... shadow-xs`, which composes correctly because Tailwind builds both
+   into a single box-shadow. */
 
 @layer utilities {
   .shadow-2xs { box-shadow: var(--shadow-2xs); }
