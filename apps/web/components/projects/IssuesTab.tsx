@@ -9,6 +9,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // Technical issues / glitches. Raising one logs the time it cost as NON-BILLABLE time,
 // so it shows up under the project's non-billable timesheets.
@@ -103,7 +104,7 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
   };
 
   async function deleteIssue(id: string) {
-    if (!confirm('Delete this issue and its non-billable time entry?')) return;
+    if (!await confirmDialog({ title: 'Delete this issue and its non-billable time entry?', danger: true, confirmLabel: 'Delete' })) return;
     setDeletingId(id);
     try { await api.issues.delete(id); invalidate(); toast('Issue deleted.', 'info'); }
     catch (e) { toast(e instanceof Error ? e.message : 'Could not delete the issue.', 'error'); }

@@ -10,6 +10,7 @@ import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { projectTypeLabel } from '@/lib/mock-data';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // The badge reflects the PID's REAL lifecycle (derived server-side from the project's phase).
 // Aligned with the project-phase palette: Active/Working = brand blue, Completed = green,
@@ -111,7 +112,7 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
    * here rather than hunting the project down and recreating it.
    */
   async function reinitialize(projectId: string, title: string) {
-    if (!confirm(`Re-initialize "${title}"?\n\nIt goes back to Active with the SAME Project ID and all its existing data.`)) return;
+    if (!await confirmDialog(`Re-initialize "${title}"?\n\nIt goes back to Active with the SAME Project ID and all its existing data.`)) return;
     setReinitId(projectId);
     try {
       await api.projects.reinitialize(projectId);

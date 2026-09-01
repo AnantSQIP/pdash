@@ -8,6 +8,7 @@ import { api, type Deal, type DealStageDef, type ClientSummary } from '@/lib/api
 import { usePermissions } from '@/lib/permissions-context';
 import { formatMoney } from '@/lib/ledger-format';
 import { formatDate } from '@/lib/date';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
@@ -198,7 +199,7 @@ export function DealPanel({ dealId, stages, onClose, onChanged, onDeleted }: {
 
               {mayEdit && (
                 <button
-                  onClick={() => { if (confirm(`Remove the ${deal.company} deal?`)) remove.mutate(); }}
+                  onClick={async () => { if (await confirmDialog({ title: `Remove the ${deal.company} deal?`, danger: true, confirmLabel: 'Remove' })) remove.mutate(); }}
                   className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-red-600"
                 >
                   <Trash2 size={12} /> Remove this deal

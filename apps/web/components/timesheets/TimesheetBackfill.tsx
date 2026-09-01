@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { CalendarClock, Check, X, Loader, Plus, ShieldCheck } from 'lucide-react';
 import { api, type TimesheetBackdateRequest } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { toastError } from '@/components/ui/Toast';
 
 const STATUS_BADGE: Record<TimesheetBackdateRequest['status'], string> = {
   PENDING:   'bg-amber-100 text-amber-700',
@@ -60,7 +61,7 @@ export function TimesheetBackfill() {
       else if (action === 'reject') await api.timesheets.rejectBackdate(id);
       else await api.timesheets.cancelBackdate(id);
       refresh();
-    } catch (e) { alert(e instanceof Error ? e.message : 'Action failed.'); }
+    } catch (e) { toastError(e, 'Action failed.'); }
     finally { setActing(null); }
   }
 

@@ -2,75 +2,189 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Shadow CSS custom properties (tangerine-style subtle multi-layer) ── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Design tokens
+   ═══════════════════════════════════════════════════════════════════════════ */
 :root {
-  --shadow-2xs: 0px 1px 2px 0px rgba(0, 0, 0, 0.04);
-  --shadow-xs:  0px 1px 3px 0px rgba(0, 0, 0, 0.06);
-  --shadow-sm:  0px 1px 3px 0px rgba(0, 0, 0, 0.08), 0px 1px 2px -1px rgba(0, 0, 0, 0.06);
-  --shadow-md:  0px 4px 6px -1px rgba(0, 0, 0, 0.07), 0px 2px 4px -2px rgba(0, 0, 0, 0.05);
-  --shadow-lg:  0px 10px 15px -3px rgba(0, 0, 0, 0.08), 0px 4px 6px -4px rgba(0, 0, 0, 0.04);
-  --shadow-xl:  0px 20px 25px -5px rgba(0, 0, 0, 0.08), 0px 8px 10px -6px rgba(0, 0, 0, 0.04);
-  --shadow-2xl: 0px 25px 50px -12px rgba(0, 0, 0, 0.22);
+  /* ── Motion ──────────────────────────────────────────────────────────────
+     Durations follow the interface-motion convention: the smaller the travel,
+     the faster the move. Anything above 320ms starts to feel like waiting.   */
+  --dur-press:   120ms;  /* button press, hover colour */
+  --dur-fast:    180ms;  /* tooltips, small popovers */
+  --dur-base:    240ms;  /* dropdowns, toasts */
+  --dur-slow:    320ms;  /* dialogs, drawers */
+
+  /* Entrances and exits decelerate; things moving on screen ease both ends.
+     These two curves do almost all the work — resist adding more.           */
+  --ease-out:    cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ── Depth ───────────────────────────────────────────────────────────────
+     Two-layer shadows: a tight contact shadow plus a wider ambient one. A
+     single large blur is what makes an interface look like a 2010 template. */
+  --shadow-2xs: 0 1px 2px 0 rgb(16 24 40 / 0.04);
+  --shadow-xs:  0 1px 2px 0 rgb(16 24 40 / 0.05), 0 1px 3px 0 rgb(16 24 40 / 0.04);
+  --shadow-sm:  0 1px 2px 0 rgb(16 24 40 / 0.06), 0 2px 4px -1px rgb(16 24 40 / 0.05);
+  --shadow-md:  0 2px 4px -1px rgb(16 24 40 / 0.06), 0 6px 12px -2px rgb(16 24 40 / 0.07);
+  --shadow-lg:  0 4px 6px -2px rgb(16 24 40 / 0.05), 0 12px 24px -4px rgb(16 24 40 / 0.09);
+  --shadow-xl:  0 8px 12px -4px rgb(16 24 40 / 0.05), 0 24px 40px -8px rgb(16 24 40 / 0.12);
+  --shadow-2xl: 0 16px 24px -8px rgb(16 24 40 / 0.08), 0 40px 64px -16px rgb(16 24 40 / 0.18);
+
+  /* ── Glass ───────────────────────────────────────────────────────────────
+     Used ONLY on transient overlays whose backdrop we control — the dialog
+     scrim, sticky headers, the toast stack. Never on a data surface: over a
+     table it becomes noise, and you cannot promise contrast against a
+     background you do not own.
+
+     --glass-barrier is the "barrier layer": a solid fill UNDER the blur, so
+     text on glass keeps its 4.5:1 whatever is behind it. Glass without one is
+     a legibility bug waiting for the wrong backdrop.                        */
+  --glass-bg:      rgb(255 255 255 / 0.72);
+  --glass-barrier: rgb(255 255 255 / 0.86);
+  --glass-blur:    saturate(180%) blur(20px);
+  --glass-edge:    rgb(255 255 255 / 0.7);
+
+  /* Hairlines. A pure-grey border reads as unconsidered; these carry a trace
+     of the brand hue so borders and surfaces belong to the same family.     */
+  --hairline:   rgb(16 24 40 / 0.07);
+  --hairline-strong: rgb(16 24 40 / 0.11);
 }
 
-/* ── Base ──────────────────────────────────────────────────────────────── */
-* {
-  box-sizing: border-box;
-}
+/* ═══════════════════════════════════════════════════════════════════════════
+   Base
+   ═══════════════════════════════════════════════════════════════════════════ */
+* { box-sizing: border-box; }
 
-html {
-  overscroll-behavior: none;
-}
+html { overscroll-behavior: none; }
 
 body {
-  background-color: #EBEBEB;
-  color: #1A1A1A;
+  /* Was #EBEBEB — a flat mid-grey that made every white card look grubby.
+     This canvas is barely tinted toward the brand blue, so white surfaces
+     read as light rather than as the only clean thing on screen.           */
+  background-color: #F4F6F9;
+  color: #16202E;
   font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Stops iOS inflating text in landscape, which silently breaks layouts. */
+  -webkit-text-size-adjust: 100%;
 }
 
-/* ── Card depth (component-layer — overridden by any explicit shadow utility) ── */
+/* Numerals line up in columns wherever they are tabulated. */
+table, .tabular { font-variant-numeric: tabular-nums; }
+
+/* Headings should not leave one orphaned word on the last line. */
+h1, h2, h3 { text-wrap: balance; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Surfaces
+   ═══════════════════════════════════════════════════════════════════════════ */
 @layer components {
-  /* White cards get a subtle ring + depth shadow matching the dashboard's ring-1 + shadow-xs */
-  .bg-white.rounded-xl {
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 4px rgba(0, 0, 0, 0.05);
+  /* Cards get a hairline ring plus a contact shadow. The ring is what keeps
+     a white card legible on a light canvas without resorting to a heavy
+     border or a dark drop shadow.                                          */
+  .bg-white.rounded-xl,
+  .bg-white.rounded-2xl {
+    box-shadow: 0 0 0 1px var(--hairline), var(--shadow-xs);
   }
 }
 
-/* ── Shadow utility overrides (refined multi-layer shadows) ─────────────── */
 @layer utilities {
+  .shadow-2xs { box-shadow: var(--shadow-2xs); }
+  .shadow-xs  { box-shadow: var(--shadow-xs); }
   .shadow-sm  { box-shadow: var(--shadow-sm); }
   .shadow     { box-shadow: var(--shadow-md); }
   .shadow-md  { box-shadow: var(--shadow-md); }
   .shadow-lg  { box-shadow: var(--shadow-lg); }
   .shadow-xl  { box-shadow: var(--shadow-xl); }
   .shadow-2xl { box-shadow: var(--shadow-2xl); }
+
+  /* Wide content — tables, code, diagrams — scrolls inside its own box so the
+     page body never scrolls sideways. */
+  .scroll-x { overflow-x: auto; overscroll-behavior-x: contain; }
 }
 
-/* ── Interactive refinements ──────────────────────────────────────────── */
-/* Press-down effect on buttons matching the dashboard's active:translate-y-px */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Interaction
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* A press should look like the surface yielding, not like the page jumping.
+   The old rule nudged the element down 1px, which reads as a hyperlink from
+   2008; a 2% scale reads as a physical press and is GPU-cheap.             */
 button:not(:disabled):active,
-[role="button"]:not(:disabled):active {
-  transform: translateY(1px);
+[role='button']:not(:disabled):active {
+  transform: scale(0.975);
+}
+button, [role='button'] {
+  transition: transform var(--dur-press) var(--ease-out);
 }
 
-/* Better focus ring using brand color (blue #3d8de2) */
+/* Focus is drawn with a ring rather than an outline so it follows rounded
+   corners instead of boxing them. Only for keyboard users. */
 :focus-visible {
-  outline: 2px solid rgba(61, 141, 226, 0.45);
+  outline: 2px solid rgb(61 141 226 / 0.5);
   outline-offset: 2px;
+  border-radius: inherit;
 }
 
-/* ── Custom scrollbar ─────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* ═══════════════════════════════════════════════════════════════════════════
+   Scrollbars — present when in use, invisible when not.
+   ═══════════════════════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background-color: rgb(209 213 219); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background-color: rgb(156 163 175); }
+::-webkit-scrollbar-thumb {
+  background-color: rgb(16 24 40 / 0.14);
+  border-radius: 9999px;
+  /* Transparent border + background-clip inset the thumb from the track. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgb(16 24 40 / 0.26); }
+* { scrollbar-width: thin; scrollbar-color: rgb(16 24 40 / 0.18) transparent; }
 
-/* Toast slide/fade-in */
-@keyframes toastIn {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+/* ═══════════════════════════════════════════════════════════════════════════
+   Reduced motion
+
+   Not "no motion". Movement that explains where something came from is kept
+   as a fade, which conveys the same thing without travel. Blanket-disabling
+   every transition makes an interface feel broken rather than calm.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  /* Colour and opacity still transition; transforms do not. */
+  button:not(:disabled):active,
+  [role='button']:not(:disabled):active { transform: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Glass fallbacks
+
+   Two ways glass must degrade to a solid surface, both non-negotiable:
+   a browser that cannot blur, and a person who has asked the OS for less
+   transparency. In both cases the panel goes opaque rather than murky.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --glass-bg: rgb(255 255 255 / 0.97); --glass-blur: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root { --glass-bg: #ffffff; --glass-barrier: #ffffff; --glass-blur: none; }
+}
+
+@layer utilities {
+  /* The barrier sits beneath the translucent fill; together they stay legible
+     over anything. Both layers are painted here so callers cannot forget one. */
+  .glass {
+    background-color: var(--glass-bg);
+    background-image: linear-gradient(var(--glass-barrier), var(--glass-barrier));
+    background-blend-mode: normal;
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
 }

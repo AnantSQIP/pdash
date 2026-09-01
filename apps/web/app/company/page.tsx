@@ -18,6 +18,7 @@ import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { OrgChartTab } from '@/components/company/OrgChartTab';
 import { AttachButton, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 function fmtDate(iso?: string | null) {
   if (!iso) return '';
@@ -84,7 +85,7 @@ function FeedTab({ canManage }: { canManage: boolean }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ['announcements'] });
 
   async function pin(a: Announcement) { try { await api.company.pinAnnouncement(a.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
-  async function del(a: Announcement) { if (!confirm('Delete this announcement?')) return; try { await api.company.deleteAnnouncement(a.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
+  async function del(a: Announcement) { if (!await confirmDialog({ title: 'Delete this announcement?', danger: true, confirmLabel: 'Delete' })) return; try { await api.company.deleteAnnouncement(a.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
 
   const anniversaries = celebrations?.anniversaries ?? [];
   const birthdays = celebrations?.birthdays ?? [];
@@ -300,7 +301,7 @@ function PoliciesTab({ canManage }: { canManage: boolean }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ['policies'] });
 
   async function acknowledge(p: Policy) { try { await api.company.acknowledgePolicy(p.id); refresh(); toast('Acknowledged'); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
-  async function del(p: Policy) { if (!confirm('Delete this policy?')) return; try { await api.company.deletePolicy(p.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
+  async function del(p: Policy) { if (!await confirmDialog({ title: 'Delete this policy?', danger: true, confirmLabel: 'Delete' })) return; try { await api.company.deletePolicy(p.id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } }
 
   const groups = useMemo(() => {
     const m = new Map<string, Policy[]>();
@@ -521,7 +522,7 @@ function RewardsTab({ canGive }: { canGive: boolean }) {
   const refresh = () => qc.invalidateQueries({ queryKey: ['rewards'] });
 
   async function del(id: string) {
-    if (!confirm('Remove this recognition?')) return;
+    if (!await confirmDialog({ title: 'Remove this recognition?', danger: true, confirmLabel: 'Remove' })) return;
     try { await api.company.deleteReward(id); refresh(); } catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); }
   }
 

@@ -25,13 +25,14 @@ import {
 import clsx from 'clsx';
 import { api, type CalendarEvent, type FreeBusy, type ApiCommentPage, type UserSummary, COMMENT_PAGE_SIZE } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
-import { useToast } from '@/components/ui/Toast';
+import { useToast, toastError } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { TeamCalendarView } from '@/components/calendar/TeamCalendarView';
 import { EVENT_COLORS, EVENT_LABELS, EVENT_LEGEND_ORDER, eventColor, type CalendarEventType } from '@/lib/calendar-colors';
 import { WEEKDAYS_SHORT, WEEKDAYS_FULL, weekdayIndex, monthLeadPad, startOfWeekMonday } from '@/lib/date';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type EventType = CalendarEventType;
 const TYPE_COLORS = EVENT_COLORS;
@@ -358,7 +359,7 @@ function NotesEditor({ event, onSaved }: { event: CalendarEvent; onSaved: (e: Ca
   async function save() {
     setBusy(true);
     try { const updated = await api.events.updateNotes(event.id, notes); onSaved(updated); setEditing(false); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not save notes'); } finally { setBusy(false); }
+    catch (e) { toastError(e, 'Could not save notes'); } finally { setBusy(false); }
   }
   return (
     <div className="mb-4">
@@ -397,7 +398,7 @@ function MeetingChat({ eventId, currentUser }: { eventId: string; currentUser: U
     if (!draft.trim() || !currentUser || busy) return;
     setBusy(true);
     try { await api.comments.create({ entityType: 'MEETING', entityId: eventId, userId: currentUser.id, content: draft.trim() }); setDraft(''); qc.invalidateQueries({ queryKey: ['meeting-chat', eventId] }); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not post'); } finally { setBusy(false); }
+    catch (e) { toastError(e, 'Could not post'); } finally { setBusy(false); }
   }
   return (
     <div className="mb-4">
@@ -529,7 +530,7 @@ export default function CalendarPage() {
   function invalidate() { qc.invalidateQueries({ queryKey: ['events', org?.id] }); }
 
   async function deleteEvent(id: string, series = false) {
-    if (!confirm(series ? 'Delete the whole recurring series?' : 'Delete this event?')) return;
+    if (!await confirmDialog(series ? 'Delete the whole recurring series?' : 'Delete this event?')) return;
     setDeletingId(id);
     try {
       await api.events.delete(id, series);

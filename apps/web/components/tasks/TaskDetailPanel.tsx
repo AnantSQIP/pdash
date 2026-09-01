@@ -19,6 +19,7 @@ import { formatDate, toUtcDay, isPastDue, formatDateTimeIST } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 import { TaskStaffing } from './TaskStaffing';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // 'staffing' replaces the old 'assignees' tab. 'subtasks' | 'comments' | 'activity' remain in the
 // type (their code below is preserved) but are hidden from the tab bar per the new task flow.
@@ -358,7 +359,7 @@ function TaskDetailPanelInner({
   }
 
   async function deleteSubtask(subtaskId: string) {
-    if (!window.confirm('Delete this subtask?')) return;
+    if (!await confirmDialog({ title: 'Delete this subtask?', danger: true, confirmLabel: 'Delete' })) return;
     try {
       await api.tasks.deleteSubtask(task.id, subtaskId);
       refetchSubtasks();
@@ -397,7 +398,7 @@ function TaskDetailPanelInner({
 
   async function deleteTask() {
     if (deletingRef.current) return; // a double-click used to fire a second delete → spurious 404
-    if (!window.confirm('Delete this task? This cannot be undone.')) return;
+    if (!await confirmDialog({ title: 'Delete this task? This cannot be undone.', danger: true, confirmLabel: 'Delete' })) return;
     deletingRef.current = true;
     try {
       await api.tasks.delete(task.id);

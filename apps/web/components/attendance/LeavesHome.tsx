@@ -13,6 +13,7 @@ import {
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
+import { toastError } from '@/components/ui/Toast';
 
 /**
  * The Leaves home, laid out the way the team already knows it from TeamNest: two status cards
@@ -96,14 +97,14 @@ export function LeavesHome({ balances, myRequests, leaveTypes, holidays, onChang
   async function cancelRequest(r: LeaveRequestItem) {
     setBusy(true);
     try { await api.leave.cancel(r.id); setConfirmCancel(null); onChanged(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not cancel the request.'); }
+    catch (e) { toastError(e, 'Could not cancel the request.'); }
     finally { setBusy(false); }
   }
 
   async function submitPlan(r: LeaveRequestItem) {
     setBusy(true);
     try { await api.leave.submitPlan(r.id); onChanged(); }
-    catch (e) { alert(e instanceof Error ? e.message : 'Could not submit the plan.'); }
+    catch (e) { toastError(e, 'Could not submit the plan.'); }
     finally { setBusy(false); }
   }
 

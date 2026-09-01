@@ -10,6 +10,7 @@ import {
   Archive, ArchiveRestore, Search, ChevronDown} from 'lucide-react';
 import { api, type ClientSummary, type PatentOverview } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
@@ -418,11 +419,11 @@ export default function PatentsPortalPage() {
                       smaller, destructive one, and the server refuses it while anything depends
                       on the client. */}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       // Archiving a client whose work is still running is occasionally right and
                       // usually a mistake. Say what is live before it happens, not after.
                       const live = active.activeProjects ?? 0;
-                      if (!active.archivedAt && live > 0 && !confirm(
+                      if (!active.archivedAt && live > 0 && !await confirmDialog(
                         `${active.code} still has ${live} project${live === 1 ? '' : 's'} running. `
                         + `Archiving keeps everything, but the client leaves the patent picker and takes no new patents.\n\nArchive anyway?`,
                       )) return;
@@ -437,13 +438,13 @@ export default function PatentsPortalPage() {
                     {active.archivedAt ? 'Restore' : 'Archive'}
                   </button>
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       const held = (active._count?.patents ?? 0) + (active._count?.projects ?? 0);
                       if (held) {
                         setErr(`${active.code} still has ${active._count?.patents ?? 0} patent(s) and ${active._count?.projects ?? 0} project(s). Removing it would destroy those records — archive it instead.`);
                         return;
                       }
-                      if (confirm(`Permanently remove client code ${active.code}? This cannot be undone.`)) removeClient.mutate(active.id);
+                      if (await confirmDialog({ title: `Permanently remove client code ${active.code}? This cannot be undone.`, danger: true, confirmLabel: 'Delete' })) removeClient.mutate(active.id);
                     }}
                     disabled={removeClient.isPending} title="Remove client code permanently"
                     className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500">
@@ -570,7 +571,7 @@ export default function PatentsPortalPage() {
                           onChange={e => { const f = e.target.files?.[0]; if (f) attachDoc.mutate({ id: p.id, file: f }); (e.target as HTMLInputElement).value = ''; }} />
                       </label>
                     </span>
-                    <button onClick={() => { if (confirm(`Remove ${p.handle}?`)) removePatent.mutate(p.id); }} disabled={removePatent.isPending}
+                    <button onClick={async () => { if (await confirmDialog({ title: `Remove ${p.handle}?`, danger: true, confirmLabel: 'Remove' })) removePatent.mutate(p.id); }} disabled={removePatent.isPending}
                       title="Remove patent" className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500 shrink-0">
                       <Trash2 size={15} />
                     </button>

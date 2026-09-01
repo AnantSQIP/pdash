@@ -8,6 +8,7 @@ import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { TaskListView } from './views';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type Group = { id: string; name: string; isDefault: boolean; sequence: number };
 
@@ -134,9 +135,9 @@ export function TaskGroups({ projectId, tasks, loading, statuses, canEdit, onTas
                 {/* The default group is the fallback for new tasks, so it must always exist. */}
                 {canEdit && id !== '__ungrouped__' && !isDefault && (
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       if (count > 0) { toast('Move or delete this group’s tasks first.', 'error'); return; }
-                      if (confirm(`Delete the group “${name}”?`)) remove.mutate(id);
+                      if (await confirmDialog({ title: `Delete the group “${name}”?`, danger: true, confirmLabel: 'Delete' })) remove.mutate(id);
                     }}
                     className="p-1 text-gray-400 hover:text-red-600 rounded" title="Delete this group">
                     <Trash2 size={13} />
