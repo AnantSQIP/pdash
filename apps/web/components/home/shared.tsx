@@ -54,7 +54,7 @@ export function priorityDotClass(priority: string): string {
  * is the whole difference between a dashboard that looks assembled and one that looks drawn.
  */
 export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={clsx('bg-white rounded-xl ring-1 ring-gray-950/[0.06]', className)}>{children}</div>;
+  return <div className={clsx('bg-white rounded-xl ring-1 ring-gray-950/[0.06] shadow-xs', className)}>{children}</div>;
 }
 
 /**
@@ -70,7 +70,10 @@ export function CardHeader({ title, icon: Icon, iconColor, href, linkLabel, badg
       {/* Card titles are labels, not headlines. Dropping from 16px to 13.5px lets the DATA be
           the largest thing in the card, which is the point of the card. */}
       <h2 className="text-[13.5px] font-semibold tracking-[-0.01em] text-gray-900 flex items-center gap-2 min-w-0">
-        {Icon && <Icon size={16} className={clsx('shrink-0', iconColor ?? 'text-brand-600')} />}
+        {/* One neutral for every card icon. Fourteen cards each with their own hue meant the
+            page had no accent left to spend on anything that MATTERS — an overdue count, a
+            falling metric. Colour is reserved for data now; the icon is just a signpost. */}
+        {Icon && <Icon size={15} className={clsx('shrink-0', iconColor ?? 'text-gray-400')} />}
         <span className="truncate">{title}</span>
         {badge}
       </h2>
@@ -92,14 +95,16 @@ export function CountBadge({ n }: { n: number }) {
 
 export function StatTile({ label, value, Icon, iconBg, iconColor, loading, error }: {
   label: string; value: string | number; Icon: ElementType;
-  iconBg: string; iconColor: string; loading?: boolean; error?: boolean;
+  /* Both optional and neutral by default. A stat tile's icon is a signpost, not a signal —
+     four different hues across four tiles told the reader nothing about the four numbers. */
+  iconBg?: string; iconColor?: string; loading?: boolean; error?: boolean;
 }) {
   return (
-    <div className="bg-white rounded-xl ring-1 ring-gray-950/[0.06] px-5 py-4 flex items-center gap-4 min-w-0">
+    <div className="bg-white rounded-xl ring-1 ring-gray-950/[0.06] shadow-xs px-5 py-4 flex items-center gap-4 min-w-0">
       {/* Squircle rather than a circle: it sits better beside rounded cards, and the icon only
           supports the number, so it stays small and quiet. */}
-      <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center shrink-0', iconBg)}>
-        <Icon size={18} className={iconColor} />
+      <div className={clsx('w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ring-1 ring-inset ring-gray-950/[0.04]', iconBg ?? 'bg-gray-50')}>
+        <Icon size={18} className={iconColor ?? 'text-gray-400'} />
       </div>
       <div className="min-w-0">
         {loading
@@ -109,6 +114,12 @@ export function StatTile({ label, value, Icon, iconBg, iconColor, loading, error
       </div>
     </div>
   );
+}
+
+/** Pulls just the text colour out of a BADGE palette, so a metric can be tinted without a box. */
+function badgeText(badge: string): string {
+  const m = /text-[a-z]+-\d+/.exec(badge);
+  return m ? m[0] : 'text-gray-900';
 }
 
 /** Compact 2x2 (or 2xN) metric grid used inside cards. Surfaces a fetch error instead of showing zeros. */
@@ -123,8 +134,13 @@ export function MetricRow({ items, loading, error, onRetry }: {
         <div key={label} className="bg-white px-4 py-4 flex flex-col gap-1 min-w-0">
           {loading
             ? <div className="h-7 w-10 bg-gray-100 animate-pulse rounded" />
-            : <span className={clsx('text-lg font-bold self-start leading-none', badge ? clsx('px-2 py-0.5 rounded-md', badge) : 'text-gray-900')}>{value}</span>}
-          <span className="text-xs text-gray-500 truncate">{label}</span>
+            /* The number used to sit in a filled, bordered chip. Six of those on one card
+               is six competing blocks of colour. The status still reads — it is carried by
+               the numeral's own colour — but the box is gone and the figure can be large,
+               tabular and comparable down the column. */
+            : <span className={clsx('text-[21px] font-semibold leading-none tracking-[-0.02em] tabular-nums self-start',
+                                    badge ? badgeText(badge) : 'text-gray-900')}>{value}</span>}
+          <span className="text-[12px] text-gray-500 truncate">{label}</span>
         </div>
       ))}
     </div>

@@ -131,12 +131,12 @@ export function KpiTile({
     <Comp
       onClick={onClick}
       className={clsx(
-        'text-left bg-white rounded-xl border px-4 py-3.5 flex items-center gap-3 transition-all w-full',
+        'text-left bg-white rounded-xl ring-1 px-4 py-3.5 flex items-center gap-3 transition-all w-full',
         onClick && 'hover:border-brand-400 hover:shadow-sm cursor-pointer',
         active ? 'border-brand-500 ring-1 ring-brand-400 bg-brand-50/40' : 'border-gray-200',
       )}
     >
-      <div className={clsx('rounded-full flex items-center justify-center shrink-0', hero ? 'w-12 h-12' : 'w-10 h-10', tint)}>
+      <div className={clsx('rounded-xl flex items-center justify-center shrink-0', hero ? 'w-11 h-11' : 'w-9 h-9', tint)}>
         <Icon size={hero ? 22 : 18} />
       </div>
       <div className="min-w-0 flex-1">
