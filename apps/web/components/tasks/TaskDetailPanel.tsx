@@ -7,7 +7,7 @@ import {
   Clock, Plus, RefreshCw, ChevronDown, Loader, Check, Search, UserPlus, Trash2, Pencil,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { api, type ApiTask, type ApiComment, type WorkflowStatus, type ActivityItem } from '@/lib/api';
+import { api, type ApiTask, type ApiCommentPage, type WorkflowStatus, type ActivityItem, COMMENT_PAGE_SIZE } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { userInitials } from '@/lib/avatar';
@@ -203,11 +203,13 @@ function TaskDetailPanelInner({
     queryFn: () => api.tasks.listSubtasks(task.id),
   });
 
-  // Comments (live from API)
-  const { data: comments = [], refetch: refetchComments, isLoading: commentsLoading, isError: commentsError } = useQuery<ApiComment[]>({
-    queryKey: ['comments', 'task', task.id],
-    queryFn: () => api.comments.list('task', task.id),
+  // Comments (live from API) — most recent window first, widened on request.
+  const [commentLimit, setCommentLimit] = useState(COMMENT_PAGE_SIZE);
+  const { data: commentPage, refetch: refetchComments, isLoading: commentsLoading, isError: commentsError } = useQuery<ApiCommentPage>({
+    queryKey: ['comments', 'task', task.id, commentLimit],
+    queryFn: () => api.comments.list('task', task.id, commentLimit),
   });
+  const comments = commentPage?.items ?? [];
 
   // Real activity for this task (only fetched when the Activity tab is open)
   const { data: activity = [], isLoading: activityLoading, isError: activityError } = useQuery<ActivityItem[]>({
@@ -938,6 +940,16 @@ function TaskDetailPanelInner({
               ) : comments.length === 0 ? (
                 <p className="text-sm text-gray-400 text-center py-6">No comments yet. Be the first to comment.</p>
               ) : null}
+              {commentPage?.hasMore && (
+                <div className="flex justify-center">
+                  <button
+                    onClick={() => setCommentLimit(n => n + COMMENT_PAGE_SIZE)}
+                    className="text-xs font-medium text-brand-600 hover:text-brand-700 px-3 py-1.5 rounded-full border border-gray-200 hover:border-brand-300"
+                  >
+                    Load earlier comments ({commentPage.total - comments.length} older)
+                  </button>
+                </div>
+              )}
               {comments.map((c) => {
                 const name = c.user ? `${c.user.firstName} ${c.user.lastName}` : 'Unknown';
                 const timeStr = formatDateTimeIST(c.createdAt);

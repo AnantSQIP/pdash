@@ -727,6 +727,15 @@ export type ApiComment = {
   attachments?: AttachmentRef[];
 };
 
+/**
+ * A window onto a thread: the newest `COMMENT_PAGE_SIZE` comments, oldest-first, plus whether
+ * older ones exist. Threads are read from the bottom, so the recent end is what loads first.
+ */
+export type ApiCommentPage = { items: ApiComment[]; total: number; hasMore: boolean };
+
+/** How many comments a thread loads at a time. Widening asks for one more window's worth. */
+export const COMMENT_PAGE_SIZE = 100;
+
 export type Timesheet = {
   id: string; userId: string; taskId?: string | null; issueId?: string | null;
   projectId?: string | null; projectType?: string | null; category?: string | null; title?: string | null;
@@ -1756,8 +1765,8 @@ export const api = {
   },
 
   comments: {
-    list: (entityType: string, entityId: string) =>
-      req<ApiComment[]>(`/comments?entityType=${entityType}&entityId=${entityId}`),
+    list: (entityType: string, entityId: string, limit: number = COMMENT_PAGE_SIZE) =>
+      req<ApiCommentPage>(`/comments?entityType=${entityType}&entityId=${entityId}&limit=${limit}`),
     create: (data: { entityType: string; entityId: string; userId: string; content: string; documentIds?: string[]; mentionedUserIds?: string[] }) =>
       req<ApiComment>('/comments', { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => req<void>(`/comments/${id}`, { method: 'DELETE' }),

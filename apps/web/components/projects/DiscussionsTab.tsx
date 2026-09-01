@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, Send, Trash2, AtSign } from 'lucide-react';
-import { api, ApiComment } from '@/lib/api';
+import { api, ApiComment, COMMENT_PAGE_SIZE } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -79,10 +79,14 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const queryKey = ['comments', 'PROJECT', projectId] as const;
-  const { data: comments = [], isLoading } = useQuery({
-    queryKey, queryFn: () => api.comments.list('PROJECT', projectId), staleTime: 15_000,
+  // The thread loads its most recent window and widens on request, rather than fetching every
+  // comment ever posted on the project each time the tab is opened.
+  const [limit, setLimit] = useState(COMMENT_PAGE_SIZE);
+  const queryKey = ['comments', 'PROJECT', projectId, limit] as const;
+  const { data: page, isLoading } = useQuery({
+    queryKey, queryFn: () => api.comments.list('PROJECT', projectId, limit), staleTime: 15_000,
   });
+  const comments = page?.items ?? [];
 
   // Project members — the only people who can be @mentioned in this discussion.
   const { data: project } = useQuery({
@@ -199,9 +203,10 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-gray-400" />
           <h2 className="text-sm font-semibold text-gray-800">Discussion</h2>
-          {comments.length > 0 && (
+          {/* The whole thread's size, not just the loaded window. */}
+          {(page?.total ?? 0) > 0 && (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-brand-100 text-brand-700">
-              {comments.length}
+              {page?.total}
             </span>
           )}
         </div>
@@ -221,16 +226,28 @@ export default function DiscussionsTab({ projectId }: { projectId: string }) {
             <p className="text-sm text-gray-500">Start the conversation below.</p>
           </div>
         ) : (
-          ordered.map((comment) => (
-            <CommentRow
-              key={comment.id}
-              comment={comment}
-              memberNames={memberNames}
-              canDelete={!!currentUser && comment.userId === currentUser.id && can('comment.delete')}
-              deleting={deletingId === comment.id}
-              onDelete={handleDelete}
-            />
-          ))
+          <>
+            {page?.hasMore && (
+              <div className="flex justify-center pb-2">
+                <button
+                  onClick={() => setLimit(n => n + COMMENT_PAGE_SIZE)}
+                  className="text-xs font-medium text-brand-600 hover:text-brand-700 px-3 py-1.5 rounded-full bg-white border border-gray-200 hover:border-brand-300"
+                >
+                  Load earlier messages ({page.total - comments.length} older)
+                </button>
+              </div>
+            )}
+            {ordered.map((comment) => (
+              <CommentRow
+                key={comment.id}
+                comment={comment}
+                memberNames={memberNames}
+                canDelete={!!currentUser && comment.userId === currentUser.id && can('comment.delete')}
+                deleting={deletingId === comment.id}
+                onDelete={handleDelete}
+              />
+            ))}
+          </>
         )}
       </div>
 

@@ -181,13 +181,40 @@ silently changes nothing. `--build` because `packages/db` is compiled at image b
 
 ---
 
+## 5. Data retention
+
+Three tables grew with use and were never pruned. Measured on the development database:
+**1,164 refresh tokens, of which exactly one was live.**
+
+A daily in-process sweep (`RetentionModule`) now removes what nothing reads:
+
+| Table | Kept for | Why that long |
+|---|---|---|
+| `refresh_token` | 30 days **after expiry** | Tokens live 14 days. A revoked-but-unexpired row is what detects a stolen token being replayed, so those are never touched. |
+| `analytics_event` | 365 days | The Performance page looks back at most 90 days, or 180 with the previous-period comparison. A year is double the longest question anyone can ask. |
+| `activity` | 365 days | The task/project activity feed. |
+
+`audit_log` is deliberately **not** swept. It is the compliance record, and the one table here
+whose value grows with age.
+
+Override per deployment in `.env.production`; `0` disables a purge entirely:
+
+```
+RETENTION_REFRESH_TOKEN_DAYS=30
+RETENTION_ANALYTICS_DAYS=365
+RETENTION_ACTIVITY_DAYS=365
+```
+
+Deletion runs in batches of 5,000 rather than one statement across a year of rows, which would
+hold locks on the same box that serves the app. To run it now instead of waiting for the daily
+pass, `POST /retention/sweep` (needs `settings.update`); it returns what it removed.
+
+---
+
 ## Still outstanding
 
-Two items proposed and deferred, both slow-burning rather than urgent:
+Nothing from the earlier list. For the record, all three are now done:
 
-- **Performance loads full task rows to count them** (`performance.service.ts:124`, `:635`) — fine
-  at 231 tasks, wasteful at several thousand. The fix is `groupBy`/`count` in SQL.
-- **Comment threads load entirely**, with no pagination.
-
-And housekeeping: `refresh_token`, `analytics_event` and `activity` grow without a retention
-policy. Not urgent; they are the tables that quietly become the biggest.
+- Performance counted tasks by loading every assigned row — now counted in SQL.
+- Comment threads loaded in full — now the newest 100, widened on request.
+- The three tables above had no retention policy — now swept daily.

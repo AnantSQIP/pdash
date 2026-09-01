@@ -23,7 +23,7 @@ import {
   type RemixiconComponentType,
 } from '@remixicon/react';
 import clsx from 'clsx';
-import { api, type CalendarEvent, type FreeBusy, type ApiComment, type UserSummary } from '@/lib/api';
+import { api, type CalendarEvent, type FreeBusy, type ApiCommentPage, type UserSummary, COMMENT_PAGE_SIZE } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
@@ -385,9 +385,12 @@ function NotesEditor({ event, onSaved }: { event: CalendarEvent; onSaved: (e: Ca
 // A lightweight comment thread on a meeting (reuses the polymorphic comments API).
 function MeetingChat({ eventId, currentUser }: { eventId: string; currentUser: UserSummary | null }) {
   const qc = useQueryClient();
-  const { data: comments = [] } = useQuery<ApiComment[]>({
-    queryKey: ['meeting-chat', eventId], queryFn: () => api.comments.list('MEETING', eventId), staleTime: 8_000, refetchInterval: 12_000,
+  // This polls every 12s, so an unbounded thread was re-fetched in full on every tick.
+  const [limit, setLimit] = useState(COMMENT_PAGE_SIZE);
+  const { data: page } = useQuery<ApiCommentPage>({
+    queryKey: ['meeting-chat', eventId, limit], queryFn: () => api.comments.list('MEETING', eventId, limit), staleTime: 8_000, refetchInterval: 12_000,
   });
+  const comments = page?.items ?? [];
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   async function send() {
@@ -401,6 +404,11 @@ function MeetingChat({ eventId, currentUser }: { eventId: string; currentUser: U
       <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Discussion</span>
       <div className="space-y-2 mt-1.5 max-h-40 overflow-y-auto">
         {comments.length === 0 && <p className="text-xs text-gray-300">No messages yet.</p>}
+        {page?.hasMore && (
+          <button onClick={() => setLimit(n => n + COMMENT_PAGE_SIZE)} className="w-full text-[11px] font-medium text-brand-600 hover:underline py-1">
+            Load earlier messages ({page.total - comments.length} older)
+          </button>
+        )}
         {comments.map(c => (
           <div key={c.id} className="flex items-start gap-2">
             <Avatar user={c.user} size={22} className="shrink-0 mt-0.5" />

@@ -120,16 +120,31 @@ export class PerformanceService {
     const now = new Date();
     const { from, to, prevFrom, prevTo } = windowRange(days);
 
-    // Point-in-time backlog snapshot (all assigned tasks, current status)
-    const tasks = await this.prisma.task.findMany({
-      where: { deletedAt: null, assignees: { some: { userId } } },
-      select: { id: true, dueDate: true, updatedAt: true, currentStatus: { select: { type: true } } },
-    });
-    const tasksAssigned = tasks.length;
-    const completedTasks = tasks.filter(t => t.currentStatus?.type === 'CLOSED');
-    const tasksCompletedAll = completedTasks.length;
+    // Point-in-time backlog snapshot (all assigned tasks, current status).
+    //
+    // Counted in SQL. This used to load every task assigned to the user — id, dueDate, updatedAt
+    // and the joined status — purely to call .length and .filter() on the result. The rows were
+    // never otherwise used, so the whole backlog crossed the wire to produce three integers.
+    //
+    // `currentStatus` is an OPTIONAL relation, and a task with no status counts as open. So
+    // "not closed" has to be written as the explicit OR below: `currentStatus: { type: { not:
+    // 'CLOSED' } }` reads as if it means the same thing, but a relation filter only matches rows
+    // where the relation EXISTS, so it silently drops every status-less task. Measured on a
+    // fixture: the naive form reported 1 overdue task where the correct answer was 2.
+    const assignedToUser = { deletedAt: null, assignees: { some: { userId } } };
+    const notClosed = {
+      OR: [
+        { currentWorkflowStatusId: null },
+        { currentStatus: { type: { not: 'CLOSED' } } },
+      ],
+    };
+    const [tasksAssigned, tasksCompletedAll, tasksOverdue] = await Promise.all([
+      this.prisma.task.count({ where: assignedToUser }),
+      this.prisma.task.count({ where: { ...assignedToUser, currentStatus: { type: 'CLOSED' } } }),
+      // dueDate: { lt: now } already excludes rows with no due date.
+      this.prisma.task.count({ where: { ...assignedToUser, dueDate: { lt: now }, ...notClosed } }),
+    ]);
     const tasksOpen = tasksAssigned - tasksCompletedAll;
-    const tasksOverdue = tasks.filter(t => t.currentStatus?.type !== 'CLOSED' && t.dueDate && t.dueDate < now).length;
 
     // Windowed throughput (current + previous window) + cycle time
     const [cur, prev, cycleTimeDays] = await Promise.all([
@@ -626,16 +641,22 @@ export class PerformanceService {
       desigOf.set(u.id, u.designation ?? 'Other');
     }
 
-    const [hoursByUser, tasks, issues, projects] = await Promise.all([
+    const [hoursByUser, tasksByStatus, allStatuses, issues, projects] = await Promise.all([
       this.prisma.timesheet.groupBy({
         by: ['userId'],
         where: { userId: { in: userIds }, deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to } },
         _sum: { hoursLogged: true },
       }),
-      this.prisma.task.findMany({
+      // Tallied in SQL. This previously fetched one row per task in the whole organisation, with
+      // the status joined on, only to increment a counter per row and discard the rows.
+      this.prisma.task.groupBy({
+        by: ['currentWorkflowStatusId'],
         where: { deletedAt: null, assignees: { some: { userId: { in: userIds } } } },
-        select: { currentStatus: { select: { name: true, type: true } } },
+        _count: { _all: true },
       }),
+      // Statuses are a handful of rows in total, so fetching them all here keeps this to a single
+      // round trip rather than a follow-up query once the group keys are known.
+      this.prisma.workflowStatus.findMany({ select: { id: true, name: true, type: true } }),
       this.prisma.issue.groupBy({
         by: ['severity'],
         where: { deletedAt: null, project: { members: { some: { user: { organizationId } } } } },
@@ -658,10 +679,14 @@ export class PerformanceService {
       byDepartment.set(dp, (byDepartment.get(dp) ?? 0) + hrs);
     }
 
+    // A task with no status has no name to show, and is treated as open — matching how the
+    // per-user backlog counts it.
+    const statusById = new Map(allStatuses.map(st => [st.id, st]));
     const statusMap = new Map<string, number>();
-    for (const t of tasks) {
-      const s = t.currentStatus?.name ?? (t.currentStatus?.type === 'CLOSED' ? 'Closed' : 'Open');
-      statusMap.set(s, (statusMap.get(s) ?? 0) + 1);
+    for (const row of tasksByStatus) {
+      const st = row.currentWorkflowStatusId ? statusById.get(row.currentWorkflowStatusId) : undefined;
+      const s = st?.name ?? (st?.type === 'CLOSED' ? 'Closed' : 'Open');
+      statusMap.set(s, (statusMap.get(s) ?? 0) + row._count._all);
     }
 
     const SEV = ['CRITICAL', 'MAJOR', 'MINOR', 'TRIVIAL'];

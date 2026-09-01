@@ -52,6 +52,14 @@ const ATTACHMENTS_INCLUDE = {
   select: { document: { select: DOC_SELECT } },
 } as const;
 
+/**
+ * How much of a thread comes back by default, and the ceiling a caller can ask for. 100 covers
+ * every thread in the system today; the cap exists so a hand-crafted `?limit=` cannot reinstate
+ * the unbounded query this replaced.
+ */
+const COMMENT_PAGE_DEFAULT = 100;
+const COMMENT_PAGE_MAX = 500;
+
 @Injectable()
 export class CommentsService {
   constructor(
@@ -103,18 +111,39 @@ export class CommentsService {
     return [...ids];
   }
 
-  async list(entityType: string, entityId: string) {
+  /**
+   * The newest `limit` comments, oldest-first within that window.
+   *
+   * This used to return every comment ever posted on the entity. A project discussion or a
+   * meeting chat grows without limit, and two of the three callers poll — so the cost of an old
+   * thread was paid again every few seconds, by everyone with it open.
+   *
+   * Threads are read from the bottom, so the recent end is the part that matters. `hasMore` lets
+   * the caller offer to widen the window rather than silently hiding the rest: a truncated thread
+   * the reader cannot tell is truncated would be worse than a slow one.
+   */
+  async list(entityType: string, entityId: string, limit = COMMENT_PAGE_DEFAULT) {
     // A comment thread is only for people who can access the underlying matter — otherwise
     // any user could read a confidential project/task/issue discussion by entityId (IDOR).
     await this.access.assertEntityAccess(getActorId(), entityType, entityId);
-    return this.prisma.comment.findMany({
-      where: { entityType, entityId },
-      include: {
-        user: { select: { id: true, firstName: true, lastName: true } },
-        attachments: ATTACHMENTS_INCLUDE,
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+
+    const take = Math.min(Math.max(Math.trunc(limit) || COMMENT_PAGE_DEFAULT, 1), COMMENT_PAGE_MAX);
+    const where = { entityType, entityId };
+    // One transaction so the count and the rows agree. Read separately, a comment landing between
+    // them makes `hasMore` claim there is an older page that does not exist.
+    const [total, newest] = await this.prisma.$transaction([
+      this.prisma.comment.count({ where }),
+      this.prisma.comment.findMany({
+        where,
+        include: {
+          user: { select: { id: true, firstName: true, lastName: true } },
+          attachments: ATTACHMENTS_INCLUDE,
+        },
+        orderBy: { createdAt: 'desc' },
+        take,
+      }),
+    ]);
+    return { items: newest.reverse(), total, hasMore: total > newest.length };
   }
 
   /**
@@ -232,8 +261,13 @@ class CommentsController {
   constructor(private readonly service: CommentsService) {}
 
   @Get()
-  list(@Query('entityType') entityType: string, @Query('entityId') entityId: string) {
-    return this.service.list(entityType, entityId);
+  list(
+    @Query('entityType') entityType: string,
+    @Query('entityId') entityId: string,
+    @Query('limit') limit?: string,
+  ) {
+    // A non-numeric limit falls back to the default rather than erroring; this is a read.
+    return this.service.list(entityType, entityId, limit ? Number(limit) : undefined);
   }
 
   @Post() @RequirePermission('comment.create')
