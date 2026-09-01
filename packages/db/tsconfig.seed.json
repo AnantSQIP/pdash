@@ -1,9 +1,10 @@
 {
   "//": "Compiles the standalone DB scripts (seed + its catalog) to plain JS so production runs them with `node` — no ts-node/tsconfig needed in the container.",
+  "//moduleResolution": "node16 rather than the deprecated node10; still emits CommonJS because @pdash/db sets no \"type\": \"module\". Emit verified identical.",
   "compilerOptions": {
-    "module": "CommonJS",
+    "module": "node16",
     "target": "ES2022",
-    "moduleResolution": "node",
+    "moduleResolution": "node16",
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,

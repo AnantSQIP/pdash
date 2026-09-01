@@ -1,6 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // The base sets moduleResolution "node" (node10), which TypeScript 7.0 drops. node16 is the
+    // supported equivalent for a package Node resolves itself, and it must be set together with
+    // "module" — TS5110 rejects one without the other.
+    //
+    // This stays CommonJS in practice: emit follows package.json, and @pdash/db declares no
+    // "type": "module". Verified by diffing the emitted JS before and after — byte identical.
+    "module": "node16",
+    "moduleResolution": "node16",
     "outDir": "dist",
     "rootDir": "src"
   },
