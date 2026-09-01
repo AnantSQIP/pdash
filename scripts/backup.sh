@@ -73,18 +73,35 @@ mv "$DOC_FILE.partial" "$DOC_FILE"
 DB_SIZE=$(du -h "$DB_FILE"  | cut -f1)
 DOC_SIZE=$(du -h "$DOC_FILE" | cut -f1)
 
-# A dump that gunzips cleanly and contains a CREATE TABLE is not proof of a good restore, but an
-# empty or truncated file is proof of a bad one — and that is the failure worth catching nightly.
+# A dump that gunzips cleanly, declares tables, and carries pg_dump's own end-of-dump marker is
+# not proof of a good restore, but an empty or truncated file is proof of a bad one — and that is
+# the failure worth catching nightly.
 if ! gzip -t "$DB_FILE" 2>/dev/null; then
   echo "[$(date -Is)] FAILED: $DB_FILE is not a valid gzip file." >&2
   exit 1
 fi
-# Scans the WHOLE file, not the head. `--clean --if-exists` emits several hundred DROP statements
-# before the first CREATE TABLE, so a head-limited check finds no schema in a perfectly good dump
-# and fails every night — which is how a backup script becomes noise everybody ignores.
-# grep -qm1 stops at the first match, so this costs one decompression pass at most.
-if ! zcat "$DB_FILE" | grep -qm1 "^CREATE TABLE"; then
-  echo "[$(date -Is)] FAILED: $DB_FILE contains no schema — the dump did not work." >&2
+
+# One pass over the WHOLE dump. `--clean --if-exists` emits several hundred DROP statements before
+# the first CREATE TABLE, so a head-limited check finds no schema in a perfectly good dump.
+#
+# Do NOT reach for `grep -q` or `grep -m1` here, however tempting the early exit looks. grep stops
+# at the first match and closes the pipe, zcat is killed by SIGPIPE (141), and `set -o pipefail`
+# then reports 141 for the whole pipeline — so the check fails hardest exactly when the dump is
+# GOOD and the match is found soonest. awk is used instead because it reads to EOF regardless.
+DUMP_CHECK="$(zcat "$DB_FILE" | awk '
+  /^CREATE TABLE/                         { tables++ }
+  /^-- PostgreSQL database dump complete/ { complete = 1 }
+  END                                     { print tables + 0, complete + 0 }')"
+TABLE_COUNT="${DUMP_CHECK%% *}"
+DUMP_COMPLETE="${DUMP_CHECK##* }"
+
+if [ "$TABLE_COUNT" -lt 1 ]; then
+  echo "[$(date -Is)] FAILED: $DB_FILE declares no tables — the dump did not work." >&2
+  exit 1
+fi
+# pg_dump writes that footer last of all, so its absence means the dump was cut short partway.
+if [ "$DUMP_COMPLETE" -ne 1 ]; then
+  echo "[$(date -Is)] FAILED: $DB_FILE is truncated — pg_dump's end-of-dump marker is missing." >&2
   exit 1
 fi
 
@@ -95,4 +112,4 @@ find "$BACKUP_DIR" -name 'pdash-docs-*.tar.gz' -mtime "+$KEEP_DAYS" -delete
 find "$BACKUP_DIR" -name '*.partial' -mtime +1 -delete
 
 COUNT=$(find "$BACKUP_DIR" -name 'pdash-db-*.sql.gz' | wc -l)
-echo "[$(date -Is)] OK — db $DB_SIZE, documents $DOC_SIZE, $COUNT database backups retained in $BACKUP_DIR"
+echo "[$(date -Is)] OK — db $DB_SIZE ($TABLE_COUNT tables), documents $DOC_SIZE, $COUNT database backups retained in $BACKUP_DIR"

@@ -44,6 +44,11 @@ failing. Check that log occasionally, or point it at a mailbox.
 
 Both are needed. A database dump alone restores a system where every document link is broken.
 
+Every run verifies the dump before keeping it: valid gzip, at least one table declared, and
+pg_dump's own end-of-dump marker present. The last of those is what catches a dump cut short
+partway — a truncated file still contains plenty of `CREATE TABLE` lines, so counting tables alone
+would pass it.
+
 ### The drill — run it monthly
 
 ```bash
@@ -85,19 +90,23 @@ changed halfway through, which is its own kind of broken.
 All three services share one box with Postgres. Without ceilings, a leak or a runaway query in the
 API starves the database — a recoverable fault in one process becomes a total outage.
 
-Defaults suit a 4 GB box. **Check yours first:**
+Defaults (postgres 1g / api 768m / web 512m) suit a 4 GB box. **Check yours first:**
 
 ```bash
 free -h
 ```
 
-Override in `.env.production` if it differs:
+Override in `.env.production` if it differs. On the current 8 GB Contabo box the defaults are
+about half of what is available, so there is headroom to raise them:
 
 ```
-POSTGRES_MEM_LIMIT=1g
-API_MEM_LIMIT=768m
-WEB_MEM_LIMIT=512m
+POSTGRES_MEM_LIMIT=2g
+API_MEM_LIMIT=1g
+WEB_MEM_LIMIT=768m
 ```
+
+Raising them is optional — nothing is being throttled today. It buys room before Postgres starts
+spilling sorts to disk as the tables grow.
 
 These are ceilings, not reservations — setting them consumes nothing. Postgres gets the largest
 share because it is the one process whose failure loses data rather than merely serving an error.
