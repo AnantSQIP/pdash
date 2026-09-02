@@ -252,7 +252,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
           select: taskSelect, orderBy: { dueDate: 'asc' }, take: 500,
         }),
         this.prisma.project.findMany({
-          where: { deletedAt: null, projectPhase: { in: ['ACTIVE', 'ON_HOLD', 'PLANNING'] }, dueDate: { gte: today, lt: lookaheadEnd } },
+          where: { deletedAt: null, projectPhase: { in: ['ACTIVE', 'ON_HOLD'] }, dueDate: { gte: today, lt: lookaheadEnd } },
           select: projectSelect, orderBy: { dueDate: 'asc' },
         }),
         // Who worked, and on what, that day — the "working hours" side of the picture.

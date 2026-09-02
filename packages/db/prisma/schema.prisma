@@ -638,7 +638,9 @@ model WorkflowTransition {
 
 // ═══════════════════════════════════════════════════════════════
 // 6. PROJECT DOMAIN
-// projectPhase: Idea | Planning | Active | On Hold | Completed | Archived | Cancelled
+// projectPhase: Active | On Hold | Completed | Archived | Cancelled
+// There is no PLANNING phase. Work here starts when it starts; a project sitting in a
+// planning state was a stage nobody used and a filter tab nobody clicked.
 // D2: approval handled via generic Approval + ApprovalAction entities.
 // ═══════════════════════════════════════════════════════════════
 
@@ -672,7 +674,7 @@ model Project {
   // The client/matter this project is for (drives the "{Type} - {Client}" title and the
   // confidential patent picker). Null for internal/General projects.
   clientId                String?
-  projectPhase            String    @default("PLANNING")
+  projectPhase            String    @default("ACTIVE")
   priority                String    @default("MEDIUM")
   startDate               DateTime?
   // dueDate = the INTERNAL deadline (visible to everyone; drives "overdue").

@@ -12,7 +12,6 @@ import { Avatar } from '@/components/Avatar';
 
 export const PHASE_COLORS: Record<string, { bg: string; text: string; label: string }> = {
   ACTIVE:    { bg: 'bg-emerald-50 ring-1 ring-inset ring-emerald-600/15', text: 'text-emerald-700', label: 'Active'    },
-  PLANNING:  { bg: 'bg-brand-50 ring-1 ring-inset ring-brand-600/15',     text: 'text-brand-700',   label: 'Planning'  },
   ON_HOLD:   { bg: 'bg-amber-50 ring-1 ring-inset ring-amber-600/15',     text: 'text-amber-700',   label: 'On Hold'   },
   COMPLETED: { bg: 'bg-gray-50 ring-1 ring-inset ring-gray-950/10',       text: 'text-gray-600',    label: 'Completed' },
   CLOSED:    { bg: 'bg-slate-50 ring-1 ring-inset ring-slate-600/15',     text: 'text-slate-600',   label: 'Closed'    },

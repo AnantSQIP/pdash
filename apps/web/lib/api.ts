@@ -438,7 +438,7 @@ export type ClientSummary = {
   /** Set = retired from day-to-day work. Reversible; nothing about the data changes. */
   archivedAt?: string | null;
   _count?: { patents: number; projects: number };
-  /** Projects still running (PLANNING/ACTIVE/ON_HOLD) — what archiving would leave orphaned. */
+  /** Projects still running (ACTIVE/ON_HOLD) — what archiving would leave orphaned. */
   activeProjects?: number;
 };
 // ─── Team spaces (Phase 3) ───────────────────────────────────────────────────

@@ -446,7 +446,7 @@ export class ClientLedgerService {
       const row = out.get(p.clientId!);
       if (!row) continue;
       row.projectCount++;
-      if (['PLANNING', 'ACTIVE', 'ON_HOLD'].includes(p.projectPhase)) row.activeProjectCount++;
+      if (['ACTIVE', 'ON_HOLD'].includes(p.projectPhase)) row.activeProjectCount++;
     }
 
     const patents = await this.prisma.patent.groupBy({

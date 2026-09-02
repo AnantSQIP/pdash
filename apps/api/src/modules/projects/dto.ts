@@ -54,7 +54,7 @@ export const OFFICES = ['GURGAON', 'JAIPUR'];
 // No CLOSED. Marking a project complete IS the end of it — a second "close" step said nothing the
 // first had not already said, and left two states meaning the same thing in every module.
 // Legacy CLOSED rows are migrated to COMPLETED; read paths still tolerate the value.
-export const PROJECT_PHASES = ['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'ARCHIVED', 'CANCELLED'];
+export const PROJECT_PHASES = ['ACTIVE', 'ON_HOLD', 'COMPLETED', 'ARCHIVED', 'CANCELLED'];
 
 export class CreateProjectDto {
   @IsString()

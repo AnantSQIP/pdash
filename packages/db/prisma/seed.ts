@@ -294,7 +294,7 @@ async function main() {
     data: {
       title: 'FTO Analysis — MedTech Wearable',
       description: 'Freedom-to-operate study for a continuous glucose-monitoring wearable ahead of US/EU launch.',
-      projectPhase: 'PLANNING', priority: 'CRITICAL', completionPercentage: 18,
+      projectPhase: 'ACTIVE', priority: 'CRITICAL', completionPercentage: 18,
       workflowId: workflow.id, currentWorkflowStatusId: sOpen.id, createdBy: bob.id,
       startDate: new Date('2026-06-01'), dueDate: new Date('2026-10-01'),
       members: { create: [
