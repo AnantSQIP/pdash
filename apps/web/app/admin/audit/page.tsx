@@ -29,6 +29,10 @@ export default function AuditPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['audit-logs', org?.id],
+    // Opened to see current state, and everything on it is written by work done on OTHER
+    // screens. With only the global 30s stale window, arriving here inside that window
+    // rendered the cached copy and the change you just made appeared to be missing.
+    refetchOnMount: 'always',
     queryFn: () => api.auditLogs.list({ organizationId: org!.id, limit: 200 }),
     enabled: !!org?.id && (isSuperAdmin || can('audit.view')),
     staleTime: 20_000,

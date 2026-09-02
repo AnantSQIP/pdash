@@ -87,8 +87,8 @@ export default function PeopleOpsPage() {
           <p className="text-xs text-amber-900 leading-relaxed">
             <b>{data.missingJoiningDate.length} {data.missingJoiningDate.length === 1 ? 'person has' : 'people have'} no joining date.</b>{' '}
             Probation cannot be worked out for them, and leave is granted in full rather than
-            pro-rated. Set a date on anyone below to fix it — they are marked{' '}
-            <span className="font-medium">No joining date</span>.
+            pro-rated. They are listed under <span className="font-medium">Probation &amp; confirmation</span>{' '}
+            marked <span className="font-medium">No joining date</span> — open anyone to set it.
           </p>
         </div>
       )}

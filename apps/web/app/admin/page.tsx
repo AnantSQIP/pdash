@@ -115,8 +115,8 @@ export default function AdminPage() {
 function UsersTab({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
   const router = useRouter();
-  const { data: users = [] } = useQuery({ queryKey: ['users', orgId, 'all'], queryFn: () => api.users.list(orgId, true), staleTime: 30_000 });
-  const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 });
+  const { data: users = [] } = useQuery({ queryKey: ['users', orgId, 'all'], queryFn: () => api.users.list(orgId, true), staleTime: 30_000 , refetchOnMount: 'always' });
+  const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
   const [showCreate, setShowCreate] = useState(false);
   const [wizardUser, setWizardUser] = useState<UserSummary | null>(null);
   const [editUser, setEditUser] = useState<UserSummary | null>(null);
@@ -274,7 +274,8 @@ function UsersTab({ orgId }: { orgId: string }) {
                           onClick={async () => {
                             setMenuFor(null);
                             if (!await confirmDialog(`Reset ${fullName(u)}'s password? They will be signed out and must use a new temporary password.`)) return;
-                            try { const r = await api.users.resetPassword(u.id); setResetResult(r); }
+                            // A reset signs the person out and flags them to change it — both shown in the list.
+    try { const r = await api.users.resetPassword(u.id); setResetResult(r); qc.invalidateQueries({ queryKey: ['users', orgId] }); }
                             catch (e) { toastError(e, 'Could not reset password'); }
                           }}
                           className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-50"
@@ -443,9 +444,9 @@ const ROLE_TEMPLATES: Record<string, (perms: PermissionDef[]) => string[]> = {
 
 function RolesTab({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
-  const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 });
-  const { data: users = [] } = useQuery({ queryKey: ['users', orgId], queryFn: () => api.users.list(orgId), staleTime: 30_000 });
-  const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 });
+  const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
+  const { data: users = [] } = useQuery({ queryKey: ['users', orgId], queryFn: () => api.users.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
+  const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 , refetchOnMount: 'always' });
   const [showCreate, setShowCreate] = useState(false);
   const [editRole, setEditRole] = useState<RoleSummary | null>(null);
   const [delRole, setDelRole] = useState<RoleSummary | null>(null);
@@ -538,8 +539,8 @@ function CreateRoleModal({ orgId, perms, onClose, onDone }: { orgId: string; per
 // ── Groups ───────────────────────────────────────────────────────────────────
 function GroupsTab({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
-  const { data: groups = [] } = useQuery({ queryKey: ['groups', orgId], queryFn: () => api.groups.list(orgId), staleTime: 30_000 });
-  const { data: users = [] } = useQuery({ queryKey: ['users', orgId], queryFn: () => api.users.list(orgId), staleTime: 30_000 });
+  const { data: groups = [] } = useQuery({ queryKey: ['groups', orgId], queryFn: () => api.groups.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
+  const { data: users = [] } = useQuery({ queryKey: ['users', orgId], queryFn: () => api.users.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
   const [showCreate, setShowCreate] = useState(false);
   const [membersOf, setMembersOf] = useState<GroupSummary | null>(null);
   const [editGroup, setEditGroup] = useState<GroupSummary | null>(null);
@@ -625,9 +626,9 @@ function EditNamedModal({ title, initial, onClose, onSave }: { title: string; in
 // ── Permission Matrix ──────────────────────────────────────────────────────────
 function MatrixTab({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
-  const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 });
-  const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 });
-  const { data: groups = [] } = useQuery({ queryKey: ['groups', orgId], queryFn: () => api.groups.list(orgId), staleTime: 30_000 });
+  const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 , refetchOnMount: 'always' });
+  const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
+  const { data: groups = [] } = useQuery({ queryKey: ['groups', orgId], queryFn: () => api.groups.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
 
   const [target, setTarget] = useState('');
   const [selected, setSelected] = useState<Set<string> | null>(null);

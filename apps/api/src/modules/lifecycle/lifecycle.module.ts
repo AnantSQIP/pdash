@@ -135,8 +135,16 @@ export class LifecycleService {
     });
     const rows = people.map(p => this.decorate(p));
     return {
-      /** Confirmation is due, overdue, or the joining date is missing so it cannot be judged. */
-      probation: rows.filter(r => ['due', 'overdue', 'on-probation'].includes(r.probationStatus)),
+      /**
+       * Confirmation is due, overdue, in progress — or cannot be judged because the joining
+       * date is missing.
+       *
+       * 'unknown' was missing from this list while the comment above claimed it was included,
+       * and the consequence was the whole screen: with no joining dates on file, EVERY person
+       * is 'unknown', so the board rendered empty under a banner reading "set a date on anyone
+       * below". The people who needed a date were the only ones excluded from the list.
+       */
+      probation: rows.filter(r => ['due', 'overdue', 'on-probation', 'unknown'].includes(r.probationStatus)),
       leaving: rows.filter(r => r.onNotice),
       /** Nothing tenure-based works without this, so it is surfaced rather than left to be noticed. */
       missingJoiningDate: rows.filter(r => !r.joiningDate).map(r => ({

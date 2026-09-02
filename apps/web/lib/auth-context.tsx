@@ -52,14 +52,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [qc]);
 
+  /**
+   * Sign out, and LAND the user on /login. The redirect belongs here rather than at the call
+   * sites, because one of them had it in the wrong order:
+   *
+   *     action: () => { logout(); router.replace('/login'); }   // logout is async, not awaited
+   *
+   * The navigation started while logout() was still running, so `qc.clear()` landed midway
+   * through the next render and emptied the cache under a tree that was already mounting —
+   * a white screen that only a manual refresh fixed.
+   *
+   * The redirect is a FULL page load, not router.replace. Signing out should leave nothing of
+   * the previous user in memory, and a client-side navigation keeps the whole React tree —
+   * and whatever it is still holding — alive.
+   */
   const logout = useCallback(async () => {
-    try { await api.auth.logout(); } catch { /* ignore */ }
+    try { await api.auth.logout(); } catch { /* the cookie is cleared server-side regardless */ }
     try { localStorage.removeItem(IDLE_KEY); } catch { /* storage blocked */ }
     // Drop the in-memory org passcode so the next user on this browser can't inherit it (the
     // patents reveal / doc-download step-up was reusable across a soft logout→login otherwise).
     clearPasscodeCache();
-    qc.clear();
     qc.setQueryData(['auth-me'], null);
+    if (typeof window !== 'undefined') window.location.replace('/login');
   }, [qc]);
 
   // Record activity (throttled) so we know when a signed-in session has gone idle.
