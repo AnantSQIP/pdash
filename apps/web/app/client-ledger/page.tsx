@@ -25,6 +25,10 @@ export default function ClientLedgerPage() {
 
   const { data: rows = [], isLoading } = useQuery<LedgerRow[]>({
     queryKey: ['client-ledger', showArchived],
+    // Opened to see current state, and everything on it is written by work done on OTHER
+    // screens. With only the global 30s stale window, arriving here inside that window
+    // rendered the cached copy and the change you just made appeared to be missing.
+    refetchOnMount: 'always',
     queryFn: () => api.clientLedger.list(showArchived),
     enabled: can('patent.manage'),
   });
@@ -32,6 +36,10 @@ export default function ClientLedgerPage() {
   // picture of the firm's work while quietly omitting some of it.
   const { data: orphan } = useQuery<LedgerUnattributed>({
     queryKey: ['client-ledger-unattributed'],
+    // Opened to see current state, and everything on it is written by work done on OTHER
+    // screens. With only the global 30s stale window, arriving here inside that window
+    // rendered the cached copy and the change you just made appeared to be missing.
+    refetchOnMount: 'always',
     queryFn: () => api.clientLedger.unattributed(),
     enabled: can('patent.manage'),
   });

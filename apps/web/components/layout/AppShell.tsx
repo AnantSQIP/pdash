@@ -27,11 +27,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (!isAuthed && !isPublic) {
       // A revoked/expired session can leave its 14-day cookie physically present. The edge
       // middleware treats that cookie as "authed" and would bounce /login → /home forever
-      // (an infinite redirect loop, e.g. right after an admin resets your password). Clear
-      // the cookies via logout() FIRST so the redirect to /login actually sticks.
+      // (an infinite redirect loop, e.g. right after an admin resets your password). logout()
+      // clears the cookies and performs the redirect itself, in that order.
       if (!bouncedRef.current) {
         bouncedRef.current = true;
-        logout().finally(() => router.replace('/login'));
+        void logout();
       }
       return;
     }

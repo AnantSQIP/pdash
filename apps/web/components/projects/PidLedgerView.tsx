@@ -125,6 +125,8 @@ export function PidLedgerView({ toolbarExtra }: { toolbarExtra?: React.ReactNode
   }
   const { data: rows = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['pid-ledger'],
+    // Every row here is produced by creating or reopening a project on another screen.
+    refetchOnMount: 'always',
     queryFn: () => api.projects.pidLedger(),
     staleTime: 15_000,
   });

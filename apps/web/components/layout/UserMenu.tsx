@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { User, CheckSquare, Settings, LogOut, Home, Plane } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useOrg } from '@/lib/org-context';
@@ -85,7 +84,6 @@ function StatusPicker() {
 }
 
 export function UserMenu({ onClose, collapsed = false }: { onClose: () => void; collapsed?: boolean }) {
-  const router = useRouter();
   const { logout, email } = useAuth();
   const { currentUser } = useOrg();
   const { mine } = usePresence();
@@ -98,7 +96,7 @@ export function UserMenu({ onClose, collapsed = false }: { onClose: () => void; 
     { icon: User,        label: 'My Profile', href: '/settings' },
     { icon: CheckSquare, label: 'My Tasks',   href: '/tasks' },
     { icon: Settings,    label: 'Account Settings', href: '/settings' },
-    { icon: LogOut,      label: 'Sign Out', danger: true, separator: true, action: () => { logout(); router.replace('/login'); } },
+    { icon: LogOut,      label: 'Sign Out', danger: true, separator: true, action: () => { void logout(); } },
   ];
 
   return (

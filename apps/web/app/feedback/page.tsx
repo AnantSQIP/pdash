@@ -56,10 +56,18 @@ export default function FeedbackPage() {
 
   const { data: items = [], isLoading } = useQuery<FeedbackItem[]>({
     queryKey: ['feedback', tab],
+    // Opened to see current state, and everything on it is written by work done on OTHER
+    // screens. With only the global 30s stale window, arriving here inside that window
+    // rendered the cached copy and the change you just made appeared to be missing.
+    refetchOnMount: 'always',
     queryFn: () => api.feedback.list(tab === 'mine' ? { mine: true } : undefined),
   });
   const { data: summary } = useQuery<FeedbackSummary>({
     queryKey: ['feedback-summary'],
+    // Opened to see current state, and everything on it is written by work done on OTHER
+    // screens. With only the global 30s stale window, arriving here inside that window
+    // rendered the cached copy and the change you just made appeared to be missing.
+    refetchOnMount: 'always',
     queryFn: () => api.feedback.summary(),
   });
 

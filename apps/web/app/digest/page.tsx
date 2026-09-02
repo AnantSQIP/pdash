@@ -221,8 +221,12 @@ export default function DigestPage() {
 
   const { data: d, isLoading } = useQuery<DigestDetail>({
     queryKey: ['digest-detail', date], queryFn: () => api.dailyDigest.detail(date), enabled: isSuperAdmin,
+    // Opened to see current state, and everything on it is written by work done on OTHER
+    // screens. With only the global 30s stale window, arriving here inside that window
+    // rendered the cached copy and the change you just made appeared to be missing.
+    refetchOnMount: 'always',
   });
-  const { data: schedule } = useQuery({ queryKey: ['digest-schedule'], queryFn: () => api.dailyDigest.getSchedule(), enabled: isSuperAdmin });
+  const { data: schedule } = useQuery({ queryKey: ['digest-schedule'], queryFn: () => api.dailyDigest.getSchedule(), enabled: isSuperAdmin , refetchOnMount: 'always' });
   const [hour, setHour] = useState<number | null>(null);
   const effHour = hour ?? schedule?.hourIst ?? 22;
 
@@ -277,6 +281,8 @@ export default function DigestPage() {
           <button onClick={async () => {
             try {
               const r = await api.dailyDigest.send();
+              // Sending writes today's digest record — the detail panel below is now stale.
+              qc.invalidateQueries({ queryKey: ['digest-detail'] });
               // A zero has two very different causes, and "sent to 0 admin(s)" hid both.
               if (r.sent > 0) {
                 toast(`Digest sent to ${r.sent} admin${r.sent === 1 ? '' : 's'}`, 'success');
