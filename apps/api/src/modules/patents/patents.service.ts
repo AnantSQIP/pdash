@@ -259,7 +259,7 @@ export class PatentsService {
       by: ['clientId'],
       where: {
         clientId: { in: clients.map(c => c.id) }, deletedAt: null,
-        projectPhase: { in: ['PLANNING', 'ACTIVE', 'ON_HOLD'] },
+        projectPhase: { in: ['ACTIVE', 'ON_HOLD'] },
       },
       _count: { _all: true },
     });

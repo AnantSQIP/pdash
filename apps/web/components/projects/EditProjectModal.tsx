@@ -27,7 +27,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
   const [title, setTitle] = useState(project.title);
   const [description, setDescription] = useState(project.description ?? '');
   const [priority, setPriority] = useState(project.priority ?? 'MEDIUM');
-  const [projectPhase, setProjectPhase] = useState(project.projectPhase ?? 'PLANNING');
+  const [projectPhase, setProjectPhase] = useState(project.projectPhase ?? 'ACTIVE');
   const [startDate, setStartDate] = useState(day(project.startDate));
   const [dueDate, setDueDate] = useState(day(project.dueDate));
   const [clientDueDate, setClientDueDate] = useState(day(project.clientDueDate));
@@ -102,7 +102,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
               <select value={projectPhase} onChange={e => setProjectPhase(e.target.value)} className={input}>
                 {/* Lifecycle end-states (Completed/Closed/Archived/Cancelled) are reached via the
                     Complete/Close/Reopen actions, not this dropdown — so it offers only editable phases. */}
-                {(['PLANNING', 'ACTIVE', 'ON_HOLD'] as Phase[]).map(p => (
+                {(['ACTIVE', 'ON_HOLD'] as Phase[]).map(p => (
                   <option key={p} value={p}>{PHASE_META[p]?.label ?? p}</option>
                 ))}
               </select>

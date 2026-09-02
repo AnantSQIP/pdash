@@ -310,7 +310,7 @@ export function MyProjectsCard() {
 }
 
 // ── Project status summary (project.view, side) ─────────────────────────────
-const PHASE_ORDER = ['ACTIVE', 'PLANNING', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED', 'ARCHIVED'];
+const PHASE_ORDER = ['ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED', 'ARCHIVED'];
 export function ProjectStatusCard() {
   const { org } = useOrg();
   const { can } = usePermissions();

@@ -14,10 +14,9 @@ import { fullName } from '@/lib/avatar';
 
 const ROLES = ['MANAGER', 'MEMBER'] as const;
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
-// A returning client's next piece of work is usually starting now, but it can be booked ahead.
+// A returning client's next piece of work either starts now or is parked.
 const PHASES: { value: string; label: string }[] = [
   { value: 'ACTIVE', label: 'Active' },
-  { value: 'PLANNING', label: 'Planning' },
   { value: 'ON_HOLD', label: 'On hold' },
 ];
 

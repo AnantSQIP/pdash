@@ -24,7 +24,6 @@ const PHASE_COLORS: Record<string, { color: string; label: string }> = {
   ACTIVE:    { color: STATUS.ACTIVE,    label: 'Active'    },
   COMPLETED: { color: STATUS.COMPLETED, label: 'Completed' },
   ON_HOLD:   { color: STATUS.ON_HOLD,   label: 'On Hold'   },
-  PLANNING:  { color: STATUS.PLANNING,  label: 'Planning'  },
   ARCHIVED:  { color: STATUS.ARCHIVED,  label: 'Archived'  },
 };
 

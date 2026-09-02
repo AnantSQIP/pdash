@@ -12,7 +12,7 @@ import { fullName } from '@/lib/avatar';
 export const OPEN_SEARCH_EVENT = 'squark:open-search';
 
 const PHASE_TINT: Record<string, string> = {
-  ACTIVE: 'text-green-600', PLANNING: 'text-blue-600', ON_HOLD: 'text-amber-600',
+  ACTIVE: 'text-green-600', ON_HOLD: 'text-amber-600',
   COMPLETED: 'text-gray-500', CLOSED: 'text-gray-400', CANCELLED: 'text-red-500',
 };
 

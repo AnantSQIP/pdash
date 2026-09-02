@@ -20,14 +20,12 @@ type ViewMode = 'grid' | 'list';
 const PHASES: { value: Phase | 'ALL'; label: string }[] = [
   { value: 'ALL',       label: 'All Projects' },
   { value: 'ACTIVE',    label: 'Active' },
-  { value: 'PLANNING',  label: 'Planning' },
   { value: 'ON_HOLD',   label: 'On Hold' },
   { value: 'COMPLETED', label: 'Completed' },
 ];
 
 const PHASE_COLOR: Record<string, string> = {
   ACTIVE:    '#E8533A',
-  PLANNING:  '#3b82f6',
   ON_HOLD:   '#f97316',
   COMPLETED: '#16a34a',
   CLOSED:    '#64748b',

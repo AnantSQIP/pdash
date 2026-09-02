@@ -278,7 +278,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     );
   }
 
-  const phase = PHASE_META[project.projectPhase as Phase] ?? PHASE_META['PLANNING'];
+  const phase = PHASE_META[project.projectPhase as Phase] ?? PHASE_META['ACTIVE'];
   const priority = PRIORITY_META[project.priority as Priority] ?? PRIORITY_META['MEDIUM'];
   const defaultTaskList = project.taskLists?.find(tl => tl.isDefault) ?? project.taskLists?.[0];
   // The project's manager — used to pre-fill each task's Project Manager (still editable per task).

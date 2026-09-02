@@ -1026,7 +1026,7 @@ export class ProjectsService {
     const deriveState = (resStatus: string, phases: string[]): string => {
       if (!phases.length) return resStatus === 'RESERVED' ? 'RESERVED' : 'DISCONTINUED';
       const TERMINAL = ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
-      if (phases.some(p => !TERMINAL.includes(p))) return 'WORKING'; // ACTIVE / PLANNING / ON_HOLD
+      if (phases.some(p => !TERMINAL.includes(p))) return 'WORKING'; // ACTIVE / ON_HOLD
       // COMPLETED is the end state. Legacy CLOSED rows read as completed too — they mean the
       // same thing, which is precisely why the second step was removed.
       if (phases.some(p => p === 'COMPLETED' || p === 'CLOSED')) return 'COMPLETED';
@@ -1612,7 +1612,7 @@ export class ProjectsService {
     await this.access.assertProjectAccess(getActorId(), id);
     const existing = await this.getRaw(id);
     // The generic edit may only move a project between the NON-terminal phases
-    // (PLANNING/ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
+    // (ACTIVE/ON_HOLD). Terminal states are reached through their own guarded
     // actions — Complete/Close (which stamp completedAt/closedAt + emit canonical events) and
     // Delete (ARCHIVED) — so a plain edit can no longer slip a project into
     // COMPLETED/CLOSED/ARCHIVED/CANCELLED, which used to leave it visible AND still writable
@@ -1719,10 +1719,12 @@ export class ProjectsService {
         data: { status: newStatus },
       });
 
-      // Advance project phase to ACTIVE on approval, back to PLANNING on rejection
+      // Approval activates. Rejection PAUSES rather than sending it back to planning:
+      // there is no planning phase any more, and a rejected project is not cancelled — it
+      // is waiting on changes, which is exactly what ON_HOLD means.
       return tx.project.update({
         where: { id },
-        data: { projectPhase: approve ? 'ACTIVE' : 'PLANNING' },
+        data: { projectPhase: approve ? 'ACTIVE' : 'ON_HOLD' },
       });
     });
 
@@ -1779,7 +1781,6 @@ export class ProjectsService {
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase === 'COMPLETED') return this.get(id);
     if (phase === 'CLOSED') throw new BadRequestException('This project is closed. Reopen it before marking it complete.');
-    if (phase === 'PLANNING') throw new BadRequestException('A project still in planning cannot be completed — activate it first.');
 
     // A project is only "complete" when its WORK is complete. Every task must be closed (or
     // deleted) first — otherwise a project could be signed off with live work still on it.
@@ -1842,7 +1843,6 @@ export class ProjectsService {
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase === 'CLOSED') return this.get(id);
-    if (phase === 'PLANNING') throw new BadRequestException('A project still in planning cannot be closed.');
     const actorId = getActorId();
     const now = new Date();
     const updated = await this.prisma.project.update({

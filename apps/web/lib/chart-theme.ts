@@ -32,7 +32,6 @@ export const STATUS = {
   ACTIVE:    '#16a394',
   COMPLETED: '#3d8de2',
   ON_HOLD:   '#e8a33d',
-  PLANNING:  '#8b7bf0',
   CANCELLED: '#e8695f',
   CLOSED:    '#7f93ad',
   ARCHIVED:  '#b6c0cc',
