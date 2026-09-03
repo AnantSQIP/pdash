@@ -26,6 +26,8 @@
     "prisma/roster-align-2026-08.ts",
     "prisma/reporting-lines-2026-08.ts",
     "prisma/opaque-client-codes.ts",
-    "prisma/seed-policies-2026-08.ts"
+    "prisma/seed-policies-2026-08.ts",
+    "prisma/offboard-report.ts",
+    "prisma/offboard-remove.ts"
   ]
 }
