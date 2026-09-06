@@ -64,6 +64,12 @@ export class TasksController {
     return this.time.complete(id, Number(body?.hours), body?.closedStatusId);
   }
 
+  /** Record my hours without closing — the analyst finishes, the reviewer closes later. */
+  @Post(':id/log-my-part') @RequirePermission('task.view')
+  logMyPart(@Param('id') id: string, @Body() body: { hours: number }) {
+    return this.time.logMyPart(id, Number(body?.hours));
+  }
+
   @Post(':id/reopen') @RequirePermission('task.view')
   reopen(@Param('id') id: string, @Body() body: { openStatusId?: string }) {
     return this.time.reopen(id, body?.openStatusId);

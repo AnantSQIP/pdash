@@ -1053,16 +1053,6 @@ model Task {
   // figure derived from them understate what the task cost.
   startedAt               DateTime?
   reopenedCount           Int       @default(0)
-  // WHICH standard this task contributed to, and how much. The key is stored because a task
-  // can be renamed after it was completed: without it, the contribution stays stranded under
-  // the old title while the next close posts a difference against a standard it never fed.
-  standardKey             String?
-  // What this task has already contributed to its standard's running total, in minutes.
-  // Without it, a task closed at 6h, reopened, then closed at 8h would post TWO completions
-  // of 6 and 8 — a mean of 7 for a task that actually took 8. Recording the contribution
-  // lets a re-completion post only the DIFFERENCE, so one task counts once, at its final
-  // total, however many times it is reopened.
-  standardMinutes         Int?
   completionPercentage    Int       @default(0)
   workflowId              String?
   currentWorkflowStatusId String?
@@ -1124,16 +1114,31 @@ model ProjectTask {
 }
 
 model TaskAssignee {
-  id             String    @id @default(cuid())
-  taskId         String
-  userId         String
+  id              String    @id @default(cuid())
+  taskId          String
+  userId          String
   // Role on this task: PM (one) | REVIEWER (many) | ANALYST (many). Null = a legacy plain assignee.
-  role           String?
+  role            String?
   // Per-person estimated hours (OPTIONAL — a reviewer may carry 0). The task's total estimated
   // hours is the SUM of these across everyone assigned.
-  estimatedHours Float?
+  estimatedHours  Float?
   // Per-assignment deadline for THIS person in THIS role on the task (optional).
-  dueDate        DateTime?
+  dueDate         DateTime?
+  // The hours this person confirmed for THEIR part, and which standard that fed.
+  //
+  // Held on the assignment rather than the task because each person contributes their own
+  // part: the analyst's six hours and the reviewer's two are two facts about two different
+  // kinds of work, and averaging them together would judge an analyst against a number that
+  // includes somebody else's review.
+  //
+  // standardKey is stored because a task can be renamed after being completed — without it
+  // the contribution stays stranded under the old title while the next close posts a
+  // difference against a standard it never fed. standardMinutes is stored so a re-completion
+  // after a reopen posts only the DIFFERENCE: one person's part counts once, at its final
+  // total, however many times the task is reopened.
+  confirmedHours  Float?
+  standardKey     String?
+  standardMinutes Int?
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -2858,6 +2863,14 @@ model TaskStandard {
   /// The task title, normalised — trimmed, inner whitespace collapsed, lower-cased. This is
   /// what makes "Prior art search" the same task in every project that runs one.
   titleKey       String
+  /// ANALYST, REVIEWER or PM — the layer that did this work.
+  ///
+  /// Learned per role because the firm's three questions need different answers. What must
+  /// fit in the calendar before a client deadline is the WHOLE task, analyst plus review, and
+  /// so is what gets invoiced. But judging an analyst against a figure that includes somebody
+  /// else's review flatters them. Per-role gives both: each layer's own expectation, and the
+  /// task total as the sum across the roles staffing it.
+  role           String   @default("ANALYST")
   /// The title as first recorded, so the screen can show it the way people write it.
   displayTitle   String
   totalMinutes   Int      @default(0)
@@ -2866,6 +2879,6 @@ model TaskStandard {
   expectedHours  Int?
   updatedAt      DateTime @updatedAt
 
-  @@unique([organizationId, titleKey])
+  @@unique([organizationId, titleKey, role])
   @@map("task_standard")
 }

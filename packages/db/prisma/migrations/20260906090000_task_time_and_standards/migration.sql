@@ -5,13 +5,19 @@
 -- system knows how long a task takes only once it has been timed.
 
 ALTER TABLE "task" ADD COLUMN "startedAt" TIMESTAMP(3);
+-- Reopening is normal in patent work; if it is not recorded, the hours and every figure
+-- derived from them understate what the task cost.
 ALTER TABLE "task" ADD COLUMN "reopenedCount" INTEGER NOT NULL DEFAULT 0;
--- What this task has already contributed to its standard, so a re-completion after a
--- reopen posts only the difference and one task counts once, at its final total.
-ALTER TABLE "task" ADD COLUMN "standardMinutes" INTEGER;
--- Which standard it contributed to. A task can be renamed after completion; without this
--- the contribution is stranded under the old title.
-ALTER TABLE "task" ADD COLUMN "standardKey" TEXT;
+
+-- What each person confirmed for THEIR part, and which standard it fed.
+--
+-- On the assignment rather than the task because the analyst's six hours and the reviewer's
+-- two are facts about two different kinds of work. standardKey survives a task being
+-- renamed after completion; standardMinutes lets a re-completion post only the difference,
+-- so one person's part counts once at its final total however often the task is reopened.
+ALTER TABLE "task_assignee" ADD COLUMN "confirmedHours" DOUBLE PRECISION;
+ALTER TABLE "task_assignee" ADD COLUMN "standardKey" TEXT;
+ALTER TABLE "task_assignee" ADD COLUMN "standardMinutes" INTEGER;
 
 -- One stretch of work: Start pressed, Stop pressed. A task is worked in several sittings,
 -- by more than one person, and again after being reopened — a row per sitting records all
@@ -35,7 +41,12 @@ ALTER TABLE "task_work_session" ADD CONSTRAINT "task_work_session_taskId_fkey"
 ALTER TABLE "task_work_session" ADD CONSTRAINT "task_work_session_userId_fkey"
     FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- What a standard task actually takes, accumulated across every completion of it anywhere.
+-- How long a standard task takes, per ROLE, learned from every completion of it anywhere.
+--
+-- Per role because the firm's three questions need different answers: a client deadline and
+-- an invoice need the WHOLE task, analyst plus review, while judging an analyst against a
+-- figure containing somebody else's review flatters them. The task total is the sum across
+-- the roles staffing it.
 --
 -- totalMinutes and completions are kept rather than a stored average so each completion is
 -- O(1) and the mean is exact. Minutes because they are integers: accumulating hours as a
@@ -45,6 +56,7 @@ CREATE TABLE "task_standard" (
     "id"             TEXT NOT NULL,
     "organizationId" TEXT NOT NULL,
     "titleKey"       TEXT NOT NULL,
+    "role"           TEXT NOT NULL DEFAULT 'ANALYST',
     "displayTitle"   TEXT NOT NULL,
     "totalMinutes"   INTEGER NOT NULL DEFAULT 0,
     "completions"    INTEGER NOT NULL DEFAULT 0,
@@ -52,5 +64,5 @@ CREATE TABLE "task_standard" (
     "updatedAt"      TIMESTAMP(3) NOT NULL,
     CONSTRAINT "task_standard_pkey" PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX "task_standard_organizationId_titleKey_key"
-    ON "task_standard"("organizationId", "titleKey");
+CREATE UNIQUE INDEX "task_standard_organizationId_titleKey_role_key"
+    ON "task_standard"("organizationId", "titleKey", "role");
