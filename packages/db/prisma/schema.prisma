@@ -1053,6 +1053,10 @@ model Task {
   // figure derived from them understate what the task cost.
   startedAt               DateTime?
   reopenedCount           Int       @default(0)
+  // WHICH standard this task contributed to, and how much. The key is stored because a task
+  // can be renamed after it was completed: without it, the contribution stays stranded under
+  // the old title while the next close posts a difference against a standard it never fed.
+  standardKey             String?
   // What this task has already contributed to its standard's running total, in minutes.
   // Without it, a task closed at 6h, reopened, then closed at 8h would post TWO completions
   // of 6 and 8 — a mean of 7 for a task that actually took 8. Recording the contribution

@@ -9,6 +9,9 @@ ALTER TABLE "task" ADD COLUMN "reopenedCount" INTEGER NOT NULL DEFAULT 0;
 -- What this task has already contributed to its standard, so a re-completion after a
 -- reopen posts only the difference and one task counts once, at its final total.
 ALTER TABLE "task" ADD COLUMN "standardMinutes" INTEGER;
+-- Which standard it contributed to. A task can be renamed after completion; without this
+-- the contribution is stranded under the old title.
+ALTER TABLE "task" ADD COLUMN "standardKey" TEXT;
 
 -- One stretch of work: Start pressed, Stop pressed. A task is worked in several sittings,
 -- by more than one person, and again after being reopened — a row per sitting records all
