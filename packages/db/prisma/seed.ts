@@ -145,14 +145,12 @@ async function main() {
   // ── Core team — referenced by the project/task/timesheet/attendance data below ──
   const mohit     = await makeUser('Mohit',     'Kalra',     'mohit@squarkip.com',            'VP',                        superAdminRole.id,       '8302971071');
   const yash      = await makeUser('Yash',      'Bhargava',  'yash@squarkip.com',             'VP',                        superAdminRole.id,       '9166876696');
-  const arjun     = await makeUser('Arjun',     'Ghosh',     'arjun.ghosh@squarkip.com',      'Research Associate',        employeeRole.id,         '9002766291');
   const vijay     = await makeUser('Vijay',     'Mishra',    'vijay.mishra@squarkip.com',     'Consultant',                consultantRole.id,       '9654129571');
   const basant    = await makeUser('Basant',    'Goyal',     'basant.goyal@squarkip.com',     'Senior Research Associate', seniorResearchAssociateRole.id, '8946889936');
   const khushi    = await makeUser('Khushi',    'Gupta',     'khushi.gupta@squarkip.com',     'Senior Research Associate', seniorResearchAssociateRole.id, '8875555997');
   const meetu     = await makeUser('Meetu',     'Singh',     'meetu.singh@squarkip.com',      'Consultant',                consultantRole.id,       '6376595932');
   const nehu      = await makeUser('Neha',      'Shukla',    'neha.shukla@squarkip.com',      'Consultant',                consultantRole.id,       '9694815249');
   const amrit     = await makeUser('Amritpal',  'Kaur',      'amritpal.kaur@squarkip.com',    'Senior Research Associate', seniorResearchAssociateRole.id, '8699426272');
-  const nitin     = await makeUser('Nitin',     'Goel',      'nitin.goel@squarkip.com',       'Manager',                   managerRole.id,          '8826599004');
   const divyanshu = await makeUser('Divyanshu', 'Saxena',    'divyanshu.saxena@squarkip.com', 'Testing and QA',            employeeRole.id,         '6376685331');
   const ankit     = await makeUser('Ankit',     'Verma',     'ankit.verma@squarkip.com',      'Product Development',       managerRole.id,          '7217827713');
   const anant     = await makeUser('Anant',     'Gupta',     'anant.gupta@squarkip.com',      'Intern- Product Development & Research',        employeeRole.id,         '7206390512');
@@ -179,7 +177,7 @@ async function main() {
   // Role aliases used throughout the data below.
   const admin = mohit;   // VP / approver / "current user"
   const alice = yash;    // engagement manager
-  const bob   = arjun;   // lead search analyst
+  const bob   = basant;  // lead search analyst
   const carol = khushi;  // analyst
   const dave  = divyanshu; // QA / docketing
 
@@ -190,7 +188,6 @@ async function main() {
   const deptOps    = await prisma.department.create({ data: { id: 'dept-ops',        organizationId: org.id, name: 'Operations',         description: 'Docketing, QA and delivery' } });
 
   await prisma.departmentMember.createMany({ data: [
-    { departmentId: deptSearch.id, userId: arjun.id  },
     { departmentId: deptSearch.id, userId: vijay.id  },
     { departmentId: deptSearch.id, userId: basant.id },
     { departmentId: deptSearch.id, userId: ketan.id  },
@@ -203,7 +200,6 @@ async function main() {
     { departmentId: deptTM.id,     userId: ankit.id  },
     { departmentId: deptTM.id,     userId: anant.id  },
     { departmentId: deptOps.id,    userId: divyanshu.id },
-    { departmentId: deptOps.id,    userId: nitin.id  },
     { departmentId: deptOps.id,    userId: shaveta.id },
   ]});
 
@@ -277,7 +273,7 @@ async function main() {
   await makeTask({ title: 'Draft invalidity search report',              priority: 'MEDIUM', pct: 0,   statusId: sOpen.id,     createdBy: alice.id, dueDate: '2026-08-12', assignee: meetu.id, projectId: p1.id, taskListId: gl1.id,            seq: 9 });
   await makeTask({ title: 'Compile reference bibliography',               priority: 'LOW',    pct: 100, statusId: sClosed.id,   createdBy: alice.id, dueDate: '2026-06-01', assignee: carol.id, projectId: p1.id, taskListId: gl1.id,            seq: 10 });
   await makeTask({ title: 'Client interim findings call',                 priority: 'MEDIUM', pct: 30,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-28', assignee: alice.id, projectId: p1.id, taskListId: sl2.id, seq: 11 });
-  await makeTask({ title: 'Docket IPR statutory deadline',                priority: 'HIGH',   pct: 20,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-06-15', assignee: nitin.id, projectId: p1.id, taskListId: gl1.id,            seq: 12 }); // overdue
+  await makeTask({ title: 'Docket IPR statutory deadline',                priority: 'HIGH',   pct: 20,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-06-15', assignee: ankit.id, projectId: p1.id, taskListId: gl1.id,            seq: 12 }); // overdue
 
   await prisma.issue.createMany({ data: [
     { projectId: p1.id, title: 'Reference C publication date unverified', description: 'Need to confirm the public-availability date of Reference C before relying on it as 102(b) art.', severity: 'MAJOR',    status: 'OPEN',        reportedBy: dave.id,  assigneeId: bob.id,   dueDate: new Date('2026-07-10') },
@@ -311,7 +307,7 @@ async function main() {
   await makeTask({ title: 'Map product features to search facets', priority: 'CRITICAL', pct: 100, statusId: sClosed.id,   createdBy: bob.id, dueDate: '2026-06-15', assignee: bob.id,   projectId: p2.id, taskListId: sl3.id, seq: 0 });
   await makeTask({ title: 'Identify active US patents by assignee',  priority: 'HIGH',     pct: 60,  statusId: sProgress.id, createdBy: bob.id, dueDate: '2026-06-28', assignee: vijay.id, projectId: p2.id, taskListId: sl3.id, seq: 1 });
   await makeTask({ title: 'Sensor electrode subsystem search',       priority: 'HIGH',     pct: 40,  statusId: sProgress.id, createdBy: bob.id, dueDate: '2026-07-05', assignee: basant.id,projectId: p2.id, taskListId: gl2.id,            seq: 2 });
-  await makeTask({ title: 'BLE data-sync method search',             priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-10', assignee: arjun.id, projectId: p2.id, taskListId: gl2.id,            seq: 3 });
+  await makeTask({ title: 'BLE data-sync method search',             priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-10', assignee: basant.id, projectId: p2.id, taskListId: gl2.id,            seq: 3 });
   await makeTask({ title: 'Screen for expired / lapsed patents',     priority: 'HIGH',     pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-12', assignee: ketan.id, projectId: p2.id, taskListId: sl3.id, seq: 4 });
   await makeTask({ title: 'EP designation & validation check',       priority: 'MEDIUM',   pct: 0,   statusId: sOpen.id,     createdBy: bob.id, dueDate: '2026-07-20', assignee: khushi.id,projectId: p2.id, taskListId: gl2.id,            seq: 5 });
   await makeTask({ title: 'Risk ranking of blocking patents',        priority: 'LOW',      pct: 80,  statusId: sReview.id,   createdBy: bob.id, dueDate: '2026-07-01', assignee: meetu.id, projectId: p2.id, taskListId: gl2.id,            seq: 6 });
@@ -320,7 +316,7 @@ async function main() {
 
   await prisma.issue.createMany({ data: [
     { projectId: p2.id, title: 'Two assignees recently merged — update list', description: 'Assignee A was acquired by Assignee B; portfolio ownership needs reconciliation.', severity: 'CRITICAL', status: 'OPEN',        reportedBy: dave.id, assigneeId: vijay.id, dueDate: new Date('2026-07-05') },
-    { projectId: p2.id, title: 'Continuation pending — monitor publication',  description: 'A blocking family has a pending continuation; flag for re-check before opinion issues.', severity: 'MAJOR',    status: 'IN_PROGRESS', reportedBy: bob.id,  assigneeId: arjun.id, dueDate: new Date('2026-07-08') },
+    { projectId: p2.id, title: 'Continuation pending — monitor publication',  description: 'A blocking family has a pending continuation; flag for re-check before opinion issues.', severity: 'MAJOR',    status: 'IN_PROGRESS', reportedBy: bob.id,  assigneeId: basant.id, dueDate: new Date('2026-07-08') },
     { projectId: p2.id, title: 'Client product spec ambiguous on electrode',  description: 'Spec does not clarify dry vs. wet electrode; affects search scope.',                     severity: 'MINOR',    status: 'OPEN',        reportedBy: dave.id, assigneeId: carol.id                  },
   ]});
   await prisma.approval.create({ data: { entityType: 'PROJECT', entityId: p2.id, status: 'PENDING', requestedBy: bob.id } });
@@ -353,10 +349,10 @@ async function main() {
   await makeTask({ title: 'Draft specification & figures',           priority: 'HIGH',   pct: 65,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-06-30', assignee: nehu.id,  projectId: p3.id, taskListId: sl5.id, seq: 2 });
   await makeTask({ title: 'Prepare IDS & cite references',           priority: 'MEDIUM', pct: 30,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-07-15', assignee: amrit.id, projectId: p3.id, taskListId: sl5.id, seq: 3 });
   await makeTask({ title: 'Patentability search for novelty check',  priority: 'MEDIUM', pct: 50,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-07-20', assignee: basant.id,projectId: p3.id, taskListId: gl3.id,            seq: 4 });
-  await makeTask({ title: 'Prepare PCT filing package',              priority: 'LOW',    pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-01', assignee: nitin.id, projectId: p3.id, taskListId: gl3.id,            seq: 5 });
+  await makeTask({ title: 'Prepare PCT filing package',              priority: 'LOW',    pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-01', assignee: ankit.id, projectId: p3.id, taskListId: gl3.id,            seq: 5 });
   await makeTask({ title: 'Respond to restriction requirement',      priority: 'HIGH',   pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-10', assignee: nehu.id,  projectId: p3.id, taskListId: gl3.id,            seq: 6 });
   await makeTask({ title: 'QA — claim/spec antecedent check',        priority: 'MEDIUM', pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-07-25', assignee: dave.id,  projectId: p3.id, taskListId: gl3.id,            seq: 7 });
-  await makeTask({ title: 'Docket 12-month PCT deadline',            priority: 'HIGH',   pct: 20,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-06-10', assignee: nitin.id, projectId: p3.id, taskListId: gl3.id,            seq: 8 }); // overdue
+  await makeTask({ title: 'Docket 12-month PCT deadline',            priority: 'HIGH',   pct: 20,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-06-10', assignee: ankit.id, projectId: p3.id, taskListId: gl3.id,            seq: 8 }); // overdue
 
   await prisma.issue.createMany({ data: [
     { projectId: p3.id, title: 'Inventorship needs confirmation',      description: 'Two contributors may qualify as inventors on the BLE claims — confirm before filing.', severity: 'MAJOR',    status: 'OPEN',     reportedBy: alice.id, assigneeId: nehu.id, dueDate: new Date('2026-07-10') },
@@ -389,7 +385,7 @@ async function main() {
   await makeTask({ title: 'Prepare US 1(b) application',          priority: 'HIGH',   pct: 60,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-06-30', assignee: amrit.id, projectId: p4.id, taskListId: gl4.id, seq: 2 });
   await makeTask({ title: 'EUIPO classification & goods/services', priority: 'MEDIUM',pct: 40,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-05', assignee: khushi.id,projectId: p4.id, taskListId: gl4.id, seq: 3 });
   await makeTask({ title: 'Respond to office action — Mark B',     priority: 'HIGH',   pct: 0,   statusId: sOpen.id,     createdBy: alice.id, dueDate: '2026-07-10', assignee: nehu.id,  projectId: p4.id, taskListId: gl4.id, seq: 4 });
-  await makeTask({ title: 'Set up watch alerts (US/EU/IN)',        priority: 'MEDIUM', pct: 50,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-15', assignee: nitin.id, projectId: p4.id, taskListId: gl4.id, seq: 5 });
+  await makeTask({ title: 'Set up watch alerts (US/EU/IN)',        priority: 'MEDIUM', pct: 50,  statusId: sProgress.id, createdBy: alice.id, dueDate: '2026-07-15', assignee: ankit.id, projectId: p4.id, taskListId: gl4.id, seq: 5 });
   await makeTask({ title: 'Q3 portfolio status report',           priority: 'LOW',    pct: 0,   statusId: sOpen.id,     createdBy: alice.id, dueDate: '2026-09-25', assignee: shaveta.id,projectId: p4.id, taskListId: gl4.id, seq: 6 });
 
   await prisma.issue.createMany({ data: [
@@ -420,7 +416,7 @@ async function main() {
   await makeTask({ title: 'Bulk dataset extraction & dedup',      priority: 'HIGH',     pct: 40,  statusId: sProgress.id, createdBy: admin.id, dueDate: '2026-08-01', assignee: basant.id, projectId: p5.id, taskListId: gl5.id, seq: 1 });
   await makeTask({ title: 'Assignee & filing-trend analytics',    priority: 'HIGH',     pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-15', assignee: ketan.id,  projectId: p5.id, taskListId: gl5.id, seq: 2 });
   await makeTask({ title: 'White-space heatmap visualization',    priority: 'MEDIUM',   pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-09-01', assignee: vijay.id,  projectId: p5.id, taskListId: gl5.id, seq: 3 });
-  await makeTask({ title: 'Key-player citation network map',      priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-10', assignee: arjun.id,  projectId: p5.id, taskListId: gl5.id, seq: 4 });
+  await makeTask({ title: 'Key-player citation network map',      priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: admin.id, dueDate: '2026-08-10', assignee: basant.id,  projectId: p5.id, taskListId: gl5.id, seq: 4 });
 
   await prisma.issue.createMany({ data: [
     { projectId: p5.id, title: 'Database export hitting record cap', description: 'The bulk export truncates at 10k records; need batched extraction by year.', severity: 'CRITICAL', status: 'OPEN', reportedBy: bob.id, assigneeId: basant.id, dueDate: new Date('2026-07-20') },
@@ -468,7 +464,7 @@ async function main() {
   await makeTask({ title: 'Client onboarding pack — new matter',     priority: 'MEDIUM',   pct: 45,  statusId: sProgress.id, createdBy: ankit.id, dueDate: '2026-07-04', assignee: meetu.id,   projectId: p4.id, taskListId: gl4.id, seq: 113 });
   await makeTask({ title: 'Inventor interview scheduling',           priority: 'MEDIUM',   pct: 60,  statusId: sProgress.id, createdBy: ankit.id, dueDate: '2026-06-29', assignee: nehu.id,    projectId: p3.id, taskListId: gl3.id, seq: 114 });
   await makeTask({ title: 'Family-tree verification (INPADOC)',      priority: 'HIGH',     pct: 0,   statusId: sOpen.id,     createdBy: yash.id,  dueDate: '2026-07-18', assignee: amrit.id,   projectId: p2.id, taskListId: gl2.id, seq: 115 });
-  await makeTask({ title: 'Docketing audit — upcoming deadlines',    priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: mohit.id, dueDate: '2026-07-14', assignee: nitin.id,   projectId: p3.id, taskListId: gl3.id, seq: 116 });
+  await makeTask({ title: 'Docketing audit — upcoming deadlines',    priority: 'CRITICAL', pct: 0,   statusId: sOpen.id,     createdBy: mohit.id, dueDate: '2026-07-14', assignee: ankit.id,   projectId: p3.id, taskListId: gl3.id, seq: 116 });
   await makeTask({ title: 'Practice roadmap Q4 draft',               priority: 'HIGH',     pct: 25,  statusId: sProgress.id, createdBy: mohit.id, dueDate: '2026-07-20', assignee: ankit.id,   projectId: p4.id, taskListId: gl4.id, seq: 117 });
   await makeTask({ title: 'Service spec — automated watch alerts',   priority: 'HIGH',     pct: 70,  statusId: sReview.id,   createdBy: ankit.id, dueDate: '2026-07-03', assignee: anant.id,   projectId: p4.id, taskListId: gl4.id, seq: 118 });
   await makeTask({ title: 'Team onboarding documentation',           priority: 'LOW',      pct: 50,  statusId: sProgress.id, createdBy: mohit.id, dueDate: '2026-07-22', assignee: shaveta.id,    projectId: p4.id, taskListId: gl4.id, seq: 119 });
@@ -483,13 +479,13 @@ async function main() {
     data: {
       organizationId: org.id, name: 'general', type: 'PUBLIC',
       description: 'Firm-wide announcements and general chat', createdBy: mohit.id,
-      members: { create: [{ userId: mohit.id }, { userId: yash.id }, { userId: arjun.id }, { userId: khushi.id }, { userId: divyanshu.id }] },
+      members: { create: [{ userId: mohit.id }, { userId: yash.id }, { userId: basant.id }, { userId: khushi.id }, { userId: divyanshu.id }] },
     },
   });
   await prisma.message.createMany({ data: [
     { channelId: general.id, userId: mohit.id, content: 'Welcome to the SquarkIP workspace! Use this channel for firm-wide updates.' },
     { channelId: general.id, userId: yash.id,  content: 'Five active engagements this quarter across search, drafting and trademarks. Strong pipeline 🚀' },
-    { channelId: general.id, userId: arjun.id, content: 'SEP invalidity search is on track — claim charts in review by Friday.' },
+    { channelId: general.id, userId: basant.id, content: 'SEP invalidity search is on track — claim charts in review by Friday.' },
     { channelId: general.id, userId: khushi.id,content: 'NPL search for the SEP matter is ~70% complete; sharing hits in #search-team.' },
     { channelId: general.id, userId: mohit.id, content: 'Reminder: docketing audit Friday. Please confirm your upcoming statutory deadlines.' },
   ]});
@@ -497,10 +493,10 @@ async function main() {
   const search = await prisma.channel.create({
     data: {
       organizationId: org.id, name: 'search-team', type: 'PUBLIC',
-      description: 'Prior-art search strategy, hits and de-duplication', createdBy: arjun.id,
-      members: { create: [{ userId: arjun.id }, { userId: vijay.id }, { userId: basant.id }, { userId: ketan.id }, { userId: khushi.id }] },
+      description: 'Prior-art search strategy, hits and de-duplication', createdBy: basant.id,
+      members: { create: [{ userId: vijay.id }, { userId: basant.id }, { userId: ketan.id }, { userId: khushi.id }, { userId: amrit.id }] },
       messages: { create: [
-        { userId: arjun.id,  content: 'Pushed the latest hit-list for the SEP matter — 240 results after dedup.' },
+        { userId: amrit.id,  content: 'Pushed the latest hit-list for the SEP matter — 240 results after dedup.' },
         { userId: vijay.id,  content: 'Reference B looks strong for claims 1 and 7. Charting now.' },
         { userId: ketan.id,  content: 'Found a JP family member — flagging for translation.' },
         { userId: basant.id, content: 'EV landscape export keeps capping at 10k; batching by year as a workaround.' },
@@ -537,10 +533,10 @@ async function main() {
   await prisma.channel.create({
     data: {
       organizationId: org.id, name: 'docketing', type: 'PUBLIC',
-      description: 'Deadlines, reminders and statutory dates', createdBy: nitin.id,
-      members: { create: [{ userId: nitin.id }, { userId: divyanshu.id }] },
+      description: 'Deadlines, reminders and statutory dates', createdBy: ankit.id,
+      members: { create: [{ userId: ankit.id }, { userId: divyanshu.id }] },
       messages: { create: [
-        { userId: nitin.id,     content: 'Upcoming: PCT 12-month deadline for the AI chipset matter — please prioritise.' },
+        { userId: ankit.id,     content: 'Upcoming: PCT 12-month deadline for the AI chipset matter — please prioritise.' },
         { userId: divyanshu.id, content: 'QA on claim mapping for the SEP matter starts Monday.' },
       ]},
     },
@@ -553,18 +549,18 @@ async function main() {
   const Y = 2026; const JUN = 5; const JUL = 6;
   await prisma.calendarEvent.createMany({ data: [
     { organizationId: org.id, title: 'Engagement Kickoff — SEP Matter',  type: 'MEETING',   color: '#fe841f', startDate: new Date(Y,JUN,2,10,0),  endDate: new Date(Y,JUN,2,11,30),  allDay: false, createdBy: alice.id },
-    { organizationId: org.id, title: 'Search Strategy Review',           type: 'MEETING',   color: '#9334e6', startDate: new Date(Y,JUN,5,14,0),  endDate: new Date(Y,JUN,5,15,0),   allDay: false, createdBy: arjun.id },
+    { organizationId: org.id, title: 'Search Strategy Review',           type: 'MEETING',   color: '#9334e6', startDate: new Date(Y,JUN,5,14,0),  endDate: new Date(Y,JUN,5,15,0),   allDay: false, createdBy: basant.id },
     { organizationId: org.id, title: 'IPR Statutory Deadline',           type: 'MILESTONE', color: '#dc2626', startDate: new Date(Y,JUN,15),                                         allDay: true,  createdBy: alice.id },
     { organizationId: org.id, title: 'Drafting Review — AI Chipset',     type: 'MEETING',   color: '#fe841f', startDate: new Date(Y,JUN,18,11,0), endDate: new Date(Y,JUN,18,12,0),  allDay: false, createdBy: admin.id },
     { organizationId: org.id, title: 'Practice Retrospective',           type: 'MEETING',   color: '#3d8de2', startDate: new Date(Y,JUN,20,15,0), endDate: new Date(Y,JUN,20,16,0),  allDay: false, createdBy: admin.id },
     { organizationId: org.id, title: 'FTO Kickoff — MedTech Wearable',   type: 'MEETING',   color: '#fe841f', startDate: new Date(Y,JUN,25,9,0),  endDate: new Date(Y,JUN,25,10,0),  allDay: false, createdBy: bob.id   },
     { organizationId: org.id, title: 'Firm All-Hands',                   type: 'MEETING',   color: '#3d8de2', startDate: new Date(Y,JUN,27,15,0), endDate: new Date(Y,JUN,27,16,30), allDay: false, createdBy: admin.id },
-    { organizationId: org.id, title: 'Docketing Audit',                  type: 'MEETING',   color: '#3d8de2', startDate: new Date(Y,JUN,30,10,0), endDate: new Date(Y,JUN,30,11,0),  allDay: false, createdBy: nitin.id },
+    { organizationId: org.id, title: 'Docketing Audit',                  type: 'MEETING',   color: '#3d8de2', startDate: new Date(Y,JUN,30,10,0), endDate: new Date(Y,JUN,30,11,0),  allDay: false, createdBy: ankit.id },
     { organizationId: org.id, title: 'TM Filing Window Opens',           type: 'MILESTONE', color: '#9334e6', startDate: new Date(Y,JUL,1),                                          allDay: true,  createdBy: alice.id },
-    { organizationId: org.id, title: 'Weekly Search Sync',               type: 'MEETING',   color: '#9334e6', startDate: new Date(Y,JUL,3,14,0),  endDate: new Date(Y,JUL,3,15,0),   allDay: false, createdBy: arjun.id },
+    { organizationId: org.id, title: 'Weekly Search Sync',               type: 'MEETING',   color: '#9334e6', startDate: new Date(Y,JUL,3,14,0),  endDate: new Date(Y,JUL,3,15,0),   allDay: false, createdBy: basant.id },
     { organizationId: org.id, title: 'Client QBR — SEP Findings',        type: 'MEETING',   color: '#fe841f', startDate: new Date(Y,JUL,10,13,0), endDate: new Date(Y,JUL,10,14,0),  allDay: false, createdBy: admin.id },
     { organizationId: org.id, title: 'Office Action Response Due',       type: 'MILESTONE', color: '#dc2626', startDate: new Date(Y,JUL,10),                                         allDay: true,  createdBy: alice.id },
-    { organizationId: org.id, title: 'PCT 12-Month Deadline',            type: 'MILESTONE', color: '#dc2626', startDate: new Date(Y,JUL,15),                                         allDay: true,  createdBy: nitin.id },
+    { organizationId: org.id, title: 'PCT 12-Month Deadline',            type: 'MILESTONE', color: '#dc2626', startDate: new Date(Y,JUL,15),                                         allDay: true,  createdBy: ankit.id },
     { organizationId: org.id, title: 'Anant\'s PTO',                     type: 'EVENT',     color: '#6b7280', startDate: new Date(Y,JUL,21),      endDate: new Date(Y,JUL,25),       allDay: true,  createdBy: anant.id },
     { organizationId: org.id, title: 'FTO Opinion Target',               type: 'MILESTONE', color: '#9334e6', startDate: new Date(Y,JUL,31),                                         allDay: true,  createdBy: bob.id   },
   ]});
@@ -601,7 +597,7 @@ async function main() {
   // Recent explicit punch records for the leadership (so today/timer + grid show times)
   const attnRows: Prisma.AttendanceCreateManyInput[] = [];
   const baseNow = new Date();
-  for (const u of [mohit, yash, nitin]) {
+  for (const u of [mohit, yash, ankit]) {
     for (let back = 1; back <= 8; back++) {
       const d = new Date(baseNow.getTime() - back * 86400000);
       const wd = d.getUTCDay();
@@ -623,7 +619,7 @@ async function main() {
   // The PerformanceService live-fallback reads these directly, so charts populate
   // even before "Rebuild snapshots" is run.
   // ══════════════════════════════════════════════════════════════════════════
-  const allUsers = [mohit, yash, arjun, vijay, basant, khushi, meetu, nehu, amrit, nitin, divyanshu, ankit, anant, shaveta, ketan];
+  const allUsers = [mohit, yash, vijay, basant, khushi, meetu, nehu, amrit, divyanshu, ankit, anant, shaveta, ketan];
   // Give tasks an estimate so the "estimated vs actual" bullet chart has data.
   const estByPriority: Record<string, number> = { CRITICAL: 20, HIGH: 14, MEDIUM: 8, LOW: 4 };
   for (const [prio, est] of Object.entries(estByPriority)) {
@@ -692,7 +688,10 @@ async function main() {
 
   console.log('\nSeed complete ✓');
   console.log('  Org:      Squark IP (code: pdash-demo)');
-  console.log('  Users:    28 SquarkIP users (@squarkip.com) — current user: Mohit (VP)');
+  // Counted, not hardcoded — the literal "28" outlived two people being removed from the roster
+  // and would have gone on claiming a headcount the seed no longer creates.
+  const seededUsers = await prisma.user.count({ where: { organizationId: org.id } });
+  console.log(`  Users:    ${seededUsers} SquarkIP users (@squarkip.com) — current user: Mohit (VP)`);
   console.log('  Projects: 5 IP/patent engagements  |  Tasks: 65  |  Timesheets: 12  |  Issues: 14  |  Channels: 5  |  Events: 15');
 }
 
