@@ -21,6 +21,15 @@ const geistSans = localFont({
 export const metadata: Metadata = {
   title: 'Squark Dashboard',
   description: 'Squark Dashboard — project, people & performance management',
+  // public/fav.png has been sitting there unreferenced: with no icon declared, every page load
+  // asked for /favicon.ico, got a 404, and the browser tab showed a blank sheet of paper instead
+  // of the Squark mark. Declared here rather than added as app/favicon.ico so there is one file
+  // to replace when the logo changes.
+  icons: {
+    icon: [{ url: '/fav.png', type: 'image/png', sizes: '200x200' }],
+    shortcut: '/fav.png',
+    apple: '/fav.png',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
