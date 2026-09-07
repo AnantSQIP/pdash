@@ -5,7 +5,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Paperclip, FileText, Loader, Trash2, CalendarClock, TrendingUp } from 'lucide-react';
 import { api, type Appraisal, type AppraisalHistory } from '@/lib/api';
-import { formatDate } from '@/lib/date';
+import { formatDate, ORG_TZ } from '@/lib/date';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 
@@ -106,7 +106,7 @@ export function ReviewCall({ appraisal, canSchedule, onChanged }: {
       </h3>
       {booked ? (
         <p className="mt-1 text-sm text-gray-700">
-          {new Date(booked).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+          {new Date(booked).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: ORG_TZ })}
           <span className="block text-[11px] text-gray-500 mt-0.5">In both calendars.</span>
         </p>
       ) : (

@@ -10,13 +10,14 @@ import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
+import { ORG_TZ } from '@/lib/date';
 
 type Member = { id: string; name: string; first: string; user: { id: string; firstName: string; lastName?: string; email?: string; profilePhoto?: string | null } };
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: ORG_TZ });
 }
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

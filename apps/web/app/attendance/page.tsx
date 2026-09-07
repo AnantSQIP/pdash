@@ -18,7 +18,7 @@ import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 import { LeavesHome } from '@/components/attendance/LeavesHome';
 import { AttendanceHome } from '@/components/attendance/AttendanceHome';
-import { WEEKDAYS_SHORT, monthLeadPad, todayIST, shiftDay } from '@/lib/date';
+import { WEEKDAYS_SHORT, monthLeadPad, todayIST, shiftDay, ORG_TZ } from '@/lib/date';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
@@ -43,14 +43,14 @@ const LEAVE_STATUS: Record<string, string> = {
   REJECTED: 'bg-red-100 text-red-700', CANCELLED: 'bg-gray-100 text-gray-500', DRAFT: 'bg-gray-100 text-gray-500',
 };
 
-function timeOf(s?: string | null) { return s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '—'; }
+function timeOf(s?: string | null) { return s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: ORG_TZ }) : '—'; }
 // Average time-of-day across the given timestamps (local tz, matches how punches are shown).
 function avgTime(stamps: (string | null | undefined)[]): string | null {
   const mins = stamps.filter(Boolean).map(s => { const d = new Date(s!); return d.getHours() * 60 + d.getMinutes(); });
   if (!mins.length) return null;
   const avg = Math.round(mins.reduce((a, b) => a + b, 0) / mins.length);
   const d = new Date(); d.setHours(Math.floor(avg / 60), avg % 60, 0, 0);
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: ORG_TZ });
 }
 function fmtElapsed(ms: number) {
   const t = Math.max(0, Math.floor(ms / 1000));

@@ -8,6 +8,7 @@ import { api, type AuditLogItem, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
+import { formatDateTimeIST } from '@/lib/date';
 
 const ACTION_COLOR: Record<string, string> = {
   created: 'bg-green-100 text-green-700', updated: 'bg-blue-100 text-blue-700',
@@ -99,7 +100,7 @@ export default function AuditPage() {
                   const u = i.user ?? usersById.get(i.userId);
                   return (
                     <tr key={i.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => setSelected(i)}>
-                      <td className="px-5 py-2.5 text-gray-500 whitespace-nowrap">{new Date(i.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+                      <td className="px-5 py-2.5 text-gray-500 whitespace-nowrap">{formatDateTimeIST(i.timestamp)}</td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2">
                           {u ? <Avatar user={u} size={24} /> : null}
@@ -135,7 +136,7 @@ export default function AuditPage() {
                   <Row label="Action"><span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', actionColor(selected.action))}>{selected.action}</span></Row>
                   <Row label="Actor">{u ? `${u.firstName} ${u.lastName}`.trim() : selected.userId}</Row>
                   <Row label="Entity">{selected.entityType} #{selected.entityId}</Row>
-                  <Row label="When">{new Date(selected.timestamp).toLocaleString()}</Row>
+                  <Row label="When">{formatDateTimeIST(selected.timestamp)}</Row>
                   <Row label="IP">{selected.ipAddress ?? '—'}</Row>
                 </div>
                 {(selected.oldValue || selected.newValue) && (

@@ -3,6 +3,7 @@
 // SquarkIP table via jsPDF + autotable (one-click download, no print dialog).
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { formatDateTimeIST } from '@/lib/date';
 
 const BRAND: [number, number, number] = [61, 141, 226]; // #3d8de2
 
@@ -54,7 +55,7 @@ export function exportPdf(opts: {
   doc.setFontSize(11);
   doc.text(opts.title, 40, 45);
   doc.setFontSize(8);
-  doc.text(`Generated ${new Date().toLocaleString()}`, pageW - 40, 24, { align: 'right' });
+  doc.text(`Generated ${formatDateTimeIST(new Date())}`, pageW - 40, 24, { align: 'right' });
   if (opts.subtitle) doc.text(opts.subtitle, pageW - 40, 40, { align: 'right' });
 
   let startY = 74;

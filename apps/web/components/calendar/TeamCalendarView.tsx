@@ -9,7 +9,7 @@ import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { useOrg } from '@/lib/org-context';
 import { EVENT_COLORS, BLOCKED_COLOR } from '@/lib/calendar-colors';
-import { WEEKDAYS_LETTER, weekdayIndex, localDay, toUtcDay, istDay, todayIST } from '@/lib/date';
+import { WEEKDAYS_LETTER, weekdayIndex, localDay, toUtcDay, istDay, todayIST, ORG_TZ } from '@/lib/date';
 
 // The grid's columns are LOCAL calendar days, so they must be keyed with the local getters.
 // This used to be `d.toISOString().slice(0, 10)`, which is UTC: a column built from local
@@ -45,7 +45,7 @@ function coveredDays(b: { start: string; end: string; allDay: boolean }): string
   return out;
 }
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: ORG_TZ });
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const NAME_W = 220; // px for the frozen member column
