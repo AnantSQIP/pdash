@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
 import { normaliseTitle, elapsedMinutes } from './task-standards';
+import { TimesheetsService } from '../timesheets/timesheets.service';
 
 /**
  * Timing a task, and learning how long that kind of task takes.
@@ -32,7 +33,10 @@ const MIN_SAMPLE_MINUTES = 1;
 
 @Injectable()
 export class TaskTimeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly timesheets: TimesheetsService,
+  ) {}
 
   private actor(): string {
     const id = getActorId();
@@ -348,7 +352,7 @@ export class TaskTimeService {
     const counts = minutes >= MIN_SAMPLE_MINUTES && newKey.length > 0;
     const now = new Date();
 
-    return this.prisma.$transaction(async tx => {
+    const outcome = await this.prisma.$transaction(async tx => {
       // Stop this person's clock so the sessions agree with the figure being recorded.
       const open = await tx.taskWorkSession.findMany({ where: { taskId, userId, endedAt: null } });
       for (const x of open) {
@@ -383,16 +387,12 @@ export class TaskTimeService {
         },
       });
 
-      // The task's actual hours are the SUM of what everyone confirmed for their own part.
-      const parts = await tx.taskAssignee.findMany({
-        where: { taskId }, select: { confirmedHours: true },
-      });
-      const taskHours = parts.reduce((sum, x) => sum + (x.confirmedHours ?? 0), 0);
-
+      // NOT actualHours. That figure has one writer — the timesheet ledger — and closing feeds
+      // the ledger (below, after this transaction) rather than keeping a rival number that the
+      // next timesheet would silently overwrite.
       const updated = await tx.task.update({
         where: { id: taskId },
         data: {
-          actualHours: taskHours,
           ...(opts.close
             ? {
                 completedAt: now,
@@ -413,6 +413,52 @@ export class TaskTimeService {
         counted: counts,
       };
     });
+
+    // Outside the transaction: the ledger has its own lock (per person per day) and its own
+    // rules, and a refusal there must not undo the close.
+    const ledger = await this.reflectInTimesheet(userId, taskId, hoursTaken);
+    return { ...outcome, ...ledger };
+  }
+
+  /**
+   * Make the person's timesheet on this task add up to at least the hours they just confirmed.
+   *
+   * "Three interactions, not twelve" only holds if closing a task ALSO files the time. But a
+   * person who logged their hours day by day must not get them booked twice, so this tops up
+   * rather than adds: if they have already logged 6h and confirm 8h, one 2h entry is written
+   * for today; if they have logged 8h or more, nothing is. Either way actualHours is then
+   * recomputed from the ledger, which is its only source.
+   *
+   * The ledger can refuse — the 16h day cap, a closed matter, a backdating window. A refusal is
+   * returned as a warning, not thrown: the task is closed and the standard is learned; only the
+   * timesheet needs a hand, and the screen says so.
+   */
+  private async reflectInTimesheet(userId: string, taskId: string, hoursTaken: number) {
+    const agg = await this.prisma.timesheet.aggregate({
+      where: { userId, taskId, deletedAt: null },
+      _sum: { hoursLogged: true },
+    });
+    const logged = agg._sum.hoursLogged ?? 0;
+    const shortfall = hoursTaken - logged;
+    // Quarter-hours, rounded UP so a 0.1h shortfall still becomes a real entry; capped at the
+    // ledger's per-entry maximum.
+    const topUp = Math.min(16, Math.ceil(shortfall * 4) / 4);
+    if (topUp < 0.25) {
+      await this.timesheets.syncTaskActualHours(taskId);
+      return { timesheetHours: 0, timesheetWarning: null as string | null };
+    }
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    try {
+      await this.timesheets.create({
+        taskId, date: today, hoursLogged: topUp, billable: true,
+        notes: 'Recorded on closing the task',
+      } as any);
+      return { timesheetHours: topUp, timesheetWarning: null as string | null };
+    } catch (e) {
+      await this.timesheets.syncTaskActualHours(taskId);
+      const msg = e instanceof Error ? e.message : 'The timesheet could not be written.';
+      return { timesheetHours: 0, timesheetWarning: `Closed, but ${topUp}h could not be added to your timesheet: ${msg}` };
+    }
   }
 
   /**

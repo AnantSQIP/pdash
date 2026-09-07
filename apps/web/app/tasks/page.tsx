@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, RotateCcw, Loader } from 'lucide-react';
+import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, RotateCcw, Loader, Clock } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
@@ -12,7 +12,8 @@ import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE, nextUpFirst } from '@/lib/tasks';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
-import { RunningTimerBar, TimerButton, CompleteTaskDialog } from '@/components/tasks/TaskWork';
+import { RunningTimerBar, TimerButton, CompleteTaskDialog, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
+import { pidLabel } from '@/lib/mock-data';
 import type { RunningTimer } from '@/lib/api';
 
 const PRIORITY_META = {
@@ -76,6 +77,8 @@ export default function TasksPage() {
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
   const [search, setSearch] = useState('');
   const [closing, setClosing] = useState<ApiTask | null>(null);
+  // A row's Log-time dialog; `hours` is pre-filled when it was opened from a stopped timer.
+  const [logging, setLogging] = useState<{ task: ApiTask; hours?: number } | null>(null);
 
   // The one task whose clock is running for this person. Polled gently — somebody may start
   // a task on their phone, and a stale bar claiming nothing is running is worse than none.
@@ -130,6 +133,20 @@ export default function TasksPage() {
     qc.setQueryData<ApiTask[]>(meKey, old => (old ?? []).map(t => (t.id === taskId ? { ...t, ...patch } : t)));
   }
 
+  // Every cache a new timesheet entry touches. invalidateTaskCaches covers the task's own
+  // actualHours; the Timesheets page, its fill calendar and the running clock are separate keys.
+  function afterTimeLogged() {
+    invalidateTaskCaches(qc);
+    qc.invalidateQueries({ queryKey: ['timesheets-mine', currentUser?.id] });
+    qc.invalidateQueries({ queryKey: ['ts-calendar'] });
+    qc.invalidateQueries({ queryKey: ['timesheets'] });
+    qc.invalidateQueries({ queryKey: ['running-timer'] });
+  }
+  const openLogFromTimer = (taskId: string, minutes: number) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (task) setLogging({ task, hours: quarterHours(minutes) });
+  };
+
   async function changeStatus(task: ApiTask, statusId: string) {
     if (statusId === task.currentWorkflowStatusId) return;
     const status = statuses.find(s => s.id === statusId);
@@ -180,7 +197,7 @@ export default function TasksPage() {
           <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
         </div>
         <div className="flex items-center gap-3">
-          {running && <div className="w-[min(22rem,60vw)]"><RunningTimerBar running={running} /></div>}
+          {running && <div className="w-[min(22rem,60vw)]"><RunningTimerBar running={running} onStopped={openLogFromTimer} /></div>}
           <Link
             href="/projects"
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
@@ -381,7 +398,16 @@ export default function TasksPage() {
                       modules; here they are one. */}
                   <td className="sticky right-0 z-10 bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)] group-hover:bg-gray-50">
                     <div className="flex items-center justify-end gap-1.5">
-                      {!closed && <TimerButton taskId={task.id} running={running} />}
+                      {!closed && <TimerButton taskId={task.id} running={running} onStopped={openLogFromTimer} />}
+                      {!closed && (
+                        <button
+                          onClick={() => setLogging({ task })}
+                          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
+                          title="Log time on this task without leaving the page"
+                        >
+                          <Clock size={12} /> Log time
+                        </button>
+                      )}
                       {!closed && (
                         <button
                           onClick={() => setClosing(task)}
@@ -408,7 +434,22 @@ export default function TasksPage() {
           taskId={closing.id}
           closedStatusId={statuses.find(x => x.type === CLOSED_TYPE)?.id}
           onClose={() => setClosing(null)}
-          onDone={() => { setClosing(null); invalidateTaskCaches(qc); qc.invalidateQueries({ queryKey: ['running-timer'] }); }}
+          onDone={() => { setClosing(null); afterTimeLogged(); }}
+        />
+      )}
+
+      {logging && (
+        <LogTimeDialog
+          taskId={logging.task.id}
+          taskTitle={logging.task.title}
+          projectLabel={(() => {
+            const p = logging.task.projectTasks?.[0]?.project;
+            if (!p) return undefined;
+            return p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.title}` : p.title;
+          })()}
+          defaultHours={logging.hours}
+          onClose={() => setLogging(null)}
+          onDone={() => { setLogging(null); afterTimeLogged(); }}
         />
       )}
     </div>

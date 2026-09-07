@@ -103,6 +103,16 @@ export class TimesheetsService {
     }
   }
 
+  /**
+   * Task.actualHours has ONE writer: this. It is the sum of the task's non-deleted timesheet
+   * hours, and nothing else may set it. (The task-timing service used to write its own figure —
+   * the sum of confirmed hours — so logging a timesheet after closing, or closing after logging,
+   * silently overwrote the other. It now reflects its hours INTO timesheets and calls this.)
+   */
+  async syncTaskActualHours(taskId: string): Promise<void> {
+    return this.recomputeTaskActualHours(taskId);
+  }
+
   /** Keep Task.actualHours in sync = SUM of its non-deleted timesheet hours. */
   private async recomputeTaskActualHours(taskId: string): Promise<void> {
     const agg = await this.prisma.timesheet.aggregate({

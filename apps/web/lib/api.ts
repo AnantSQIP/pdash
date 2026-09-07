@@ -214,7 +214,8 @@ export type ApiTask = {
   assignees?: AssigneeRef[];
   subtasks?: Subtask[];
   /** Which project(s) and task GROUP this task sits in — drives the grouped task list. */
-  projectTasks?: { projectId: string; taskListId?: string | null; sequence: number; project?: { id: string; title: string } }[];
+  projectTasks?: { projectId: string; taskListId?: string | null; sequence: number;
+    project?: { id: string; title: string; code?: string | null; roundSeq?: number; projectType?: string | null; projectPhase?: string | null } }[];
   _count?: { subtasks: number; checklists?: number };
 };
 
@@ -1110,19 +1111,24 @@ export type DayState =
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
   utilization: number; free: number; note?: string;
+  /** The day's load itemised by task (working days only), largest first. Join taskId → openTasks. */
+  tasks?: { taskId: string; hours: number }[];
 };
 export type CapacityOpenTask = {
   id: string; title: string; projectId?: string; project?: string;
   /** The project's PID and which round it is — two rounds of one PID share a code. */
   projectPid?: string | null; projectRound?: number;
+  /** Team-space work: no PID, labelled by the space. */
+  isTeamWork?: boolean;
   dueDate?: string | null; priority: string; completionPercentage: number;
+  projectPriority?: string; projectDueDate?: string | null;
   remainingHours: number; overdue: boolean;
 };
 export type CapacityRow = {
   userId: string; name: string; designation?: string; department?: string; office?: string; profilePhoto?: string | null;
   days: CapacityDay[];
   openTasks: CapacityOpenTask[];
-  freeHours: number; committedHours: number; capacityHours: number; utilization: number;
+  freeHours: number; committedHours: number; overCommittedHours: number; capacityHours: number; utilization: number;
   nextFreeDate: string | null; freeRunDays: number; availableNow: boolean; overdueCount: number;
 };
 export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[] };
@@ -1806,11 +1812,14 @@ export const api = {
     closingSummary: (id: string) => req<ClosingSummary>(`/tasks/${id}/closing-summary`),
     /** Record my hours and close the task. */
     completeWithHours: (id: string, hours: number, closedStatusId?: string) =>
-      req<{ id: string; role: string; myHours: number; expectedHoursForMyRole: number | null; basedOnCompletions: number; counted: boolean }>(
+      req<{ id: string; role: string; myHours: number; expectedHoursForMyRole: number | null; basedOnCompletions: number; counted: boolean;
+            /** Hours the close added to your timesheet (0 if already logged), and why it could not if it could not. */
+            timesheetHours: number; timesheetWarning: string | null }>(
         `/tasks/${id}/complete`, { method: 'POST', body: JSON.stringify({ hours, closedStatusId }) }),
     /** Record my hours WITHOUT closing — the analyst finishes, the reviewer closes later. */
     logMyPart: (id: string, hours: number) =>
-      req<{ id: string; role: string; myHours: number }>(`/tasks/${id}/log-my-part`, { method: 'POST', body: JSON.stringify({ hours }) }),
+      req<{ id: string; role: string; myHours: number; timesheetHours: number; timesheetWarning: string | null }>(
+        `/tasks/${id}/log-my-part`, { method: 'POST', body: JSON.stringify({ hours }) }),
     reopenTask: (id: string, openStatusId?: string) =>
       req<{ id: string; reopenedCount: number }>(`/tasks/${id}/reopen`, { method: 'POST', body: JSON.stringify({ openStatusId }) }),
   },

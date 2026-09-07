@@ -57,6 +57,12 @@ export interface CapacityDay {
   /** Free hours left on this day (0 on non-working days). */
   free: number;
   note?: string;
+  /**
+   * Which open tasks put how many hours on this day — the aggregate `load`, itemised.
+   * Only on working days; join `taskId` to the row's openTasks for title/project/priority.
+   * Largest first.
+   */
+  tasks?: { taskId: string; hours: number }[];
 }
 
 export interface CapacityRow {
@@ -75,6 +81,9 @@ export interface CapacityRow {
     projectPid?: string | null; projectRound?: number;
     /** Internal team-space work rather than a client matter — no PID, never billable. */
     isTeamWork?: boolean;
+    /** The project's own priority and INTERNAL deadline — the board shades urgency from these. */
+    projectPriority?: string;
+    projectDueDate?: string | null;
     dueDate?: string | null; priority: string; completionPercentage: number;
     remainingHours: number; overdue: boolean;
   }[];
@@ -198,7 +207,9 @@ export class CapacityService {
           projectTasks: {
             // A PID can hold several projects, so the title alone no longer identifies the work —
             // the code + round do.
-            select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true } } },
+            // priority + dueDate (the INTERNAL deadline) so the board can shade by urgency.
+            // clientDueDate is deliberately not selected: it is redacted per permission elsewhere.
+            select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } } },
             take: 1,
           },
           // Team-space work already counted toward load — this query is by ASSIGNEE, not by
@@ -248,7 +259,12 @@ export class CapacityService {
 
     // Per-user, per-day committed load.
     const loadByUserDay = new Map<string, number>();
-    const openByUser = new Map<string, CapacityRow['openTasks']>();
+    // The same load, but keeping WHICH task put how many hours on the day. The aggregate alone
+    // could say "6h on Tuesday" and nothing about what — so the board could only paint a day
+    // one colour. Keyed by taskId so a person holding two roles on one task is one entry.
+    const tasksByUserDay = new Map<string, Map<string, number>>();
+    // Keyed by taskId per user for the same reason: two assignee rows (two roles) are one task.
+    const openByUser = new Map<string, Map<string, CapacityRow['openTasks'][number]>>();
 
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
@@ -266,24 +282,32 @@ export class CapacityService {
         // when a legacy task never recorded per-person hours.
         const personEstimate = a.estimatedHours != null ? a.estimatedHours : evenSplit;
         const remaining = Math.max(0, personEstimate * (1 - done));
-        const list = openByUser.get(userId) ?? [];
-        list.push({
-          id: task.id,
-          title: task.title,
-          projectId: project?.id ?? team?.id,
-          // Team work has no PID and no round — it is labelled by the space it belongs to, and
-          // flagged so the UI can tell a client matter from an internal one.
-          project: project?.title ?? team?.name,
-          projectPid: project?.code ?? null,
-          projectRound: project?.roundSeq,
-          isTeamWork: !project && !!team,
-          dueDate: task.dueDate ? dayKey(task.dueDate) : null,
-          priority: task.priority,
-          completionPercentage: task.completionPercentage ?? 0,
-          remainingHours: r1(remaining),
-          overdue,
-        });
-        openByUser.set(userId, list);
+        const mine = openByUser.get(userId) ?? new Map<string, CapacityRow['openTasks'][number]>();
+        const existing = mine.get(task.id);
+        if (existing) {
+          // Second role on the same task: their part is the sum of both roles' remaining hours.
+          existing.remainingHours = r1(existing.remainingHours + remaining);
+        } else {
+          mine.set(task.id, {
+            id: task.id,
+            title: task.title,
+            projectId: project?.id ?? team?.id,
+            // Team work has no PID and no round — it is labelled by the space it belongs to, and
+            // flagged so the UI can tell a client matter from an internal one.
+            project: project?.title ?? team?.name,
+            projectPid: project?.code ?? null,
+            projectRound: project?.roundSeq,
+            isTeamWork: !project && !!team,
+            dueDate: task.dueDate ? dayKey(task.dueDate) : null,
+            priority: task.priority,
+            projectPriority: project?.priority ?? undefined,
+            projectDueDate: project?.dueDate ? dayKey(project.dueDate) : null,
+            completionPercentage: task.completionPercentage ?? 0,
+            remainingHours: r1(remaining),
+            overdue,
+          });
+        }
+        openByUser.set(userId, mine);
 
         if (remaining <= 0) continue;
         const workable = workingDaysFor(userId);
@@ -315,6 +339,9 @@ export class CapacityService {
         for (const d of span) {
           const k = `${userId}|${dayKey(d)}`;
           loadByUserDay.set(k, (loadByUserDay.get(k) ?? 0) + perDay);
+          const byTask = tasksByUserDay.get(k) ?? new Map<string, number>();
+          byTask.set(task.id, (byTask.get(task.id) ?? 0) + perDay);
+          tasksByUserDay.set(k, byTask);
         }
       }
     }
@@ -336,13 +363,19 @@ export class CapacityService {
         const load = loadByUserDay.get(`${u.id}|${k}`) ?? 0;
         const utilization = load / DAILY_CAPACITY_HOURS;
         const free = r1(Math.max(0, DAILY_CAPACITY_HOURS - load));
+        // Largest first, so the widest segment is drawn first and the tail of small ones is
+        // what gets truncated on a crowded day.
+        const dayTasks = [...(tasksByUserDay.get(`${u.id}|${k}`) ?? [])]
+          .map(([taskId, hours]) => ({ taskId, hours: r1(hours) }))
+          .filter(t => t.hours > 0)
+          .sort((a, b) => b.hours - a.hours);
         // A PENDING (unapproved) leave is shown tentatively but does NOT free the day — the
         // capacity still counts until it is approved (the request could be rejected).
         const pending = pendingLeaveByUserDay.get(`${u.id}|${k}`);
         if (pending) {
           return {
             date: k, state: 'LEAVE_PENDING', load: r1(load), capacity: DAILY_CAPACITY_HOURS,
-            utilization: Math.round(utilization * 100) / 100, free,
+            utilization: Math.round(utilization * 100) / 100, free, tasks: dayTasks,
             note: `${pending} leave (pending approval)`,
           };
         }
@@ -352,7 +385,7 @@ export class CapacityService {
               : 'FREE';
         return {
           date: k, state, load: r1(load), capacity: DAILY_CAPACITY_HOURS,
-          utilization: Math.round(utilization * 100) / 100, free,
+          utilization: Math.round(utilization * 100) / 100, free, tasks: dayTasks,
         };
       });
 
@@ -378,7 +411,7 @@ export class CapacityService {
           freeRunDays++;
         }
       }
-      const openTasks = (openByUser.get(u.id) ?? []).sort((a, b) => (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999'));
+      const openTasks = [...(openByUser.get(u.id)?.values() ?? [])].sort((a, b) => (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999'));
       // "Available now" = free on the next WORKABLE day (today on a weekday; Monday if
       // the board is opened on a weekend) — otherwise the answer is uselessly "nobody".
       const firstWorkIdx = days.findIndex(d => d.capacity > 0);
