@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
-import { normaliseTitle, elapsedMinutes, expectedHoursFrom } from './task-standards';
+import { normaliseTitle, elapsedMinutes } from './task-standards';
 
 /**
  * Timing a task, and learning how long that kind of task takes.
@@ -73,6 +73,24 @@ export class TaskTimeService {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     if (!u) throw new NotFoundException('User not found.');
     return u.organizationId;
+  }
+
+  /**
+   * The organisation a task's standards belong to.
+   *
+   * The signed-in actor first, because they are by definition a live account. Falling back to
+   * the task's creator alone was fragile: offboarding purges the account, and every later
+   * attempt to withdraw that task's contribution would then throw "User not found" — which
+   * surfaces as a failure to delete an ordinary task.
+   */
+  private async orgForTask(createdBy: string | null | undefined): Promise<string | null> {
+    const actorId = getActorId();
+    for (const id of [actorId, createdBy]) {
+      if (!id) continue;
+      const u = await this.prisma.user.findUnique({ where: { id }, select: { organizationId: true } });
+      if (u?.organizationId) return u.organizationId;
+    }
+    return null;
   }
 
   /**
@@ -447,6 +465,30 @@ export class TaskTimeService {
   }
 
   /**
+   * Withdraw the standard contributions of specific assignment rows, inside a caller's
+   * transaction.
+   *
+   * Used when a task is re-staffed and somebody's seat goes away. Their hours were folded
+   * into what this kind of work is expected to take; if the row simply disappears, the sample
+   * stays in the average with nothing left in the database that could ever take it back out.
+   *
+   * Returns the rows that actually carried a contribution, so the caller can see what moved.
+   */
+  async releaseAssignments(
+    tx: any,
+    organizationId: string,
+    displayTitle: string,
+    rows: { id: string; role: string | null; standardKey: string | null; standardMinutes: number | null }[],
+  ) {
+    const carrying = rows.filter(r => r.standardKey && r.standardMinutes !== null);
+    for (const r of carrying) {
+      await this.applyDelta(tx, organizationId, r.standardKey!, (r.role ?? 'ANALYST').toUpperCase(),
+        displayTitle, -(r.standardMinutes ?? 0), -1);
+    }
+    return carrying;
+  }
+
+  /**
    * Withdraw a deleted task's contributions so the averages stop counting work off the books.
    *
    * A task has as many contributions as it had people on it — the analyst's and the
@@ -463,12 +505,10 @@ export class TaskTimeService {
     if (!task) return;
     const contributions = task.assignees.filter(a => a.standardKey && a.standardMinutes !== null);
     if (!contributions.length) return;
-    const organizationId = await this.orgOf(task.createdBy);
+    const organizationId = await this.orgForTask(task.createdBy);
+    if (!organizationId) return;   // nothing to withdraw against; never block the delete
     await this.prisma.$transaction(async tx => {
-      for (const a of contributions) {
-        await this.applyDelta(tx, organizationId, a.standardKey!, (a.role ?? 'ANALYST').toUpperCase(),
-          task.title.trim(), -(a.standardMinutes ?? 0), -1);
-      }
+      await this.releaseAssignments(tx, organizationId, task.title.trim(), contributions);
       await tx.taskAssignee.updateMany({
         where: { id: { in: contributions.map(a => a.id) } },
         data: { standardKey: null, standardMinutes: null },
