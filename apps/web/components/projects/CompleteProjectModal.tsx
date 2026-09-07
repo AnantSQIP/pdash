@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, X, Loader, Clock, Truck } from 'lucide-react';
 import { api } from '@/lib/api';
+import { todayIST } from '@/lib/date';
 
 /**
  * Marking a project complete is the one moment anyone actually knows two things the system can't
@@ -25,14 +26,9 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
   onConfirm: (v: { clientDeliveryDate: string; workingHours: number; actualHours?: number }) => void;
   busy?: boolean;
 }) {
-  // A date input wants the LOCAL calendar day, not a UTC instant (which rolls over at
+  // A date input wants the org's calendar day, not a UTC instant (which rolls over at
   // 05:30 IST and would offer "yesterday" to anyone signing off late in the evening).
-  const todayLocal = () => {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 10);
-  };
-  const [delivery, setDelivery] = useState(todayLocal);
+  const [delivery, setDelivery] = useState(todayIST);
   const [working, setWorking] = useState('');
   const [actual, setActual] = useState('');
   const [touchedWorking, setTouchedWorking] = useState(false);

@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx';
 import { ShieldAlert, Lock, X, Loader } from 'lucide-react';
 import { setPasscodeHandler, type PasscodePrompt } from './api';
+import { ORG_TZ } from '@/lib/date';
 
 export function PasscodeProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -53,7 +54,7 @@ export function PasscodeProvider({ children }: { children: ReactNode }) {
   }
 
   const lockedMsg = locked && info?.lockedUntil
-    ? `Too many attempts. Try again after ${new Date(info.lockedUntil).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}.`
+    ? `Too many attempts. Try again after ${new Date(info.lockedUntil).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: ORG_TZ })}.`
     : info?.message;
 
   return (

@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { api, type TimesheetCalendarDay } from '@/lib/api';
-import { WEEKDAYS_SHORT } from '@/lib/date';
+import { WEEKDAYS_SHORT, todayIST } from '@/lib/date';
 
 // Color key for each day's fill status. Graded: full 8h = green, 4–8h = amber, under 4h = red.
 // Aligned with the attendance calendar's palette so the SAME meaning is the SAME colour everywhere:
@@ -61,7 +61,7 @@ export function TimesheetCalendar({ selectedDate, onSelectDate }: { selectedDate
   while (cells.length % 7 !== 0) cells.push(null);
 
   const monthName = new Date(cursor.year, cursor.month - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = todayIST();
   const move = (delta: number) => setCursor(c => {
     const m = c.month + delta;
     if (m < 1) return { year: c.year - 1, month: 12 };

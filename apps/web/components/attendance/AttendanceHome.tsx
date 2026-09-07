@@ -5,7 +5,7 @@ import clsx from 'clsx';
 import { format } from 'date-fns';
 import { CalendarDays, ListOrdered, ShieldCheck, ChevronLeft, ChevronRight, Pencil } from 'lucide-react';
 import type { AttendanceMonth, AttendanceDay, Holiday, RegularizationRequest } from '@/lib/api';
-import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
+import { WEEKDAYS_SHORT, monthLeadPad, ORG_TZ } from '@/lib/date';
 
 /**
  * Attendance laid out the way the team reads it in TeamNest: a calendar, a log of what the clock
@@ -59,7 +59,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id'];
 
 const hhmm = (s?: string | null) =>
-  s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+  s ? new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: ORG_TZ }) : '—';
 const hrs = (n: number) => (n === 0 ? '—' : `${n.toFixed(2)} h`);
 
 export function AttendanceHome({ month, holidays, regularizations, year, monthNum, onShiftMonth, onPickDay }: {

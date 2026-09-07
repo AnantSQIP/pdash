@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { UserCircle, Loader, MapPin, Phone, HeartPulse, ShieldCheck } from 'lucide-react';
 import { api, BLOOD_GROUPS, GENDERS, MARITAL_STATUSES, type ProfileInput } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { todayIST } from '@/lib/date';
 
 const input =
   'w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none ' +
@@ -148,7 +149,7 @@ export function CompleteProfile() {
                 placeholder="you@gmail.com" className={input} />
             </Field>
             <Field label="Date of birth" required error={fieldErrors.dateOfBirth}>
-              <input type="date" value={f.dateOfBirth ?? ''} onChange={set('dateOfBirth')} max={new Date().toISOString().slice(0, 10)} className={input} />
+              <input type="date" value={f.dateOfBirth ?? ''} onChange={set('dateOfBirth')} max={todayIST()} className={input} />
             </Field>
           </Section>
 
@@ -173,7 +174,7 @@ export function CompleteProfile() {
             </Field>
             {f.maritalStatus === 'Married' && (
               <Field label="Wedding anniversary">
-                <input type="date" value={f.weddingAnniversary ?? ''} onChange={set('weddingAnniversary')} max={new Date().toISOString().slice(0, 10)} className={input} />
+                <input type="date" value={f.weddingAnniversary ?? ''} onChange={set('weddingAnniversary')} max={todayIST()} className={input} />
               </Field>
             )}
             <Field label="Nationality">

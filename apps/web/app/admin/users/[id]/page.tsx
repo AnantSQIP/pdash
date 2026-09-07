@@ -22,6 +22,7 @@ import { avatarColor, fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { ProfileCard } from '@/components/people/ProfileCard';
 import { toastError } from '@/components/ui/Toast';
+import { formatDateTimeIST } from '@/lib/date';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function moduleOf(code: string) { return code.split('.')[0]; }
@@ -542,7 +543,7 @@ function ActivityTab({ userId, orgId }: { userId: string; orgId: string }) {
           <tbody className="divide-y divide-gray-50">
             {rows.map(r => (
               <tr key={r.id} className="hover:bg-gray-50">
-                <td className="px-5 py-2.5 text-gray-500 whitespace-nowrap">{new Date(r.ts).toLocaleString()}</td>
+                <td className="px-5 py-2.5 text-gray-500 whitespace-nowrap">{formatDateTimeIST(r.ts)}</td>
                 <td className="px-3 py-2.5"><span className="text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{r.action}</span></td>
                 <td className="px-3 py-2.5 text-gray-600">{r.entity}</td>
                 <td className="px-3 py-2.5 text-gray-500">{r.who ?? '—'}</td>

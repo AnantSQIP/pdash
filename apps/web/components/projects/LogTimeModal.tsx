@@ -5,6 +5,7 @@ import { api, type ApiTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
+import { todayIST } from '@/lib/date';
 
 interface LogTimeModalProps {
   projectId: string;
@@ -16,7 +17,7 @@ interface LogTimeModalProps {
 export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess }: LogTimeModalProps) {
   const { currentUser } = useOrg();
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? '');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayIST());
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');

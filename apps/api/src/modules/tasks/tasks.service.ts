@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { startOfUtcDay, resolveDate } from '../../common/dates';
+import { TaskTimeService } from './task-time.service';
 
 
 @Injectable()
@@ -18,7 +19,126 @@ export class TasksService {
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
     private readonly access: ProjectAccessService,
+    private readonly time: TaskTimeService,
   ) {}
+
+  /**
+   * Bring a task's assignee rows to `wanted`, KEEPING the rows that survive.
+   *
+   * This used to be `deleteMany` + `createMany`, which was wrong in a way that only showed up
+   * later. A TaskAssignee row is not just a link — it also carries the hours that person
+   * confirmed for their part and the standard those hours fed (confirmedHours, standardKey,
+   * standardMinutes). Deleting every row to add one reviewer therefore:
+   *
+   *   · stranded the contribution. The sample stayed in task_standard with nothing left in the
+   *     database able to withdraw it, and closing the task again posted a SECOND completion —
+   *     one task counted twice, and the learned average was permanently wrong.
+   *   · silently erased everyone's confirmed hours. The task's actualHours is recomputed as
+   *     the sum across assignees, so the next person to record their part reset the task's
+   *     total to their own figure alone.
+   *
+   * So: rows that are still wanted are UPDATED in place, rows that are genuinely going away
+   * have their standard contribution withdrawn first, and only new seats are created.
+   */
+  private async reconcileAssignees(
+    taskId: string,
+    title: string,
+    wanted: { userId: string; role?: string | null; estimatedHours?: number | null; dueDate?: Date | null }[],
+  ) {
+    const existing = await this.prisma.taskAssignee.findMany({
+      where: { taskId },
+      select: { id: true, userId: true, role: true, confirmedHours: true, standardKey: true, standardMinutes: true },
+    });
+
+    // A seat's identity is (person, role) — the table's own unique key. But `role` is nullable:
+    // a plain assignee predating role-based staffing has NULL, and the timing code reads NULL as
+    // ANALYST. So two notions of sameness are needed, and conflating them is what made the first
+    // version of this drop a legacy assignee's hours the moment somebody gave them a job title.
+    const seat = (userId: string, role?: string | null) => `${userId}|${role ?? ''}`;
+    const effectiveRole = (role?: string | null) => (role ?? 'ANALYST').toUpperCase();
+
+    const unclaimed = new Map(existing.map(e => [e.id, e]));
+    const plan: {
+      w: typeof wanted[number];
+      row?: typeof existing[number];
+      /** The seat is the same person doing the same job — keep every figure it carries. */
+      keepsStandard: boolean;
+    }[] = [];
+
+    // Pass 1 — exact (person, role) matches. Nothing about these seats has changed.
+    for (const w of wanted) {
+      const row = [...unclaimed.values()].find(e => seat(e.userId, e.role) === seat(w.userId, w.role));
+      if (row) {
+        unclaimed.delete(row.id);
+        plan.push({ w, row, keepsStandard: true });
+      }
+    }
+    // Pass 2 — the same person, reclassified. Adopt their remaining row rather than deleting it
+    // and creating a fresh one: it is the same human doing the same work, and their confirmed
+    // hours belong to them, not to the label that was on the seat. Prefer a row whose EFFECTIVE
+    // role already matches (NULL → ANALYST is a relabelling, not a change of job), because that
+    // seat can keep its learned contribution exactly where it is.
+    for (const w of wanted) {
+      if (plan.some(pl => pl.w === w)) continue;
+      const mine = [...unclaimed.values()].filter(e => e.userId === w.userId);
+      const row = mine.find(e => effectiveRole(e.role) === effectiveRole(w.role)) ?? mine[0];
+      if (row) {
+        unclaimed.delete(row.id);
+        plan.push({ w, row, keepsStandard: effectiveRole(row.role) === effectiveRole(w.role) });
+      } else {
+        plan.push({ w, keepsStandard: false });
+      }
+    }
+
+    // Whatever is still unclaimed is a seat that genuinely went away.
+    const removed = [...unclaimed.values()];
+    // A seat whose job changed keeps its hours but must move its sample: the contribution was
+    // learned as one role's work and is no longer that role's work.
+    const reclassified = plan.filter(pl => pl.row && !pl.keepsStandard).map(pl => pl.row!);
+    const needsOrg = removed.length > 0 || reclassified.length > 0;
+    const organizationId = needsOrg ? await this.orgOfActor() : null;
+
+    await this.prisma.$transaction(async tx => {
+      // Withdraw before deleting: once the row is gone there is nothing left that could ever
+      // take its hours back out of the learned average.
+      if (removed.length) {
+        if (organizationId) await this.time.releaseAssignments(tx, organizationId, title.trim(), removed);
+        await tx.taskAssignee.deleteMany({ where: { id: { in: removed.map(r => r.id) } } });
+      }
+      if (reclassified.length && organizationId) {
+        await this.time.releaseAssignments(tx, organizationId, title.trim(), reclassified);
+      }
+
+      // Deletes first, then updates: adopting a row into a (person, role) pair that a
+      // just-removed row still occupied would otherwise trip the unique key.
+      for (const { w, row, keepsStandard } of plan) {
+        const data: Record<string, unknown> = {
+          ...(w.estimatedHours !== undefined ? { estimatedHours: w.estimatedHours ?? 0 } : {}),
+          ...(w.dueDate !== undefined ? { dueDate: w.dueDate ?? null } : {}),
+        };
+        if (!row) {
+          await tx.taskAssignee.create({ data: { taskId, userId: w.userId, role: w.role ?? null, ...data } });
+          continue;
+        }
+        if (row.role !== (w.role ?? null)) data.role = w.role ?? null;
+        if (!keepsStandard) {
+          // The hours they confirmed stay with them — they did that work. Only the link to the
+          // standard is cleared, so their next entry is counted afresh under the new role.
+          data.standardKey = null;
+          data.standardMinutes = null;
+        }
+        if (Object.keys(data).length) await tx.taskAssignee.update({ where: { id: row.id }, data });
+      }
+    });
+  }
+
+  /** The signed-in actor's organisation, or null when it cannot be resolved. */
+  private async orgOfActor(): Promise<string | null> {
+    const actorId = getActorId();
+    if (!actorId) return null;
+    const u = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
+    return u?.organizationId ?? null;
+  }
 
   /** A task's deadline can't fall before its start. */
   private assertTaskDateOrder(start?: Date | null, due?: Date | null) {
@@ -409,14 +529,8 @@ export class TasksService {
     // Whoever changes the assignees is the "assigned by" — the person delegating the work.
     // Clear it when the task is left unassigned.
     const assignedById = dto.assigneeIds.length ? (getActorId() ?? null) : null;
-    await this.prisma.$transaction([
-      this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
-      this.prisma.taskAssignee.createMany({
-        data: dto.assigneeIds.map((userId) => ({ taskId: id, userId })),
-        skipDuplicates: true,
-      }),
-      this.prisma.task.update({ where: { id }, data: { assignedById } }),
-    ]);
+    await this.reconcileAssignees(id, before.title, dto.assigneeIds.map(userId => ({ userId, role: null })));
+    await this.prisma.task.update({ where: { id }, data: { assignedById } });
     // Notify the NEWLY-added assignees only.
     const added = dto.assigneeIds.filter(uid => !prev.has(uid));
     await this.notifications.notify(added, {
@@ -463,15 +577,13 @@ export class TasksService {
     const totalHours = entries.reduce((s, e) => s + (e.estimatedHours ?? 0), 0);
     const assignedById = entries.length ? (getActorId() ?? null) : null;
 
-    await this.prisma.$transaction([
-      this.prisma.taskAssignee.deleteMany({ where: { taskId: id } }),
-      this.prisma.taskAssignee.createMany({
-        data: entries.map(e => ({ taskId: id, userId: e.userId, role: e.role, estimatedHours: e.estimatedHours ?? 0, dueDate: e.dueDate ? new Date(e.dueDate) : null })),
-        skipDuplicates: true,
-      }),
-      // The task's estimate is the sum of the per-person hours (drives the capacity board).
-      this.prisma.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } }),
-    ]);
+    await this.reconcileAssignees(id, before.title, entries.map(e => ({
+      userId: e.userId, role: e.role,
+      estimatedHours: e.estimatedHours ?? 0,
+      dueDate: e.dueDate ? new Date(e.dueDate) : null,
+    })));
+    // The task's estimate is the sum of the per-person hours (drives the capacity board).
+    await this.prisma.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } });
 
     const added = [...new Set(entries.map(e => e.userId))].filter(uid => !prev.has(uid));
     await this.notifications.notify(added, {
@@ -489,6 +601,10 @@ export class TasksService {
     await this.access.assertTaskAccess(getActorId(), id);
     await this.access.assertTaskWritable(id); // no deleting a completed/closed matter's tasks
     const task = await this.getRaw(id);
+    // Take this task's hours back out of the learned averages BEFORE it leaves the books.
+    // Otherwise a deleted task keeps shaping what every future task of its kind is expected
+    // to take, with no row on any screen to explain why.
+    await this.time.withdraw(id);
     const result = await this.prisma.task.update({
       where: { id },
       data: { deletedAt: new Date() },

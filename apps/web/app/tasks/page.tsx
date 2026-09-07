@@ -9,7 +9,7 @@ import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { AvatarStack } from '@/components/ui/AvatarStack';
-import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
+import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE, nextUpFirst } from '@/lib/tasks';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
 import { RunningTimerBar, TimerButton, CompleteTaskDialog } from '@/components/tasks/TaskWork';
@@ -71,13 +71,19 @@ export default function TasksPage() {
 
   const isLoading = orgLoading || (!!currentUser?.id && tasksLoading);
 
-  const filtered = tasks.filter(t => {
-    if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
-    if (priorityFilter !== 'All' && t.priority !== priorityFilter) return false;
-    if (statusFilter === 'All') return true;
-    if (statusFilter === 'Overdue') return isOverdue(t);
-    return statusCategory(t) === statusFilter;
-  });
+  // Sorted the same way the home card is, and for the same reason: this is the page people are
+  // told to work from, so it has to open on what to do next. Without this it showed whatever
+  // order the API returned — which is by due date, so a task closed in June sat above six
+  // overdue ones, and a CRITICAL task sat below a LOW one that happened to be older.
+  const filtered = tasks
+    .filter(t => {
+      if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
+      if (priorityFilter !== 'All' && t.priority !== priorityFilter) return false;
+      if (statusFilter === 'All') return true;
+      if (statusFilter === 'Overdue') return isOverdue(t);
+      return statusCategory(t) === statusFilter;
+    })
+    .sort(nextUpFirst);
 
   const counts: Record<StatusFilter, number> = { All: tasks.length, Open: 0, 'In Progress': 0, Closed: 0, Overdue: 0 };
   for (const t of tasks) {

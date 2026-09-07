@@ -12,11 +12,11 @@ import {
 import { api, type DigestDetail, type DigestProject, type DigestTask, type DigestPersonHours } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
-import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
+import { formatDate, formatDateIST, formatDateTimeIST, todayIST, shiftDay } from '@/lib/date';
 import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { digestCsv } from './export';
 
-const shift = (d: string, days: number) => new Date(new Date(`${d}T00:00:00`).getTime() + days * 86_400_000).toISOString().slice(0, 10);
+const shift = shiftDay;
 const pretty = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const dayLabel = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
 const hrs = (n: number | null | undefined) => (n == null ? '—' : `${n}h`);
@@ -216,7 +216,7 @@ export default function DigestPage() {
   const { isSuperAdmin, loading } = usePermissions();
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayIST());
   const [openSection, setOpenSection] = useState<string | null>(null);
 
   const { data: d, isLoading } = useQuery<DigestDetail>({
@@ -247,7 +247,7 @@ export default function DigestPage() {
 
   const hh = (n: number) => `${String(n).padStart(2, '0')}:00`;
   const toggle = (k: string) => setOpenSection(s => (s === k ? null : k));
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
 
   return (
     <div className="min-h-full">

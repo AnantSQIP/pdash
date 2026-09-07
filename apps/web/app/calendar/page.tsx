@@ -32,7 +32,7 @@ import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { TeamCalendarView } from '@/components/calendar/TeamCalendarView';
 import { EVENT_COLORS, EVENT_LABELS, EVENT_LEGEND_ORDER, eventColor, type CalendarEventType } from '@/lib/calendar-colors';
-import { WEEKDAYS_SHORT, WEEKDAYS_FULL, weekdayIndex, monthLeadPad, startOfWeekMonday } from '@/lib/date';
+import { WEEKDAYS_SHORT, WEEKDAYS_FULL, weekdayIndex, monthLeadPad, startOfWeekMonday, ORG_TZ } from '@/lib/date';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type EventType = CalendarEventType;
@@ -81,7 +81,7 @@ function dateKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: ORG_TZ });
 }
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -1122,10 +1122,10 @@ export default function CalendarPage() {
               <div className="flex items-start gap-2">
                 <RiTimeLine size={15} className="text-gray-400 mt-0.5 shrink-0" />
                 <div>
-                  <div>{new Date(selectedEvent.startDate).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: selectedEvent.allDay ? undefined : 'numeric', minute: selectedEvent.allDay ? undefined : '2-digit' })}</div>
+                  <div>{new Date(selectedEvent.startDate).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: selectedEvent.allDay ? undefined : 'numeric', minute: selectedEvent.allDay ? undefined : '2-digit', timeZone: selectedEvent.allDay ? 'UTC' : ORG_TZ })}</div>
                   {selectedEvent.endDate && (
                     <div className="text-gray-400 text-xs mt-0.5">
-                      until {new Date(selectedEvent.endDate).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: selectedEvent.allDay ? undefined : 'numeric', minute: selectedEvent.allDay ? undefined : '2-digit' })}
+                      until {new Date(selectedEvent.endDate).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: selectedEvent.allDay ? undefined : 'numeric', minute: selectedEvent.allDay ? undefined : '2-digit', timeZone: selectedEvent.allDay ? 'UTC' : ORG_TZ })}
                     </div>
                   )}
                 </div>

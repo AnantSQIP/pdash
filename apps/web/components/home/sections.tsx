@@ -139,7 +139,7 @@ export function MyPerformanceCard() {
   const noData = !!k && k.tasksAssigned === 0 && k.hoursLogged === 0 && k.tasksOverdue === 0;
   const kpis = [
     { label: 'Completion rate', value: fmtPct(k?.completionRate),       Icon: CheckCircle,   color: 'text-green-600' },
-    { label: 'On-time rate',    value: fmtPct(k?.onTimeCompletionRate), Icon: Clock,         color: 'text-amber-600' },
+    { label: 'On-time rate',    value: k?.onTimeCompletionRate == null ? 'n/a' : fmtPct(k.onTimeCompletionRate), Icon: Clock,         color: 'text-amber-600' },
     { label: 'Hours logged',    value: fmtHours(k?.hoursLogged),        Icon: TrendingUp,    color: 'text-brand-600' },
     { label: 'Tasks overdue',   value: fmtNum(k?.tasksOverdue),         Icon: AlertTriangle, color: 'text-red-500'   },
   ];

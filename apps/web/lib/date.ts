@@ -73,15 +73,67 @@ export function formatTimeIST(value: string | Date | null | undefined): string {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: ORG_TZ });
 }
 
-/** Today as a UTC `YYYY-MM-DD` string. */
+/**
+ * Today as a UTC `YYYY-MM-DD` string.
+ *
+ * Almost never what you want. IST is UTC+5:30, so between midnight and 5:30am this returns
+ * YESTERDAY — which is how "today" rows stopped matching, date pickers refused the current
+ * day, and a WFH approval covering today went unrecognised at 3am. Use `todayIST()` for
+ * "today" and `istDay()`/`toUtcDay()` to key a specific value.
+ *
+ * Kept only for the rare caller that genuinely means the UTC date.
+ */
 export function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * The calendar day a real INSTANT falls on, in the org timezone (IST), as `YYYY-MM-DD`.
+ *
+ * For timestamps — a meeting start, a punch, a blocked hour. A date-only value (stored at
+ * UTC midnight) is not an instant: key those with `toUtcDay` instead, or IST will read
+ * midnight-UTC as the previous evening and shift the day.
+ */
+export function istDay(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  // en-CA renders ISO `YYYY-MM-DD`; the explicit timeZone makes it IST everywhere.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: ORG_TZ }).format(d);
+}
+
 /** Today's calendar day in the org timezone (IST) as `YYYY-MM-DD`. */
 export function todayIST(now: Date = new Date()): string {
-  // en-CA renders ISO `YYYY-MM-DD`; the explicit timeZone makes it IST everywhere.
-  return new Intl.DateTimeFormat('en-CA', { timeZone: ORG_TZ }).format(now);
+  return istDay(now);
+}
+
+/**
+ * The calendar day a LOCAL Date object represents, as `YYYY-MM-DD`.
+ *
+ * Built from the local getters, never `toISOString()`. A `Date` at local midnight is the
+ * previous day in UTC, so keying a locally-constructed calendar column through ISO shifts
+ * the whole grid by one — which is exactly what the team calendar used to do.
+ */
+export function localDay(d: Date): string {
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Move a `YYYY-MM-DD` day by whole calendar days.
+ *
+ * Pure arithmetic on the date itself: the string is read as UTC midnight, stepped with
+ * `setUTCDate`, and written back. Do NOT do this by adding `days * 86_400_000` to a locally
+ * parsed date — `new Date('2026-09-07T00:00:00')` is 18:30 the previous day in UTC, so the
+ * ISO slice comes back a day short. That is precisely how the daily digest ended up with a
+ * "next day" arrow that did not move and a "previous day" arrow that skipped two.
+ *
+ * Returns the input unchanged if it is not a parseable day.
+ */
+export function shiftDay(day: string, days: number): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return day;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 /** The current hour (0–23) in the org timezone (IST). */
@@ -120,9 +172,15 @@ export function longDateIST(now: Date = new Date()): string {
   }).format(now);
 }
 
-/** The UTC `YYYY-MM-DD` day of a date-only value. */
+/**
+ * The UTC `YYYY-MM-DD` day of a date-only value (one stored at UTC midnight).
+ *
+ * Returns '' rather than throwing on an unparseable value: `toISOString()` raises a
+ * RangeError on an Invalid Date, and one malformed row should not blank an entire screen.
+ */
 export function toUtcDay(value: string | Date): string {
   const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
   return d.toISOString().slice(0, 10);
 }
 

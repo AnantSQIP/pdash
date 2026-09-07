@@ -25,6 +25,8 @@ import { UserPerfPanel } from './UserPerfPanel';
 import { MultiSelectFilter, FilterBar } from './controls';
 import { C, DONUT_COLORS, STATUS_COLORS, SEVERITY_COLORS, rateColor, round1, METRIC_HELP } from './tokens';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
+import { ORG_TZ } from '@/lib/date';
+import { periodLabel } from '@/lib/periods';
 
 type Metric = 'tasksCompleted' | 'hoursLogged' | 'onTimeRate' | 'activityVolume';
 const METRIC_LABEL: Record<Metric, string> = {
@@ -155,7 +157,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
   const exportOrg = (): ExportData => ({
     filename: 'org-performance',
     title: 'Organization Performance Report',
-    subtitle: `Last ${days} days · ${ranked.length} members`,
+    subtitle: `${periodLabel(days)} · ${ranked.length} members`,
     columns: ['Member', 'Role', 'Department', 'Tasks completed', 'Hours logged', 'On-time %', 'Activity', 'Score'],
     rows: ranked.map(r => [
       r.name, r.designation ?? '', r.department ?? '',
@@ -177,7 +179,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
         <FilterBar>
           <MultiSelectFilter label="Department" options={deptOptions} selected={depts} onChange={setDepts} />
           <MultiSelectFilter label="Role" options={desigOptions} selected={desigs} onChange={setDesigs} />
-          <span className="text-xs text-gray-400 hidden md:inline">as of {freshAt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span className="text-xs text-gray-400 hidden md:inline">as of {freshAt.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: ORG_TZ })}</span>
           {can('analytics.view.organization') && (
             <button onClick={handleRebuild} disabled={rebuilding} className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-60">
               <RiRefreshLine size={14} className={clsx(rebuilding && 'animate-spin')} />{rebuilding ? 'Rebuilding…' : 'Rebuild snapshots'}

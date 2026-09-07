@@ -12,6 +12,7 @@ import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
 import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
+import { todayIST, shiftDay } from '@/lib/date';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
@@ -50,7 +51,7 @@ export default function TimesheetsPage() {
   const [showLog, setShowLog] = useState(false);
   const [assigning, setAssigning] = useState<Timesheet | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [selectedDate, setSelectedDate] = useState(todayIST());
   const [showBackfill, setShowBackfill] = useState(false);
 
   // MY own entries across every project (the API scopes ?userId to self).
@@ -77,8 +78,8 @@ export default function TimesheetsPage() {
     finally { setDeletingId(null); }
   }
 
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const weekAgo = new Date(Date.now() - 6 * 86_400_000).toISOString().slice(0, 10);
+  const todayKey = todayIST();
+  const weekAgo = shiftDay(todayKey, -6);
   const monthStart = `${todayKey.slice(0, 7)}-01`;
 
   const totalHours = entries.reduce((s, e) => s + e.hoursLogged, 0);

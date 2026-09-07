@@ -9,6 +9,7 @@ import {
 import { api, type ActivityItem } from '@/lib/api';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
+import { ORG_TZ } from '@/lib/date';
 
 // action → display verb, filter category, and icon.
 const ACTION_META: Record<string, { verb: string; cat: string; icon: React.ReactNode; color: string }> = {
@@ -35,7 +36,7 @@ const FILTERS = ['All', 'Tasks', 'Comments', 'Issues', 'Projects'] as const;
 type FilterLabel = (typeof FILTERS)[number];
 
 function formatTime(d: Date) {
-  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: ORG_TZ });
 }
 function dateLabel(d: Date): string {
   const now = new Date();
