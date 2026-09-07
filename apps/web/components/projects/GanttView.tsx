@@ -53,6 +53,8 @@ type Row = {
   start: Date;
   end: Date;
   color: string;
+  /** true when this task has NO dates of its own — the bar is a placeholder, not a plan. */
+  unscheduled: boolean;
   /** true when the start was derived (task had no real startDate). */
   derivedStart: boolean;
 };
@@ -80,6 +82,7 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
       let start: Date;
       let end: Date;
       let derivedStart = false;
+      let unscheduled = false;
 
       if (realStart && due) {
         start = realStart;
@@ -92,12 +95,21 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
         start = addDays(due, -DEFAULT_BAR_DAYS);
         end = due;
       } else {
+        // NEITHER a start nor a due date. This used to take the project's start and draw a
+        // confident seven-day bar — a schedule for a task nobody had scheduled. In the review
+        // that produced a bar sitting in the 12–19 September week for a task with no dates at
+        // all, and the only way to tell was to know the project happened to start on the 12th.
+        //
+        // It is still placed (a task the reader cannot see is worse than one they can), but
+        // anchored to TODAY rather than borrowing a date that means something else, and
+        // flagged as unscheduled so the bar reads as a gap to fill.
         derivedStart = true;
-        start = projectStart ?? today;
+        unscheduled = true;
+        start = today;
         end = addDays(start, DEFAULT_BAR_DAYS);
       }
 
-      return { task, start, end, color: task.currentStatus?.colorHex || BRAND, derivedStart };
+      return { task, start, end, color: task.currentStatus?.colorHex || BRAND, derivedStart, unscheduled };
     });
   }, [tasks, project.startDate, today]);
 
@@ -145,11 +157,27 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
     return segments;
   }, [timelineStart, totalDays]);
 
+  /**
+   * Week gridlines, on actual Mondays.
+   *
+   * These used to be every seven days counted from `timelineStart` — which is snapped to the
+   * FIRST OF A MONTH, an arbitrary weekday. When a timeline began in August 2026 the 1st was
+   * a Saturday, so every "week" on the chart ran Saturday to Saturday and the labels read
+   * 5 Sep, 12 Sep, 19 Sep. Somebody reading a bar against those lines was reading it against
+   * boundaries that had nothing to do with a working week, which is exactly what was queried
+   * in the 3 September review.
+   *
+   * Anchored to the Monday on or before the timeline start instead, so a week on the chart is
+   * a week in the office.
+   */
   const weekLines = useMemo(() => {
     const lines: number[] = [];
-    for (let d = 7; d < totalDays; d += 7) lines.push(d);
+    // Days from timelineStart to the first Monday at or after it. getDay(): Sun 0 … Sat 6.
+    const startDow = timelineStart.getDay();
+    const toMonday = (8 - startDow) % 7;   // 0 when the start IS a Monday
+    for (let d = toMonday === 0 ? 7 : toMonday; d < totalDays; d += 7) lines.push(d);
     return lines;
-  }, [totalDays]);
+  }, [timelineStart, totalDays]);
 
   const timelineWidth = totalDays * DAY_WIDTH;
   const todayOffset = daysBetween(timelineStart, today);
@@ -275,7 +303,7 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
                 <div className="absolute top-0 bottom-0 z-10 border-l-2 border-dashed" style={{ left: todayOffset * DAY_WIDTH, borderColor: ACCENT }} />
               )}
 
-              {rows.map(({ task, start, end, color, derivedStart }, idx) => {
+              {rows.map(({ task, start, end, color, derivedStart, unscheduled }, idx) => {
                 const offset = daysBetween(timelineStart, start);
                 const span = Math.max(daysBetween(start, end), 1);
                 const left = offset * DAY_WIDTH;
@@ -301,6 +329,8 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
                         backgroundColor: `${color}26`,
                         border: `1.5px solid ${color}`,
                         borderStyle: derivedStart ? 'dashed' : 'solid',
+                        // No dates of its own: hollow, so it cannot be mistaken for a plan.
+                        ...(unscheduled ? { backgroundColor: 'transparent', opacity: 0.75 } : {}),
                         boxShadow: selected ? `0 0 0 3px ${color}66` : undefined,
                         zIndex: selected ? 20 : undefined,
                       }}
@@ -315,7 +345,9 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
                       <div className="pointer-events-none absolute z-30 w-56 rounded-lg border border-gray-200 bg-white p-3 text-left shadow-lg" style={{ top: ROW_HEIGHT - 4, left: Math.min(left, timelineWidth - 232) }}>
                         <p className="mb-1 truncate text-sm font-semibold text-gray-900">{task.title}</p>
                         <div className="space-y-1 text-xs text-gray-600">
-                          <p><span className="text-gray-400">Dates: </span>{formatDate(start)} – {formatDate(end)}{derivedStart && <span className="text-gray-400"> (est.)</span>}</p>
+                          <p><span className="text-gray-400">Dates: </span>{unscheduled
+                            ? <span className="text-amber-600">no dates set — not scheduled</span>
+                            : <>{formatDate(start)} – {formatDate(end)}{derivedStart && <span className="text-gray-400"> (est.)</span>}</>}</p>
                           <p className="flex items-center gap-1.5"><span className="text-gray-400">Status: </span><span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />{task.currentStatus?.name ?? 'No status'}</p>
                           <p><span className="text-gray-400">Complete: </span>{progress}%</p>
                         </div>
