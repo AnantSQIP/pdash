@@ -353,13 +353,15 @@ export class TasksService {
       orderBy: { dueDate: 'asc' },
       include: {
         ...this.taskInclude(),
-        // Override projectTasks from taskInclude() to also bring the project name
+        // Override projectTasks from taskInclude() to also bring the project name — and the
+        // PID, round, type and phase, so a My Tasks row can label its project and log time
+        // against it without a second fetch.
         projectTasks: {
           select: {
             projectId: true,
             taskListId: true,
             sequence: true,
-            project: { select: { id: true, title: true } },
+            project: { select: { id: true, title: true, code: true, roundSeq: true, projectType: true, projectPhase: true } },
           },
         },
       },

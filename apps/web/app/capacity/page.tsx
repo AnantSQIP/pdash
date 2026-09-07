@@ -2,13 +2,13 @@
 
 // Team Capacity — "who is busy, who is free, and when".
 //
-// Every person × every day across ALL projects: committed hours vs capacity, with
-// weekends, company holidays and approved leave excluded properly. The point of the
-// board is a single decision — "who can take more work?" — so the most available
-// people sort to the top, free windows are the loudest thing on the screen, and every
-// free run is one click away from assigning a task into exactly that window.
+// Every person × every day across ALL projects. A working day is a green box; the work in it
+// is drawn as segments — one per task, width = hours, hue = project, depth = priority, a rail
+// when the deadline is close — so the green left showing is the free hours. Hover a day for
+// what fills it; click a name (or a day) for the whole plan. The most available people sort
+// to the top, and assigning into a free window is one click from the panel.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -35,7 +35,11 @@ import { useToast } from '@/components/ui/Toast';
 import { PersonPanel, ExtendMenu } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
-import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
+import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holidaysOf, type Segment } from '@/components/capacity/grid';
+import { BoardLegend } from '@/components/capacity/BoardLegend';
+import { HoverCard, type HoverTarget, type HoverIntent } from '@/components/capacity/HoverCard';
+import { assignProjectHues } from '@/lib/project-colors';
+import { todayIST } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 
@@ -49,8 +53,15 @@ export default function CapacityPage() {
   const [search, setSearch] = useState('');
   const [dept, setDept] = useState('');
   const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
-  const [selected, setSelected] = useState<CapacityRow | null>(null);
+  // The selected PERSON, not a snapshot of their row: the panel then re-reads the row from the
+  // latest payload, so an Extend done inside it is reflected without closing and reopening.
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [assignTo, setAssignTo] = useState<{ row: CapacityRow; start?: string; due?: string } | null>(null);
+  const [hover, setHover] = useState<HoverTarget | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
+  const [focusDate, setFocusDate] = useState<string | undefined>();
+  const today = todayIST();
 
   const isPast = range === 'past-30';
   const days = range === 'next-7' ? 7 : range === 'next-30' ? 30 : 14; // forward horizon
@@ -91,6 +102,47 @@ export default function CapacityPage() {
 
   const isLoading = isPast ? histLoading : fwdLoading;
   const fwdRows = data?.rows ?? [];
+  // Hues come from the WHOLE payload, so a search or filter never reshuffles the colours.
+  const hues = useMemo(() => assignProjectHues(projectsOf(fwdRows)), [fwdRows]);
+  const holidays = useMemo(() => holidaysOf(fwdRows), [fwdRows]);
+  const selected = useMemo(() => fwdRows.find(r => r.userId === selectedUserId) ?? null, [fwdRows, selectedUserId]);
+  // Every cell's segments, once per payload — not once per hover. A hover changes page state,
+  // which re-renders every row; without this each of 26 × 30 cells re-derived its segments.
+  const segmentsByKey = useMemo(() => {
+    const m = new Map<string, Segment[] | null>();
+    for (const r of fwdRows) for (const d of r.days) m.set(`${r.userId}|${d.date}`, segmentsFor(r, d, hues, today, holidays));
+    return m;
+  }, [fwdRows, hues, holidays, today]);
+  // A cell fits five 6px segments at the 30-day range, eight at 14, a dozen at 7.
+  const maxSegments = days >= 30 ? 5 : days >= 14 ? 8 : 12;
+  // A pinned project belongs to the board it was pinned on.
+  useEffect(() => { setFocusProjectId(null); }, [range, projectId]);
+
+  // The hover card is fixed to the viewport, so it must go the moment anything moves.
+  useEffect(() => {
+    if (!hover) return;
+    const close = () => setHover(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); window.removeEventListener('keydown', onKey); };
+  }, [hover]);
+  const beginHover = (t: HoverIntent) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    // The rect is read when the card is about to show, so 120ms of scrolling cannot leave the
+    // card beside where the cell used to be.
+    hoverTimer.current = setTimeout(() => {
+      if (!t.el.isConnected) return;
+      setHover({ row: t.row, day: t.day, segments: t.segments, rect: t.el.getBoundingClientRect() });
+    }, 120);
+  };
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
+  const endHover = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+    setHover(null);
+  };
   const histRows = history?.rows ?? [];
   const allRows: { name: string; department?: string }[] = isPast ? histRows : fwdRows;
 
@@ -103,9 +155,13 @@ export default function CapacityPage() {
   const visibleFwd = useMemo(() => fwdRows.filter(matches), [fwdRows, search, dept]);
   const visibleHist = useMemo(() => histRows.filter(matches), [histRows, search, dept]);
 
-  // Group the forward board by office (Gurgaon, Jaipur, then anything else), A–Z within each.
+  // Group by office (Gurgaon, Jaipur, then anything else) ONLY when at least one person has an
+  // office — otherwise a lone "Unassigned · 26" header is a label for nothing. Within a group the
+  // server's order is kept: most available first, which is what the board promises.
   const groupedFwd = useMemo(() => {
     const ORDER = ['GURGAON', 'JAIPUR'];
+    const anyOffice = visibleFwd.some(r => !!r.office);
+    if (!anyOffice) return [{ office: '', rows: visibleFwd }];
     const byOffice = new Map<string, CapacityRow[]>();
     for (const r of visibleFwd) {
       const key = r.office || 'Unassigned';
@@ -118,10 +174,7 @@ export default function CapacityPage() {
         if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
         return a.localeCompare(b);
       })
-      .map(office => ({
-        office,
-        rows: byOffice.get(office)!.slice().sort((a, b) => a.name.localeCompare(b.name)),
-      }));
+      .map(office => ({ office, rows: byOffice.get(office)! }));
   }, [visibleFwd]);
 
   // Forward headline numbers a manager acts on.
@@ -142,22 +195,6 @@ export default function CapacityPage() {
     return { compoff, present, onLeave, absent };
   }, [histRows]);
 
-  // Who's on approved leave, and which company holidays fall in this window — synced from
-  // the same leave/holiday data the Calendar uses, surfaced up front so it's unmissable
-  // when planning. (Forward view only.)
-  const leaveHoliday = useMemo(() => {
-    const people: { name: string; from: string; to: string }[] = [];
-    for (const r of fwdRows) {
-      const ds = r.days.filter(d => d.state === 'LEAVE').map(d => d.date).sort();
-      if (ds.length) people.push({ name: r.name, from: ds[0], to: ds[ds.length - 1] });
-    }
-    const holidays: { date: string; name: string }[] = [];
-    const seen = new Set<string>();
-    for (const d of fwdRows[0]?.days ?? []) {
-      if (d.state === 'HOLIDAY' && !seen.has(d.date)) { seen.add(d.date); holidays.push({ date: d.date, name: d.note ?? 'Holiday' }); }
-    }
-    return { people, holidays };
-  }, [fwdRows]);
 
   if (permLoading) {
     return <div className="flex items-center justify-center h-full text-gray-400"><Loader className="animate-spin mr-2" size={18} />Loading…</div>;
@@ -184,7 +221,12 @@ export default function CapacityPage() {
               <Gauge size={20} className="text-brand-600" /> Team Capacity
             </h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              Who is busy, who is free, and when — across every project. Click any free day to assign work into it.
+              Who is on what, when, and how much — across every project. Hover a day for what fills it; click a name for the whole plan.
+              {!isPast && fwdRows.length > 0 && (
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
+                  {stats.freeNow} of {fwdRows.length} available now
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -205,7 +247,7 @@ export default function CapacityPage() {
             {departments.length > 0 && (
               <select value={dept} onChange={e => setDept(e.target.value)}
                 className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white">
-                <option value="">All departments</option>
+                <option value="">All teams</option>
                 {departments.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
             )}
@@ -220,52 +262,21 @@ export default function CapacityPage() {
           </div>
         </div>
 
-        {/* KPI strip — the four things worth acting on */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-          {isPast ? (
-            <>
-              <Kpi label="Comp-off candidates" value={histStats.compoff} Icon={CalendarPlus} tint="bg-indigo-100 text-indigo-700" hint="worked on a non-working day" />
-              <Kpi label="Days present" value={histStats.present} Icon={Sparkles} tint="bg-emerald-100 text-emerald-700" hint="across the team, past 30 days" />
-              <Kpi label="Days on leave" value={histStats.onLeave} Icon={CalendarRange} tint="bg-purple-100 text-purple-700" hint="approved leave taken" />
-              <Kpi label="Days absent" value={histStats.absent} Icon={AlertTriangle} tint="bg-red-100 text-red-700" hint="working days with no attendance" />
-            </>
-          ) : (
-            <>
-              <Kpi label="Available now" value={stats.freeNow} Icon={Sparkles} tint="bg-emerald-100 text-emerald-700" hint="free on the next working day" />
-              <Kpi label="Freeing up soon" value={stats.freeingSoon} Icon={CalendarRange} tint="bg-sky-100 text-sky-700" hint="within this window" />
-              <Kpi label="Spare capacity" value={`${stats.spareHours}h`} Icon={Zap} tint="bg-amber-100 text-amber-700" hint="unused hours in window" />
-              <Kpi label="Overdue tasks" value={stats.overdue} Icon={Clock} tint="bg-purple-100 text-purple-700" hint="past deadline" />
-            </>
-          )}
-        </div>
+        {/* The forward board carries no tiles: free people are the green rows, overdue work is
+            the red-railed segments, spare hours are the green left showing. The retrospective
+            (attendance) view keeps its four, which the grid below cannot show. */}
+        {isPast && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+            <Kpi label="Comp-off candidates" value={histStats.compoff} Icon={CalendarPlus} tint="bg-indigo-100 text-indigo-700" hint="worked on a non-working day" />
+            <Kpi label="Days present" value={histStats.present} Icon={Sparkles} tint="bg-emerald-100 text-emerald-700" hint="across the team, past 30 days" />
+            <Kpi label="Days on leave" value={histStats.onLeave} Icon={CalendarRange} tint="bg-purple-100 text-purple-700" hint="approved leave taken" />
+            <Kpi label="Days absent" value={histStats.absent} Icon={AlertTriangle} tint="bg-red-100 text-red-700" hint="working days with no attendance" />
+          </div>
+        )}
       </div>
 
       {/* Body */}
       <div className="flex-1 min-h-0 overflow-hidden flex flex-col p-4 sm:p-6 gap-4">
-        {!isPast && (leaveHoliday.people.length > 0 || leaveHoliday.holidays.length > 0) && (
-          <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex flex-wrap items-start gap-x-6 gap-y-2">
-            {leaveHoliday.people.length > 0 && (
-              <div className="flex items-start gap-2 min-w-0">
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-100 px-2 py-0.5 rounded-full shrink-0 mt-0.5"><Plane size={12} /> On leave</span>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
-                  {leaveHoliday.people.map(p => (
-                    <span key={p.name}><span className="font-medium text-gray-800">{p.name}</span> · {formatDate(p.from)}{p.to !== p.from ? `–${formatDate(p.to)}` : ''}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {leaveHoliday.holidays.length > 0 && (
-              <div className="flex items-start gap-2 min-w-0">
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-full shrink-0 mt-0.5"><Flag size={12} /> Holidays</span>
-                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
-                  {leaveHoliday.holidays.map(h => (
-                    <span key={h.date}><span className="font-medium text-gray-800">{h.name}</span> · {formatDate(h.date)}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
         {coverage && coverage.risks.length > 0 && (
           <CoveragePanel data={coverage} />
         )}
@@ -294,9 +305,9 @@ export default function CapacityPage() {
                       className={clsx('text-center rounded-md py-0.5',
                         holiday && 'bg-amber-100',
                         weekend && 'bg-gray-100',
-                        isToday(d.date) && 'ring-1 ring-brand-400')}>
-                      <div className={clsx('text-[9px] uppercase', holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
-                      <div className={clsx('text-[11px] font-medium', isToday(d.date) ? 'text-brand-600 font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
+                        isToday(d.date) && 'bg-gray-900')}>
+                      <div className={clsx('text-[9px] uppercase', isToday(d.date) ? 'text-gray-300' : holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
+                      <div className={clsx('text-[11px] font-medium', isToday(d.date) ? 'text-white font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
                     </div>
                   );
                 })}
@@ -314,28 +325,37 @@ export default function CapacityPage() {
                 visibleFwd.length === 0
                   ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
                   : groupedFwd.map(g => (
-                    <div key={g.office}>
-                      <div className="sticky top-0 z-[5] flex items-center gap-1.5 px-4 py-1.5 bg-gray-100/95 backdrop-blur border-y border-gray-200 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                        <Building2 size={12} className="text-gray-400" />
-                        {officeLabel(g.office)}
-                        <span className="normal-case font-normal text-gray-400">· {g.rows.length}</span>
-                      </div>
+                    <div key={g.office || 'all'}>
+                      {g.office && (
+                        <div className="sticky top-0 z-[5] flex items-center gap-1.5 px-4 py-1.5 bg-gray-100/95 backdrop-blur border-y border-gray-200 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                          <Building2 size={12} className="text-gray-400" />
+                          {officeLabel(g.office)}
+                          <span className="normal-case font-normal text-gray-400">· {g.rows.length}</span>
+                        </div>
+                      )}
                       {g.rows.map(row => (
                     <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
-                      <button onClick={() => setSelected(row)} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
-                        <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={30} />
+                      <button onClick={() => { setFocusDate(undefined); setSelectedUserId(row.userId); }} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
+                        <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={30} />
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-gray-800 truncate group-hover:text-brand-600 transition-colors">{row.name}</p>
-                          <p className="text-[11px] text-gray-400 truncate">
-                            {row.designation ?? '—'}
-                            {row.overdueCount > 0 && <span className="ml-1 text-red-500 font-medium">· {row.overdueCount} overdue</span>}
-                          </p>
+                          <p className="text-[11px] text-gray-400 truncate">{row.designation ?? '—'}</p>
                         </div>
                       </button>
                       <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
-                        {row.days.map(d => (
-                          <DayCell key={d.date} day={d} onClick={() => setAssignTo({ row, start: d.date, due: d.date })} />
-                        ))}
+                        {row.days.map(d => {
+                          const segments = segmentsByKey.get(`${row.userId}|${d.date}`) ?? null;
+                          return (
+                            <DayCell
+                              key={d.date} day={d} segments={segments} focusProjectId={focusProjectId} today={isToday(d.date)} maxSegments={maxSegments}
+                              onHover={e => beginHover({ row, day: d, segments, el: e.currentTarget })}
+                              onLeave={endHover}
+                              // A day opens the person's plan at that day. Adding work is the
+                              // panel's job, where you can see what is already there first.
+                              onClick={() => { endHover(); setFocusDate(d.date); setSelectedUserId(row.userId); }}
+                            />
+                          );
+                        })}
                       </div>
                       <div className="w-40 shrink-0 flex items-center justify-end gap-2">
                         <div className="text-right">
@@ -344,17 +364,19 @@ export default function CapacityPage() {
                           ) : row.nextFreeDate ? (
                             <p className="text-xs font-medium text-gray-600">Free {formatDate(row.nextFreeDate)}</p>
                           ) : (
-                            <p className="text-xs font-medium text-red-500">Fully booked</p>
+                            // No day under a quarter loaded. If hours are still free, say that rather
+                            // than "fully booked" beside "37h free" — the two read as a contradiction.
+                            <p className="text-xs font-medium text-red-500">{row.freeHours > 0 ? 'No free day' : 'Fully booked'}</p>
                           )}
-                          <p className="text-[10px] text-gray-400">
-                            {row.freeHours}h free · {row.utilization}% used
-                            {row.freeRunDays > 1 && <span className="text-emerald-600 font-medium"> · {row.freeRunDays}d window</span>}
+                          <p className="text-[10px] tabular-nums text-gray-400">
+                            {row.freeHours}h free
+                            {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-gray-900">· {row.overCommittedHours}h over</span>}
                           </p>
                         </div>
                         <button
                           onClick={() => setAssignTo({ row, start: row.nextFreeDate ?? undefined, due: row.nextFreeDate ?? undefined })}
                           title={`Assign a task to ${row.name}`}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-brand-600 opacity-0 group-hover:opacity-100 transition-all shrink-0"
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-gray-900 transition-colors shrink-0"
                         >
                           <Plus size={14} />
                         </button>
@@ -367,28 +389,34 @@ export default function CapacityPage() {
             </div>
 
             {/* Legend */}
-            <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-              {((isPast
-                ? ['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT', 'NOT_MARKED']
-                : ['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'LEAVE_PENDING', 'HOLIDAY', 'WEEKEND']) as DayState[]).map(s => (
-                <span key={s} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
-                  <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[s].dot)} />{STATE_STYLE[s].label}
-                </span>
-              ))}
-              <span className="text-[11px] text-gray-400 ml-auto">
-                {isPast ? 'Actual attendance over the past 30 days' : `Capacity ${data?.capacityPerDay}h/day · leave & holidays excluded`}
-              </span>
-            </div>
+            {isPast ? (
+              <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+                {(['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT', 'NOT_MARKED'] as DayState[]).map(st => (
+                  <span key={st} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+                    <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[st].dot)} />{STATE_STYLE[st].label}
+                  </span>
+                ))}
+                <span className="text-[11px] text-gray-400 ml-auto">Actual attendance over the past 30 days</span>
+              </div>
+            ) : (
+              <BoardLegend rows={fwdRows} hues={hues} focusProjectId={focusProjectId} onFocus={setFocusProjectId} />
+            )}
           </div>
         )}
       </div>
 
+      {hover && !selected && !assignTo && <HoverCard target={hover} today={today} />}
+
       {/* Person drill-down */}
       {selected && (
         <PersonPanel
-          row={selected}
-          onClose={() => setSelected(null)}
-          onAssign={() => { setAssignTo({ row: selected, start: selected.nextFreeDate ?? undefined, due: selected.nextFreeDate ?? undefined }); setSelected(null); }}
+          row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
+          onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
+          onAssign={() => {
+            const start = focusDate ?? selected.nextFreeDate ?? undefined;
+            setAssignTo({ row: selected, start, due: start });
+            setSelectedUserId(null); setFocusDate(undefined);
+          }}
         />
       )}
 
@@ -403,6 +431,8 @@ export default function CapacityPage() {
           onDone={() => {
             setAssignTo(null);
             invalidateTaskCaches(qc);
+            // The coverage board reads its own key; a reassignment must not leave it stale.
+            qc.invalidateQueries({ queryKey: ['coverage-risks'] });
           }}
         />
       )}
@@ -551,7 +581,7 @@ function HistoryRowView({ row }: { row: HistoryRow }) {
         </div>
       </div>
       <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
-        {row.days.map(d => <DayCell key={d.date} day={d} />)}
+        {row.days.map(d => <DayCell key={d.date} day={d} segments={null} />)}
       </div>
       <div className="w-40 shrink-0 text-right">
         <p className="text-xs font-medium text-gray-700">{row.present} present · {row.absent} absent</p>

@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
 import { normaliseTitle, elapsedMinutes } from './task-standards';
+import { TimesheetsService } from '../timesheets/timesheets.service';
+import { ProjectAccessService } from '../../common/access/project-access.module';
 
 /**
  * Timing a task, and learning how long that kind of task takes.
@@ -32,7 +34,11 @@ const MIN_SAMPLE_MINUTES = 1;
 
 @Injectable()
 export class TaskTimeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly timesheets: TimesheetsService,
+    private readonly access: ProjectAccessService,
+  ) {}
 
   private actor(): string {
     const id = getActorId();
@@ -139,6 +145,10 @@ export class TaskTimeService {
   async start(taskId: string) {
     const userId = this.actor();
     await this.assertMine(taskId, userId);
+    // A completed or closed matter takes no more work. The ledger would refuse the hours at
+    // the end; better to refuse the clock at the start, with the same words the rest of the
+    // app uses.
+    await this.access.assertTaskWritable(taskId);
     await this.reconcileStale(userId);
     const now = new Date();
 
@@ -178,12 +188,16 @@ export class TaskTimeService {
       where: { taskId, userId, endedAt: null },
       orderBy: { startedAt: 'desc' },
     });
-    if (!open) return { stopped: false, minutes: await this.minutesOn(taskId) };
+    if (!open) return { stopped: false, minutes: 0, totalMinutes: await this.minutesOn(taskId) };
+    const minutes = elapsedMinutes(open.startedAt, now);
     await this.prisma.taskWorkSession.update({
       where: { id: open.id },
-      data: { endedAt: now, minutes: elapsedMinutes(open.startedAt, now) },
+      data: { endedAt: now, minutes },
     });
-    return { stopped: true, minutes: await this.minutesOn(taskId) };
+    // `minutes` is THIS sitting — what the person just did, and what the toast offers to log.
+    // The cumulative figure is returned beside it; it must never be the one pre-filled, or a
+    // second session of the day books the first one again.
+    return { stopped: true, minutes, totalMinutes: await this.minutesOn(taskId) };
   }
 
   /** Total recorded minutes on a task — everyone's sessions, plus any still running. */
@@ -211,9 +225,10 @@ export class TaskTimeService {
     const organizationId = await this.orgOf(userId);
     const titleKey = normaliseTitle(task.title);
 
-    const [mineMinutes, standards] = await Promise.all([
+    const [mineMinutes, standards, ledger] = await Promise.all([
       this.minutesFor(taskId, userId),
       this.prisma.taskStandard.findMany({ where: { organizationId, titleKey } }),
+      this.prisma.timesheet.aggregate({ where: { userId, taskId, deletedAt: null }, _sum: { hoursLogged: true } }),
     ]);
     const mineStd = standards.find(x => x.role === role) ?? null;
     const assignment = task.assignees.find(a => a.userId === userId && (a.role ?? 'ANALYST').toUpperCase() === role);
@@ -230,6 +245,8 @@ export class TaskTimeService {
       /** Every role's expectation summed: what the task as a whole is expected to cost. */
       expectedHoursForTask: standards.reduce((sum, x) => sum + (x.expectedHours ?? 0), 0) || null,
       alreadyCounted: assignment?.standardMinutes != null,
+      /** Hours already in this person's timesheet for the task. Closing adds only any shortfall. */
+      loggedHours: Math.round((ledger._sum.hoursLogged ?? 0) * 100) / 100,
     };
   }
 
@@ -335,6 +352,7 @@ export class TaskTimeService {
   private async record(taskId: string, hoursTaken: number, opts: { close: boolean; closedStatusId?: string }) {
     const userId = this.actor();
     const { task, assignment, role } = await this.assertMine(taskId, userId);
+    await this.access.assertTaskWritable(taskId);
     if (!Number.isFinite(hoursTaken) || hoursTaken < 0) {
       throw new BadRequestException('Hours must be a number of zero or more.');
     }
@@ -345,10 +363,14 @@ export class TaskTimeService {
     const organizationId = await this.orgOf(userId);
     const newKey = normaliseTitle(task.title);
     const minutes = Math.max(0, Math.round(hoursTaken * 60));
+    // A close must move the visible status too. The screen names the Closed status; an API
+    // caller may not — and a task with completedAt set but an Open status reads as open, with
+    // Start and Close still offered. Resolve it from the task's own workflow when unnamed.
+    const closedStatusId = opts.close ? (opts.closedStatusId ?? await this.closedStatusFor(taskId)) : undefined;
     const counts = minutes >= MIN_SAMPLE_MINUTES && newKey.length > 0;
     const now = new Date();
 
-    return this.prisma.$transaction(async tx => {
+    const outcome = await this.prisma.$transaction(async tx => {
       // Stop this person's clock so the sessions agree with the figure being recorded.
       const open = await tx.taskWorkSession.findMany({ where: { taskId, userId, endedAt: null } });
       for (const x of open) {
@@ -383,21 +405,17 @@ export class TaskTimeService {
         },
       });
 
-      // The task's actual hours are the SUM of what everyone confirmed for their own part.
-      const parts = await tx.taskAssignee.findMany({
-        where: { taskId }, select: { confirmedHours: true },
-      });
-      const taskHours = parts.reduce((sum, x) => sum + (x.confirmedHours ?? 0), 0);
-
+      // NOT actualHours. That figure has one writer — the timesheet ledger — and closing feeds
+      // the ledger (below, after this transaction) rather than keeping a rival number that the
+      // next timesheet would silently overwrite.
       const updated = await tx.task.update({
         where: { id: taskId },
         data: {
-          actualHours: taskHours,
           ...(opts.close
             ? {
                 completedAt: now,
                 completionPercentage: 100,
-                ...(opts.closedStatusId ? { currentWorkflowStatusId: opts.closedStatusId } : {}),
+                ...(closedStatusId ? { currentWorkflowStatusId: closedStatusId } : {}),
               }
             : {}),
         },
@@ -413,6 +431,60 @@ export class TaskTimeService {
         counted: counts,
       };
     });
+
+    // Outside the transaction: the ledger has its own lock (per person per day) and its own
+    // rules, and a refusal there must not undo the close.
+    const ledger = await this.reflectInTimesheet(userId, taskId, hoursTaken, opts.close);
+    return { ...outcome, ...ledger };
+  }
+
+  /**
+   * Make the person's timesheet on this task add up to at least the hours they just confirmed.
+   *
+   * "Three interactions, not twelve" only holds if closing a task ALSO files the time. But a
+   * person who logged their hours day by day must not get them booked twice, so this tops up
+   * rather than adds: if they have already logged 6h and confirm 8h, one 2h entry is written
+   * for today; if they have logged 8h or more, nothing is. Either way actualHours is then
+   * recomputed from the ledger, which is its only source.
+   *
+   * The ledger can refuse — the 16h day cap, a closed matter, a backdating window. A refusal is
+   * returned as a warning, not thrown: the task is closed and the standard is learned; only the
+   * timesheet needs a hand, and the screen says so.
+   */
+  private async reflectInTimesheet(userId: string, taskId: string, hoursTaken: number, closing: boolean) {
+    const verb = closing ? 'Closed' : 'Recorded';
+    const agg = await this.prisma.timesheet.aggregate({
+      where: { userId, taskId, deletedAt: null },
+      _sum: { hoursLogged: true },
+    });
+    const logged = agg._sum.hoursLogged ?? 0;
+    // Quarter-hours, rounded UP so a 0.1h shortfall still becomes a real entry.
+    const shortfall = Math.ceil((hoursTaken - logged) * 4) / 4;
+    if (shortfall < 0.25) {
+      await this.timesheets.syncTaskActualHours(taskId);
+      return { timesheetHours: 0, timesheetWarning: null as string | null };
+    }
+    // One entry can hold a 16-hour day and no more. A larger shortfall is work from other days
+    // that was never logged; today's entry takes what it can and the rest is SAID, not dropped.
+    const topUp = Math.min(16, shortfall);
+    const leftover = Math.round((shortfall - topUp) * 100) / 100;
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    try {
+      await this.timesheets.create({
+        taskId, date: today, hoursLogged: topUp, billable: true,
+        notes: closing ? 'Recorded when closing the task' : 'Recorded from My Tasks',
+      } as any, { skipIdenticalCheck: true });
+      return {
+        timesheetHours: topUp,
+        timesheetWarning: leftover > 0
+          ? `${topUp}h added to today's timesheet; the remaining ${leftover}h needs logging against the days it was worked.`
+          : null as string | null,
+      };
+    } catch (e) {
+      await this.timesheets.syncTaskActualHours(taskId);
+      const msg = e instanceof Error ? e.message : 'The timesheet could not be written.';
+      return { timesheetHours: 0, timesheetWarning: `${verb}, but ${topUp}h could not be added to your timesheet: ${msg}` };
+    }
   }
 
   /**
@@ -469,6 +541,20 @@ export class TaskTimeService {
       byTask.set(r.titleKey, entry);
     }
     return [...byTask.values()].sort((a, b) => b.totalExpectedHours - a.totalExpectedHours);
+  }
+
+  /** The CLOSED-type status of the workflow this task is in, or null if it has no status yet. */
+  private async closedStatusFor(taskId: string): Promise<string | undefined> {
+    const t = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { currentStatus: { select: { workflowId: true } } },
+    });
+    const workflowId = t?.currentStatus?.workflowId;
+    if (!workflowId) return undefined;
+    const closed = await this.prisma.workflowStatus.findFirst({
+      where: { workflowId, type: 'CLOSED' }, orderBy: { sequence: 'desc' }, select: { id: true },
+    });
+    return closed?.id;
   }
 
   /**

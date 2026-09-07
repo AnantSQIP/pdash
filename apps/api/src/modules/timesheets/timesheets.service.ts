@@ -103,6 +103,16 @@ export class TimesheetsService {
     }
   }
 
+  /**
+   * Task.actualHours has ONE writer: this. It is the sum of the task's non-deleted timesheet
+   * hours, and nothing else may set it. (The task-timing service used to write its own figure —
+   * the sum of confirmed hours — so logging a timesheet after closing, or closing after logging,
+   * silently overwrote the other. It now reflects its hours INTO timesheets and calls this.)
+   */
+  async syncTaskActualHours(taskId: string): Promise<void> {
+    return this.recomputeTaskActualHours(taskId);
+  }
+
   /** Keep Task.actualHours in sync = SUM of its non-deleted timesheet hours. */
   private async recomputeTaskActualHours(taskId: string): Promise<void> {
     const agg = await this.prisma.timesheet.aggregate({
@@ -196,7 +206,15 @@ export class TimesheetsService {
     });
   }
 
-  async create(dto: CreateTimesheetDto) {
+  /**
+   * `opts.skipIdenticalCheck` is for SYSTEM-written entries only (the close-time top-up) and is
+   * never reachable from the controller. The identical-entry rule exists to stop a human
+   * double-submitting a form; a computed shortfall that happens to equal an entry already logged
+   * today is not a double submission, and refusing it left hours unrecordable from any screen.
+   * Every other rule — assignee, matter open, backdating, the day cap, the per-day lock — still
+   * applies.
+   */
+  async create(dto: CreateTimesheetDto, opts: { skipIdenticalCheck?: boolean } = {}) {
     // SECURITY: the owner is the authenticated actor — never the client-supplied
     // dto.userId (which is ignored). Prevents logging/inflating others' hours.
     const actorId = await this.actor();
@@ -324,11 +342,13 @@ export class TimesheetsService {
     // arriving together each saw no duplicate and no hours logged, and all four were accepted.
     const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
       // Reject an identical re-submission (same task, day and hours) — a double-billing vector.
-      const dupe = await tx.timesheet.findFirst({
-        where: { userId: actorId, taskId: dto.taskId, date: entryDay, hoursLogged: dto.hoursLogged, deletedAt: null },
-        select: { id: true },
-      });
-      if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
+      if (!opts.skipIdenticalCheck) {
+        const dupe = await tx.timesheet.findFirst({
+          where: { userId: actorId, taskId: dto.taskId, date: entryDay, hoursLogged: dto.hoursLogged, deletedAt: null },
+          select: { id: true },
+        });
+        if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
+      }
       await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
 
       return tx.timesheet.create({

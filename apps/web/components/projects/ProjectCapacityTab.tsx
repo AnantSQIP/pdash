@@ -3,15 +3,19 @@
 // Per-project availability — the Team Capacity board, scoped to this project's members.
 // Answers "who on THIS project is free to take more of it?" without leaving the project.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Users, Loader, ArrowRight, CalendarRange } from 'lucide-react';
 import { api, type CapacityRow } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
-import { DOW, DayCell, CapacityLegend, dayOfWeek, dayNum, isToday } from '@/components/capacity/grid';
+import { DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holidaysOf } from '@/components/capacity/grid';
+import { BoardLegend } from '@/components/capacity/BoardLegend';
+import { HoverCard, type HoverTarget } from '@/components/capacity/HoverCard';
 import { PersonPanel } from '@/components/capacity/PersonPanel';
+import { assignProjectHues } from '@/lib/project-colors';
+import { todayIST } from '@/lib/date';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 
 const RANGES = [7, 14, 30] as const;
@@ -19,9 +23,13 @@ const RANGES = [7, 14, 30] as const;
 export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const [days, setDays] = useState<number>(14);
-  const [selected, setSelected] = useState<CapacityRow | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   // Clicking a free day opens the add-task flow, pre-assigned to that person on that day.
   const [assign, setAssign] = useState<{ userId: string; date: string } | null>(null);
+  const [hover, setHover] = useState<HoverTarget | null>(null);
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
+  const [focusDate, setFocusDate] = useState<string | undefined>();
+  const today = todayIST();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['capacity', 'project', projectId, days],
@@ -34,6 +42,10 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
     staleTime: 60_000,
   });
   const defaultTaskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
+  const payloadRows = data?.rows ?? [];
+  const hues = useMemo(() => assignProjectHues(projectsOf(payloadRows)), [payloadRows]);
+  const holidays = useMemo(() => holidaysOf(payloadRows), [payloadRows]);
+  const selected = useMemo(() => payloadRows.find(r => r.userId === selectedUserId) ?? null, [payloadRows, selectedUserId]);
 
   if (isLoading) {
     return <div className="flex items-center justify-center py-16 text-gray-400"><Loader className="animate-spin mr-2" size={18} /> Loading availability…</div>;
@@ -90,9 +102,11 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
                 <tr>
                   <th className="sticky left-0 z-10 bg-gray-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide px-4 py-3 min-w-[180px]">Member</th>
                   {dates.map(d => (
-                    <th key={d} className={clsx('px-1 py-2 text-center', isToday(d) && 'bg-brand-50')}>
-                      <div className="text-[10px] text-gray-400">{DOW[dayOfWeek(d)]}</div>
-                      <div className={clsx('text-xs', isToday(d) ? 'font-bold text-brand-600' : 'text-gray-500')}>{dayNum(d)}</div>
+                    <th key={d} className="px-1 py-2 text-center">
+                      <div className={clsx('rounded-md py-0.5', isToday(d) && 'bg-gray-900')}>
+                        <div className={clsx('text-[10px]', isToday(d) ? 'text-gray-300' : 'text-gray-400')}>{DOW[dayOfWeek(d)]}</div>
+                        <div className={clsx('text-xs', isToday(d) ? 'font-bold text-white' : 'text-gray-500')}>{dayNum(d)}</div>
+                      </div>
                     </th>
                   ))}
                   <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide min-w-[130px]">Availability</th>
@@ -102,7 +116,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
                 {rows.map((row: CapacityRow) => (
                   <tr key={row.userId} className="border-t border-gray-50">
                     <td className="sticky left-0 z-10 bg-white px-4 py-2">
-                      <button onClick={() => setSelected(row)} className="flex items-center gap-2 text-left group/member" title={`See what ${row.name.split(' ')[0]} is working on`}>
+                      <button onClick={() => { setFocusDate(undefined); setSelectedUserId(row.userId); }} className="flex items-center gap-2 text-left group/member" title={`See what ${row.name.split(' ')[0]} is working on`}>
                         <Avatar user={{ firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={28} />
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-gray-800 truncate group-hover/member:text-brand-600 transition-colors">{row.name}</div>
@@ -110,11 +124,20 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
                         </div>
                       </button>
                     </td>
-                    {row.days.map(d => (
-                      <td key={d.date} className="px-0.5 py-2 w-9">
-                        <DayCell day={d} onClick={() => setAssign({ userId: row.userId, date: d.date })} />
-                      </td>
-                    ))}
+                    {row.days.map(d => {
+                      const segments = segmentsFor(row, d, hues, today, holidays);
+                      return (
+                        <td key={d.date} className="px-0.5 py-2 w-9">
+                          <DayCell
+                            day={d} segments={segments} focusProjectId={focusProjectId} today={isToday(d.date)}
+                            onHover={e => setHover({ row, day: d, segments, rect: e.currentTarget.getBoundingClientRect() })}
+                            onLeave={() => setHover(null)}
+                            // A cell opens the person's plan at that day; adding work is the panel's job.
+                            onClick={() => { setHover(null); setFocusDate(d.date); setSelectedUserId(row.userId); }}
+                          />
+                        </td>
+                      );
+                    })}
                     <td className="px-4 py-2 text-right">
                       <div className={clsx('text-sm font-semibold', row.availableNow ? 'text-emerald-600' : 'text-gray-500')}>
                         {row.availableNow ? 'Available now' : row.nextFreeDate ? `Free ${new Date(`${row.nextFreeDate}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}` : 'Fully booked'}
@@ -129,10 +152,18 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <CapacityLegend states={['FREE', 'LIGHT', 'BUSY', 'LEAVE', 'LEAVE_PENDING', 'HOLIDAY', 'WEEKEND']} />
+      <BoardLegend rows={rows} hues={hues} focusProjectId={focusProjectId} onFocus={setFocusProjectId} />
+
+      {hover && !selected && <HoverCard target={hover} today={today} />}
 
       {/* Click a member to see what they're working on — same drill-down as the full board. */}
-      {selected && <PersonPanel row={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <PersonPanel
+          row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
+          onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
+          onAssign={() => { const r = selected; setSelectedUserId(null); setFocusDate(undefined); setAssign({ userId: r.userId, date: focusDate ?? r.nextFreeDate ?? today }); }}
+        />
+      )}
 
       {/* Click a free day → add a task into THIS project, pre-assigned to that person + day. */}
       {assign && defaultTaskList && (
