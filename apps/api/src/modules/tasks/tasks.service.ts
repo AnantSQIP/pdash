@@ -47,39 +47,87 @@ export class TasksService {
   ) {
     const existing = await this.prisma.taskAssignee.findMany({
       where: { taskId },
-      select: { id: true, userId: true, role: true, standardKey: true, standardMinutes: true },
+      select: { id: true, userId: true, role: true, confirmedHours: true, standardKey: true, standardMinutes: true },
     });
-    // The identity of a seat is (person, role) — the table's own unique key.
-    const seat = (userId: string, role?: string | null) => `${userId}|${role ?? ''}`;
-    const wantedBySeat = new Map(wanted.map(w => [seat(w.userId, w.role), w]));
-    const existingBySeat = new Map(existing.map(e => [seat(e.userId, e.role), e]));
 
-    const removed = existing.filter(e => !wantedBySeat.has(seat(e.userId, e.role)));
-    const organizationId = removed.length ? await this.orgOfActor() : null;
+    // A seat's identity is (person, role) — the table's own unique key. But `role` is nullable:
+    // a plain assignee predating role-based staffing has NULL, and the timing code reads NULL as
+    // ANALYST. So two notions of sameness are needed, and conflating them is what made the first
+    // version of this drop a legacy assignee's hours the moment somebody gave them a job title.
+    const seat = (userId: string, role?: string | null) => `${userId}|${role ?? ''}`;
+    const effectiveRole = (role?: string | null) => (role ?? 'ANALYST').toUpperCase();
+
+    const unclaimed = new Map(existing.map(e => [e.id, e]));
+    const plan: {
+      w: typeof wanted[number];
+      row?: typeof existing[number];
+      /** The seat is the same person doing the same job — keep every figure it carries. */
+      keepsStandard: boolean;
+    }[] = [];
+
+    // Pass 1 — exact (person, role) matches. Nothing about these seats has changed.
+    for (const w of wanted) {
+      const row = [...unclaimed.values()].find(e => seat(e.userId, e.role) === seat(w.userId, w.role));
+      if (row) {
+        unclaimed.delete(row.id);
+        plan.push({ w, row, keepsStandard: true });
+      }
+    }
+    // Pass 2 — the same person, reclassified. Adopt their remaining row rather than deleting it
+    // and creating a fresh one: it is the same human doing the same work, and their confirmed
+    // hours belong to them, not to the label that was on the seat. Prefer a row whose EFFECTIVE
+    // role already matches (NULL → ANALYST is a relabelling, not a change of job), because that
+    // seat can keep its learned contribution exactly where it is.
+    for (const w of wanted) {
+      if (plan.some(pl => pl.w === w)) continue;
+      const mine = [...unclaimed.values()].filter(e => e.userId === w.userId);
+      const row = mine.find(e => effectiveRole(e.role) === effectiveRole(w.role)) ?? mine[0];
+      if (row) {
+        unclaimed.delete(row.id);
+        plan.push({ w, row, keepsStandard: effectiveRole(row.role) === effectiveRole(w.role) });
+      } else {
+        plan.push({ w, keepsStandard: false });
+      }
+    }
+
+    // Whatever is still unclaimed is a seat that genuinely went away.
+    const removed = [...unclaimed.values()];
+    // A seat whose job changed keeps its hours but must move its sample: the contribution was
+    // learned as one role's work and is no longer that role's work.
+    const reclassified = plan.filter(pl => pl.row && !pl.keepsStandard).map(pl => pl.row!);
+    const needsOrg = removed.length > 0 || reclassified.length > 0;
+    const organizationId = needsOrg ? await this.orgOfActor() : null;
 
     await this.prisma.$transaction(async tx => {
+      // Withdraw before deleting: once the row is gone there is nothing left that could ever
+      // take its hours back out of the learned average.
       if (removed.length) {
-        if (organizationId) {
-          await this.time.releaseAssignments(tx, organizationId, title.trim(), removed);
-        }
+        if (organizationId) await this.time.releaseAssignments(tx, organizationId, title.trim(), removed);
         await tx.taskAssignee.deleteMany({ where: { id: { in: removed.map(r => r.id) } } });
       }
-      for (const [key, w] of wantedBySeat) {
-        const found = existingBySeat.get(key);
-        const data = {
+      if (reclassified.length && organizationId) {
+        await this.time.releaseAssignments(tx, organizationId, title.trim(), reclassified);
+      }
+
+      // Deletes first, then updates: adopting a row into a (person, role) pair that a
+      // just-removed row still occupied would otherwise trip the unique key.
+      for (const { w, row, keepsStandard } of plan) {
+        const data: Record<string, unknown> = {
           ...(w.estimatedHours !== undefined ? { estimatedHours: w.estimatedHours ?? 0 } : {}),
           ...(w.dueDate !== undefined ? { dueDate: w.dueDate ?? null } : {}),
         };
-        if (found) {
-          // Keep confirmedHours / standardKey / standardMinutes untouched — that is the point.
-          if (Object.keys(data).length) {
-            await tx.taskAssignee.update({ where: { id: found.id }, data });
-          }
-        } else {
-          await tx.taskAssignee.create({
-            data: { taskId, userId: w.userId, role: w.role ?? null, ...data },
-          });
+        if (!row) {
+          await tx.taskAssignee.create({ data: { taskId, userId: w.userId, role: w.role ?? null, ...data } });
+          continue;
         }
+        if (row.role !== (w.role ?? null)) data.role = w.role ?? null;
+        if (!keepsStandard) {
+          // The hours they confirmed stay with them — they did that work. Only the link to the
+          // standard is cleared, so their next entry is counted afresh under the new role.
+          data.standardKey = null;
+          data.standardMinutes = null;
+        }
+        if (Object.keys(data).length) await tx.taskAssignee.update({ where: { id: row.id }, data });
       }
     });
   }
