@@ -7,30 +7,37 @@ import clsx from 'clsx';
 import { RiSearchLine, RiArrowDownSLine, RiCloseLine, RiFilter3Line, RiDownloadLine } from '@remixicon/react';
 import { toCSV, downloadCSV, type CsvColumn } from './tokens';
 import { DateField } from '@/components/ui/DateField';
+import { PERIODS } from '@/lib/periods';
 
 export function FilterBar({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={clsx('flex items-center gap-2 flex-wrap', className)}>{children}</div>;
 }
 
-// ── Period pills (7 / 30 / 90) ───────────────────────────────────────────────────
-export function PeriodPicker({ value, onChange, options = [7, 30, 90] }: {
-  value: number; onChange: (d: number) => void; options?: number[];
+// ── Reporting periods ────────────────────────────────────────────────────────────
+// The arithmetic lives in lib/periods.ts so it can be tested without React.
+
+export function PeriodPicker({ value, onChange }: {
+  value: number; onChange: (d: number) => void;
 }) {
   // Same segmented language as the page tabs: selection shown by elevation, not by colour.
   return (
     <div className="inline-flex items-center gap-1 rounded-lg bg-gray-100/80 p-1 ring-1 ring-inset ring-gray-950/[0.04]">
-      {options.map(d => (
-        <button
-          key={d}
-          onClick={() => onChange(d)}
-          className={clsx('rounded-md px-3 py-1.5 text-[12.5px] font-medium tabular-nums transition-colors',
-            value === d
-              ? 'bg-white text-gray-900 shadow-[0_1px_2px_0_rgb(16_24_40_/_0.06),0_1px_3px_0_rgb(16_24_40_/_0.04)]'
-              : 'text-gray-500 hover:text-gray-800')}
-        >
-          {d} days
-        </button>
-      ))}
+      {PERIODS.map(p => {
+        const days = p.days();
+        return (
+          <button
+            key={p.key}
+            onClick={() => onChange(days)}
+            title={`Last ${days} calendar days`}
+            className={clsx('rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+              value === days
+                ? 'bg-white text-gray-900 shadow-[0_1px_2px_0_rgb(16_24_40_/_0.06),0_1px_3px_0_rgb(16_24_40_/_0.04)]'
+                : 'text-gray-500 hover:text-gray-800')}
+          >
+            {p.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

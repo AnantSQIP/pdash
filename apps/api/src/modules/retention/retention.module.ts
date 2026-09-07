@@ -94,7 +94,14 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      const analyticsDays = windowDays('RETENTION_ANALYTICS_DAYS', 365);
+      // 800 days, not 365.
+      //
+      // The Performance module now offers an ANNUAL window, and every window is compared
+      // against the equally long period before it — so a year's view reads back 730 days.
+      // At 365 the comparison period had already been deleted, and the trend arrow would
+      // have been drawn against nothing while looking perfectly healthy. 800 covers the two
+      // years the longest question needs, with a couple of months to spare.
+      const analyticsDays = windowDays('RETENTION_ANALYTICS_DAYS', 800);
       if (analyticsDays > 0) {
         const before = cutoff(analyticsDays);
         result.analyticsEvents = await this.purgeBatched(
