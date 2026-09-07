@@ -8,7 +8,7 @@ import { api, type FreeBusy, type UserSummary, type Holiday, type CalendarEvent 
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { useOrg } from '@/lib/org-context';
-import { EVENT_COLORS } from '@/lib/calendar-colors';
+import { EVENT_COLORS, BLOCKED_COLOR } from '@/lib/calendar-colors';
 import { WEEKDAYS_LETTER, weekdayIndex } from '@/lib/date';
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
@@ -40,6 +40,7 @@ const KIND_COLOR: Record<string, string> = {
   WFH: EVENT_COLORS.WFH,
   COMPOFF: EVENT_COLORS.COMPOFF,
   MEETING: EVENT_COLORS.MEETING,
+  BLOCKED: BLOCKED_COLOR,
 };
 const kindColor = (k?: string) => KIND_COLOR[k ?? 'MEETING'] ?? EVENT_COLORS.EVENT;
 
@@ -329,7 +330,8 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
       </div>
       <div className="px-4 py-2.5 border-t border-gray-100 flex items-center gap-x-4 gap-y-1.5 flex-wrap">
         {([['Leave', EVENT_COLORS.LEAVE], ['WFH', EVENT_COLORS.WFH], ['Comp-off', EVENT_COLORS.COMPOFF],
-           ['Meeting', EVENT_COLORS.MEETING], ['Holiday', EVENT_COLORS.HOLIDAY]] as const).map(([label, c]) => (
+           ['Meeting', EVENT_COLORS.MEETING], ['Holiday', EVENT_COLORS.HOLIDAY],
+           ['Unavailable', BLOCKED_COLOR]] as const).map(([label, c]) => (
           <span key={label} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: c }} />{label}
           </span>

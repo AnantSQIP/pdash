@@ -149,3 +149,22 @@ export class UpdateEventDto {
   @Min(0)
   reminderMinutes?: number;
 }
+
+/**
+ * A stretch of the caller's own time marked unavailable.
+ *
+ * `reason` is optional and private — it is stored for the owner and never returned to
+ * anybody else. Free/busy reports only that the time is taken.
+ */
+export class CreateBlockDto {
+  @IsDateString()
+  startsAt!: string;
+
+  @IsDateString()
+  endsAt!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string;
+}

@@ -10,6 +10,10 @@ import { CreateEventDto, UpdateEventDto } from './dto';
 // can create. Exceeding it is rejected explicitly (it used to be silently truncated).
 const MAX_OCCURRENCES = 365;
 
+// The longest single stretch of blocked time. Anything longer is an absence, which belongs
+// in leave (where it is approved, deducted and covered) rather than a silent calendar block.
+const MAX_BLOCK_MS = 30 * 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class EventsService {
   constructor(
@@ -388,7 +392,7 @@ export class EventsService {
     if (!ids.length) return [];
     const fromD = new Date(from);
     const toD = new Date(to);
-    const [events, leaves, wfh, compoffs] = await Promise.all([
+    const [events, leaves, wfh, blocks, compoffs] = await Promise.all([
       this.prisma.calendarEvent.findMany({
         where: {
           organizationId, deletedAt: null,
@@ -408,6 +412,12 @@ export class EventsService {
       this.prisma.wfhRequest.findMany({
         where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
         select: { userId: true, startDate: true, endDate: true, status: true },
+      }),
+      // Self-declared unavailability. `reason` is deliberately NOT selected — it is the
+      // owner's note to themselves, and free/busy must never leak it.
+      this.prisma.calendarBlock.findMany({
+        where: { userId: { in: ids }, startsAt: { lte: toD }, endsAt: { gte: fromD }, user: { organizationId } },
+        select: { userId: true, startsAt: true, endsAt: true },
       }),
       this.prisma.compOffRequest.findMany({
         where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, workDate: { gte: fromD, lte: toD }, user: { organizationId } },
@@ -443,6 +453,14 @@ export class EventsService {
         title: pending ? 'WFH (requested)' : 'WFH', allDay: true, kind: 'WFH', pending,
       });
     }
+    for (const b of blocks) {
+      busy.get(b.userId)?.push({
+        start: b.startsAt.toISOString(), end: b.endsAt.toISOString(),
+        // "Unavailable", never the reason: a colleague needs to know you are busy between
+        // two times, not what you are doing.
+        title: 'Unavailable', allDay: false, kind: 'BLOCKED',
+      });
+    }
     for (const c of compoffs) {
       const pending = c.status === 'PENDING';
       busy.get(c.userId)?.push({
@@ -451,6 +469,48 @@ export class EventsService {
       });
     }
     return ids.map(userId => ({ userId, busy: busy.get(userId) ?? [] }));
+  }
+
+  // ── Blocked time ────────────────────────────────────────────────────────────
+  // A person marks their OWN time unavailable. There is deliberately no way to block
+  // somebody else's calendar: that is what a meeting invitation is for, and it carries
+  // the accountability (an organiser, a subject, an RSVP) that a silent block does not.
+
+  /** The caller's own blocks overlapping [from, to). Nobody can read anybody else's. */
+  async listBlocks(from?: string, to?: string) {
+    const userId = this.actor.requireActorId();
+    const where: { userId: string; startsAt?: { lt: Date }; endsAt?: { gt: Date } } = { userId };
+    if (to) where.startsAt = { lt: new Date(to) };
+    if (from) where.endsAt = { gt: new Date(from) };
+    return this.prisma.calendarBlock.findMany({ where, orderBy: { startsAt: 'asc' } });
+  }
+
+  async createBlock(dto: { startsAt: string; endsAt: string; reason?: string }) {
+    const userId = this.actor.requireActorId();
+    const startsAt = new Date(dto.startsAt);
+    const endsAt = new Date(dto.endsAt);
+    if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+      throw new BadRequestException('That is not a valid start or end time.');
+    }
+    // `<=` not `<`: a zero-length block is not "busy for no time", it is a mistake that
+    // would render as an invisible chip nobody can find to delete.
+    if (endsAt <= startsAt) throw new BadRequestException('The end of a block must be after its start.');
+    if (endsAt.getTime() - startsAt.getTime() > MAX_BLOCK_MS) {
+      throw new BadRequestException('A single block cannot run longer than 30 days. Apply for leave instead.');
+    }
+    return this.prisma.calendarBlock.create({
+      data: { userId, startsAt, endsAt, reason: dto.reason?.trim() || null },
+    });
+  }
+
+  /** Delete one of the caller's own blocks. The ownership check is the authorisation. */
+  async deleteBlock(id: string) {
+    const userId = this.actor.requireActorId();
+    const block = await this.prisma.calendarBlock.findUnique({ where: { id }, select: { userId: true } });
+    if (!block) throw new NotFoundException('That blocked time no longer exists.');
+    if (block.userId !== userId) throw new ForbiddenException('You can only remove your own blocked time.');
+    await this.prisma.calendarBlock.delete({ where: { id } });
+    return { ok: true };
   }
 }
 

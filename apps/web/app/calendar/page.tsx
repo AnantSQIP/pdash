@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, ChevronLeft, ChevronRight, Loader, X, Trash2, Calendar, Check, Video, MapPin, Send, Repeat, Download } from 'lucide-react';
 import {
   RiCalendarEventLine,
@@ -20,10 +20,11 @@ import {
   RiFlightTakeoffLine,
   RiExchangeLine,
   RiHomeOfficeLine,
+  RiForbid2Line,
   type RemixiconComponentType,
 } from '@remixicon/react';
 import clsx from 'clsx';
-import { api, type CalendarEvent, type FreeBusy, type ApiCommentPage, type UserSummary, COMMENT_PAGE_SIZE } from '@/lib/api';
+import { api, type CalendarEvent, type CalendarBlock, type FreeBusy, type ApiCommentPage, type UserSummary, COMMENT_PAGE_SIZE } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { useToast, toastError } from '@/components/ui/Toast';
 import { DateField } from '@/components/ui/DateField';
@@ -429,6 +430,96 @@ function MeetingChat({ eventId, currentUser }: { eventId: string; currentUser: U
   );
 }
 
+/**
+ * Block out your own time.
+ *
+ * Deliberately not an event: an event has attendees, a subject and an RSVP. This says only
+ * "I am not available between these two times", which is what a colleague scheduling around
+ * you actually needs. The note you attach is yours — free/busy shows other people the word
+ * "Unavailable" and nothing else.
+ */
+function BlockTimeModal({ onClose, onSaved, defaultDate }: { onClose: () => void; onSaved: () => void; defaultDate?: string }) {
+  const { toast } = useToast();
+  const todayKey = dateKey(new Date());
+  const [date, setDate] = useState(defaultDate ?? todayKey);
+  const [start, setStart] = useState('09:00');
+  const [end, setEnd] = useState('10:00');
+  const [reason, setReason] = useState('');
+
+  // Times are wall-clock in the browser's zone; `new Date('YYYY-MM-DDTHH:mm')` (no Z) is
+  // parsed as local, which is what the person typing 9am means.
+  const startsAt = new Date(`${date}T${start}`);
+  const endsAt = new Date(`${date}T${end}`);
+  const ordered = endsAt > startsAt;
+  const valid = !!date && !!start && !!end && ordered;
+
+  const save = useMutation({
+    mutationFn: () => api.events.createBlock({
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      ...(reason.trim() ? { reason: reason.trim() } : {}),
+    }),
+    onSuccess: () => { toast('Time blocked.', 'success'); onSaved(); onClose(); },
+    onError: e => toastError(e, 'Could not block that time.'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <RiForbid2Line size={17} className="text-gray-500" />
+            <h3 className="text-base font-semibold text-gray-900">Block time</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg text-gray-400 hover:bg-gray-100" aria-label="Close"><X size={17} /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">Date</label>
+            <DateField type="date" required value={date} onChange={e => setDate(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">From</label>
+              <DateField type="time" required value={start} onChange={e => setStart(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">To</label>
+              <DateField type="time" required value={end} onChange={e => setEnd(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+            </div>
+          </div>
+          {!ordered && start && end && (
+            <p className="text-xs text-red-600">The end has to be after the start.</p>
+          )}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              Note <span className="font-normal text-gray-400">— optional, only you see it</span>
+            </label>
+            <input value={reason} onChange={e => setReason(e.target.value)} maxLength={200}
+              placeholder="Focus time, appointment…"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400" />
+            <p className="text-[11px] text-gray-400 mt-1.5">
+              Your team sees only &ldquo;Unavailable&rdquo; and the times — never the note.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
+          <button onClick={onClose} className="px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+          <button onClick={() => save.mutate()} disabled={!valid || save.isPending}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-40">
+            {save.isPending && <Loader size={13} className="animate-spin" />} Block it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CalendarPage() {
   const { org, currentUser, users } = useOrg();
   const qc = useQueryClient();
@@ -440,6 +531,7 @@ export default function CalendarPage() {
   const [month, setMonth] = useState(today.getMonth());
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
   const [showAdd, setShowAdd] = useState(false);
+  const [showBlock, setShowBlock] = useState(false);
   const [clickedDate, setClickedDate] = useState<string | undefined>();
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -497,6 +589,14 @@ export default function CalendarPage() {
     staleTime: 5 * 60_000,
   });
 
+  // The caller's OWN blocked time over the visible range. Nobody else's is readable — the
+  // team view shows other people's blocks as an anonymous "Unavailable" chip via free/busy.
+  const { data: myBlocks = [], refetch: refetchBlocks } = useQuery<CalendarBlock[]>({
+    queryKey: ['my-blocks', fromISO, toISO],
+    queryFn: () => api.events.blocks(fromISO, toISO),
+    staleTime: 30_000,
+  });
+
   // Birthdays + wedding anniversaries for the Upcoming rail (this + next ~2 months). Month/day only.
   const { data: celebrations } = useQuery({
     queryKey: ['celebrations-cal'],
@@ -528,6 +628,19 @@ export default function CalendarPage() {
   );
 
   function invalidate() { qc.invalidateQueries({ queryKey: ['events', org?.id] }); }
+
+  async function removeBlock(id: string) {
+    if (!await confirmDialog('Remove this blocked time? Your calendar will show you as free again.')) return;
+    try {
+      await api.events.deleteBlock(id);
+      refetchBlocks();
+      // The team view reads blocks through free/busy, so it has to be told too.
+      qc.invalidateQueries({ queryKey: ['team-freebusy'] });
+      toast('Block removed.', 'success');
+    } catch (err) {
+      toastError(err, 'Could not remove that block.');
+    }
+  }
 
   async function deleteEvent(id: string, series = false) {
     if (!await confirmDialog(series ? 'Delete the whole recurring series?' : 'Delete this event?')) return;
@@ -727,6 +840,13 @@ export default function CalendarPage() {
             className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
             <Download size={14} /> <span className="hidden sm:inline">Export</span>
           </a>
+          <button
+            onClick={() => setShowBlock(true)}
+            title="Mark your own time unavailable"
+            className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <RiForbid2Line size={14} /> <span className="hidden sm:inline">Block time</span>
+          </button>
           <button
             onClick={() => openAdd(undefined)}
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 transition-colors"
@@ -1161,6 +1281,35 @@ export default function CalendarPage() {
               </div>
             )}
 
+            {/* Your own blocked time. Listed here because a block you cannot find is a block you
+                cannot remove — it would quietly keep you "busy" to everybody scheduling around you. */}
+            {myBlocks.length > 0 && (
+              <div className="mt-5 pt-4 border-t border-gray-100">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Your blocked time</p>
+                <div className="space-y-0.5">
+                  {myBlocks.map(b => (
+                    <div key={b.id} className="group flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-gray-50">
+                      <RiForbid2Line size={13} className="text-gray-400 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-gray-800 truncate">{b.reason || 'Unavailable'}</div>
+                        <div className="text-[11px] text-gray-400 tabular-nums">
+                          {new Date(b.startsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          {' · '}{fmtTime(b.startsAt)}–{fmtTime(b.endsAt)}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removeBlock(b.id)}
+                        title="Remove this block"
+                        className="p-1 rounded-md text-gray-300 hover:bg-red-50 hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity shrink-0"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Celebrations — birthdays + wedding anniversaries (this & next month, day/month only). */}
             {(() => {
               const cel = [
@@ -1203,6 +1352,14 @@ export default function CalendarPage() {
           defaultDate={clickedDate}
           onClose={() => { setShowAdd(false); setClickedDate(undefined); }}
           onSuccess={invalidate}
+        />
+      )}
+
+      {showBlock && (
+        <BlockTimeModal
+          defaultDate={clickedDate}
+          onClose={() => setShowBlock(false)}
+          onSaved={() => { refetchBlocks(); qc.invalidateQueries({ queryKey: ['team-freebusy'] }); }}
         />
       )}
     </div>

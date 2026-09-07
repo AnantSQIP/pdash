@@ -804,6 +804,16 @@ export type CalendarEvent = {
 /** Availability blocks for the team calendar / scheduling assistant. The server deliberately
  *  omits private detail (leave type, reason, meeting title) — `kind` is enough to colour and
  *  label the block, and `pending` marks a request that hasn't been approved yet. */
+/** A stretch of your own time marked unavailable. `reason` comes back only to its owner. */
+export type CalendarBlock = {
+  id: string;
+  userId: string;
+  startsAt: string;
+  endsAt: string;
+  reason?: string | null;
+  createdAt: string;
+};
+
 export type FreeBusy = {
   userId: string;
   busy: { start: string; end: string; title: string; allDay: boolean; kind?: string; pending?: boolean }[];
@@ -1892,6 +1902,19 @@ export const api = {
     freeBusy: (userIds: string[], from: string, to: string) =>
       req<FreeBusy[]>(`/calendar-events/free-busy?userIds=${userIds.join(',')}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     icsHref: () => `${BASE}/calendar-events/export.ics`,
+
+    // Blocked time — always the signed-in person's own; the server refuses anybody else's.
+    blocks: (from?: string, to?: string) => {
+      const q = new URLSearchParams();
+      if (from) q.set('from', from);
+      if (to) q.set('to', to);
+      const s = q.toString();
+      return req<CalendarBlock[]>(`/calendar-events/blocks${s ? `?${s}` : ''}`);
+    },
+    createBlock: (data: { startsAt: string; endsAt: string; reason?: string }) =>
+      req<CalendarBlock>('/calendar-events/blocks', { method: 'POST', body: JSON.stringify(data) }),
+    deleteBlock: (id: string) =>
+      req<{ ok: boolean }>(`/calendar-events/blocks/${id}`, { method: 'DELETE' }),
   },
 
   channels: {
