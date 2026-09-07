@@ -1,6 +1,7 @@
 import type { ReportProject } from '@/lib/api';
 import type { ExportData } from '@/components/ExportMenu';
 import { projectTypeLabel } from '@/lib/mock-data';
+import { todayIST } from '@/lib/date';
 
 /**
  * Report exports.
@@ -95,7 +96,7 @@ function download(lines: string[], filename: string) {
 /** Every project, then every task with its staffing — two sections in one readable file. */
 export function fullReportCsv(projects: ReportProject[]) {
   const lines: string[] = [];
-  lines.push(row([`Projects report — ${new Date().toISOString().slice(0, 10)}`]));
+  lines.push(row([`Projects report — ${todayIST()}`]));
   lines.push(row([`${projects.length} project${projects.length === 1 ? '' : 's'}`]));
   lines.push('');
   lines.push(row(['PROJECTS']));
@@ -107,7 +108,7 @@ export function fullReportCsv(projects: ReportProject[]) {
   const tasks = projects.flatMap(taskRows);
   if (tasks.length === 0) lines.push(row(['No tasks on these projects.']));
   else tasks.forEach(r => lines.push(row(r)));
-  download(lines, `projects-report-${new Date().toISOString().slice(0, 10)}.csv`);
+  download(lines, `projects-report-${todayIST()}.csv`);
 }
 
 /** Everything about ONE project — what someone asking "send me this matter" actually wants. */

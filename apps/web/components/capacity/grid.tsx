@@ -6,7 +6,7 @@
 import clsx from 'clsx';
 import { Plane, Flag } from 'lucide-react';
 import type { CapacityDay, DayState } from '@/lib/api';
-import { formatDate } from '@/lib/date';
+import { formatDate, todayIST } from '@/lib/date';
 
 // Free reads GREEN (opportunity), overloaded reads RED (risk) — the two states a manager
 // acts on. Busy/light are calm blues so the greens and reds pop.
@@ -29,7 +29,7 @@ export const STATE_STYLE: Record<DayState, { cell: string; label: string; dot: s
 export const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 export function dayOfWeek(iso: string) { return new Date(`${iso}T00:00:00Z`).getUTCDay(); }
 export function dayNum(iso: string) { return new Date(`${iso}T00:00:00Z`).getUTCDate(); }
-export function isToday(iso: string) { return iso === new Date().toISOString().slice(0, 10); }
+export function isToday(iso: string) { return iso === todayIST(); }
 
 export function DayCell({ day, onClick }: { day: CapacityDay; onClick?: () => void }) {
   const s = STATE_STYLE[day.state];

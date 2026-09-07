@@ -18,7 +18,7 @@ import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 import { LeavesHome } from '@/components/attendance/LeavesHome';
 import { AttendanceHome } from '@/components/attendance/AttendanceHome';
-import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
+import { WEEKDAYS_SHORT, monthLeadPad, todayIST, shiftDay } from '@/lib/date';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
@@ -124,7 +124,7 @@ export default function AttendancePage() {
   const dayComplete = !!today?.checkIn && !!today?.checkOut; // clocked in AND out — locked for the day
   const elapsed = today?.checkIn ? Date.now() - new Date(today.checkIn).getTime() : 0;
   // An approved WFH request covering today — the punch will be recorded as WFH.
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = todayIST();
   const wfhApprovedToday = myWfh.some(w => w.status === 'APPROVED' && w.startDate.slice(0, 10) <= todayKey && todayKey <= w.endDate.slice(0, 10));
 
   return (
@@ -563,7 +563,7 @@ function WfhCard() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ startDate: '', endDate: '', reason: '' });
   const [busy, setBusy] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
   const inv = () => { qc.invalidateQueries({ queryKey: ['wfh-mine'] }); qc.invalidateQueries({ queryKey: ['wfh-pending'] }); };
 
   async function submit() {
@@ -651,7 +651,7 @@ function CompOffCard() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<{ workDate: string; reason: string; projectRef: string; dayType: 'FULL' | 'HALF' }>({ workDate: '', reason: '', projectRef: '', dayType: 'FULL' });
   const [busy, setBusy] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
 
   async function submit() {
     if (busy || !form.workDate || !form.reason.trim() || !form.projectRef.trim()) return;
@@ -856,7 +856,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   const { can } = usePermissions();
   const { org: teamOrg } = useOrg();
   const orgId = teamOrg?.id;
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = todayIST();
   // Approved leave that has not finished yet — the list HR/Admin need when someone rings in
   // to say they will work after all. Past leave is left alone: cancelling it would silently
   // rewrite an attendance record that has already been counted.
@@ -885,13 +885,13 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
     } catch (e) { toastError(e, 'Could not cancel the leave.'); }
     finally { setBusyId(''); }
   }
-  const yearAgoKey = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);
+  const yearAgoKey = shiftDay(todayIST(), -365);
   // Punch-in/out locations for every member on a chosen day (HR/Admin only) — pick any day in the
   // last year. Full data is exportable to CSV over a range.
   const [locDate, setLocDate] = useState(todayKey);
   const [exporting, setExporting] = useState(false);
   // Custom export range — admins pick the from/to dates (defaults to the last month).
-  const monthAgoKey = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const monthAgoKey = shiftDay(todayIST(), -30);
   const [expFrom, setExpFrom] = useState(monthAgoKey);
   const [expTo, setExpTo] = useState(todayKey);
   const { data: punchLoc } = useQuery({ queryKey: ['attn-punch-locations', locDate], queryFn: () => api.attendance.orgPunchLocations(locDate), staleTime: 30_000 });

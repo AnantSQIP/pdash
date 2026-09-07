@@ -6,7 +6,7 @@ import Link from 'next/link';
 import clsx from 'clsx';
 import { Loader, Download, ChevronRight, ChevronDown, Search, RotateCcw, ExternalLink } from 'lucide-react';
 import { api, type PidLedgerEntry, type PidLedgerState } from '@/lib/api';
-import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
+import { formatDate, formatDateIST, formatDateTimeIST, todayIST } from '@/lib/date';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { projectTypeLabel } from '@/lib/mock-data';
@@ -86,7 +86,7 @@ function exportCsv(rows: PidLedgerEntry[]) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `pid-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `pid-ledger-${todayIST()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }

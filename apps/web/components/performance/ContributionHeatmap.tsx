@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
 import type { HeatmapDay } from '@/lib/api';
+import { WEEKDAYS_SHORT } from '@/lib/date';
 
 const LEVEL_BG = ['bg-gray-100', 'bg-emerald-200', 'bg-emerald-400', 'bg-emerald-600', 'bg-emerald-800'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -19,7 +20,11 @@ export function ContributionHeatmap({ days }: { days: HeatmapDay[] }) {
     // starts MONDAY, so row 0 is Monday and row 6 is Sunday.
     const startMonday = new Date(first);
     startMonday.setUTCDate(first.getUTCDate() - ((first.getUTCDay() + 6) % 7));
-    const numWeeks = Math.ceil((last.getTime() - startMonday.getTime()) / 86_400_000 / 7) + 1;
+    // Whole weeks needed to cover startMonday..last INCLUSIVE. The old form —
+    // ceil(diff / 7) + 1 — over-counted by one whenever the span was a whole number of weeks,
+    // leaving a blank column hanging off the right of the chart.
+    const spanDays = Math.round((last.getTime() - startMonday.getTime()) / 86_400_000) + 1;
+    const numWeeks = Math.max(1, Math.ceil(spanDays / 7));
 
     const weeks: (HeatmapDay | null)[][] = [];
     const monthLabels: { col: number; label: string }[] = [];
@@ -48,17 +53,25 @@ export function ContributionHeatmap({ days }: { days: HeatmapDay[] }) {
   return (
     <div className="overflow-x-auto">
       <div className="inline-flex flex-col gap-1 min-w-max">
-        {/* month labels */}
-        <div className="flex gap-[3px] pl-8 h-4 text-[10px] text-gray-400">
+        {/* Month labels. The leading spacer is the SAME element width as the weekday gutter
+            below, so the two rows cannot drift apart — a hardcoded `pl-8` was a guess at the
+            gutter's rendered width and sat a few pixels right of column one. */}
+        <div className="flex gap-[3px] h-4 text-[10px] text-gray-400">
+          <div className="w-7 shrink-0" />
           {weeks.map((_, w) => {
             const m = monthLabels.find(x => x.col === w);
             return <div key={w} className="w-[11px]">{m ? m.label : ''}</div>;
           })}
         </div>
         <div className="flex gap-[3px]">
-          {/* weekday labels */}
-          <div className="flex flex-col gap-[3px] pr-1 text-[9px] text-gray-400 justify-around">
-            <span>Mon</span><span>Wed</span><span>Fri</span>
+          {/* Weekday labels — one slot per row, on the SAME 11px/3px rhythm as the cells, so
+              each label sits beside the row it names. They were previously three spans spread
+              with `justify-around` over the full column, which put "Mon" a whole row below
+              Monday and left every label pointing at the wrong day. */}
+          <div className="w-7 shrink-0 flex flex-col gap-[3px] text-[9px] leading-[11px] text-gray-400">
+            {WEEKDAYS_SHORT.map((d, r) => (
+              <span key={d + r} className="h-[11px]">{r % 2 === 0 && r < 5 ? d : ''}</span>
+            ))}
           </div>
           {/* week columns */}
           {weeks.map((col, w) => (
@@ -74,7 +87,8 @@ export function ContributionHeatmap({ days }: { days: HeatmapDay[] }) {
           ))}
         </div>
         {/* legend */}
-        <div className="flex items-center gap-2 pl-8 mt-1 text-[10px] text-gray-400">
+        <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400">
+          <div className="w-7 shrink-0" />
           <span>{total} actions in this period</span>
           <span className="ml-auto">Less</span>
           {LEVEL_BG.map((bg, i) => <div key={i} className={clsx('w-[11px] h-[11px] rounded-sm', bg)} />)}

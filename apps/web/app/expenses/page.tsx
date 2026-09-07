@@ -10,6 +10,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 import { toastError } from '@/components/ui/Toast';
+import { todayIST } from '@/lib/date';
 
 /**
  * Expenses, in the shape the team reads in TeamNest: a status card and an approved-total card
@@ -209,7 +210,7 @@ function ExpenseTable({ rows, onCancel }: { rows: Expense[]; onCancel?: (id: str
 
 // ── New expense ───────────────────────────────────────────────────────────────
 function NewExpenseModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
   const [form, setForm] = useState({ category: 'TRAVEL', amount: '', spentOn: today, description: '' });
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);

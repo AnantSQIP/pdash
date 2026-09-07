@@ -12,7 +12,7 @@ import {
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
-import { WEEKDAYS_SHORT, monthLeadPad } from '@/lib/date';
+import { WEEKDAYS_SHORT, monthLeadPad, todayIST } from '@/lib/date';
 import { toastError } from '@/components/ui/Toast';
 
 /**
@@ -539,7 +539,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
   const isCompOff = f.leaveType === 'CO';
   // Claiming a credit is a different form: it is about a day already worked, not a day off.
   const isClaim = isCompOff && f.compOffMode === 'CREDIT';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
 
   const valid = isClaim
     ? !!f.compOffDate && !!f.reason.trim() && !!f.projectRef.trim()

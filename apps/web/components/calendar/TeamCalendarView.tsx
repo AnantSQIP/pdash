@@ -9,10 +9,41 @@ import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
 import { useOrg } from '@/lib/org-context';
 import { EVENT_COLORS, BLOCKED_COLOR } from '@/lib/calendar-colors';
-import { WEEKDAYS_LETTER, weekdayIndex } from '@/lib/date';
+import { WEEKDAYS_LETTER, weekdayIndex, localDay, toUtcDay, istDay, todayIST } from '@/lib/date';
 
-const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+// The grid's columns are LOCAL calendar days, so they must be keyed with the local getters.
+// This used to be `d.toISOString().slice(0, 10)`, which is UTC: a column built from local
+// midnight keyed as the PREVIOUS day, while the leave and meeting rows keyed correctly — so
+// every chip, and the "today" ring, rendered one column to the right of where it belonged.
+const dayKey = localDay;
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+
+/**
+ * The calendar days a busy block covers, as `YYYY-MM-DD` keys.
+ *
+ * Two kinds of value arrive here and they are NOT read the same way. Leave, WFH and comp-off
+ * are date-only values stored at UTC midnight, so their day is the UTC day. Meetings and
+ * blocked time are real instants, so their day is the one they fall on in IST. Reading either
+ * through the other's rule moves it a day.
+ */
+function coveredDays(b: { start: string; end: string; allDay: boolean }): string[] {
+  const dayOf = b.allDay ? toUtcDay : istDay;
+  const first = dayOf(b.start);
+  const last = dayOf(b.end);
+  if (!first) return [];
+  if (!last || last < first) return [first];
+  // Stepped as date strings through UTC arithmetic — no local-midnight round trip to drift,
+  // and hard-capped so a bad row can never spin the render forever.
+  const out: string[] = [];
+  const cursor = new Date(`${first}T00:00:00Z`);
+  for (let i = 0; i < 400; i++) {
+    const k = cursor.toISOString().slice(0, 10);
+    out.push(k);
+    if (k >= last) break;
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return out;
+}
 const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -139,8 +170,8 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
     const map = new Map<string, FreeBusy['busy']>();
     for (const f of freeBusy) {
       for (const b of f.busy) {
-        for (let d = new Date(b.start); dayKey(d) <= dayKey(new Date(b.end)); d = addDays(d, 1)) {
-          const k = `${f.userId}|${dayKey(d)}`;
+        for (const day of coveredDays(b)) {
+          const k = `${f.userId}|${day}`;
           (map.get(k) ?? map.set(k, []).get(k)!).push(b);
         }
       }
@@ -148,7 +179,8 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
     return map;
   }, [freeBusy]);
 
-  const todayKey = dayKey(new Date());
+  // The org's today, not the viewer's device day — the same rule the rest of the dashboard uses.
+  const todayKey = todayIST();
   const hasCompanyRow = holidayByDay.size > 0 || companyByDay.size > 0;
 
   const headCell = 'sticky top-0 z-20 bg-gray-50 border-b border-r border-gray-200';

@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
+import { todayIST } from '@/lib/date';
 
 // Technical issues / glitches. Raising one logs the time it cost as NON-BILLABLE time,
 // so it shows up under the project's non-billable timesheets.
@@ -19,7 +20,7 @@ function RaiseIssueModal({ projectId, onClose, onSuccess }: {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [hours, setHours] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayIST());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 

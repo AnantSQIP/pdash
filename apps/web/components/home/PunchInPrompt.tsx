@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Home, LogIn, Loader, Clock } from 'lucide-react';
 import { usePunch } from './usePunch';
-import { hourIST } from '@/lib/date';
+import { hourIST, todayIST } from '@/lib/date';
 
 /**
  * First-login-of-the-day punch-in prompt. When someone opens the app and hasn't clocked in yet
@@ -19,7 +19,7 @@ import { hourIST } from '@/lib/date';
 export function PunchInPrompt() {
   const { allowed, ready, att, dayComplete, busy, punch } = usePunch();
   const [dismissed, setDismissed] = useState(true); // start hidden until we've checked storage
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = todayIST();
   const storageKey = `punch-later-${todayKey}`;
 
   useEffect(() => {

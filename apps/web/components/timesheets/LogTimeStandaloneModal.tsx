@@ -8,6 +8,7 @@ import { useOrg } from '@/lib/org-context';
 import { pidLabel } from '@/lib/mock-data';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
+import { todayIST } from '@/lib/date';
 
 /**
  * Log time from the standalone Timesheets module. Two options:
@@ -32,7 +33,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
   const [title, setTitle] = useState('');
-  const [date, setDate] = useState(defaultDate ?? new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(defaultDate ?? todayIST());
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
@@ -312,7 +313,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Date <span className="text-red-500">*</span></label>
             <DateField
-              type="date" required value={date} max={new Date().toISOString().slice(0, 10)} onChange={e => setDate(e.target.value)}
+              type="date" required value={date} max={todayIST()} onChange={e => setDate(e.target.value)}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
             />
           </div>
