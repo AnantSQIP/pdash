@@ -6,6 +6,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { UserPerfPanel } from '@/components/performance/UserPerfPanel';
 import { OrgView } from '@/components/performance/OrgView';
 import { PeriodPicker } from '@/components/performance/controls';
+import { periodLabel, workingDaysBack } from '@/lib/periods';
 import { PageHeader, SegmentedControl } from '@/components/ui/Page';
 
 export default function PerformancePage() {
@@ -13,7 +14,8 @@ export default function PerformancePage() {
   const { can } = usePermissions();
   const canOrg = can('analytics.view.organization');
   const [tab, setTab] = useState<'me' | 'org'>('me');
-  const [days, setDays] = useState(30);
+  // Opens on the working week — the period somebody checks most often.
+  const [days, setDays] = useState(() => workingDaysBack(5));
 
   const tabs: { value: 'me' | 'org'; label: string }[] = [
     { value: 'me', label: 'My performance' },
@@ -34,7 +36,8 @@ export default function PerformancePage() {
             shouting a footnote. It is a footnote, so it is set as one: one quiet line that
             labels everything below without competing with any of it. */}
         <p className="mb-5 text-[12px] leading-relaxed text-gray-400">
-          Figures cover the <span className="font-medium text-gray-600 tabular-nums">last {days} days</span> through today.
+          Figures cover the <span className="font-medium text-gray-600">{periodLabel(days).toLowerCase()}</span>{' '}
+          through today, against the same length of time before it.
           Trend lines are per day; donut and bullet charts are totals across the window.
           Capacity assumes a 40-hour week, Mon–Fri, 9am–6pm IST.
         </p>

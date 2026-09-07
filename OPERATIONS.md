@@ -191,7 +191,7 @@ A daily in-process sweep (`RetentionModule`) now removes what nothing reads:
 | Table | Kept for | Why that long |
 |---|---|---|
 | `refresh_token` | 30 days **after expiry** | Tokens live 14 days. A revoked-but-unexpired row is what detects a stolen token being replayed, so those are never touched. |
-| `analytics_event` | 365 days | The Performance page looks back at most 90 days, or 180 with the previous-period comparison. A year is double the longest question anyone can ask. |
+| `analytics_event` | 800 days | The Performance page's longest window is a year, doubled to 730 days by the previous-period comparison. 800 covers it with a margin. |
 | `activity` | 365 days | The task/project activity feed. |
 
 `audit_log` is deliberately **not** swept. It is the compliance record, and the one table here
@@ -201,7 +201,7 @@ Override per deployment in `.env.production`; `0` disables a purge entirely:
 
 ```
 RETENTION_REFRESH_TOKEN_DAYS=30
-RETENTION_ANALYTICS_DAYS=365
+RETENTION_ANALYTICS_DAYS=800
 RETENTION_ACTIVITY_DAYS=365
 ```
 
