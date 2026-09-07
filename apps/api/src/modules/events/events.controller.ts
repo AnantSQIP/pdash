@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { EventsService } from './events.service';
-import { CreateEventDto, UpdateEventDto, RespondDto, NotesDto } from './dto';
+import { CreateEventDto, UpdateEventDto, RespondDto, NotesDto, CreateBlockDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 
@@ -36,6 +36,28 @@ export class EventsController {
   @Header('Content-Disposition', 'attachment; filename="squark-calendar.ics"')
   async exportIcs() {
     return this.events.exportIcs(await this.actor.requireOrgId());
+  }
+
+  // ── Blocked time ──────────────────────────────────────────────────────────
+  // Declared ABOVE @Get(':id')/@Delete(':id'): Nest matches in declaration order, so a
+  // static path placed after a `:id` route would be swallowed by it.
+  //
+  // No @RequirePermission beyond calendar.view: a person blocking their OWN time needs no
+  // privilege, and the service refuses to touch anybody else's.
+
+  @Get('blocks') @RequirePermission('calendar.view')
+  listBlocks(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.events.listBlocks(from, to);
+  }
+
+  @Post('blocks') @RequirePermission('calendar.view')
+  createBlock(@Body() dto: CreateBlockDto) {
+    return this.events.createBlock(dto);
+  }
+
+  @Delete('blocks/:id') @RequirePermission('calendar.view')
+  deleteBlock(@Param('id') id: string) {
+    return this.events.deleteBlock(id);
   }
 
   @Get(':id') @RequirePermission('calendar.view')

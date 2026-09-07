@@ -190,6 +190,7 @@ model User {
   presence                  Presence?
   notificationPreference    NotificationPreference?
   taskWorkSessions          TaskWorkSession[]
+  calendarBlocks            CalendarBlock[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -2881,4 +2882,29 @@ model TaskStandard {
 
   @@unique([organizationId, titleKey, role])
   @@map("task_standard")
+}
+
+/// A period a person has marked themselves unavailable.
+///
+/// Deliberately NOT a CalendarEvent with a special type. An event carries attendees, a join
+/// link, reminders and recurrence, none of which mean anything here — and it would appear in
+/// meeting lists as something joinable. This is the opposite: an absence of availability.
+///
+/// The reason is stored for the owner's own benefit and is NEVER returned to anybody else.
+/// The review was explicit that the subject need not be visible: what a colleague needs is
+/// that you are busy between two times, not what you are doing.
+model CalendarBlock {
+  id        String   @id @default(cuid())
+  userId    String
+  startsAt  DateTime
+  endsAt    DateTime
+  /// Private to the owner. Free/busy reports "Unavailable" and never this.
+  reason    String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Free/busy asks "whose blocks overlap this window" on every scheduling lookup.
+  @@index([userId, startsAt])
+  @@map("calendar_block")
 }

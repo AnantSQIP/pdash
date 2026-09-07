@@ -37,6 +37,17 @@ export const EVENT_COLORS: Record<CalendarEventType, string> = {
   WFH:       '#0e7490', // cyan      — working, from home
 };
 
+/**
+ * "Unavailable" — self-declared blocked time.
+ *
+ * NOT a CalendarEventType: it never appears on the month/week/agenda calendar, only as an
+ * availability chip in the team view. So it is held to the palette rule against the chips it
+ * actually sits beside (meeting, leave, comp-off, WFH, event, holiday) rather than all nine:
+ * ΔE 42.4 from its nearest neighbour, 15.2:1 against white text. Near-black also reads as
+ * "closed off", which is exactly what it means.
+ */
+export const BLOCKED_COLOR = '#292524';
+
 export const EVENT_LABELS: Record<CalendarEventType, string> = {
   EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task due', MILESTONE: 'Milestone',
   REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off', WFH: 'WFH',
