@@ -68,15 +68,18 @@ export function CardHeader({ title, icon: Icon, iconColor, href, linkLabel, badg
     <div className="flex items-center justify-between gap-2 px-5 py-3.5 border-b border-gray-950/[0.05]">
       {/* Card titles are labels, not headlines. Dropping from 16px to 13.5px lets the DATA be
           the largest thing in the card, which is the point of the card. */}
-      <h2 className="text-[13.5px] font-semibold tracking-[-0.01em] text-gray-900 flex items-center gap-2 min-w-0">
+      {/* shrink-0, not min-w-0: a card title is two or three words and is how you know which
+          card you are looking at. Letting it flex meant a tab row beside it clipped "My Tasks"
+          down to "My Tas…" — the header lost its own name to make room for its controls. */}
+      <h2 className="text-[13.5px] font-semibold tracking-[-0.01em] text-gray-900 flex items-center gap-2 shrink-0">
         {/* One neutral for every card icon. Fourteen cards each with their own hue meant the
             page had no accent left to spend on anything that MATTERS — an overdue count, a
             falling metric. Colour is reserved for data now; the icon is just a signpost. */}
         {Icon && <Icon size={15} className={clsx('shrink-0', iconColor ?? 'text-gray-400')} />}
-        <span className="truncate">{title}</span>
+        <span className="whitespace-nowrap">{title}</span>
         {badge}
       </h2>
-      {actions}
+      {actions && <div className="min-w-0 flex-1 flex justify-end">{actions}</div>}
       {href && (
         <Link href={href} className="text-sm text-brand-600 hover:underline inline-flex items-center gap-1 shrink-0">
           {linkLabel ?? 'View'} <ArrowRight size={13} />

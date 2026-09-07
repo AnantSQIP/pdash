@@ -291,19 +291,23 @@ export function MyProjectsCard() {
           const statusColor = project.currentStatus?.colorHex ?? '#3d8de2';
           const pct = Math.max(0, Math.min(100, Math.round(project.completionPercentage ?? 0)));
           return (
-            <div key={project.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
+            /* The name is the row, and it was the only thing being squeezed: every trailing item
+               is shrink-0, so in a third-of-the-page card the title rendered as "Pat…" / "Trad…",
+               which tells you nothing and makes two different patent projects look identical.
+               The PID badge went because it read "PID pending" on every row here — furniture
+               carrying no information, at the cost of the one thing that identifies the row.
+               overflow-hidden is the backstop: the fixed items must never push the percentage
+               out past the card's edge. */
+            <div key={project.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3 overflow-hidden">
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: statusColor }} />
-              <Link href={`/projects/${project.id}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 flex-1 truncate">{project.title}</Link>
-              {project.code
-                ? <span className="hidden md:inline text-[11px] font-mono text-gray-500 shrink-0">{pidLabel(project.code, project.roundSeq)}</span>
-                : <span className="hidden md:inline text-[11px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded shrink-0">PID pending</span>}
-              <span className={clsx('hidden sm:inline text-xs px-2 py-0.5 rounded-full font-medium shrink-0', phase.bg, phase.text)}>{phase.label}</span>
-              <div className="w-16 sm:w-28 shrink-0">
+              <Link href={`/projects/${project.id}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 flex-1 min-w-0 truncate" title={project.title}>{project.title}</Link>
+              <span className={clsx('hidden 2xl:inline text-xs px-2 py-0.5 rounded-full font-medium shrink-0', phase.bg, phase.text)}>{phase.label}</span>
+              <div className="w-14 2xl:w-20 shrink-0">
                 <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
                   <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: progressColor(pct, project.priority) }} />
                 </div>
               </div>
-              <span className="text-xs text-gray-500 shrink-0 w-8 text-right">{pct}%</span>
+              <span className="text-xs text-gray-500 shrink-0 w-8 text-right tabular-nums">{pct}%</span>
             </div>
           );
         })
@@ -435,7 +439,7 @@ export function OrgPerformanceCard() {
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Tasks completed', value: fmtNum(t?.tasksCompleted) },
         { label: 'Hours logged',    value: fmtHours(t?.hoursLogged) },
-        { label: 'On-time rate',    value: fmtPct(t?.avgOnTimeRate) },
+        { label: 'On-time rate',    value: t?.avgOnTimeRate == null ? 'n/a' : fmtPct(t.avgOnTimeRate) },
         { label: 'Active projects', value: fmtNum(t?.activeProjects) },
       ]} />
       {leaders.length > 0 && (

@@ -449,7 +449,12 @@ export class PerformanceService {
     // A true org-wide ratio (Σ on-time ÷ Σ with-a-due-date, over DISTINCT tasks), not an
     // unweighted mean of per-person rates. tasksCompleted is likewise the distinct count so a
     // multi-assignee task isn't counted once per assignee in the headline total.
-    const avgOnTimeRate = pct(curM.distinct.onTime, curM.distinct.withDueCount);
+    // null, not 0, when nothing with a deadline closed org-wide in the window — the same
+    // distinction the personal view draws. A team that closed no dated work has no on-time
+    // score; showing 0% says they missed every deadline they had.
+    const avgOnTimeRate = curM.distinct.withDueCount > 0
+      ? pct(curM.distinct.onTime, curM.distinct.withDueCount)
+      : null;
     const activeProjects = await this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE', members: { some: { user: { organizationId } } } } });
 
     return {

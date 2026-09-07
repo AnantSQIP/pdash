@@ -1065,7 +1065,7 @@ export type LeaderboardRow = {
 };
 export type OrgPerformance = {
   periodDays: number;
-  totals: { users: number; tasksCompleted: number; hoursLogged: number; activeProjects: number; avgOnTimeRate: number };
+  totals: { users: number; tasksCompleted: number; hoursLogged: number; activeProjects: number; avgOnTimeRate: number | null };
   previousTotals: { tasksCompleted: number; hoursLogged: number };
   leaderboard: LeaderboardRow[];
 };
