@@ -1033,7 +1033,8 @@ export type AuditLogItem = {
 // ─── Performance types ───────────────────────────────────────────────────────
 export type PerformanceKpis = {
   tasksAssigned: number; tasksCompleted: number; tasksOpen: number; tasksOverdue: number;
-  onTimeCompletionRate: number; completionRate: number;
+  /** null when no deadline-bearing task closed in the window — no score, not a zero score. */
+  onTimeCompletionRate: number | null; onTimeOf: number; completionRate: number;
   hoursLogged: number; billableHours: number;
   /** null when the person did no client work at all — team-space hours can never be billable,
    *  so a percentage would be 0 by construction rather than by performance. */
@@ -1046,7 +1047,7 @@ export type PerformanceKpis = {
 export type PerformanceTrendPoint = { date: string; completed: number; hours: number; activity: number };
 export type PerformancePrevious = {
   hoursLogged: number; billableHours: number; tasksCompleted: number;
-  activityVolume: number; issuesResolved: number; commentsPosted: number; onTimeCompletionRate: number;
+  activityVolume: number; issuesResolved: number; commentsPosted: number; onTimeCompletionRate: number | null;
 };
 export type UserPerformance = {
   userId: string; name: string; designation?: string;

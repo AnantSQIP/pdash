@@ -20,6 +20,7 @@ import {
 } from './charts';
 import { C, PRIORITY_COLORS, SEVERITY_COLORS, STATUS_COLORS, METRIC_HELP } from './tokens';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
+import { periodLabel } from '@/lib/periods';
 
 function withColors(data: NameValue[], map: Record<string, string>): NameValue[] {
   return data.map(d => ({ ...d, color: map[d.name] ?? C.slate }));
@@ -75,7 +76,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
   ];
   const radar = [
     { axis: 'Completion', v: k.completionRate },
-    { axis: 'On-time', v: k.onTimeCompletionRate },
+    { axis: 'On-time', v: k.onTimeCompletionRate ?? 0 },
     { axis: 'Billable', v: k.billablePct ?? 0 },
     { axis: 'Activity', v: Math.min(100, k.activityVolume * 8) },
     { axis: 'Issues', v: k.issuesReported ? Math.round((k.issuesResolved / k.issuesReported) * 100) : 0 },
@@ -103,7 +104,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
   const exportReport = (): ExportData => ({
     filename: `performance-${(perf.name || 'user').replace(/\s+/g, '-').toLowerCase()}`,
     title: `Performance Report — ${perf.name}`,
-    subtitle: `Last ${days} days`,
+    subtitle: periodLabel(days),
     columns: ['Metric', 'Value'],
     rows: [
       ['Tasks completed (period)', perf.periodTasksCompleted],
@@ -111,7 +112,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
       ['Tasks open', k.tasksOpen],
       ['Tasks overdue', k.tasksOverdue],
       ['Completion rate', `${k.completionRate}%`],
-      ['On-time completion rate', `${k.onTimeCompletionRate}%`],
+      ['On-time completion rate', k.onTimeCompletionRate === null ? 'n/a — nothing with a deadline closed' : `${k.onTimeCompletionRate}%`],
       ['Hours logged', `${k.hoursLogged}h`],
       ['Billable hours', `${k.billableHours}h`],
       ['Billable %', k.billablePct === null ? 'n/a — no client work' : `${k.billablePct}%`],
@@ -121,13 +122,13 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
       ['Activity volume', k.activityVolume],
       ['Avg cycle time', perf.cycleTimeDays != null ? `${perf.cycleTimeDays} days` : '—'],
     ],
-    meta: [{ label: 'Member', value: perf.name }, { label: 'Period', value: `Last ${days} days` }],
+    meta: [{ label: 'Member', value: perf.name }, { label: 'Period', value: periodLabel(days) }],
   });
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-gray-700">{perf.name}<span className="font-normal text-gray-400"> · last {days} days</span></p>
+        <p className="text-sm font-semibold text-gray-700">{perf.name}<span className="font-normal text-gray-400"> · {periodLabel(days).toLowerCase()}</span></p>
         <ExportMenu getData={exportReport} label="Export report" />
       </div>
       {/* KPI strip with deltas + sparklines */}
@@ -136,7 +137,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
         <KpiTile label="Hours" value={`${k.hoursLogged}h`} Icon={RiTimeLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" delta={delta(k.hoursLogged, p.hoursLogged)} spark={sparkOf('hours')} sparkColor={C.brand} info={METRIC_HELP.hoursLogged} />
         <KpiTile label="Activity" value={k.activityVolume} Icon={RiPulseLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" delta={delta(k.activityVolume, p.activityVolume)} spark={sparkOf('activity')} sparkColor={C.purple} info={METRIC_HELP.activityVolume} />
         <KpiTile label="Resolved" value={k.issuesResolved} Icon={RiBugLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" delta={delta(k.issuesResolved, p.issuesResolved)} info="Issues you moved to a resolved/closed state in the period." />
-        <KpiTile label="On-time" value={`${k.onTimeCompletionRate}%`} Icon={RiBarChartBoxLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" info={METRIC_HELP.onTimeRate} />
+        <KpiTile label="On-time" value={k.onTimeCompletionRate === null ? 'n/a' : `${k.onTimeCompletionRate}%`} Icon={RiBarChartBoxLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" info={METRIC_HELP.onTimeRate} />
         <KpiTile label="Open · Overdue" value={`${k.tasksOpen} · ${k.tasksOverdue}`} Icon={RiInboxLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" />
       </div>
 
@@ -145,7 +146,15 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
         <ChartCard title="Quality & effort rates">
           <div className="flex items-center justify-around">
             <GaugeCard value={k.completionRate} label="Completion" color={C.brand} />
-            <GaugeCard value={k.onTimeCompletionRate} label="On-time" />
+            {k.onTimeCompletionRate === null ? (
+              <div className="flex flex-col items-center justify-center text-center px-2" style={{ minWidth: 96 }}>
+                <span className="text-lg font-semibold text-gray-300">n/a</span>
+                <span className="text-[11px] text-gray-500 mt-1">On-time</span>
+                <span className="text-[10px] text-gray-400 mt-0.5 leading-tight">nothing with a<br />deadline closed</span>
+              </div>
+            ) : (
+              <GaugeCard value={k.onTimeCompletionRate} label="On-time" />
+            )}
             {k.billablePct === null ? (
               <div className="flex flex-col items-center justify-center text-center px-2" style={{ minWidth: 96 }}>
                 <span className="text-lg font-semibold text-gray-300">n/a</span>
@@ -190,7 +199,7 @@ export function UserPerfPanel({ userId, days = 30 }: { userId: string; days?: nu
         <ChartCard title="Tasks by priority">
           <ColumnCard data={priorityData} categoryKey="name" series={[{ key: 'value', name: 'Tasks', color: C.brand }]} />
         </ChartCard>
-        <ChartCard title="Hours by project" subtitle={`Last ${days} days`}>
+        <ChartCard title="Hours by project" subtitle={periodLabel(days)}>
           <BarCard data={hoursByProject} categoryKey="name" valueKey="value" color={C.brand} />
         </ChartCard>
         <ChartCard title="Issues by severity">

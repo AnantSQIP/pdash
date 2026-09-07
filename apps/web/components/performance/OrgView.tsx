@@ -26,6 +26,7 @@ import { MultiSelectFilter, FilterBar } from './controls';
 import { C, DONUT_COLORS, STATUS_COLORS, SEVERITY_COLORS, rateColor, round1, METRIC_HELP } from './tokens';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
 import { ORG_TZ } from '@/lib/date';
+import { periodLabel } from '@/lib/periods';
 
 type Metric = 'tasksCompleted' | 'hoursLogged' | 'onTimeRate' | 'activityVolume';
 const METRIC_LABEL: Record<Metric, string> = {
@@ -156,7 +157,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
   const exportOrg = (): ExportData => ({
     filename: 'org-performance',
     title: 'Organization Performance Report',
-    subtitle: `Last ${days} days · ${ranked.length} members`,
+    subtitle: `${periodLabel(days)} · ${ranked.length} members`,
     columns: ['Member', 'Role', 'Department', 'Tasks completed', 'Hours logged', 'On-time %', 'Activity', 'Score'],
     rows: ranked.map(r => [
       r.name, r.designation ?? '', r.department ?? '',

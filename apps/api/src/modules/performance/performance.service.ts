@@ -155,7 +155,11 @@ export class PerformanceService {
 
     const kpis = {
       tasksAssigned, tasksCompleted: tasksCompletedAll, tasksOpen, tasksOverdue,
-      onTimeCompletionRate: cur.onTimeRate,
+      // null, not 0, when nothing with a deadline was closed in the window. pct(0, 0) is 0, and
+      // "0% on-time" reads as having missed every deadline when in fact there was none to miss —
+      // the same distinction billablePct draws below between a bad score and no score.
+      onTimeCompletionRate: cur.withDueCount > 0 ? cur.onTimeRate : null,
+      onTimeOf: cur.withDueCount,
       completionRate: pct(tasksCompletedAll, tasksAssigned),
       hoursLogged: cur.hoursLogged,
       billableHours: cur.billableHours,
@@ -174,7 +178,7 @@ export class PerformanceService {
     const previous = {
       hoursLogged: prev.hoursLogged, billableHours: prev.billableHours, tasksCompleted: prev.tasksCompleted,
       activityVolume: prev.activityVolume, issuesResolved: prev.issuesResolved, commentsPosted: prev.commentsPosted,
-      onTimeCompletionRate: prev.onTimeRate,
+      onTimeCompletionRate: prev.withDueCount > 0 ? prev.onTimeRate : null,
     };
 
     const trend = await this.getTrend(userId, Math.min(days, 30));
