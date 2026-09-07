@@ -12,6 +12,8 @@ import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
+import { RunningTimerBar, TimerButton, CompleteTaskDialog } from '@/components/tasks/TaskWork';
+import type { RunningTimer } from '@/lib/api';
 
 const PRIORITY_META = {
   CRITICAL: { label: 'Critical', color: 'text-red-600',    bg: 'bg-red-50',    dot: 'bg-red-500'    },
@@ -39,6 +41,16 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
   const [search, setSearch] = useState('');
+  const [closing, setClosing] = useState<ApiTask | null>(null);
+
+  // The one task whose clock is running for this person. Polled gently — somebody may start
+  // a task on their phone, and a stale bar claiming nothing is running is worse than none.
+  const { data: running = null } = useQuery<RunningTimer>({
+    queryKey: ['running-timer'],
+    queryFn: () => api.tasks.runningTimer(),
+    refetchInterval: 60_000,
+    refetchOnMount: 'always',
+  });
 
   const meKey = ['tasks-me', currentUser?.id];
 
@@ -127,13 +139,16 @@ export default function TasksPage() {
           <h1 className="text-xl font-bold text-gray-900">My Tasks</h1>
           <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
         </div>
-        <Link
-          href="/projects"
-          className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
-        >
-          <Plus size={14} />
-          Add in Project
-        </Link>
+        <div className="flex items-center gap-3">
+          {running && <div className="w-[min(22rem,60vw)]"><RunningTimerBar running={running} /></div>}
+          <Link
+            href="/projects"
+            className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
+          >
+            <Plus size={14} />
+            Add in Project
+          </Link>
+        </div>
       </div>
 
       {/* Filters */}
@@ -200,6 +215,7 @@ export default function TasksPage() {
                 <td className="px-4 py-3"><div className="h-6 bg-gray-100 rounded-full w-16" /></td>
                 <td className="px-4 py-3"><div className="h-3 bg-gray-100 rounded w-14" /></td>
                 <td className="px-4 py-3"><div className="h-1.5 bg-gray-100 rounded-full w-16" /></td>
+                <td className="sticky right-0 z-10 bg-white px-4 py-3"><div className="h-6 bg-gray-100 rounded-lg w-28 ml-auto" /></td>
               </tr>
             ))}
           </TableShell>
@@ -252,7 +268,7 @@ export default function TasksPage() {
               const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
               const project = task.projectTasks?.[0]?.project;
               return (
-                <tr key={task.id} className="hover:bg-gray-50 transition-colors">
+                <tr key={task.id} className="group hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 w-8">
                     <button
                       onClick={() => toggleComplete(task)}
@@ -320,6 +336,24 @@ export default function TasksPage() {
                       </select>
                     </div>
                   </td>
+                  {/* Everything a person does with a task, on the row they are already looking
+                      at. Closing it and recording the time used to be two errands in two
+                      modules; here they are one. */}
+                  <td className="sticky right-0 z-10 bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)] group-hover:bg-gray-50">
+                    <div className="flex items-center justify-end gap-1.5">
+                      {!closed && <TimerButton taskId={task.id} running={running} />}
+                      {!closed && (
+                        <button
+                          onClick={() => setClosing(task)}
+                          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
+                          title="Close this task and record the hours"
+                        >
+                          <CheckCircle size={12} /> Close
+                        </button>
+                      )}
+                      {closed && <span className="text-[12px] text-gray-400">Closed</span>}
+                    </div>
+                  </td>
                 </tr>
               );
             })}
@@ -328,13 +362,22 @@ export default function TasksPage() {
           </>
         )}
       </div>
+
+      {closing && (
+        <CompleteTaskDialog
+          taskId={closing.id}
+          closedStatusId={statuses.find(x => x.type === CLOSED_TYPE)?.id}
+          onClose={() => setClosing(null)}
+          onDone={() => { setClosing(null); invalidateTaskCaches(qc); qc.invalidateQueries({ queryKey: ['running-timer'] }); }}
+        />
+      )}
     </div>
   );
 }
 
 // Shared table chrome so the loading, populated and (implicitly) empty states line up.
 function TableShell({ children }: { children: React.ReactNode }) {
-  const headers = ['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due', 'Progress'];
+  const headers = ['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due', 'Progress', 'Work'];
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">
@@ -343,7 +386,16 @@ function TableShell({ children }: { children: React.ReactNode }) {
             <tr className="border-b border-gray-100 bg-gray-50">
               <th className="w-8 px-4 py-2.5" />
               {headers.map(h => (
-                <th key={h} className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
+                <th
+                  key={h}
+                  className={clsx(
+                    'px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap',
+                    // Pinned so the actions stay reachable when the table scrolls sideways.
+                    h === 'Work' && 'sticky right-0 z-10 bg-gray-50 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)]',
+                  )}
+                >
+                  {h}
+                </th>
               ))}
             </tr>
           </thead>

@@ -736,6 +736,30 @@ export type ApiCommentPage = { items: ApiComment[]; total: number; hasMore: bool
 /** How many comments a thread loads at a time. Widening asks for one more window's worth. */
 export const COMMENT_PAGE_SIZE = 100;
 
+// ── Task timing ──────────────────────────────────────────────────────────────
+/** The one task this person currently has the clock running on. */
+export type RunningTimer = {
+  id: string; taskId: string; startedAt: string;
+  task: { id: string; title: string };
+} | null;
+
+/** What to show when closing: your own time, your role's expectation, and the task's. */
+export type ClosingSummary = {
+  taskId: string; title: string; role: string;
+  trackedMinutes: number; suggestedHours: number;
+  expectedHoursForMyRole: number | null;
+  basedOnCompletions: number;
+  expectedHoursForTask: number | null;
+  alreadyCounted: boolean;
+};
+
+/** A learned standard: what each role takes, and the task total as their sum. */
+export type TaskStandardGroup = {
+  title: string;
+  totalExpectedHours: number;
+  roles: { role: string; expectedHours: number | null; completions: number; updatedAt: string }[];
+};
+
 export type Timesheet = {
   id: string; userId: string; taskId?: string | null; issueId?: string | null;
   projectId?: string | null; projectType?: string | null; category?: string | null; title?: string | null;
@@ -1757,6 +1781,27 @@ export const api = {
       req<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     deleteSubtask: (taskId: string, subtaskId: string) =>
       req<void>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' }),
+
+    // ── Timing ────────────────────────────────────────────────────────────────
+    /** The task whose clock is running for me, if any. */
+    runningTimer: () => req<RunningTimer>('/tasks/timer/running'),
+    /** What each standard task has actually taken, per role. */
+    standards: () => req<TaskStandardGroup[]>('/tasks/standards'),
+    /** Start the clock. Starting a second task stops the first — one thing at a time. */
+    startTimer: (id: string) =>
+      req<{ id: string; taskId: string; startedAt: string; resumed: boolean }>(`/tasks/${id}/start`, { method: 'POST' }),
+    stopTimer: (id: string) =>
+      req<{ stopped: boolean; minutes: number }>(`/tasks/${id}/stop`, { method: 'POST' }),
+    closingSummary: (id: string) => req<ClosingSummary>(`/tasks/${id}/closing-summary`),
+    /** Record my hours and close the task. */
+    completeWithHours: (id: string, hours: number, closedStatusId?: string) =>
+      req<{ id: string; role: string; myHours: number; expectedHoursForMyRole: number | null; basedOnCompletions: number; counted: boolean }>(
+        `/tasks/${id}/complete`, { method: 'POST', body: JSON.stringify({ hours, closedStatusId }) }),
+    /** Record my hours WITHOUT closing — the analyst finishes, the reviewer closes later. */
+    logMyPart: (id: string, hours: number) =>
+      req<{ id: string; role: string; myHours: number }>(`/tasks/${id}/log-my-part`, { method: 'POST', body: JSON.stringify({ hours }) }),
+    reopenTask: (id: string, openStatusId?: string) =>
+      req<{ id: string; reopenedCount: number }>(`/tasks/${id}/reopen`, { method: 'POST', body: JSON.stringify({ openStatusId }) }),
   },
 
   workflows: {
