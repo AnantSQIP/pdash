@@ -29,11 +29,13 @@ export default function HomeDashboardPage() {
       {/* Balanced masonry — cards flow to keep columns even regardless of which render. */}
       <div className="px-4 py-4 sm:px-6 sm:py-6">
         <div className="columns-1 md:columns-2 2xl:columns-3 gap-4 sm:gap-6 [&>*]:mb-4 sm:[&>*]:mb-6 [&>*]:break-inside-avoid">
+          {/* First card in the masonry: the day's work is what a person opens this page to
+              find, and it was sitting fifth behind four approval queues. */}
+          <MyTasksCard />
           <PidRequestsCard />
           <TeamAvailabilityCard />
           <LeaveApprovalsCard />
           <PendingRequestsCard />
-          <MyTasksCard />
           <MyExpensesCard />
           <TeamAttendanceCard />
           <OrgPerformanceCard />
