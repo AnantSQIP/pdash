@@ -110,12 +110,12 @@ model User {
   // A stored end date is a second copy of the same fact that goes stale the moment a joining
   // date is corrected, and joining dates get corrected.
   /// Months of probation from the joining date. Null = the org default applies.
-  probationMonths          Int?
+  probationMonths  Int?
   /// Set when somebody confirms this person. Null while still on probation.
-  confirmedAt              DateTime?
+  confirmedAt      DateTime?
   /// Who confirmed them — a record, not an access grant.
-  confirmedBy              String?
-  confirmationNote         String?
+  confirmedBy      String?
+  confirmationNote String?
 
   // ── Exit ──────────────────────────────────────────────────────────────────────
   //
@@ -123,16 +123,16 @@ model User {
   // very next request. What was missing is the part only this system can answer — what the person
   // was still holding on the day they left.
   /// The day they resigned, not the day they leave.
-  resignationDate          DateTime?
+  resignationDate DateTime?
   /// Contractual notice in days, so the last working day can be proposed rather than typed.
-  noticeDays               Int?
-  lastWorkingDay           DateTime?
-  exitReason               String?
+  noticeDays      Int?
+  lastWorkingDay  DateTime?
+  exitReason      String?
   /// Set when the handover has been reviewed and signed off — not when the person leaves.
-  exitCompletedAt          DateTime?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
-  deletedAt                DateTime?
+  exitCompletedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
 
   organization              Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   profile                   UserProfile?
@@ -142,8 +142,8 @@ model User {
   manages                   UserManager[]              @relation("ManagerUsers")
   departmentMemberships     DepartmentMember[]
   departmentsHeaded         Department[]               @relation("DepartmentHead")
-  managedClients   Client[] @relation("ClientAccountManager")
-  leaveOpeningBalances LeaveOpeningBalance[]
+  managedClients            Client[]                   @relation("ClientAccountManager")
+  leaveOpeningBalances      LeaveOpeningBalance[]
   feedbackAbout             Feedback[]                 @relation("FeedbackAbout")
   feedbackWritten           Feedback[]                 @relation("FeedbackAuthor")
   teamMemberships           TeamMember[]
@@ -189,6 +189,7 @@ model User {
   metricsDaily              UserMetricDaily[]
   presence                  Presence?
   notificationPreference    NotificationPreference?
+  taskWorkSessions          TaskWorkSession[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -735,13 +736,13 @@ model Project {
 // A Client is the "Malikie / MLK" grouping. Its patents get a public HANDLE (Pat_MLK_1, …)
 // shown in the project picker, while the real patent number stays Admin/Super-Admin only.
 model Client {
-  id             String                @id @default(cuid())
+  id             String    @id @default(cuid())
   organizationId String
   name           String? // OPTIONAL — the portal shows the code alone when there's no name
   code           String // "MLK" — used in patent handles Pat_<code>_<serial>
   createdBy      String
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   // ARCHIVED ≠ DELETED. Archiving retires a client from day-to-day work — no new patents, gone
   // from the project picker — while every existing patent, handle and project link stays exactly
   // as it was. It is reversible and needs no passcode, which is what makes it the safe answer to
@@ -760,16 +761,16 @@ model Client {
   //
   // All optional. A client created for one patent search does not need an address, and demanding
   // one would only get a row of full stops typed into the box.
-  contactName    String?
-  contactEmail   String?
-  contactPhone   String?
-  website        String?
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  website      String?
   /// Where the client is, which is also which jurisdiction the work usually concerns.
-  country        String?
-  address        String?
-  industry       String?
+  country      String?
+  address      String?
+  industry     String?
   /// Anything that does not fit a field: the history, the quirks, who introduced us.
-  notes          String?
+  notes        String?
 
   // ── What the work is worth ────────────────────────────────────────────────────────────────
   //
@@ -778,11 +779,11 @@ model Client {
   // logged. One number here makes value DERIVED — hours × rate, recomputed on every read, moving
   // with the work instead of behind it. A stated total still wins where one exists; this is the
   // default that means most clients no longer need one.
-  billingRate    Float?
-  billingCurrency String  @default("INR")
+  billingRate      Float?
+  billingCurrency  String    @default("INR")
   /// When the relationship began, which is not when somebody got round to creating the row.
   /// `createdAt` was standing in for this and quietly answering a different question.
-  engagementStart DateTime?
+  engagementStart  DateTime?
   /// Who owns the relationship. Not an access grant — a name to ask, shown on the ledger.
   accountManagerId String?
 
@@ -790,7 +791,7 @@ model Client {
   projects       Project[]
   ledgerOverride ClientLedgerOverride?
   deals          Deal[]
-  accountManager User? @relation("ClientAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
+  accountManager User?                 @relation("ClientAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, code])
   @@index([organizationId, deletedAt])
@@ -1047,6 +1048,11 @@ model Task {
   overdueNotifiedAt       DateTime?
   estimatedHours          Float?
   actualHours             Float?
+  // When work first started, and how many times this task has been reopened after being
+  // closed. Reopening is normal in patent work; if it is not recorded, the hours and every
+  // figure derived from them understate what the task cost.
+  startedAt               DateTime?
+  reopenedCount           Int       @default(0)
   completionPercentage    Int       @default(0)
   workflowId              String?
   currentWorkflowStatusId String?
@@ -1067,17 +1073,18 @@ model Task {
   updatedAt               DateTime  @updatedAt
   deletedAt               DateTime?
 
-  workflow      Workflow?        @relation(fields: [workflowId], references: [id], onDelete: SetNull)
-  currentStatus WorkflowStatus?  @relation("TaskCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
-  assignedBy    User?            @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  workflow      Workflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  currentStatus WorkflowStatus?   @relation("TaskCurrentStatus", fields: [currentWorkflowStatusId], references: [id], onDelete: SetNull)
+  assignedBy    User?             @relation("TaskAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
   projectTasks  ProjectTask[]
   teamTasks     TeamTask[]
   assignees     TaskAssignee[]
   subtasks      Subtask[]
-  successors    TaskDependency[] @relation("DependencyPredecessor")
-  predecessors  TaskDependency[] @relation("DependencySuccessor")
+  successors    TaskDependency[]  @relation("DependencyPredecessor")
+  predecessors  TaskDependency[]  @relation("DependencySuccessor")
   checklists    Checklist[]
   timesheets    Timesheet[]
+  workSessions  TaskWorkSession[]
   taskDocuments TaskDocument[]
 
   @@index([deletedAt])
@@ -1107,16 +1114,31 @@ model ProjectTask {
 }
 
 model TaskAssignee {
-  id             String    @id @default(cuid())
-  taskId         String
-  userId         String
+  id              String    @id @default(cuid())
+  taskId          String
+  userId          String
   // Role on this task: PM (one) | REVIEWER (many) | ANALYST (many). Null = a legacy plain assignee.
-  role           String?
+  role            String?
   // Per-person estimated hours (OPTIONAL — a reviewer may carry 0). The task's total estimated
   // hours is the SUM of these across everyone assigned.
-  estimatedHours Float?
+  estimatedHours  Float?
   // Per-assignment deadline for THIS person in THIS role on the task (optional).
-  dueDate        DateTime?
+  dueDate         DateTime?
+  // The hours this person confirmed for THEIR part, and which standard that fed.
+  //
+  // Held on the assignment rather than the task because each person contributes their own
+  // part: the analyst's six hours and the reviewer's two are two facts about two different
+  // kinds of work, and averaging them together would judge an analyst against a number that
+  // includes somebody else's review.
+  //
+  // standardKey is stored because a task can be renamed after being completed — without it
+  // the contribution stays stranded under the old title while the next close posts a
+  // difference against a standard it never fed. standardMinutes is stored so a re-completion
+  // after a reopen posts only the DIFFERENCE: one person's part counts once, at its final
+  // total, however many times the task is reopened.
+  confirmedHours  Float?
+  standardKey     String?
+  standardMinutes Int?
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1566,12 +1588,12 @@ model LeaveRequest {
 }
 
 model LeaveType {
-  id             String   @id @default(cuid())
+  id             String @id @default(cuid())
   organizationId String
   name           String
   code           String
-  annualQuota    Int      @default(12)
-  colorHex       String   @default("#3d8de2")
+  annualQuota    Int    @default(12)
+  colorHex       String @default("#3d8de2")
 
   /// How entitlement is earned.
   ///   ANNUAL  — the whole allowance exists from 1 January (today's behaviour, and the default)
@@ -1579,19 +1601,19 @@ model LeaveType {
   /// Left configurable rather than hard-coded because the firm's written policy ("1.5 CL,
   /// 0.5 SL") and the quotas actually stored here (12 and 8) describe different schemes, and
   /// guessing at somebody's entitlement is not a decision code should make on its own.
-  accrualMode    String   @default("ANNUAL")
+  accrualMode     String  @default("ANNUAL")
   /// Days earned per completed month when accrualMode is MONTHLY. e.g. 1.5
-  monthlyRate    Float?
+  monthlyRate     Float?
   /// PRO-RATE for a mid-year joiner. Without this a person joining in October receives a full
   /// year's allowance for three months of service — which, with a quarter of the firm on
   /// internships, is the difference that matters most.
-  prorateOnJoin  Boolean  @default(false)
+  prorateOnJoin   Boolean @default(false)
   /// Does an unused balance survive 31 December?
-  carryForward   Boolean  @default(false)
+  carryForward    Boolean @default(false)
   /// The most that may be carried, in days. Null = uncapped.
   carryForwardCap Int?
 
-  createdAt      DateTime @default(now())
+  createdAt DateTime @default(now())
 
   organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   openingBalances LeaveOpeningBalance[]
@@ -2791,4 +2813,72 @@ model Feedback {
   @@index([aboutUserId])
   @@index([authorId])
   @@map("feedback")
+}
+
+/// One stretch of work on a task: somebody pressed Start, and later Stop.
+///
+/// Kept as its own table rather than a pair of columns on Task because a task is worked in
+/// several sittings, is picked up by more than one person, and is reopened after closing.
+/// Two columns can record none of that; a row per sitting records all three.
+model TaskWorkSession {
+  id        String    @id @default(cuid())
+  taskId    String
+  userId    String
+  startedAt DateTime
+  /// Null while the session is still running.
+  endedAt   DateTime?
+  /// Elapsed whole minutes, written when the session ends.
+  minutes   Int?
+  createdAt DateTime  @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  // Finding a person's running session is the hottest query here — it happens on every
+  // page load of My Tasks.
+  @@index([userId, endedAt])
+  @@map("task_work_session")
+}
+
+/// How long a standard task actually takes, learned from every completion of it.
+///
+/// The expected hours for a task are not supplied by anyone. They are the mean of every time
+/// that same task has been completed ANYWHERE in the organisation — not within one project —
+/// so the estimate improves on its own with each repetition.
+///
+/// WHY MINUTES, AND WHY A RUNNING TOTAL
+///
+/// Storing the sum and the count makes each completion O(1): no scan of past tasks, and the
+/// mean is exact rather than a number that drifts as it is folded in repeatedly. The sum is
+/// kept in whole minutes because minutes are integers — accumulating hours as a float would
+/// accrue rounding error over hundreds of completions.
+///
+/// The expectation is shown as a WHOLE NUMBER of hours, rounded once, at the end. Rounding
+/// each entry on the way in instead would be a different and wrong figure: five sittings of
+/// thirty minutes are two and a half hours, not zero and not five.
+model TaskStandard {
+  id             String   @id @default(cuid())
+  organizationId String
+  /// The task title, normalised — trimmed, inner whitespace collapsed, lower-cased. This is
+  /// what makes "Prior art search" the same task in every project that runs one.
+  titleKey       String
+  /// ANALYST, REVIEWER or PM — the layer that did this work.
+  ///
+  /// Learned per role because the firm's three questions need different answers. What must
+  /// fit in the calendar before a client deadline is the WHOLE task, analyst plus review, and
+  /// so is what gets invoiced. But judging an analyst against a figure that includes somebody
+  /// else's review flatters them. Per-role gives both: each layer's own expectation, and the
+  /// task total as the sum across the roles staffing it.
+  role           String   @default("ANALYST")
+  /// The title as first recorded, so the screen can show it the way people write it.
+  displayTitle   String
+  totalMinutes   Int      @default(0)
+  completions    Int      @default(0)
+  /// round(totalMinutes / completions / 60), never below 1. Null until first completed.
+  expectedHours  Int?
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, titleKey, role])
+  @@map("task_standard")
 }

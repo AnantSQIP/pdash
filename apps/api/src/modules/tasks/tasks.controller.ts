@@ -1,11 +1,15 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { TasksService } from './tasks.service';
+import { TaskTimeService } from './task-time.service';
 import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, SetProgressDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 @Controller('tasks')
 export class TasksController {
-  constructor(private readonly tasks: TasksService) {}
+  constructor(
+    private readonly tasks: TasksService,
+    private readonly time: TaskTimeService,
+  ) {}
 
   @Post() @RequirePermission('task.create')
   create(@Body() dto: CreateTaskDto) {
@@ -21,6 +25,54 @@ export class TasksController {
     if (userId) return this.tasks.listForUser(userId);
     if (projectId) return this.tasks.list(projectId, { taskListId });
     return [];
+  }
+
+  // ── Timing ──────────────────────────────────────────────────────────────────
+  // Declared ABOVE @Get(':id'): Nest matches routes in declaration order, so putting these
+  // after it would make "standards" and "timer" be read as task ids.
+
+  /** The session this person currently has running, if any. Drives the My Tasks header. */
+  @Get('timer/running') @RequirePermission('task.view')
+  runningTimer() {
+    return this.time.running();
+  }
+
+  /** Every learned standard and the number of completions behind it. */
+  @Get('standards') @RequirePermission('task.view')
+  standards() {
+    return this.time.standards();
+  }
+
+  @Post(':id/start') @RequirePermission('task.view')
+  startTimer(@Param('id') id: string) {
+    return this.time.start(id);
+  }
+
+  @Post(':id/stop') @RequirePermission('task.view')
+  stopTimer(@Param('id') id: string) {
+    return this.time.stop(id);
+  }
+
+  /** What to show in the close dialog: tracked time, and the expectation to compare against. */
+  @Get(':id/closing-summary') @RequirePermission('task.view')
+  closingSummary(@Param('id') id: string) {
+    return this.time.closingSummary(id);
+  }
+
+  @Post(':id/complete') @RequirePermission('task.view')
+  complete(@Param('id') id: string, @Body() body: { hours: number; closedStatusId?: string }) {
+    return this.time.complete(id, Number(body?.hours), body?.closedStatusId);
+  }
+
+  /** Record my hours without closing — the analyst finishes, the reviewer closes later. */
+  @Post(':id/log-my-part') @RequirePermission('task.view')
+  logMyPart(@Param('id') id: string, @Body() body: { hours: number }) {
+    return this.time.logMyPart(id, Number(body?.hours));
+  }
+
+  @Post(':id/reopen') @RequirePermission('task.view')
+  reopen(@Param('id') id: string, @Body() body: { openStatusId?: string }) {
+    return this.time.reopen(id, body?.openStatusId);
   }
 
   @Get(':id') @RequirePermission('task.view')
