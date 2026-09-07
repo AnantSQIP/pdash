@@ -365,8 +365,10 @@ export class CapacityService {
         const free = r1(Math.max(0, DAILY_CAPACITY_HOURS - load));
         // Largest first, so the widest segment is drawn first and the tail of small ones is
         // what gets truncated on a crowded day.
+        // Two decimals, not one: a 0.04h task rounded to 0.0 vanished from the day while its hours
+        // stayed in `load`, so the segments no longer added up to the cell.
         const dayTasks = [...(tasksByUserDay.get(`${u.id}|${k}`) ?? [])]
-          .map(([taskId, hours]) => ({ taskId, hours: r1(hours) }))
+          .map(([taskId, hours]) => ({ taskId, hours: Math.round(hours * 100) / 100 }))
           .filter(t => t.hours > 0)
           .sort((a, b) => b.hours - a.hours);
         // A PENDING (unapproved) leave is shown tentatively but does NOT free the day — the

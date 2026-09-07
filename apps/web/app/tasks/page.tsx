@@ -62,7 +62,7 @@ function ReopenButton({ task, openStatusId }: { task: ApiTask; openStatusId?: st
       onClick={() => m.mutate()}
       disabled={m.isPending}
       title="Reopen this task — the reopening is recorded and you can log further hours"
-      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50 disabled:opacity-40"
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50 disabled:opacity-40"
     >
       {m.isPending ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />} Reopen
     </button>
@@ -312,6 +312,7 @@ export default function TasksPage() {
                 onToggle={() => toggleComplete(task)}
                 onStatus={id => changeStatus(task, id)}
                 onProgress={p => changeProgress(task, p)}
+                onLogTime={() => setLogging({ task })}
               />
             ))}
           </div>
@@ -399,19 +400,26 @@ export default function TasksPage() {
                   <td className="sticky right-0 z-10 bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)] group-hover:bg-gray-50">
                     <div className="flex items-center justify-end gap-1.5">
                       {!closed && <TimerButton taskId={task.id} running={running} onStopped={openLogFromTimer} />}
-                      {!closed && (
-                        <button
-                          onClick={() => setLogging({ task })}
-                          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
-                          title="Log time on this task without leaving the page"
-                        >
-                          <Clock size={12} /> Log time
-                        </button>
-                      )}
+                      {!closed && (() => {
+                        // The ledger refuses time on a completed or closed matter; say so here
+                        // rather than after a round trip.
+                        const phase = task.projectTasks?.[0]?.project?.projectPhase;
+                        const matterClosed = phase === 'COMPLETED' || phase === 'CLOSED';
+                        return (
+                          <button
+                            onClick={() => setLogging({ task })}
+                            disabled={matterClosed}
+                            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                            title={matterClosed ? 'This project is completed or closed — reopen it to log time' : 'Log time on this task without leaving the page'}
+                          >
+                            <Clock size={12} /> Log time
+                          </button>
+                        );
+                      })()}
                       {!closed && (
                         <button
                           onClick={() => setClosing(task)}
-                          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
+                          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
                           title="Close this task and record the hours"
                         >
                           <CheckCircle size={12} /> Close
@@ -440,6 +448,7 @@ export default function TasksPage() {
 
       {logging && (
         <LogTimeDialog
+          key={`${logging.task.id}:${logging.hours ?? ''}`}
           taskId={logging.task.id}
           taskTitle={logging.task.title}
           projectLabel={(() => {
@@ -489,7 +498,7 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgress }: {
+function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgress, onLogTime }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
@@ -497,6 +506,8 @@ function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgr
   onToggle: () => void;
   onStatus: (id: string) => void;
   onProgress: (p: number) => void;
+  /** The phone gets the same in-place timesheet as the table. */
+  onLogTime?: () => void;
 }) {
   const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
   const project = task.projectTasks?.[0]?.project;
@@ -542,6 +553,17 @@ function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgr
                 <span className={clsx('text-xs whitespace-nowrap', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
                   {formatDate(task.dueDate)}{overdue && ' · overdue'}
                 </span>
+              )}
+              {/* The phone gets the same in-place timesheet as the table — the whole point was
+                  not having to go to another screen, and a phone is where that hurts most. */}
+              {!closed && onLogTime && (
+                <button
+                  onClick={onLogTime}
+                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
+                  title="Log time on this task"
+                >
+                  <Clock size={11} /> Log time
+                </button>
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">

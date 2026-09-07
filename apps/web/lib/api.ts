@@ -752,6 +752,8 @@ export type ClosingSummary = {
   basedOnCompletions: number;
   expectedHoursForTask: number | null;
   alreadyCounted: boolean;
+  /** Hours already in your timesheet for this task; closing adds only any shortfall. */
+  loggedHours: number;
 };
 
 /** A learned standard: what each role takes, and the task total as their sum. */
@@ -1808,7 +1810,7 @@ export const api = {
     startTimer: (id: string) =>
       req<{ id: string; taskId: string; startedAt: string; resumed: boolean }>(`/tasks/${id}/start`, { method: 'POST' }),
     stopTimer: (id: string) =>
-      req<{ stopped: boolean; minutes: number }>(`/tasks/${id}/stop`, { method: 'POST' }),
+      req<{ stopped: boolean; /** THIS sitting's minutes. */ minutes: number; totalMinutes: number }>(`/tasks/${id}/stop`, { method: 'POST' }),
     closingSummary: (id: string) => req<ClosingSummary>(`/tasks/${id}/closing-summary`),
     /** Record my hours and close the task. */
     completeWithHours: (id: string, hours: number, closedStatusId?: string) =>

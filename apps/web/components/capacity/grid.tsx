@@ -95,7 +95,7 @@ export function segmentsFor(
 }
 
 export function DayCell({
-  day, segments, focusProjectId, compact, today, onHover, onLeave, onClick,
+  day, segments, focusProjectId, compact, today, maxSegments = 8, inert, onHover, onLeave, onClick,
 }: {
   day: CapacityDay;
   /** null = no itemisation in the payload → plain fill; [] = a genuinely free day. */
@@ -105,6 +105,14 @@ export function DayCell({
   /** The person panel's own strip: shorter cells. */
   compact?: boolean;
   today?: boolean;
+  /**
+   * How many segments the cell can show before the tail collapses into one "+n" stub. Each
+   * segment is at least 6px wide, so a 40px cell at the 30-day range fits five and no more —
+   * beyond that the extras were clipped silently and a light day looked full.
+   */
+  maxSegments?: number;
+  /** A display-only strip (the person panel): not a tab stop. */
+  inert?: boolean;
   onHover?: (e: MouseEvent<HTMLButtonElement> | FocusEvent<HTMLButtonElement>) => void;
   onLeave?: () => void;
   onClick?: () => void;
@@ -122,11 +130,16 @@ export function DayCell({
 
   const legacy = working && segments === null;
   const pendingLeave = day.state === 'LEAVE_PENDING';
+  // The tail beyond the cell's capacity collapses into one stub; the hover lists everything.
+  const shown = segments && segments.length > maxSegments ? segments.slice(0, maxSegments - 1) : segments;
+  const hidden = segments && shown ? segments.length - shown.length : 0;
+  const taskWord = segments ? ` · ${segments.length} ${segments.length === 1 ? 'task' : 'tasks'}` : '';
 
   return (
     <button
       type="button"
-      aria-label={label}
+      aria-label={label + (working ? taskWord : '')}
+      tabIndex={inert ? -1 : undefined}
       onMouseEnter={onHover}
       onFocus={onHover}
       onMouseLeave={onLeave}
@@ -149,9 +162,9 @@ export function DayCell({
         ...(legacy ? { backgroundImage: `linear-gradient(90deg, rgba(5,150,105,0.35) ${Math.min(100, day.utilization * 100)}%, transparent ${Math.min(100, day.utilization * 100)}%)` } : {}),
       }}
     >
-      {working && segments && segments.length > 0 && (
+      {working && shown && shown.length > 0 && (
         <div className="absolute inset-0.5 flex gap-px overflow-hidden rounded-[3px]">
-          {segments.map(seg => {
+          {shown.map(seg => {
             const faded = !!focusProjectId && seg.task.projectId !== focusProjectId;
             return (
               <div
@@ -173,6 +186,13 @@ export function DayCell({
               </div>
             );
           })}
+          {hidden > 0 && (
+            <div
+              className="relative h-full shrink-0 rounded-[2px]"
+              title={`+${hidden} more`}
+              style={{ width: '6px', background: 'repeating-linear-gradient(45deg, #374151 0 2px, #ffffff 2px 4px)', boxShadow: SEGMENT_RING }}
+            />
+          )}
         </div>
       )}
       {/* Over 8h: a neutral corner mark, the same idiom as a spreadsheet note. Not red. */}
@@ -180,7 +200,7 @@ export function DayCell({
         <span className="pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[7px] border-t-[7px] border-l-transparent" style={{ borderTopColor: OVER_COMMITTED }} />
       )}
       {day.state === 'LEAVE' && <Plane size={11} className="absolute inset-0 m-auto text-purple-500" />}
-      {pendingLeave && <Plane size={10} className="absolute right-1 top-1 text-purple-500" />}
+      {pendingLeave && <Plane size={10} className={clsx('absolute top-1 text-purple-500', over ? 'left-1' : 'right-1')} />}
       {day.state === 'HOLIDAY' && <Flag size={11} className="absolute inset-0 m-auto text-amber-500" />}
     </button>
   );

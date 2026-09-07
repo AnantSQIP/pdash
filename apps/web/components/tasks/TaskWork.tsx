@@ -133,7 +133,7 @@ export function TimerButton({ taskId, running, disabled, onStopped }: { taskId: 
       disabled={disabled || busy}
       title={isThis ? 'Stop the clock' : 'Start working on this'}
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-40',
+        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-40',
         isThis
           ? 'bg-gray-900 text-white hover:bg-gray-800'
           : 'text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50',
@@ -239,6 +239,12 @@ export function CompleteTaskDialog({
               Your timer recorded {humanMinutes(summary.trackedMinutes)}. Correct it if that is not right —
               what you enter here is what is kept.
             </p>
+            {summary.loggedHours > 0 && (
+              <p className="mt-1 text-[11.5px] text-gray-400">
+                Your timesheet already holds <span className="tabular-nums text-gray-600">{summary.loggedHours}h</span> for this task;
+                closing adds only anything above that.
+              </p>
+            )}
           </div>
 
           {/* What this kind of work usually takes, and on how much evidence. */}

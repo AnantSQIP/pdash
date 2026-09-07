@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plane, Flag } from 'lucide-react';
 import type { CapacityRow } from '@/lib/api';
-import { type ProjectHue, FREE_BASE, OVER_COMMITTED, RAIL } from '@/lib/project-colors';
+import { type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED, RAIL } from '@/lib/project-colors';
 import { pidLabel } from '@/lib/mock-data';
 
 const RAMP = ['#3d3d3d', '#595959', '#808080', '#a8a8a8'];
@@ -39,10 +39,24 @@ export function BoardLegend({
 
   useEffect(() => {
     if (!pinned) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setPinned(null); onFocus(null); } };
+    // Escape clears the pin — unless a dialog is open, in which case Escape is the dialog's.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.querySelector('[role="dialog"]')) return;
+      setPinned(null); onFocus(null);
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [pinned, onFocus]);
+
+  // The pin lives in the parent's focus state; if this legend goes away (range change, past
+  // view) the board must not stay faded with nothing left on screen to clear it.
+  useEffect(() => () => onFocus(null), [onFocus]);
+  // And if the parent clears the focus (a range or project change), the pin goes with it —
+  // otherwise the chip stays pressed while nothing on the board is faded, and hover-preview
+  // stays disabled.
+  useEffect(() => { if (pinned && focusProjectId !== pinned) setPinned(null); }, [focusProjectId, pinned]);
+
+  const hasTeamWork = useMemo(() => rows.some(r => r.openTasks.some(t => t.isTeamWork)), [rows]);
 
   const preview = (id: string | null) => { if (!pinned) onFocus(id); };
   const pin = (id: string) => {
@@ -81,6 +95,11 @@ export function BoardLegend({
                 </button>
               );
             })}
+            {hasTeamWork && (
+              <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-gray-600" title="Work in a team space — no client matter, no PID">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: NO_PROJECT_HUE.medium }} />Team space
+              </span>
+            )}
           </div>
         )}
 

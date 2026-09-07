@@ -143,6 +143,14 @@ export function PersonPanel({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // A dialog that opens without taking focus leaves a keyboard user still on the board behind it.
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => { closeRef.current?.focus(); }, []);
+
+  // An older API with no per-day itemisation: every task is still real work; it just cannot be
+  // placed on a day. Then nothing is "not scheduled" — it is simply not itemised.
+  const itemised = row.days.some(d => d.tasks !== undefined);
+
   // Where each task's hours land across the window.
   const footprints = useMemo(() => {
     const m = new Map<string, Footprint>();
@@ -181,7 +189,7 @@ export function PersonPanel({
   }, [row.openTasks, hues, footprints]);
 
   const scheduledCount = row.openTasks.filter(t => (footprints.get(t.id)?.hours ?? 0) > 0).length;
-  const unscheduled = row.openTasks.filter(t => !(footprints.get(t.id)?.hours ?? 0));
+  const unscheduled = itemised ? row.openTasks.filter(t => !(footprints.get(t.id)?.hours ?? 0)) : [];
 
   // Opened from a cell: the tasks on that day get a moment's ring, and the first scrolls into view.
   const focusIds = useMemo(() => {
@@ -261,7 +269,7 @@ export function PersonPanel({
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[460px]" role="dialog" aria-label={`${row.name}'s plan`}>
+      <div className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[460px]" role="dialog" aria-modal="true" aria-label={`${row.name}'s plan`}>
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={40} />
@@ -270,7 +278,7 @@ export function PersonPanel({
               <p className="truncate text-xs text-gray-400">{row.designation ?? '—'}{row.department ? ` · ${row.department}` : ''}</p>
             </div>
           </div>
-          <button onClick={onClose} className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100" aria-label="Close"><X size={16} /></button>
+          <button ref={closeRef} onClick={onClose} className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100" aria-label="Close"><X size={16} /></button>
         </div>
 
         {/* Their own window, in the board's colours — the context for everything below. */}
@@ -282,7 +290,7 @@ export function PersonPanel({
               </div>
             ))}
             {row.days.map(d => (
-              <DayCell key={d.date} day={d} compact today={isToday(d.date)}
+              <DayCell key={d.date} day={d} compact inert today={isToday(d.date)}
                 segments={segmentsFor(row, d, hues, today, holidays)} />
             ))}
           </div>
@@ -300,7 +308,7 @@ export function PersonPanel({
             <p className="py-6 text-center text-sm text-gray-400">Nothing assigned — completely free to take work.</p>
           ) : (
             <div className="space-y-4">
-              {groups.filter(g => g.tasks.some(t => (footprints.get(t.id)?.hours ?? 0) > 0)).map(g => (
+              {groups.filter(g => !itemised || g.tasks.some(t => (footprints.get(t.id)?.hours ?? 0) > 0)).map(g => (
                 <section key={g.key}>
                   <div className="flex items-center gap-2 rounded-md px-1 py-1.5" style={{ backgroundColor: g.hue.tint }}>
                     <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: g.hue.medium }} />
@@ -318,7 +326,7 @@ export function PersonPanel({
                     </p>
                   )}
                   <div className="divide-y divide-gray-100">
-                    {g.tasks.filter(t => (footprints.get(t.id)?.hours ?? 0) > 0).map(t => taskRow(t, g.hue, true))}
+                    {g.tasks.filter(t => !itemised || (footprints.get(t.id)?.hours ?? 0) > 0).map(t => taskRow(t, g.hue, itemised))}
                   </div>
                 </section>
               ))}
@@ -337,7 +345,7 @@ export function PersonPanel({
                   )}
                 </section>
               )}
-              {scheduledCount === 0 && unscheduled.length > 0 && (
+              {itemised && scheduledCount === 0 && unscheduled.length > 0 && (
                 <p className="text-[11.5px] text-gray-400">Assigned work, none of it landing in this window — every task is either done, overdue with no hours left, or starts later.</p>
               )}
             </div>

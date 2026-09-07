@@ -8,7 +8,7 @@
 // is clipped at the right edge and the bottom, and z-fights the headers. A fixed card has none
 // of those problems, and never scrolls with the grid (the owner closes it on scroll instead).
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { CapacityDay, CapacityRow } from '@/lib/api';
 import { Portal } from '@/components/ui/Portal';
 import { formatDate } from '@/lib/date';
@@ -21,6 +21,8 @@ const GAP = 6;
 const MAX_ROWS = 6;
 
 export type HoverTarget = { row: CapacityRow; day: CapacityDay; segments: Segment[] | null; rect: DOMRect };
+/** What a cell hands over on hover; the rect is read when the delay elapses, not now. */
+export type HoverIntent = { row: CapacityRow; day: CapacityDay; segments: Segment[] | null; el: HTMLElement };
 
 /** The words beside the colour: never rely on the rail alone. */
 export function dueText(seg: Segment, today: string): { text: string; cls: string } {
@@ -28,7 +30,8 @@ export function dueText(seg: Segment, today: string): { text: string; cls: strin
   if (!due) return { text: 'No deadline', cls: 'text-gray-400' };
   switch (seg.deadline) {
     case 'overdue': return { text: `Overdue ${daysOverdue(due, today)}d`, cls: 'text-red-700 font-medium' };
-    case 'today':   return { text: 'Due today', cls: 'text-amber-700 font-medium' };
+    // Red, like its rail: a deadline that is today is not "soon", it is now.
+    case 'today':   return { text: 'Due today', cls: 'text-red-700 font-medium' };
     case 'soon':    return { text: `Due ${formatDate(due)}`, cls: 'text-amber-700' };
     default:        return { text: `Due ${formatDate(due)}`, cls: 'text-gray-500' };
   }
@@ -40,13 +43,16 @@ export function priorityWord(p: string | null | undefined): string {
 }
 
 export function HoverCard({ target, today }: { target: HoverTarget; today: string }) {
-  const ref = useRef<HTMLDivElement>(null);
+  // A callback ref held in state, not a useRef: Portal renders nothing on its first pass (it
+  // waits for mount), so on the first commit the card element does not exist yet and a ref
+  // would be null when the layout effect ran — leaving the card parked at -9999px. Putting
+  // the element in state re-runs the placement the moment it actually exists.
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number; maxH?: number } | null>(null);
 
   // Measure after first paint, then place: below the cell, flipped above if that overflows,
   // clamped to the viewport, and capped in height as a last resort.
   useLayoutEffect(() => {
-    const el = ref.current;
     if (!el) return;
     const r = target.rect;
     const h = el.offsetHeight;
@@ -57,7 +63,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
     if (top + h > vh - 8) top = r.top - GAP - h;
     if (top < 8) { top = 8; maxH = vh - 16; }
     setPos({ left, top, maxH });
-  }, [target]);
+  }, [target, el]);
 
   const { row, day, segments } = target;
   const working = day.capacity > 0;
@@ -69,7 +75,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
   return (
     <Portal>
       <div
-        ref={ref}
+        ref={setEl}
         role="tooltip"
         className="pointer-events-none fixed z-[70] rounded-lg bg-white p-3 text-xs shadow-lg ring-1 ring-gray-200"
         style={{ width: WIDTH, left: pos?.left ?? -9999, top: pos?.top ?? -9999, maxHeight: pos?.maxH, overflow: 'hidden' }}
@@ -78,7 +84,8 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
           <span className="font-semibold text-gray-900">{row.name.split(' ')[0]} · {formatDate(day.date, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
           {working ? (
             over
-              ? <span className="font-medium text-red-700 tabular-nums">{day.load}h of {DAILY_CAPACITY}h · over by {Math.round((day.load - DAILY_CAPACITY) * 10) / 10}h</span>
+              // Neutral, not red: red on this board means a task is late; too much on one day is the dark edge.
+              ? <span className="font-semibold text-gray-900 tabular-nums">{day.load}h of {DAILY_CAPACITY}h · over by {Math.round((day.load - DAILY_CAPACITY) * 10) / 10}h</span>
               : day.load > 0
                 ? <span className="text-gray-600 tabular-nums">{day.load}h of {DAILY_CAPACITY}h · <span className="text-emerald-700">{Math.round(free * 10) / 10}h free</span></span>
                 : <span className="font-medium text-emerald-700">Free all day</span>
@@ -106,7 +113,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
                         {pid && <span className="font-mono text-[10.5px] text-gray-500">{pid} · </span>}
                         <span className="text-gray-700">{seg.task.project ?? (seg.task.isTeamWork ? 'Team space' : '—')}</span>
                       </span>
-                      <span className="shrink-0 font-semibold tabular-nums text-gray-900">{seg.hours}h</span>
+                      <span className="shrink-0 font-semibold tabular-nums text-gray-900">{Math.round(seg.hours * 10) / 10}h</span>
                     </div>
                     <p className="truncate font-medium text-gray-900">{seg.task.title}</p>
                     <p className="text-[11px] text-gray-500">
@@ -120,7 +127,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
         )}
         {more > 0 && <p className="mt-2 text-[11px] text-gray-500">+{more} more — click the name for the full plan</p>}
         {working && shown.length === 0 && segments && (
-          <p className="mt-2 text-[11px] text-gray-400">Nothing scheduled — click to assign work into this day.</p>
+          <p className="mt-2 text-[11px] text-gray-400">Nothing scheduled — click for the plan; assign from there.</p>
         )}
       </div>
     </Portal>

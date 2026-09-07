@@ -35,9 +35,9 @@ import { useToast } from '@/components/ui/Toast';
 import { PersonPanel, ExtendMenu } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
-import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holidaysOf } from '@/components/capacity/grid';
+import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holidaysOf, type Segment } from '@/components/capacity/grid';
 import { BoardLegend } from '@/components/capacity/BoardLegend';
-import { HoverCard, type HoverTarget } from '@/components/capacity/HoverCard';
+import { HoverCard, type HoverTarget, type HoverIntent } from '@/components/capacity/HoverCard';
 import { assignProjectHues } from '@/lib/project-colors';
 import { todayIST } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
@@ -53,7 +53,9 @@ export default function CapacityPage() {
   const [search, setSearch] = useState('');
   const [dept, setDept] = useState('');
   const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
-  const [selected, setSelected] = useState<CapacityRow | null>(null);
+  // The selected PERSON, not a snapshot of their row: the panel then re-reads the row from the
+  // latest payload, so an Extend done inside it is reflected without closing and reopening.
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [assignTo, setAssignTo] = useState<{ row: CapacityRow; start?: string; due?: string } | null>(null);
   const [hover, setHover] = useState<HoverTarget | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +105,18 @@ export default function CapacityPage() {
   // Hues come from the WHOLE payload, so a search or filter never reshuffles the colours.
   const hues = useMemo(() => assignProjectHues(projectsOf(fwdRows)), [fwdRows]);
   const holidays = useMemo(() => holidaysOf(fwdRows), [fwdRows]);
+  const selected = useMemo(() => fwdRows.find(r => r.userId === selectedUserId) ?? null, [fwdRows, selectedUserId]);
+  // Every cell's segments, once per payload — not once per hover. A hover changes page state,
+  // which re-renders every row; without this each of 26 × 30 cells re-derived its segments.
+  const segmentsByKey = useMemo(() => {
+    const m = new Map<string, Segment[] | null>();
+    for (const r of fwdRows) for (const d of r.days) m.set(`${r.userId}|${d.date}`, segmentsFor(r, d, hues, today, holidays));
+    return m;
+  }, [fwdRows, hues, holidays, today]);
+  // A cell fits five 6px segments at the 30-day range, eight at 14, a dozen at 7.
+  const maxSegments = days >= 30 ? 5 : days >= 14 ? 8 : 12;
+  // A pinned project belongs to the board it was pinned on.
+  useEffect(() => { setFocusProjectId(null); }, [range, projectId]);
 
   // The hover card is fixed to the viewport, so it must go the moment anything moves.
   useEffect(() => {
@@ -114,10 +128,16 @@ export default function CapacityPage() {
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); window.removeEventListener('keydown', onKey); };
   }, [hover]);
-  const beginHover = (t: HoverTarget) => {
+  const beginHover = (t: HoverIntent) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = setTimeout(() => setHover(t), 120);
+    // The rect is read when the card is about to show, so 120ms of scrolling cannot leave the
+    // card beside where the cell used to be.
+    hoverTimer.current = setTimeout(() => {
+      if (!t.el.isConnected) return;
+      setHover({ row: t.row, day: t.day, segments: t.segments, rect: t.el.getBoundingClientRect() });
+    }, 120);
   };
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
   const endHover = () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     hoverTimer.current = null;
@@ -315,7 +335,7 @@ export default function CapacityPage() {
                       )}
                       {g.rows.map(row => (
                     <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
-                      <button onClick={() => { setFocusDate(undefined); setSelected(row); }} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
+                      <button onClick={() => { setFocusDate(undefined); setSelectedUserId(row.userId); }} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
                         <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={30} />
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-gray-800 truncate group-hover:text-brand-600 transition-colors">{row.name}</p>
@@ -324,15 +344,15 @@ export default function CapacityPage() {
                       </button>
                       <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
                         {row.days.map(d => {
-                          const segments = segmentsFor(row, d, hues, today, holidays);
+                          const segments = segmentsByKey.get(`${row.userId}|${d.date}`) ?? null;
                           return (
                             <DayCell
-                              key={d.date} day={d} segments={segments} focusProjectId={focusProjectId} today={isToday(d.date)}
-                              onHover={e => beginHover({ row, day: d, segments, rect: e.currentTarget.getBoundingClientRect() })}
+                              key={d.date} day={d} segments={segments} focusProjectId={focusProjectId} today={isToday(d.date)} maxSegments={maxSegments}
+                              onHover={e => beginHover({ row, day: d, segments, el: e.currentTarget })}
                               onLeave={endHover}
                               // A day opens the person's plan at that day. Adding work is the
                               // panel's job, where you can see what is already there first.
-                              onClick={() => { endHover(); setFocusDate(d.date); setSelected(row); }}
+                              onClick={() => { endHover(); setFocusDate(d.date); setSelectedUserId(row.userId); }}
                             />
                           );
                         })}
@@ -344,11 +364,13 @@ export default function CapacityPage() {
                           ) : row.nextFreeDate ? (
                             <p className="text-xs font-medium text-gray-600">Free {formatDate(row.nextFreeDate)}</p>
                           ) : (
-                            <p className="text-xs font-medium text-red-500">Fully booked</p>
+                            // No day under a quarter loaded. If hours are still free, say that rather
+                            // than "fully booked" beside "37h free" — the two read as a contradiction.
+                            <p className="text-xs font-medium text-red-500">{row.freeHours > 0 ? 'No free day' : 'Fully booked'}</p>
                           )}
                           <p className="text-[10px] tabular-nums text-gray-400">
                             {row.freeHours}h free
-                            {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-red-600">· {row.overCommittedHours}h over</span>}
+                            {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-gray-900">· {row.overCommittedHours}h over</span>}
                           </p>
                         </div>
                         <button
@@ -389,11 +411,11 @@ export default function CapacityPage() {
       {selected && (
         <PersonPanel
           row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
-          onClose={() => { setSelected(null); setFocusDate(undefined); }}
+          onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
           onAssign={() => {
             const start = focusDate ?? selected.nextFreeDate ?? undefined;
             setAssignTo({ row: selected, start, due: start });
-            setSelected(null); setFocusDate(undefined);
+            setSelectedUserId(null); setFocusDate(undefined);
           }}
         />
       )}
