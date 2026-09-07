@@ -1,13 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, RotateCcw, Loader } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
-import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
-import { useToast } from '@/components/ui/Toast';
+import { useToast, toastError } from '@/components/ui/Toast';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE, nextUpFirst } from '@/lib/tasks';
 import { invalidateTaskCaches } from '@/lib/task-cache';
@@ -33,6 +33,40 @@ function statusCategory(t: ApiTask): 'Open' | 'In Progress' | 'Closed' {
   return 'Open';
 }
 const isOverdue = (t: ApiTask) => isPastDue(t.dueDate) && !isTaskClosed(t);
+
+/**
+ * Reopen a closed task.
+ *
+ * Goes through POST /tasks/:id/reopen rather than simply setting the status back to Open.
+ * They are not the same thing: the status dropdown moves the task and nothing else, so the
+ * reopening leaves no trace, while this records it on the task (reopenedCount) and clears the
+ * completion so the work can be timed again. The review asked for reopening to be RECORDED —
+ * "if it is not recorded, the hours and everything derived from them understate the work".
+ */
+function ReopenButton({ task, openStatusId }: { task: ApiTask; openStatusId?: string }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const m = useMutation({
+    mutationFn: () => api.tasks.reopenTask(task.id, openStatusId),
+    onSuccess: r => {
+      toast(r.reopenedCount === 1 ? 'Reopened. Time it again and close when it is done.'
+                                  : `Reopened — ${r.reopenedCount} times now.`, 'success');
+      invalidateTaskCaches(qc);
+      qc.invalidateQueries({ queryKey: ['running-timer'] });
+    },
+    onError: e => toastError(e, 'Could not reopen the task.'),
+  });
+  return (
+    <button
+      onClick={() => m.mutate()}
+      disabled={m.isPending}
+      title="Reopen this task — the reopening is recorded and you can log further hours"
+      className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50 disabled:opacity-40"
+    >
+      {m.isPending ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />} Reopen
+    </button>
+  );
+}
 
 export default function TasksPage() {
   const { currentUser, loading: orgLoading } = useOrg();
@@ -357,7 +391,7 @@ export default function TasksPage() {
                           <CheckCircle size={12} /> Close
                         </button>
                       )}
-                      {closed && <span className="text-[12px] text-gray-400">Closed</span>}
+                      {closed && <ReopenButton task={task} openStatusId={statuses.find(x => x.type === OPEN_TYPE)?.id} />}
                     </div>
                   </td>
                 </tr>

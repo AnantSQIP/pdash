@@ -167,7 +167,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
       { label: 'Members', value: String(t.users) },
       { label: 'Tasks completed', value: String(t.tasksCompleted) },
       { label: 'Hours logged', value: `${Math.round(t.hoursLogged)}h` },
-      { label: 'Avg on-time', value: `${t.avgOnTimeRate}%` },
+      { label: 'Avg on-time', value: t.avgOnTimeRate == null ? 'n/a — nothing with a deadline closed' : `${t.avgOnTimeRate}%` },
     ],
   });
 
@@ -195,7 +195,7 @@ export function OrgView({ days = 30 }: { days?: number }) {
         <KpiTile label={METRIC_LABEL.tasksCompleted} value={t.tasksCompleted} Icon={RiCheckboxCircleLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" active={focus === 'tasksCompleted'} onClick={() => setFocus('tasksCompleted')} delta={t.tasksCompleted - orgPerf.previousTotals.tasksCompleted} spark={trendSpark('completed')} sparkColor={C.green} info={METRIC_HELP.tasksCompleted} />
         <KpiTile label={METRIC_LABEL.hoursLogged} value={`${t.hoursLogged}h`} Icon={RiTimeLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" active={focus === 'hoursLogged'} onClick={() => setFocus('hoursLogged')} delta={round1(t.hoursLogged - orgPerf.previousTotals.hoursLogged)} spark={trendSpark('hours')} sparkColor={C.brand} info={METRIC_HELP.hoursLogged} />
         <KpiTile label="Active Projects" value={t.activeProjects} Icon={RiFolder3Line} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" />
-        <KpiTile label={METRIC_LABEL.onTimeRate} value={`${t.avgOnTimeRate}%`} Icon={RiTrophyLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" hero active={focus === 'onTimeRate'} onClick={() => setFocus('onTimeRate')} info={METRIC_HELP.onTimeRate} />
+        <KpiTile label={METRIC_LABEL.onTimeRate} value={t.avgOnTimeRate == null ? 'n/a' : `${t.avgOnTimeRate}%`} Icon={RiTrophyLine} tint="bg-gray-50 text-gray-400 ring-1 ring-inset ring-gray-950/[0.04]" hero active={focus === 'onTimeRate'} onClick={() => setFocus('onTimeRate')} info={METRIC_HELP.onTimeRate} />
       </div>
       <p className="text-xs text-gray-400 -mt-3">Tip: click a metric tile to re-rank the comparison charts & table{filterActive ? ' · filters applied to ranking & table' : ''}.</p>
 
@@ -249,7 +249,15 @@ export function OrgView({ days = 30 }: { days?: number }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ChartCard title="Org rates" subtitle="On-time · avg project completion · capacity used">
           <div className="flex flex-wrap items-center justify-around gap-3 py-2">
-            <GaugeCard value={t.avgOnTimeRate} label="On-time" />
+            {t.avgOnTimeRate == null ? (
+              <div className="flex flex-col items-center justify-center text-center px-2" style={{ minWidth: 96 }}>
+                <span className="text-lg font-semibold text-gray-300">n/a</span>
+                <span className="text-[11px] text-gray-500 mt-1">On-time</span>
+                <span className="text-[10px] text-gray-400 mt-0.5 leading-tight">nothing with a<br />deadline closed</span>
+              </div>
+            ) : (
+              <GaugeCard value={t.avgOnTimeRate} label="On-time" />
+            )}
             <GaugeCard value={avgCompletion} label="Avg completion" color={C.brand} />
             <GaugeCard value={capUsed} label="Capacity used" color={C.teal} />
           </div>

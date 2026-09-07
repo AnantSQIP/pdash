@@ -198,15 +198,32 @@ export default function GanttView({ tasks, project }: { tasks: ApiTask[]; projec
     requestAnimationFrame(() => { syncing.current = false; });
   }, []);
 
-  // On first open, scroll so TODAY sits near the left edge — past is reached by
-  // scrolling left, future by scrolling right.
+  // On first open, scroll so TODAY sits near the left edge — past is reached by scrolling
+  // left, future by scrolling right.
+  //
+  // Unless there is no work anywhere near today, which is the common case for a project whose
+  // tasks all ran earlier: opening on today then showed an EMPTY chart with seven task rows
+  // and no bars, and nothing on screen said the work was off to the left. When nothing
+  // intersects the first screenful, open on the work instead.
   useEffect(() => {
     if (didInit.current || !bodyRef.current || rows.length === 0) return;
     didInit.current = true;
-    const left = Math.max(0, (todayOffset - 2) * DAY_WIDTH);
-    bodyRef.current.scrollLeft = left;
+    const el = bodyRef.current;
+    const visibleDays = Math.max(1, Math.floor(el.clientWidth / DAY_WIDTH));
+    const preferred = Math.max(0, todayOffset - 2);
+    const spans = rows.map(r => ({
+      from: daysBetween(timelineStart, r.start),
+      to: daysBetween(timelineStart, r.end),
+    }));
+    const anyInView = spans.some(sp => sp.to >= preferred && sp.from <= preferred + visibleDays);
+    // Fall back to the earliest bar, less a little padding, so the first thing on screen is
+    // the start of the work rather than a blank month.
+    const earliest = spans.reduce((m, sp) => Math.min(m, sp.from), Number.POSITIVE_INFINITY);
+    const startDay = anyInView || !Number.isFinite(earliest) ? preferred : Math.max(0, earliest - 2);
+    const left = startDay * DAY_WIDTH;
+    el.scrollLeft = left;
     if (headerRef.current) headerRef.current.scrollLeft = left;
-  }, [rows.length, todayOffset]);
+  }, [rows, timelineStart, todayOffset]);
 
   // Click a task (left list) → bring its bar forward: center it and highlight it.
   const selectTask = useCallback((taskId: string) => {

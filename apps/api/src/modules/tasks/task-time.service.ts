@@ -52,6 +52,9 @@ export class TaskTimeService {
       select: {
         id: true, title: true, actualHours: true,
         completedAt: true, startedAt: true, reopenedCount: true,
+        // A task can be closed two ways — by the closing dialog (completedAt) or simply by
+        // moving it into a CLOSED status. Both have to count as closed, so both are read.
+        currentStatus: { select: { type: true } },
         assignees: {
           select: {
             id: true, userId: true, role: true,
@@ -422,7 +425,11 @@ export class TaskTimeService {
   async reopen(taskId: string, openStatusId?: string) {
     const userId = this.actor();
     const { task } = await this.assertMine(taskId, userId);
-    if (!task.completedAt) throw new BadRequestException('That task is not closed.');
+    // Closed by the dialog OR closed by status. Requiring completedAt alone meant every task
+    // closed the ordinary way — which is all of them, including everything predating the
+    // closing dialog — showed a Reopen button that answered "That task is not closed."
+    const isClosed = !!task.completedAt || task.currentStatus?.type === 'CLOSED';
+    if (!isClosed) throw new BadRequestException('That task is not closed.');
     return this.prisma.task.update({
       where: { id: taskId },
       data: {
