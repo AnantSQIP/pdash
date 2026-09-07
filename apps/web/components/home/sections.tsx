@@ -15,6 +15,7 @@ import {
   type Holiday, type RoleSummary, type UserSummary, type TeamCapacity, type PidRequestItem,
   type RegularizationRequest, type CompOffRequest, type Expense } from '@/lib/api';
 import { formatDate, fmtHours, fmtNum, fmtPct, plural, longDateIST, hourIST, todayUtc, isPastDue, relativePast } from '@/lib/date';
+import { nextUpFirst } from '@/lib/tasks';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -197,7 +198,9 @@ export function MyTasksCard() {
   });
   if (!allowed) return null;
   const loading = isLoading || !uid; // disabled-query window reads as loading, not "empty"
-  const visible = filterTasks(tasks, tab);
+  // Sorted BEFORE the cap, or the six shown would be an arbitrary six put in order rather
+  // than the six that matter.
+  const visible = [...filterTasks(tasks, tab)].sort(nextUpFirst);
   const shown = visible.slice(0, TASK_CAP);
   const more = visible.length - shown.length;
   const tabs = (

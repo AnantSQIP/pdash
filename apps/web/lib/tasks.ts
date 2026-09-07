@@ -43,3 +43,45 @@ export function taskAssigneeIds(task: Pick<ApiTask, 'assignees'> | null | undefi
     .filter(Boolean) as string[];
   return [...new Set(ids)];
 }
+
+const PRIORITY_RANK: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+
+/** Past its due date, in whole days, ignoring the time of day. */
+function pastDue(due?: string | null): boolean {
+  if (!due) return false;
+  const d = new Date(due);
+  const today = new Date();
+  d.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return d.getTime() < today.getTime();
+}
+
+/**
+ * What to do next, in order.
+ *
+ * The home card showed whatever order the API happened to return and then took the first
+ * six, so somebody's morning could open on a task closed last week while a critical one sat
+ * below the fold. This is the order the question actually has:
+ *
+ *   1. closed work last — it is not what to do next
+ *   2. overdue first — a missed date is the most urgent fact about a task, and it outranks
+ *      priority: a LOW task three days late needs attention before a MEDIUM due next month
+ *   3. then priority
+ *   4. then the soonest deadline, so equal-priority work is ordered by what runs out first
+ *   5. dateless tasks after dated ones — no deadline is not the same as a deadline today
+ */
+export function nextUpFirst(a: ApiTask, b: ApiTask): number {
+  const closed = (t: ApiTask) => (t.currentStatus?.type === CLOSED_TYPE ? 1 : 0);
+  if (closed(a) !== closed(b)) return closed(a) - closed(b);
+
+  const overdue = (t: ApiTask) => (t.currentStatus?.type !== CLOSED_TYPE && pastDue(t.dueDate) ? 0 : 1);
+  if (overdue(a) !== overdue(b)) return overdue(a) - overdue(b);
+
+  const rank = (t: ApiTask) => PRIORITY_RANK[t.priority ?? 'MEDIUM'] ?? 2;
+  if (rank(a) !== rank(b)) return rank(a) - rank(b);
+
+  const due = (t: ApiTask) => (t.dueDate ? new Date(t.dueDate).getTime() : Number.POSITIVE_INFINITY);
+  if (due(a) !== due(b)) return due(a) - due(b);
+
+  return (a.title ?? '').localeCompare(b.title ?? '');
+}
