@@ -8,6 +8,7 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 import { startOfIstDay } from '../../common/dates';
+import { istDayWindow, overlapMinutes, ceilQuarter, minutesToHours, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { NotificationsService } from '../notifications/notifications.module';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 
@@ -581,6 +582,126 @@ export class TimesheetsService {
       days.push({ date: k, target, logged, status, compOff, pending: pendingFor(k) });
     }
     return { year, month, days };
+  }
+
+  // ── One day, and whether it is settled ───────────────────────────────────────
+  // Filling the timesheet is a condition of punching out, so "how much does this person owe
+  // today, and what have they got to file it from?" is now a question three places ask: the
+  // punch-out check, the morning catch-up, and the line at the top of My Tasks. It is answered
+  // here, once, rather than three times slightly differently.
+
+  /**
+   * The hours a person owes a given day.
+   *
+   *   0h  weekend, company holiday, approved full-day leave — nothing is owed
+   *   4h  an approved half-day leave, or a day attendance already marked HALF_DAY
+   *   8h  everything else, including a Saturday turned into a working day by an approved comp-off
+   *
+   * The same ladder the fill calendar grades against, so the colour of a day and the gate on the
+   * door can never disagree.
+   */
+  async dayTarget(userId: string, dayMarker: Date): Promise<number> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
+    const [att, leaves, holiday, comp] = await Promise.all([
+      this.prisma.attendance.findFirst({ where: { userId, date: dayMarker }, select: { status: true } }),
+      this.prisma.leaveRequest.findMany({
+        where: { userId, status: 'APPROVED', startDate: { lte: dayMarker }, endDate: { gte: dayMarker } },
+        select: { dayType: true },
+      }),
+      user?.organizationId
+        ? this.prisma.holiday.findFirst({ where: { organizationId: user.organizationId, date: dayMarker }, select: { id: true } })
+        : Promise.resolve(null),
+      this.prisma.compOffRequest.findFirst({ where: { userId, workDate: dayMarker, status: 'APPROVED' }, select: { dayType: true } }),
+    ]);
+    // An approved comp-off makes a non-working day a required one, so it is read before the
+    // weekend and holiday rules rather than after them.
+    if (comp) return comp.dayType === 'HALF' ? TimesheetsService.HALF_DAY_HOURS : TimesheetsService.FULL_DAY;
+    const dow = dayMarker.getUTCDay();
+    if (dow === 0 || dow === 6) return 0;
+    if (holiday) return 0;
+    if (att?.status === 'ON_LEAVE' || leaves.some(l => l.dayType !== 'HALF')) return 0;
+    if (att?.status === 'HALF_DAY' || leaves.some(l => l.dayType === 'HALF')) return TimesheetsService.HALF_DAY_HOURS;
+    return TimesheetsService.FULL_DAY;
+  }
+
+  /**
+   * Everything about one person's day: what is owed, what is filed, and what the clock recorded
+   * that has not been filed yet — per task, so the answer to "you owe 5 hours" can be a button
+   * rather than an errand.
+   *
+   * Tracked minutes are the sessions' overlap with the IST day, so a sitting that ran past
+   * midnight gives each day only its own share.
+   */
+  async dayStatus(userId: string, dayMarker: Date) {
+    const now = new Date();
+    const { from, to } = istDayWindow(dayMarker);
+    const cap = SESSION_CAP_MINUTES;
+    const [target, entries, sessions] = await Promise.all([
+      this.dayTarget(userId, dayMarker),
+      this.prisma.timesheet.findMany({
+        where: { userId, date: dayMarker, deletedAt: null },
+        select: { taskId: true, hoursLogged: true },
+      }),
+      this.prisma.taskWorkSession.findMany({
+        // Overlapping the day, not starting in it: a sitting begun before midnight still owns
+        // part of this day.
+        where: { userId, startedAt: { lt: to }, OR: [{ endedAt: null }, { endedAt: { gt: from } }] },
+        select: {
+          taskId: true, startedAt: true, endedAt: true, minutes: true,
+          task: {
+            select: {
+              id: true, title: true, completedAt: true,
+              currentStatus: { select: { type: true } },
+              projectTasks: { take: 1, select: { project: { select: { id: true, title: true, code: true, roundSeq: true } } } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const logged = Math.round(entries.reduce((s, e) => s + e.hoursLogged, 0) * 100) / 100;
+    const filedByTask = new Map<string, number>();
+    for (const e of entries) if (e.taskId) filedByTask.set(e.taskId, (filedByTask.get(e.taskId) ?? 0) + e.hoursLogged);
+
+    type Row = {
+      taskId: string; title: string; projectId?: string; project?: string; projectPid?: string | null; projectRound?: number;
+      minutes: number; filedHours: number; unfiledHours: number; running: boolean; finished: boolean;
+    };
+    const byTask = new Map<string, Row>();
+    for (const s of sessions) {
+      const minutes = overlapMinutes(s, from, to, now, cap);
+      if (minutes <= 0 && s.endedAt) continue;
+      const p = s.task?.projectTasks[0]?.project;
+      const row = byTask.get(s.taskId) ?? {
+        taskId: s.taskId, title: s.task?.title ?? 'Task',
+        projectId: p?.id, project: p?.title, projectPid: p?.code ?? null, projectRound: p?.roundSeq,
+        minutes: 0, filedHours: Math.round((filedByTask.get(s.taskId) ?? 0) * 100) / 100,
+        unfiledHours: 0, running: false,
+        finished: !!s.task?.completedAt || s.task?.currentStatus?.type === 'CLOSED',
+      };
+      row.minutes += minutes;
+      if (!s.endedAt) row.running = true;
+      byTask.set(s.taskId, row);
+    }
+    for (const row of byTask.values()) {
+      row.unfiledHours = Math.max(0, ceilQuarter(minutesToHours(row.minutes) - row.filedHours));
+    }
+    const tracked = [...byTask.values()].sort((a, b) => b.minutes - a.minutes);
+    const trackedMinutes = tracked.reduce((s, r) => s + r.minutes, 0);
+    const unfiledHours = Math.round(tracked.reduce((s, r) => s + r.unfiledHours, 0) * 100) / 100;
+
+    return {
+      date: dayMarker.toISOString().slice(0, 10),
+      target,
+      logged,
+      missing: Math.round(Math.max(0, target - logged) * 100) / 100,
+      complete: logged >= target,
+      trackedMinutes,
+      trackedHours: minutesToHours(trackedMinutes),
+      unfiledHours,
+      running: tracked.filter(r => r.running).length,
+      tracked,
+    };
   }
 
   /** Required days left incomplete within the last `windowDays` (default 14) for a user. */

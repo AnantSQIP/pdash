@@ -16,10 +16,13 @@ import {
   AdminShortcutsCard, QuickAccessCard, PidRequestsCard, TeamAvailabilityCard,
   PendingRequestsCard,
 } from '@/components/home/sections';
+import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
 
 export default function HomeDashboardPage() {
   return (
     <div className="min-h-full">
+      {/* Anything left unresolved behind them, before anything else on the screen. */}
+      <CatchUpBanner />
       {/* Full-width top zone — the banner now carries the Punch In/Out button, top-right. */}
       <PersonaBanner />
       <WorkspaceErrorBanner />

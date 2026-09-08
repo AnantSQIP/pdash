@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Play, Square, Check, Loader, Clock } from 'lucide-react';
+import { Play, Pause, Check, Loader, Clock, AlertTriangle } from 'lucide-react';
 import clsx from 'clsx';
-import { api, type ClosingSummary, type RunningTimer } from '@/lib/api';
+import { api, type RunningTimer } from '@/lib/api';
+import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 import { Modal } from '@/components/ui/Modal';
 import { DateField } from '@/components/ui/DateField';
 import { toastError, toast } from '@/components/ui/Toast';
@@ -23,7 +24,8 @@ export function quarterHours(minutes: number): number {
  * project, pick the task, pick the date, type the hours, save. Twelve interactions and two
  * page loads, for one task, every day.
  *
- * Here it is Start, Stop, confirm.
+ * Here it is Start and Finish. Nothing is typed and nothing is confirmed: the clock already
+ * knows how long it took, and Finish files today's share of it.
  */
 
 /** Whole minutes, shown the way people say them. */
@@ -35,103 +37,137 @@ export function humanMinutes(total: number): string {
 }
 
 /**
- * The clock, counting up.
+ * Every clock that is running, counting up.
  *
- * Ticks locally rather than polling the server: the start time is known, so the elapsed
- * figure is arithmetic. A request a second per person would be a lot of traffic to tell
- * somebody something their own machine can work out.
+ * Ticks locally rather than polling the server: each start time is known, so the elapsed figure
+ * is arithmetic. A request a second per person would be a lot of traffic to tell somebody
+ * something their own machine can work out.
+ *
+ * A list, because several clocks may run at once. When more than one does, it says so plainly —
+ * an hour with three clocks running records three hours, which is what was asked for, but it
+ * should never be a surprise at the end of the day.
  */
-export function RunningTimerBar({ running, onStopped }: { running: RunningTimer; onStopped?: (taskId: string, minutes: number) => void }) {
+export function RunningTimersBar({ running, onPaused }: {
+  running: RunningTimer[];
+  onPaused?: (taskId: string, minutes: number) => void;
+}) {
   const qc = useQueryClient();
   const [now, setNow] = useState(() => Date.now());
+  const [busyId, setBusyId] = useState('');
 
   useEffect(() => {
-    if (!running) return;
+    if (!running.length) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [running]);
+  }, [running.length]);
 
-  const stop = useMutation({
-    mutationFn: () => api.tasks.stopTimer(running!.taskId),
-    onSuccess: r => {
+  if (!running.length) return null;
+
+  const pause = async (taskId: string) => {
+    setBusyId(taskId);
+    try {
+      const r = await api.tasks.pauseTimer(taskId);
       qc.invalidateQueries({ queryKey: ['running-timer'] });
+      qc.invalidateQueries({ queryKey: ['timer-today'] });
       qc.invalidateQueries({ queryKey: ['tasks-me'] });
-      offerToLog(running!.taskId, r.minutes, onStopped);
-    },
-    onError: e => toastError(e, 'Could not stop the timer.'),
-  });
-
-  if (!running) return null;
-  const elapsed = Math.max(0, Math.floor((now - new Date(running.startedAt).getTime()) / 60_000));
+      offerToLog(taskId, r.minutes, onPaused);
+    } catch (e) { toastError(e, 'Could not pause the clock.'); }
+    finally { setBusyId(''); }
+  };
 
   return (
-    <div className="flex items-center gap-3 rounded-xl bg-gray-900 px-4 py-3 text-white">
-      <span className="relative flex h-2 w-2 shrink-0">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium">{running.task.title}</p>
-        <p className="text-[11.5px] text-gray-400 tabular-nums">Running · {humanMinutes(elapsed)}</p>
-      </div>
-      <button
-        onClick={() => stop.mutate()}
-        disabled={stop.isPending}
-        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-[12.5px] font-medium hover:bg-white/20 disabled:opacity-50"
-      >
-        {stop.isPending ? <Loader size={13} className="animate-spin" /> : <Square size={13} />} Stop
-      </button>
+    <div className="rounded-xl bg-gray-900 text-white">
+      {running.length > 1 && (
+        <p className="flex items-center gap-1.5 border-b border-white/10 px-4 py-1.5 text-[11px] text-amber-300">
+          <AlertTriangle size={11} />
+          {running.length} clocks running — each records its own hours, so the day will total more than you were here.
+        </p>
+      )}
+      <ul className="divide-y divide-white/10">
+        {running.map(r => {
+          const elapsed = Math.max(0, Math.floor((now - new Date(r.startedAt).getTime()) / 60_000));
+          return (
+            <li key={r.id} className="flex items-center gap-3 px-4 py-2.5">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-medium">{r.task.title}</p>
+                <p className="text-[11.5px] tabular-nums text-gray-400">Running · {humanMinutes(elapsed)}</p>
+              </div>
+              <button
+                onClick={() => pause(r.taskId)}
+                disabled={busyId === r.taskId}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-[12.5px] font-medium hover:bg-white/20 disabled:opacity-50"
+              >
+                {busyId === r.taskId ? <Loader size={13} className="animate-spin" /> : <Pause size={13} />} Pause
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
 
-/** Start / Stop for one task row. */
 /**
  * Stopping the clock is the moment the hours exist, so it is the moment to file them. The
  * toast carries the figure and one action; the dialog opens pre-filled if they take it.
  * Below a quarter-hour there is nothing a timesheet could record, so nothing is offered.
  */
-function offerToLog(taskId: string, minutes: number, onStopped?: (taskId: string, minutes: number) => void) {
+function offerToLog(taskId: string, minutes: number, onPaused?: (taskId: string, minutes: number) => void) {
   const h = quarterHours(minutes);
-  if (onStopped && h >= 0.25) {
-    toast(`Stopped — ${humanMinutes(minutes)} on this task.`, 'success', {
-      action: { label: `Log ${h}h to timesheet`, onClick: () => onStopped(taskId, minutes) },
+  if (onPaused && h >= 0.25) {
+    toast(`Paused — ${humanMinutes(minutes)} on this task.`, 'success', {
+      action: { label: `Log ${h}h to timesheet`, onClick: () => onPaused(taskId, minutes) },
       duration: 8000,
     });
   } else {
-    toast(`Stopped — ${humanMinutes(minutes)} on this task.`, 'success');
+    toast(`Paused — ${humanMinutes(minutes)} on this task.`, 'success');
   }
 }
 
-export function TimerButton({ taskId, running, disabled, onStopped }: { taskId: string; running: RunningTimer; disabled?: boolean; onStopped?: (taskId: string, minutes: number) => void }) {
+/**
+ * One clock, one button: Start, then Pause, then Resume.
+ *
+ * Starting no longer stops anything else. Several tasks may run at once, and the only way to
+ * stop one is to pause or finish that task — so time can never be moved off a task by pressing
+ * something on a different row, which is how hours used to end up on the wrong work.
+ */
+export function TimerButton({ taskId, running, hasTracked, disabled, onPaused }: {
+  taskId: string;
+  running: RunningTimer[];
+  /** The clock has been on this task before, so the word is Resume rather than Start. */
+  hasTracked?: boolean;
+  disabled?: boolean;
+  onPaused?: (taskId: string, minutes: number) => void;
+}) {
   const qc = useQueryClient();
-  const isThis = running?.taskId === taskId;
+  const isThis = running.some(r => r.taskId === taskId);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['running-timer'] });
+    qc.invalidateQueries({ queryKey: ['timer-today'] });
     qc.invalidateQueries({ queryKey: ['tasks-me'] });
   };
   const start = useMutation({
     mutationFn: () => api.tasks.startTimer(taskId),
-    onSuccess: r => {
-      refresh();
-      // Say plainly that the previous task was stopped — a silent switch is how people end
-      // up with hours on the wrong task.
-      if (!r.resumed && running) toast(`Started. “${running.task.title}” was stopped.`, 'info');
-    },
-    onError: e => toastError(e, 'Could not start the timer.'),
+    onSuccess: refresh,
+    onError: e => toastError(e, 'Could not start the clock.'),
   });
-  const stop = useMutation({
-    mutationFn: () => api.tasks.stopTimer(taskId),
-    onSuccess: r => { refresh(); offerToLog(taskId, r.minutes, onStopped); },
-    onError: e => toastError(e, 'Could not stop the timer.'),
+  const pause = useMutation({
+    mutationFn: () => api.tasks.pauseTimer(taskId),
+    onSuccess: r => { refresh(); offerToLog(taskId, r.minutes, onPaused); },
+    onError: e => toastError(e, 'Could not pause the clock.'),
   });
-  const busy = start.isPending || stop.isPending;
+  const busy = start.isPending || pause.isPending;
+  const label = isThis ? 'Pause' : hasTracked ? 'Resume' : 'Start';
 
   return (
     <button
-      onClick={() => (isThis ? stop.mutate() : start.mutate())}
+      onClick={() => (isThis ? pause.mutate() : start.mutate())}
       disabled={disabled || busy}
-      title={isThis ? 'Stop the clock' : 'Start working on this'}
+      title={isThis ? 'Pause the clock — the time so far is kept' : hasTracked ? 'Pick this back up' : 'Start working on this'}
       className={clsx(
         'inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-40',
         isThis
@@ -139,152 +175,58 @@ export function TimerButton({ taskId, running, disabled, onStopped }: { taskId: 
           : 'text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50',
       )}
     >
-      {busy ? <Loader size={12} className="animate-spin" /> : isThis ? <Square size={12} /> : <Play size={12} />}
-      {isThis ? 'Stop' : 'Start'}
+      {busy ? <Loader size={12} className="animate-spin" /> : isThis ? <Pause size={12} /> : <Play size={12} />}
+      {label}
     </button>
   );
 }
 
 /**
- * Closing a task.
+ * Finish: one click, and the task is done.
  *
- * The hours box is pre-filled from the timer but editable, and the edited figure is what is
- * kept. A timer left running would otherwise poison the expectation for every future task of
- * this kind, and nobody reads intent as well as the person who did the work.
+ * Nothing is asked for. The clock already knows how long it took, that figure teaches the
+ * estimate, and today's share of it goes to the timesheet — so the person who did the work
+ * types nothing, and the numbers still add up. What happened is said afterwards, in the toast,
+ * where it can be read and ignored rather than filled in and guessed at.
  */
-export function CompleteTaskDialog({
-  taskId, onClose, onDone, closedStatusId,
-}: {
+export function FinishButton({ taskId, disabled, onDone }: {
   taskId: string;
-  onClose: () => void;
-  onDone: () => void;
-  closedStatusId?: string;
+  disabled?: boolean;
+  onDone?: () => void;
 }) {
-  const [hours, setHours] = useState<string>('');
-  const [touched, setTouched] = useState(false);
-
-  const { data: summary, isLoading } = useQuery<ClosingSummary>({
-    queryKey: ['closing-summary', taskId],
-    queryFn: () => api.tasks.closingSummary(taskId),
-    refetchOnMount: 'always',
-  });
-
-  // Pre-fill once, from the timer. Never overwrite what the person has typed.
-  useEffect(() => {
-    if (summary && !touched) setHours(String(summary.suggestedHours || ''));
-  }, [summary, touched]);
-
-  const submit = useMutation({
-    mutationFn: () => api.tasks.completeWithHours(taskId, Number(hours), closedStatusId),
+  const qc = useQueryClient();
+  const finish = useMutation({
+    mutationFn: () => api.tasks.finishTask(taskId),
     onSuccess: r => {
-      const learned = r.counted
-        ? ` ${r.role.charAt(0) + r.role.slice(1).toLowerCase()} work of this kind now averages ${r.expectedHoursForMyRole}h over ${r.basedOnCompletions} ${r.basedOnCompletions === 1 ? 'completion' : 'completions'}.`
-        : '';
-      const ledger = r.timesheetHours > 0 ? ` ${r.timesheetHours}h added to your timesheet.` : '';
-      toast(`Closed at ${r.myHours}h.${ledger}${learned}`, 'success');
-      // The close itself succeeded; only the ledger needs a hand. Say so separately, and loudly.
-      if (r.timesheetWarning) toast(r.timesheetWarning, 'warning', { duration: 12000 });
-      onDone();
+      invalidateTimesheetCaches(qc);
+      qc.invalidateQueries({ queryKey: ['running-timer'] });
+      qc.invalidateQueries({ queryKey: ['timer-today'] });
+      const s = r.settle;
+      const took = s && s.trackedMinutes > 0 ? ` It took ${humanMinutes(s.trackedMinutes)}.` : '';
+      const filed = s && s.timesheetHours > 0 ? ` ${s.timesheetHours}h filed to today's timesheet.` : '';
+      toast(`Finished.${took}${filed}`, 'success');
+      // No time on the clock at all: say so once, rather than leaving somebody to find an empty
+      // day at punch-out and wonder where their afternoon went.
+      if (s && s.trackedMinutes === 0) {
+        toast('The clock was never started on this task, so nothing was filed. Use Log time if you worked on it.', 'info', { duration: 9000 });
+      }
+      if (s?.timesheetWarning) toast(s.timesheetWarning, 'warning', { duration: 12000 });
+      onDone?.();
     },
-    onError: e => toastError(e, 'Could not close the task.'),
+    onError: e => toastError(e, 'Could not finish the task.'),
   });
-
-  const n = Number(hours);
-  const valid = hours.trim() !== '' && Number.isFinite(n) && n >= 0 && n <= 999;
-  const overExpected = summary?.expectedHoursForMyRole != null && valid && n > summary.expectedHoursForMyRole;
 
   return (
-    <Modal
-      title="Close this task"
-      subtitle={summary?.title}
-      size="sm"
-      onClose={onClose}
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg px-3.5 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100">
-            Cancel
-          </button>
-          <button
-            onClick={() => submit.mutate()}
-            disabled={!valid || submit.isPending}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3.5 py-2 text-[13px] font-medium text-white hover:bg-gray-800 disabled:opacity-40"
-          >
-            {submit.isPending ? <Loader size={13} className="animate-spin" /> : <Check size={13} />} Close task
-          </button>
-        </div>
-      }
+    <button
+      onClick={() => finish.mutate()}
+      disabled={disabled || finish.isPending}
+      title="Mark this done. The clock stops and today's time is filed."
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-40"
     >
-      {isLoading || !summary ? (
-        <p className="py-6 text-center text-[13px] text-gray-400">
-          <Loader size={14} className="mr-2 inline animate-spin" /> Loading…
-        </p>
-      ) : (
-        <div className="flex flex-col gap-4">
-          <div>
-            <label htmlFor="hours" className="mb-1.5 block text-[12.5px] font-medium text-gray-700">
-              How long did your part take?
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id="hours"
-                type="number" min={0} max={999} step={0.25}
-                value={hours}
-                onChange={e => { setTouched(true); setHours(e.target.value); }}
-                className="w-28 rounded-lg bg-white px-3 py-2 text-[14px] tabular-nums text-gray-900 ring-1 ring-inset ring-gray-950/[0.10] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-500"
-              />
-              <span className="text-[13px] text-gray-500">hours</span>
-            </div>
-            <p className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-gray-400">
-              <Clock size={11} />
-              Your timer recorded {humanMinutes(summary.trackedMinutes)}. Correct it if that is not right —
-              what you enter here is what is kept.
-            </p>
-            {summary.loggedHours > 0 && (
-              <p className="mt-1 text-[11.5px] text-gray-400">
-                Your timesheet already holds <span className="tabular-nums text-gray-600">{summary.loggedHours}h</span> for this task;
-                closing adds only anything above that.
-              </p>
-            )}
-          </div>
-
-          {/* What this kind of work usually takes, and on how much evidence. */}
-          <div className="rounded-lg bg-gray-50 px-3.5 py-3 text-[12.5px] ring-1 ring-inset ring-gray-950/[0.05]">
-            {summary.expectedHoursForMyRole == null ? (
-              <p className="text-gray-500">
-                Nothing like this has been timed yet, so your figure sets the first expectation for
-                <span className="font-medium text-gray-700"> {summary.role.toLowerCase()}</span> work on this task.
-              </p>
-            ) : (
-              <>
-                <p className="text-gray-600">
-                  <span className="font-medium text-gray-900 tabular-nums">{summary.expectedHoursForMyRole}h</span>
-                  {' '}is what {summary.role.toLowerCase()} work on this task usually takes, over{' '}
-                  <span className="tabular-nums">{summary.basedOnCompletions}</span>{' '}
-                  {summary.basedOnCompletions === 1 ? 'completion' : 'completions'}.
-                </p>
-                {summary.expectedHoursForTask != null && summary.expectedHoursForTask !== summary.expectedHoursForMyRole && (
-                  <p className="mt-1 text-gray-500">
-                    The whole task, across every role, usually takes{' '}
-                    <span className="tabular-nums">{summary.expectedHoursForTask}h</span>.
-                  </p>
-                )}
-                {overExpected && (
-                  <p className="mt-1.5 text-amber-700">
-                    That is longer than usual — worth a note on the task while it is fresh.
-                  </p>
-                )}
-              </>
-            )}
-            {summary.basedOnCompletions === 1 && (
-              <p className="mt-1.5 text-gray-400">Based on a single completion, so treat it lightly.</p>
-            )}
-          </div>
-        </div>
-      )}
-    </Modal>
+      {finish.isPending ? <Loader size={12} className="animate-spin" /> : <Check size={12} />} Finish
+    </button>
   );
 }
-
 
 /**
  * Log time on a task, from the row it is on.

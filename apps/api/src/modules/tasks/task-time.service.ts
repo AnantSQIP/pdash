@@ -2,6 +2,9 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
 import { normaliseTitle, elapsedMinutes } from './task-standards';
+import { startOfIstDay } from '../../common/dates';
+import { istDayWindow, overlapMinutes, totalMinutes as sessionMinutes, ceilQuarter, minutesToHours, SESSION_CAP_MINUTES } from '../../common/work-time';
+import { serialize, timerKeyFor } from '../../common/db/serialize';
 import { TimesheetsService } from '../timesheets/timesheets.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 
@@ -23,7 +26,8 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
  * longer than the 9-to-6 day and short enough that a forgotten timer cannot propose a number
  * nobody would type.
  */
-const MAX_SESSION_MINUTES = 12 * 60;
+/** Re-exported name for the shared cap; see common/work-time.ts. */
+const MAX_SESSION_MINUTES = SESSION_CAP_MINUTES;
 
 /**
  * Below this a completion measures nothing and is not counted as a sample. A task closed at
@@ -124,23 +128,35 @@ export class TaskTimeService {
     return stale.length;
   }
 
-  /** The session this person currently has running, if any. */
+  /**
+   * Every session this person currently has running.
+   *
+   * A list, not one: people are allowed several clocks at once. Each records its own real
+   * elapsed time, so an hour spent switching between three tasks reads as an hour on each —
+   * which is what a stopwatch does, and what the person pressed. Nothing is silently divided.
+   * The consequence, that a day can total more hours than were lived, is surfaced rather than
+   * hidden: My Tasks says how many clocks are running, and the punch-out check compares tracked
+   * hours against the hours actually attended.
+   */
   async running(userId = this.actor()) {
     await this.reconcileStale(userId);
-    return this.prisma.taskWorkSession.findFirst({
+    return this.prisma.taskWorkSession.findMany({
       where: { userId, endedAt: null },
-      orderBy: { startedAt: 'desc' },
+      orderBy: { startedAt: 'asc' },
       select: { id: true, taskId: true, startedAt: true, task: { select: { id: true, title: true } } },
     });
   }
 
   /**
-   * Start work on a task.
+   * Start — or resume — work on a task.
    *
-   * Idempotent: pressing Start on a task already running returns the session in progress
-   * rather than opening a second one. Any session on a DIFFERENT task is stopped first — a
-   * person does one thing at a time, and having to remember to stop the last task is exactly
-   * the errand this is meant to remove.
+   * Idempotent: pressing Start on a task already running returns the session in progress rather
+   * than opening a second one. Sessions on OTHER tasks are left alone; running several clocks is
+   * allowed on purpose, and the only way to stop one is to pause or finish that task.
+   *
+   * Locked per person, because "already running?" is a question asked and then acted on. Two
+   * devices pressing Start in the same instant both read no session and both opened one, which
+   * doubled the day's tracked time from a single sitting.
    */
   async start(taskId: string) {
     const userId = this.actor();
@@ -152,17 +168,9 @@ export class TaskTimeService {
     await this.reconcileStale(userId);
     const now = new Date();
 
-    return this.prisma.$transaction(async tx => {
-      const open = await tx.taskWorkSession.findMany({ where: { userId, endedAt: null } });
-      const already = open.find(s => s.taskId === taskId);
+    return serialize(this.prisma, timerKeyFor(userId), async tx => {
+      const already = await tx.taskWorkSession.findFirst({ where: { userId, taskId, endedAt: null } });
       if (already) return { id: already.id, taskId, startedAt: already.startedAt, resumed: true };
-
-      for (const s of open) {
-        await tx.taskWorkSession.update({
-          where: { id: s.id },
-          data: { endedAt: now, minutes: elapsedMinutes(s.startedAt, now) },
-        });
-      }
       // startedAt records when the task was FIRST picked up, and is never overwritten.
       await tx.task.updateMany({ where: { id: taskId, startedAt: null }, data: { startedAt: now } });
       const created = await tx.taskWorkSession.create({
@@ -174,13 +182,13 @@ export class TaskTimeService {
   }
 
   /**
-   * Stop the running session on a task.
+   * Pause the clock on a task. Resuming is simply Start again.
    *
    * Deliberately does NOT require the task still to be assigned to you. Being unassigned
    * while your timer runs would otherwise leave you holding a session you are not allowed to
    * close, accruing hours nobody can stop.
    */
-  async stop(taskId: string) {
+  async pause(taskId: string) {
     const userId = this.actor();
     await this.reconcileStale(userId);
     const now = new Date();
@@ -188,16 +196,53 @@ export class TaskTimeService {
       where: { taskId, userId, endedAt: null },
       orderBy: { startedAt: 'desc' },
     });
-    if (!open) return { stopped: false, minutes: 0, totalMinutes: await this.minutesOn(taskId) };
+    if (!open) return { paused: false, minutes: 0, totalMinutes: await this.minutesOn(taskId), todayMinutes: await this.minutesToday(taskId, userId) };
     const minutes = elapsedMinutes(open.startedAt, now);
     await this.prisma.taskWorkSession.update({
       where: { id: open.id },
       data: { endedAt: now, minutes },
     });
     // `minutes` is THIS sitting — what the person just did, and what the toast offers to log.
-    // The cumulative figure is returned beside it; it must never be the one pre-filled, or a
+    // The cumulative figures are returned beside it; neither may be the one pre-filled, or a
     // second session of the day books the first one again.
-    return { stopped: true, minutes, totalMinutes: await this.minutesOn(taskId) };
+    return { paused: true, minutes, totalMinutes: await this.minutesOn(taskId), todayMinutes: await this.minutesToday(taskId, userId) };
+  }
+
+  /**
+   * Stop every clock this person has running, and say what was stopped.
+   *
+   * Punching out calls this, and so does the 23:59 sweep that closes a forgotten day: a timer
+   * that outlives the day it belongs to invents hours nobody worked, and until now the only
+   * thing standing between that and the timesheet was a twelve-hour cap.
+   */
+  async pauseAll(userId: string): Promise<{ stopped: number; minutes: number }> {
+    await this.reconcileStale(userId);
+    const now = new Date();
+    const open = await this.prisma.taskWorkSession.findMany({ where: { userId, endedAt: null } });
+    let minutes = 0;
+    for (const s of open) {
+      const m = elapsedMinutes(s.startedAt, now);
+      minutes += m;
+      await this.prisma.taskWorkSession.update({ where: { id: s.id }, data: { endedAt: now, minutes: m } });
+    }
+    return { stopped: open.length, minutes };
+  }
+
+  /** Minutes this person recorded on a task on one IST day — a sitting across midnight splits. */
+  async minutesToday(taskId: string, userId: string, dayMarker = startOfIstDay(new Date())): Promise<number> {
+    const { from, to } = istDayWindow(dayMarker);
+    const now = new Date();
+    const sessions = await this.prisma.taskWorkSession.findMany({
+      where: { taskId, userId, startedAt: { lt: to }, OR: [{ endedAt: null }, { endedAt: { gt: from } }] },
+      select: { startedAt: true, endedAt: true, minutes: true },
+    });
+    return sessions.reduce((n, s) => n + overlapMinutes(s, from, to, now, MAX_SESSION_MINUTES), 0);
+  }
+
+  /** What this person has tracked today, per task, and how much of it is already filed. */
+  async todayBoard(userId = this.actor()) {
+    await this.reconcileStale(userId);
+    return this.timesheets.dayStatus(userId, startOfIstDay(new Date()));
   }
 
   /** Total recorded minutes on a task — everyone's sessions, plus any still running. */
@@ -213,41 +258,6 @@ export class TaskTimeService {
         : Math.min(MAX_SESSION_MINUTES, elapsedMinutes(s.startedAt, now))),
       0,
     );
-  }
-
-  /**
-   * What to put in front of the person on closing: what their own timer says, what their
-   * ROLE is expected to take, and what the whole task is expected to take across every role.
-   */
-  async closingSummary(taskId: string) {
-    const userId = this.actor();
-    const { task, role } = await this.assertMine(taskId, userId);
-    const organizationId = await this.orgOf(userId);
-    const titleKey = normaliseTitle(task.title);
-
-    const [mineMinutes, standards, ledger] = await Promise.all([
-      this.minutesFor(taskId, userId),
-      this.prisma.taskStandard.findMany({ where: { organizationId, titleKey } }),
-      this.prisma.timesheet.aggregate({ where: { userId, taskId, deletedAt: null }, _sum: { hoursLogged: true } }),
-    ]);
-    const mineStd = standards.find(x => x.role === role) ?? null;
-    const assignment = task.assignees.find(a => a.userId === userId && (a.role ?? 'ANALYST').toUpperCase() === role);
-
-    return {
-      taskId,
-      title: task.title,
-      role,
-      trackedMinutes: mineMinutes,
-      /** Pre-fill for the hours box — one decimal is enough to confirm or correct. */
-      suggestedHours: Math.round((mineMinutes / 60) * 10) / 10,
-      expectedHoursForMyRole: mineStd?.expectedHours ?? null,
-      basedOnCompletions: mineStd?.completions ?? 0,
-      /** Every role's expectation summed: what the task as a whole is expected to cost. */
-      expectedHoursForTask: standards.reduce((sum, x) => sum + (x.expectedHours ?? 0), 0) || null,
-      alreadyCounted: assignment?.standardMinutes != null,
-      /** Hours already in this person's timesheet for the task. Closing adds only any shortfall. */
-      loggedHours: Math.round((ledger._sum.hoursLogged ?? 0) * 100) / 100,
-    };
   }
 
   /** Minutes this ONE person has recorded on a task — their part, not everybody's. */
@@ -302,188 +312,165 @@ export class TaskTimeService {
   }
 
   /**
-   * Close a task with the hours it actually took, and fold that into what this kind of task
-   * is expected to take.
+   * Everything that must happen for the person completing a task: the clock stops, what it
+   * recorded becomes the sample the estimate learns from, and today's share of it goes to the
+   * timesheet.
    *
-   * Three shapes, because a task does not always contribute the same way twice:
+   * There is no dialog and nothing to type. The figure a person used to confirm by hand is now
+   * whatever their own clock recorded, which is both less work and harder to get wrong.
    *
-   *   never counted before      → add the hours, and one sample
-   *   counted, same title       → post only the DIFFERENCE, no new sample. One task counts
-   *                               once at its final total however often it is reopened.
-   *   counted, title CHANGED    → withdraw from the old standard entirely, add to the new.
-   *                               Without this the old standard keeps a sample for work that
-   *                               no longer carries that name.
+   * Called by Finish AND by every status change that closes a task, so a task ticked complete in
+   * a project list behaves exactly like one finished in My Tasks. Two doors with two different
+   * outcomes was the largest inconsistency in this module.
    *
-   * A close at zero hours counts as no sample at all, and withdraws any earlier one: it
-   * measures nothing, and averaging it in would drag the expectation down while telling us
-   * nothing about the work.
-   */
-  async complete(taskId: string, hoursTaken: number, closedStatusId?: string) {
-    return this.record(taskId, hoursTaken, { close: true, closedStatusId });
-  }
-
-  /**
-   * Record MY hours on a task without closing it.
+   * The estimate learns in the same three shapes as before, because a task does not always
+   * contribute the same way twice:
    *
-   * The analyst finishes their part and hands over; the reviewer closes later. Forcing the
-   * analyst to wait for the close before their hours are recorded would either lose the
-   * figure or make somebody else guess it.
-   */
-  async logMyPart(taskId: string, hoursTaken: number) {
-    return this.record(taskId, hoursTaken, { close: false });
-  }
-
-  /**
-   * Record one person's confirmed hours against their ROLE's standard, and optionally close
-   * the task.
-   *
-   * Three shapes, because a person does not always contribute the same way twice:
-   *
-   *   never counted before     → add the hours, and one sample
+   *   never counted before     → add the minutes, and one sample
    *   counted, same title      → post only the DIFFERENCE, no new sample. One person's part
    *                              counts once at its final total however often it is reopened.
    *   counted, title CHANGED   → withdraw from the old standard entirely, add to the new.
-   *                              Otherwise the old keeps a sample for work no longer carrying
-   *                              that name, and the new is understated.
    *
-   * Zero hours count as no sample and withdraw any earlier one: a zero measures nothing, and
-   * averaging it in would drag the expectation down while carrying no information.
+   * A task finished with the clock never started contributes NOTHING — it neither adds a sample
+   * nor withdraws an earlier one. The old dialog recorded a zero in that case, which threw away
+   * a real measurement and dragged the expectation down while measuring nothing at all.
    */
-  private async record(taskId: string, hoursTaken: number, opts: { close: boolean; closedStatusId?: string }) {
+  async settleClose(taskId: string, opts: { requireMine?: boolean } = {}) {
     const userId = this.actor();
-    const { task, assignment, role } = await this.assertMine(taskId, userId);
-    await this.access.assertTaskWritable(taskId);
-    if (!Number.isFinite(hoursTaken) || hoursTaken < 0) {
-      throw new BadRequestException('Hours must be a number of zero or more.');
+    const nothing = {
+      settled: false, role: null as string | null, trackedMinutes: 0, todayMinutes: 0,
+      counted: false, expectedHoursForMyRole: null as number | null, basedOnCompletions: 0,
+      timesheetHours: 0, timesheetWarning: null as string | null,
+    };
+
+    // Finish demands a seat on the task. A status change made by somebody else settles nothing:
+    // a manager closing an analyst's task has no clock of their own to stop and cannot file
+    // hours into another person's timesheet.
+    let found;
+    if (opts.requireMine) {
+      found = await this.assertMine(taskId, userId);
+      await this.access.assertTaskWritable(taskId);
+    } else {
+      try { found = await this.assertMine(taskId, userId); } catch { return nothing; }
     }
-    if (hoursTaken > 999) {
-      throw new BadRequestException('That is more hours than a task can take — please check the figure.');
-    }
+    const { task, assignment, role } = found;
 
     const organizationId = await this.orgOf(userId);
     const newKey = normaliseTitle(task.title);
-    const minutes = Math.max(0, Math.round(hoursTaken * 60));
-    // A close must move the visible status too. The screen names the Closed status; an API
-    // caller may not — and a task with completedAt set but an Open status reads as open, with
-    // Start and Close still offered. Resolve it from the task's own workflow when unnamed.
-    const closedStatusId = opts.close ? (opts.closedStatusId ?? await this.closedStatusFor(taskId)) : undefined;
-    const counts = minutes >= MIN_SAMPLE_MINUTES && newKey.length > 0;
     const now = new Date();
+    const dayMarker = startOfIstDay(now);
+    const { from: dayFrom, to: dayTo } = istDayWindow(dayMarker);
 
     const outcome = await this.prisma.$transaction(async tx => {
-      // Stop this person's clock so the sessions agree with the figure being recorded.
+      // Stop this person's clock on THIS task. Their other tasks keep running: several clocks at
+      // once is deliberate, and finishing one says nothing about the others.
       const open = await tx.taskWorkSession.findMany({ where: { taskId, userId, endedAt: null } });
-      for (const x of open) {
+      for (const s of open) {
         await tx.taskWorkSession.update({
-          where: { id: x.id },
-          data: { endedAt: now, minutes: elapsedMinutes(x.startedAt, now) },
+          where: { id: s.id },
+          data: { endedAt: now, minutes: elapsedMinutes(s.startedAt, now) },
         });
       }
+      // Read the sessions AFTER closing them, so both figures include the sitting just ended.
+      const sessions = await tx.taskWorkSession.findMany({
+        where: { taskId, userId },
+        select: { startedAt: true, endedAt: true, minutes: true },
+      });
+      const tracked = sessions.reduce((n, s) => n + sessionMinutes(s, now, MAX_SESSION_MINUTES), 0);
+      const todayMinutes = sessions.reduce((n, s) => n + overlapMinutes(s, dayFrom, dayTo, now, MAX_SESSION_MINUTES), 0);
 
+      const counts = tracked >= MIN_SAMPLE_MINUTES && newKey.length > 0 && !!organizationId;
       const had = assignment.standardKey !== null && assignment.standardMinutes !== null;
       let result: any = null;
-
-      if (had && assignment.standardKey === newKey && counts) {
-        result = await this.applyDelta(tx, organizationId, newKey, role, task.title.trim(),
-          minutes - (assignment.standardMinutes ?? 0), 0);
-      } else {
-        if (had) {
-          await this.applyDelta(tx, organizationId, assignment.standardKey!, role, task.title.trim(),
-            -(assignment.standardMinutes ?? 0), -1);
-        }
-        if (counts) {
-          result = await this.applyDelta(tx, organizationId, newKey, role, task.title.trim(), minutes, 1);
+      // Nothing on the clock means nothing was measured, and a thing not measured must not be
+      // allowed to change what this kind of task is expected to take — in EITHER direction. The
+      // old dialog recorded a zero here, which withdrew a real earlier measurement and dragged
+      // the expectation down on the strength of no information at all.
+      if (counts) {
+        if (had && assignment.standardKey === newKey) {
+          // The same person's same task, measured again: post the DIFFERENCE, not a second
+          // sample, however many times it is reopened and finished.
+          result = await this.applyDelta(tx, organizationId!, newKey, role, task.title.trim(),
+            tracked - (assignment.standardMinutes ?? 0), 0);
+        } else {
+          // Renamed since it was counted: the old standard keeps a sample for work that no
+          // longer carries that name, so it is withdrawn and posted to the new one.
+          if (had) {
+            await this.applyDelta(tx, organizationId!, assignment.standardKey!, role, task.title.trim(),
+              -(assignment.standardMinutes ?? 0), -1);
+          }
+          result = await this.applyDelta(tx, organizationId!, newKey, role, task.title.trim(), tracked, 1);
         }
       }
 
       await tx.taskAssignee.update({
         where: { id: assignment.id },
         data: {
-          confirmedHours: hoursTaken,
-          standardKey: counts ? newKey : null,
-          standardMinutes: counts ? minutes : null,
+          // Only a real measurement moves either figure. A finish with no clock leaves the seat's
+          // confirmed hours and its sample exactly as they were.
+          ...(counts ? { confirmedHours: minutesToHours(tracked), standardKey: newKey, standardMinutes: tracked } : {}),
         },
-      });
-
-      // NOT actualHours. That figure has one writer — the timesheet ledger — and closing feeds
-      // the ledger (below, after this transaction) rather than keeping a rival number that the
-      // next timesheet would silently overwrite.
-      const updated = await tx.task.update({
-        where: { id: taskId },
-        data: {
-          ...(opts.close
-            ? {
-                completedAt: now,
-                completionPercentage: 100,
-                ...(closedStatusId ? { currentWorkflowStatusId: closedStatusId } : {}),
-              }
-            : {}),
-        },
-        select: { id: true, actualHours: true, completedAt: true },
       });
 
       return {
-        ...updated,
-        role,
-        myHours: hoursTaken,
+        role, trackedMinutes: tracked, todayMinutes, counted: counts,
         expectedHoursForMyRole: result?.expectedHours ?? null,
         basedOnCompletions: result?.completions ?? 0,
-        counted: counts,
       };
     });
 
     // Outside the transaction: the ledger has its own lock (per person per day) and its own
-    // rules, and a refusal there must not undo the close.
-    const ledger = await this.reflectInTimesheet(userId, taskId, hoursTaken, opts.close);
-    return { ...outcome, ...ledger };
+    // rules, and a refusal there must never undo a finish.
+    const ledger = await this.fileDay(userId, taskId, outcome.todayMinutes, dayMarker);
+    return { settled: true, ...outcome, ...ledger };
   }
 
   /**
-   * Make the person's timesheet on this task add up to at least the hours they just confirmed.
+   * File the part of today the clock recorded on this task and the timesheet has not got yet.
    *
-   * "Three interactions, not twelve" only holds if closing a task ALSO files the time. But a
-   * person who logged their hours day by day must not get them booked twice, so this tops up
-   * rather than adds: if they have already logged 6h and confirm 8h, one 2h entry is written
-   * for today; if they have logged 8h or more, nothing is. Either way actualHours is then
-   * recomputed from the ledger, which is its only source.
+   * TODAY only, and this task only. A task worked across several days is paused at the end of
+   * each one and those days are filed by hand; finishing it on the last day must not sweep the
+   * earlier days into today's entry, which would move real work onto the wrong date and bill it
+   * there. The task's own total stays complete regardless — it is the sum of every session.
    *
-   * The ledger can refuse — the 16h day cap, a closed matter, a backdating window. A refusal is
-   * returned as a warning, not thrown: the task is closed and the standard is learned; only the
-   * timesheet needs a hand, and the screen says so.
+   * A top-up, not an addition: somebody who already logged two of today's three tracked hours
+   * gets one more, not three more. Somebody who logged more than the clock saw gets nothing —
+   * their own figure stands, because they were there and the clock was not.
+   *
+   * The ledger can refuse — the 16h day cap, a closed matter, a backdating window. A refusal
+   * comes back as a warning, never thrown: the task is finished and the estimate is learned;
+   * only the timesheet needs a hand, and the screen says so.
    */
-  private async reflectInTimesheet(userId: string, taskId: string, hoursTaken: number, closing: boolean) {
-    const verb = closing ? 'Closed' : 'Recorded';
+  private async fileDay(userId: string, taskId: string, todayMinutes: number, dayMarker: Date) {
+    if (todayMinutes < 1) return { timesheetHours: 0, timesheetWarning: null as string | null };
     const agg = await this.prisma.timesheet.aggregate({
-      where: { userId, taskId, deletedAt: null },
+      where: { userId, taskId, deletedAt: null, date: dayMarker },
       _sum: { hoursLogged: true },
     });
-    const logged = agg._sum.hoursLogged ?? 0;
-    // Quarter-hours, rounded UP so a 0.1h shortfall still becomes a real entry.
-    const shortfall = Math.ceil((hoursTaken - logged) * 4) / 4;
+    const already = agg._sum.hoursLogged ?? 0;
+    // Quarter-hours, rounded UP so seven minutes of real work still becomes an entry.
+    const shortfall = ceilQuarter(minutesToHours(todayMinutes) - already);
     if (shortfall < 0.25) {
       await this.timesheets.syncTaskActualHours(taskId);
       return { timesheetHours: 0, timesheetWarning: null as string | null };
     }
-    // One entry can hold a 16-hour day and no more. A larger shortfall is work from other days
-    // that was never logged; today's entry takes what it can and the rest is SAID, not dropped.
     const topUp = Math.min(16, shortfall);
     const leftover = Math.round((shortfall - topUp) * 100) / 100;
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    const day = dayMarker.toISOString().slice(0, 10);
     try {
       await this.timesheets.create({
-        taskId, date: today, hoursLogged: topUp, billable: true,
-        notes: closing ? 'Recorded when closing the task' : 'Recorded from My Tasks',
+        taskId, date: day, hoursLogged: topUp, billable: true, notes: 'Tracked on My Tasks',
       } as any, { skipIdenticalCheck: true });
       return {
         timesheetHours: topUp,
         timesheetWarning: leftover > 0
-          ? `${topUp}h added to today's timesheet; the remaining ${leftover}h needs logging against the days it was worked.`
+          ? `${topUp}h was filed for today; the remaining ${leftover}h needs logging against the days it was worked.`
           : null as string | null,
       };
     } catch (e) {
       await this.timesheets.syncTaskActualHours(taskId);
       const msg = e instanceof Error ? e.message : 'The timesheet could not be written.';
-      return { timesheetHours: 0, timesheetWarning: `${verb}, but ${topUp}h could not be added to your timesheet: ${msg}` };
+      return { timesheetHours: 0, timesheetWarning: `Finished, but ${topUp}h could not be filed to your timesheet: ${msg}` };
     }
   }
 
@@ -544,7 +531,7 @@ export class TaskTimeService {
   }
 
   /** The CLOSED-type status of the workflow this task is in, or null if it has no status yet. */
-  private async closedStatusFor(taskId: string): Promise<string | undefined> {
+  async closedStatusFor(taskId: string): Promise<string | undefined> {
     const t = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { currentStatus: { select: { workflowId: true } } },

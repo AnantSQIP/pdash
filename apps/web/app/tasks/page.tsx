@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, RotateCcw, Loader, Clock } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
@@ -12,9 +12,11 @@ import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE, nextUpFirst } from '@/lib/tasks';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
-import { RunningTimerBar, TimerButton, CompleteTaskDialog, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
+import { RunningTimersBar, TimerButton, FinishButton, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
 import { pidLabel } from '@/lib/mock-data';
-import type { RunningTimer } from '@/lib/api';
+import type { RunningTimer, DayStatus } from '@/lib/api';
+import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
+import { TrackedTodayBar } from '@/components/tasks/TrackedTodayBar';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 const PRIORITY_META = {
@@ -83,18 +85,29 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
   const [search, setSearch] = useState('');
-  const [closing, setClosing] = useState<ApiTask | null>(null);
   // A row's Log-time dialog; `hours` is pre-filled when it was opened from a stopped timer.
   const [logging, setLogging] = useState<{ task: ApiTask; hours?: number } | null>(null);
 
-  // The one task whose clock is running for this person. Polled gently — somebody may start
-  // a task on their phone, and a stale bar claiming nothing is running is worse than none.
-  const { data: running = null } = useQuery<RunningTimer>({
+  // Every clock this person has running — several at once is allowed. Polled gently: somebody
+  // may start a task on their phone, and a stale bar claiming nothing is running is worse than
+  // no bar at all.
+  const { data: running = [] } = useQuery<RunningTimer[]>({
     queryKey: ['running-timer'],
-    queryFn: () => api.tasks.runningTimer(),
+    queryFn: () => api.tasks.runningTimers(),
     refetchInterval: 60_000,
     refetchOnMount: 'always',
   });
+
+  // What the clock recorded today and how much of it the timesheet has. Filing the day is a
+  // condition of punching out, so the arithmetic belongs here, where the work is, rather than
+  // being sprung on somebody at the door.
+  const { data: today } = useQuery<DayStatus>({
+    queryKey: ['timer-today'],
+    queryFn: () => api.tasks.today(),
+    refetchInterval: 60_000,
+    refetchOnMount: 'always',
+  });
+  const trackedByTask = useMemo(() => new Map((today?.tracked ?? []).map(t => [t.taskId, t])), [today]);
 
   const meKey = ['tasks-me', currentUser?.id];
 
@@ -190,13 +203,14 @@ export default function TasksPage() {
   return (
     <div className="min-h-full">
       {/* Header */}
+      <CatchUpBanner />
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">My Tasks</h1>
           <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
         </div>
         <div className="flex items-center gap-3">
-          {running && <div className="w-[min(22rem,60vw)]"><RunningTimerBar running={running} onStopped={openLogFromTimer} /></div>}
+          {running.length > 0 && <div className="w-[min(24rem,60vw)]"><RunningTimersBar running={running} onPaused={openLogFromTimer} /></div>}
           <Link
             href="/projects"
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
@@ -206,6 +220,8 @@ export default function TasksPage() {
           </Link>
         </div>
       </div>
+
+      {today && <TrackedTodayBar day={today} onFiled={afterTimeLogged} />}
 
       {/* Filters */}
       <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 sm:gap-4 flex-wrap">
@@ -313,6 +329,10 @@ export default function TasksPage() {
                 onStatus={id => changeStatus(task, id)}
                 onProgress={p => changeProgress(task, p)}
                 onLogTime={() => setLogging({ task })}
+                running={running}
+                hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0}
+                onPaused={openLogFromTimer}
+                onFinished={afterTimeLogged}
               />
             ))}
           </div>
@@ -402,7 +422,7 @@ export default function TasksPage() {
                       modules; here they are one. */}
                   <td className="sticky right-0 z-10 bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)] group-hover:bg-gray-50">
                     <div className="flex items-center justify-end gap-1.5">
-                      {!closed && <TimerButton taskId={task.id} running={running} onStopped={openLogFromTimer} />}
+                      {!closed && <TimerButton taskId={task.id} running={running} hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0} onPaused={openLogFromTimer} />}
                       {!closed && (() => {
                         // The ledger refuses time on a completed or closed matter; say so here
                         // rather than after a round trip.
@@ -419,15 +439,7 @@ export default function TasksPage() {
                           </button>
                         );
                       })()}
-                      {!closed && (
-                        <button
-                          onClick={() => setClosing(task)}
-                          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
-                          title="Close this task and record the hours"
-                        >
-                          <CheckCircle size={12} /> Close
-                        </button>
-                      )}
+                      {!closed && <FinishButton taskId={task.id} onDone={afterTimeLogged} />}
                       {closed && <ReopenButton task={task} openStatusId={statuses.find(x => x.type === OPEN_TYPE)?.id} />}
                     </div>
                   </td>
@@ -440,14 +452,7 @@ export default function TasksPage() {
         )}
       </div>
 
-      {closing && (
-        <CompleteTaskDialog
-          taskId={closing.id}
-          closedStatusId={statuses.find(x => x.type === CLOSED_TYPE)?.id}
-          onClose={() => setClosing(null)}
-          onDone={() => { setClosing(null); afterTimeLogged(); }}
-        />
-      )}
+
 
       {logging && (
         <LogTimeDialog
@@ -501,7 +506,7 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, onProgress, onLogTime }: {
+function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, onProgress, onLogTime, running, hasTracked, onPaused, onFinished }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
@@ -513,6 +518,11 @@ function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, on
   onProgress: (p: number) => void;
   /** The phone gets the same in-place timesheet as the table. */
   onLogTime?: () => void;
+  /** …and the same clock and Finish. A phone could previously do neither. */
+  running: RunningTimer[];
+  hasTracked?: boolean;
+  onPaused?: (taskId: string, minutes: number) => void;
+  onFinished?: () => void;
 }) {
   const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
   const project = task.projectTasks?.[0]?.project;
@@ -570,6 +580,8 @@ function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, on
                   <Clock size={11} /> Log time
                 </button>
               )}
+              {!closed && <TimerButton taskId={task.id} running={running} hasTracked={hasTracked} onPaused={onPaused} />}
+              {!closed && <FinishButton taskId={task.id} onDone={onFinished} />}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">

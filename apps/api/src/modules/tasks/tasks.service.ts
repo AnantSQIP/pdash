@@ -521,6 +521,18 @@ export class TasksService {
       return u;
     });
 
+    // Closing a task settles the person's clock, the learned estimate and today's timesheet.
+    // Doing it HERE rather than only behind the Finish button is the point: a task ticked
+    // complete in a project list, moved on the board, or closed from the detail panel all go
+    // through setStatus, and every one of them used to leave the clock running and the hours
+    // unfiled. Tolerant by design — a manager closing somebody else's task settles nothing and
+    // must not be refused for it.
+    let settle: Awaited<ReturnType<TaskTimeService['settleClose']>> | null = null;
+    if (status.type === 'CLOSED') {
+      try { settle = await this.time.settleClose(id); }
+      catch (e) { console.warn(`[tasks] settling the clock on close failed for ${id}: ${String(e)}`); }
+    }
+
     const projectId = (task as any).projectTasks?.[0]?.projectId;
     await this.events.emit({
       action: EVENTS.TASK_STATUS_CHANGED,
@@ -530,7 +542,39 @@ export class TasksService {
       newValue: { status: status.name, type: status.type },
       metadata: { projectId, title: task.title },
     });
-    return updated;
+    // `settle` rides along so the screen can say what was filed without a second round trip.
+    return Object.assign(updated as object, { settle }) as typeof updated & { settle: typeof settle };
+  }
+
+  /**
+   * Finish a task: one click, no dialog, nothing to type.
+   *
+   * It resolves the workflow's completed status and goes through the ordinary status change, so
+   * finishing does everything closing has always done — subtasks close, progress re-syncs, the
+   * event is written — and, through that path, settles the clock, the learned estimate and
+   * today's timesheet too.
+   */
+  async finish(id: string, closedStatusId?: string) {
+    await this.access.assertTaskWritable(id);
+    const current = await this.prisma.task.findFirst({
+      where: { id, deletedAt: null },
+      select: { completedAt: true, currentStatus: { select: { type: true } } },
+    });
+    if (!current) throw new NotFoundException(`Task ${id} not found`);
+    // Already finished — a double click, or somebody else closed it while this person's clock
+    // was still running. Do NOT close it a second time: that would move completedAt, write a
+    // second event and make a task look finished today that was finished last week. But DO
+    // settle, or their hours are stranded on a task nobody will ever close again.
+    if (current.completedAt || current.currentStatus?.type === 'CLOSED') {
+      const settle = await this.time.settleClose(id).catch(() => null);
+      const task = await this.get(id);
+      return Object.assign(task as object, { settle, alreadyComplete: true });
+    }
+    const statusId = closedStatusId ?? await this.time.closedStatusFor(id);
+    if (!statusId) {
+      throw new BadRequestException('This task has no completed status in its workflow, so it cannot be finished. Add one to the workflow first.');
+    }
+    return this.setStatus(id, { statusId });
   }
 
   async setAssignees(id: string, dto: SetAssigneesDto) {

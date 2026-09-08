@@ -10,6 +10,11 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { serialize, leaveKeyFor } from '../../common/db/serialize';
 import { entitlementsFor } from './leave-entitlement';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
+import { TimesheetsModule } from '../timesheets/timesheets.module';
+import { TimesheetsService } from '../timesheets/timesheets.service';
+import { TasksModule } from '../tasks/tasks.module';
+import { TaskTimeService } from '../tasks/task-time.service';
+import { istDayWindow, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { PermissionService } from '../permissions/permission.service';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
@@ -168,7 +173,12 @@ export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly timesheets: TimesheetsService,
+    private readonly taskTime: TaskTimeService,
   ) {}
+
+  /** How long a "leaving early" reason may be. Long enough to explain, short enough to read. */
+  private static readonly MAX_EARLY_REASON = 300;
 
   private async orgOf(userId: string): Promise<string | null> {
     const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
@@ -203,6 +213,99 @@ export class AttendanceService {
     return rows.map(r => r.id);
   }
 
+  /**
+   * What punching out would say, asked BEFORE pressing it.
+   *
+   * The gate is enforced on the punch itself — a check the client can skip is not a rule — but
+   * being told at the door what you owe, with the tracked time sitting there ready to file, is
+   * the difference between a rule people keep and a rule people resent.
+   */
+  async punchOutCheck(userId: string) {
+    const today = istDay(new Date());
+    const open = await this.prisma.attendance.findFirst({
+      where: { userId, checkIn: { not: null }, checkOut: null },
+      orderBy: { date: 'desc' },
+      select: { date: true, checkIn: true },
+    });
+    // Not clocked in: the next punch is a punch IN, and nothing is owed at the door.
+    const day = await this.timesheets.dayStatus(userId, open?.date ?? today);
+    const attendedHours = open?.checkIn
+      ? Math.round(((Date.now() - open.checkIn.getTime()) / 3_600_000) * 10) / 10
+      : null;
+    return {
+      clockedIn: !!open,
+      ok: day.complete,
+      attendedHours,
+      /** Tracked more than you were here for — several clocks left running at once. */
+      overTracked: attendedHours != null && day.trackedHours > attendedHours + 0.5,
+      day,
+    };
+  }
+
+  /**
+   * What is still unresolved behind this person: days the timesheet is short, a shift the
+   * machine had to close at 11:59 pm, a clock still running from yesterday.
+   *
+   * Only ever days that were actually owed — weekends, company holidays and approved leave are
+   * not "missed", and listing them would teach people to ignore the whole thing.
+   */
+  async catchUp(userId: string) {
+    const today = istDay(new Date());
+    const from = new Date(today.getTime() - 7 * 86_400_000);
+    const { from: todayFrom } = istDayWindow(today);
+    const [missingKeys, closedShifts, stillRunning] = await Promise.all([
+      // One batched query rather than seven: on the ordinary day this returns nothing and the
+      // banner costs almost nothing to ask for.
+      this.timesheets.incompleteRecentDays(userId, 7),
+      this.prisma.attendance.findMany({
+        where: { userId, date: { gte: from, lt: today }, checkIn: { not: null }, checkOut: { not: null } },
+        select: { date: true, checkIn: true, checkOut: true, totalHours: true },
+      }),
+      // A clock somebody left on shows up in two shapes, and only listing the first would have
+      // meant almost never listing it at all: a session still open from an earlier day, and one
+      // the stale sweep already CAPPED at twelve hours. The sweep runs on the next timer call of
+      // any kind, so by the time anybody opens the app the next morning the forgotten clock is
+      // usually already closed — at a figure nobody worked. Both are reported the same way.
+      this.prisma.taskWorkSession.findMany({
+        where: {
+          userId,
+          OR: [
+            { endedAt: null, startedAt: { lt: todayFrom } },
+            { startedAt: { gte: from }, endedAt: { not: null }, minutes: { gte: SESSION_CAP_MINUTES } },
+          ],
+        },
+        select: { id: true, taskId: true, startedAt: true, endedAt: true, minutes: true, task: { select: { title: true } } },
+      }),
+    ]);
+
+    // A shift the 11:59 pm sweep closed carries its signature: the check-out is the last minute
+    // of its own day, to the second.
+    const autoClosed = closedShifts
+      .filter(a => a.checkIn && a.checkOut && Math.abs(a.checkOut.getTime() - endOfIstDay(a.checkIn).getTime()) < 60_000)
+      .map(a => ({ date: dayKey(a.date), hours: a.totalHours ?? null }));
+    const autoClosedDays = new Set(autoClosed.map(a => a.date));
+
+    const days = await Promise.all(
+      missingKeys.slice(-7).map(async k => {
+        const status = await this.timesheets.dayStatus(userId, new Date(`${k}T00:00:00.000Z`));
+        return { ...status, autoClosed: autoClosedDays.has(k) };
+      }),
+    );
+
+    return {
+      days,
+      autoClosed,
+      running: stillRunning.map(s => ({
+        sessionId: s.id, taskId: s.taskId, title: s.task?.title ?? 'Task', startedAt: s.startedAt,
+        /** Already closed at the twelve-hour cap: the hours are a guess and want checking. */
+        capped: !!s.endedAt,
+        hours: s.endedAt ? Math.round(((s.minutes ?? 0) / 60) * 10) / 10 : null,
+      })),
+      /** Nothing to do — the banner does not appear at all. */
+      clear: days.length === 0 && autoClosed.length === 0 && stillRunning.length === 0,
+    };
+  }
+
   async getToday(userId: string) {
     const today = istDay(new Date());
     return this.prisma.attendance.findUnique({ where: { userId_date: { userId, date: today } } });
@@ -220,6 +323,7 @@ export class AttendanceService {
   async punch(
     userId: string,
     coords: { lat: number; lng: number; accuracy?: number; area?: string },
+    opts: { earlyReason?: string } = {},
   ) {
     // The day a punch belongs to is the IST CALENDAR day, not the UTC one. utcDay() put every
     // punch made between 00:00 and 05:29 IST onto the PREVIOUS day's row — so an early-morning
@@ -269,10 +373,53 @@ export class AttendanceService {
     if (existing.checkOut) {
       throw new BadRequestException('You have already clocked out for today. The day is complete.');
     }
+
+    // ── Punching out ────────────────────────────────────────────────────────────
+    // Two things happen before the day can close, in this order.
+    //
+    // First every clock stops. A timer that outlives the day it belongs to invents hours nobody
+    // worked, and the only thing that used to stand between that and the timesheet was a
+    // twelve-hour cap. Stopping here also means the sitting just ended counts towards what the
+    // check below asks for, rather than being the reason it fails.
+    await this.taskTime.pauseAll(userId);
+
+    // Then the timesheet has to add up. The day's own target is used, not a flat figure: 8h
+    // normally, 4h on an approved half day, 0 on leave or a holiday — the same ladder the fill
+    // calendar grades against, so the colour of a day and the gate on the door always agree.
+    //
+    // `existing.date` and not today: an overnight shift punches out on the following calendar
+    // day, and the day being CLOSED is the one that must add up.
+    const day = await this.timesheets.dayStatus(userId, existing.date);
+    const reason = opts.earlyReason?.trim();
+    if (!day.complete && !reason) {
+      // Everything the screen needs to fix it in one click rides on the refusal, so this is a
+      // door with a handle rather than an errand.
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'TIMESHEET_INCOMPLETE',
+        message: `Your timesheet for ${day.date} holds ${day.logged}h of the ${day.target}h it needs. File the rest before punching out.`,
+        day,
+      });
+    }
+    if (reason && reason.length > AttendanceService.MAX_EARLY_REASON) {
+      throw new BadRequestException(`Keep the reason under ${AttendanceService.MAX_EARLY_REASON} characters.`);
+    }
+
     const totalHours = shiftHours(existing.checkIn, now);
     // Validate the day by hours: below a half day, mark HALF_DAY (a punch-in then an
     // immediate punch-out must not count as a full present day).
-    return this.prisma.attendance.update({ where: { id: existing.id }, data: { checkOut: now, totalHours, status: statusForHours(totalHours), ...outLoc } });
+    // Leaving with the timesheet short is allowed, but never silently: the reason is written on
+    // the day, where HR and the person's own month view both read it.
+    const shortNote = reason && !day.complete
+      ? `Punched out with ${day.logged}h of ${day.target}h filed — ${reason}`
+      : null;
+    return this.prisma.attendance.update({
+      where: { id: existing.id },
+      data: {
+        checkOut: now, totalHours, status: statusForHours(totalHours), ...outLoc,
+        ...(shortNote ? { note: existing.note ? `${existing.note} · ${shortNote}` : shortNote } : {}),
+      },
+    });
   }
 
   /** Admin/manual mark for a specific user+date. */
@@ -1388,8 +1535,22 @@ class AttendanceController {
 
   // Location is MANDATORY on every punch (in and out). No work mode is accepted here: a day is
   // recorded as worked from home only through an approved regularisation.
+  /** What punching out would say, before pressing it: what the day owes and what is ready to file. */
+  @Get('me/punch-out-check')
+  punchOutCheck(@Actor() actorId: string | null) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.punchOutCheck(actorId);
+  }
+
+  /** Anything left unresolved behind you: short days, a shift closed at 11:59 pm, a live clock. */
+  @Get('me/catch-up')
+  catchUp(@Actor() actorId: string | null) {
+    if (!actorId) throw new ForbiddenException('Not authenticated');
+    return this.svc.catchUp(actorId);
+  }
+
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string; earlyReason?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     const lat = Number(body?.lat), lng = Number(body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -1397,7 +1558,8 @@ class AttendanceController {
     }
     const accuracy = Number.isFinite(Number(body?.accuracy)) ? Number(body.accuracy) : undefined;
     const area = typeof body?.area === 'string' ? body.area : undefined;
-    return this.svc.punch(actorId, { lat, lng, accuracy, area });
+    const earlyReason = typeof body?.earlyReason === 'string' ? body.earlyReason : undefined;
+    return this.svc.punch(actorId, { lat, lng, accuracy, area }, { earlyReason });
   }
 
   // An employee RAISES a regularisation request. This no longer edits attendance directly —
@@ -1636,6 +1798,7 @@ export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDest
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly taskTime: TaskTimeService,
   ) {}
 
   onModuleInit() {
@@ -1662,6 +1825,9 @@ export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDest
         await this.prisma.attendance.update({
           where: { id: a.id }, data: { checkOut: closeAt, totalHours, status: statusForHours(totalHours) },
         });
+        // A day that closes with clocks still running would carry them into tomorrow, where they
+        // would accrue against a day nobody worked them on. They stop with the day.
+        try { await this.taskTime.pauseAll(a.userId); } catch { /* the sweep must not stop for one person */ }
         // The day is capped at 23:59 by design. Anyone who genuinely worked past midnight needs a
         // route to claim it, so tell them once, here, rather than leaving them to notice the
         // missing hours later. Best-effort: a failed notification must not stop the sweep.
@@ -1683,7 +1849,9 @@ export class AttendanceAutoPunchOutService implements OnModuleInit, OnModuleDest
 }
 
 @Module({
-  imports: [CapacityModule],
+  // TimesheetsModule for the day's target and fill; TasksModule for the clocks, which stop
+  // when the day does. Neither imports Attendance, so there is no cycle.
+  imports: [CapacityModule, TimesheetsModule, TasksModule],
   controllers: [AttendanceController, LeaveController],
   providers: [AttendanceService, LeaveService, AttendanceAutoPunchOutService],
   exports: [AttendanceService, LeaveService],
