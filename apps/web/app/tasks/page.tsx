@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Plus, CheckSquare, Search, Circle, CheckCircle, AlertTriangle, RotateCcw, Loader, Clock } from 'lucide-react';
+import { Plus, CheckSquare, Search, AlertTriangle, RotateCcw, Loader, Clock } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
@@ -13,6 +13,7 @@ import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYP
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
 import { RunningTimersBar, TimerButton, FinishButton, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
+import { TaskStateMark } from '@/components/tasks/TaskStateMark';
 import { pidLabel } from '@/lib/mock-data';
 import type { RunningTimer, DayStatus } from '@/lib/api';
 import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
@@ -193,13 +194,6 @@ export default function TasksPage() {
     }
   }
 
-  // Toggle done ↔ open via the workflow, so it's reversible (was a silent no-op before).
-  async function toggleComplete(task: ApiTask) {
-    const target = isTaskClosed(task) ? statuses.find(s => s.type === OPEN_TYPE) : statuses.find(s => s.type === CLOSED_TYPE);
-    if (!target) { toast('No suitable workflow status is configured', 'error'); return; }
-    await changeStatus(task, target.id);
-  }
-
   return (
     <div className="min-h-full">
       {/* Header */}
@@ -325,7 +319,6 @@ export default function TasksPage() {
                 overdue={isOverdue(task, currentUser?.id)}
                 due={myDue(task, currentUser?.id)}
                 statuses={statuses}
-                onToggle={() => toggleComplete(task)}
                 onStatus={id => changeStatus(task, id)}
                 onProgress={p => changeProgress(task, p)}
                 onLogTime={() => setLogging({ task })}
@@ -350,14 +343,7 @@ export default function TasksPage() {
               return (
                 <tr key={task.id} className="group hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 w-8">
-                    <button
-                      onClick={() => toggleComplete(task)}
-                      className={clsx('transition-colors', closed ? 'text-green-500' : 'text-gray-300 hover:text-green-400')}
-                      title={closed ? 'Completed — click to reopen' : 'Mark complete'}
-                      aria-label={closed ? 'Reopen task' : 'Mark task complete'}
-                    >
-                      {closed ? <CheckCircle size={16} /> : <Circle size={16} />}
-                    </button>
+                    <TaskStateMark closed={closed} size={16} />
                   </td>
                   <td className="px-4 py-3">
                     <span className={clsx('text-sm font-medium text-gray-900', closed && 'line-through text-gray-400')}>
@@ -506,14 +492,13 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, onProgress, onLogTime, running, hasTracked, onPaused, onFinished }: {
+function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, onLogTime, running, hasTracked, onPaused, onFinished }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
   /** The deadline that applies to this person (their own, when one was set). */
   due?: string | null;
   statuses: WorkflowStatus[];
-  onToggle: () => void;
   onStatus: (id: string) => void;
   onProgress: (p: number) => void;
   /** The phone gets the same in-place timesheet as the table. */
@@ -529,13 +514,9 @@ function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, on
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-3.5">
       <div className="flex items-start gap-3">
-        <button
-          onClick={onToggle}
-          className={clsx('mt-0.5 shrink-0 transition-colors', closed ? 'text-green-500' : 'text-gray-300 hover:text-green-400')}
-          aria-label={closed ? 'Reopen task' : 'Mark task complete'}
-        >
-          {closed ? <CheckCircle size={20} /> : <Circle size={20} />}
-        </button>
+        <span className="mt-0.5">
+          <TaskStateMark closed={closed} size={18} />
+        </span>
         <div className="min-w-0 flex-1">
           <p className={clsx('text-sm font-medium leading-snug', closed ? 'line-through text-gray-400' : 'text-gray-900')}>
             {task.title}

@@ -9,7 +9,8 @@ import { useToast } from '@/components/ui/Toast';
 import { formatDate } from '@/lib/date';
 import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
-import { isTaskClosed, taskAssigneeUsers, OPEN_TYPE, CLOSED_TYPE } from '@/lib/tasks';
+import { isTaskClosed, taskAssigneeUsers } from '@/lib/tasks';
+import { TaskStateMark } from '@/components/tasks/TaskStateMark';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useQueryClient } from '@tanstack/react-query';
@@ -38,12 +39,6 @@ export function TaskListView({
   onAddTask: () => void;
   onStatusChange: (taskId: string, statusId: string) => void;
 }) {
-  // Toggle done↔open from the row checkbox, via the workflow (reversible).
-  function toggleComplete(task: ApiTask) {
-    const target = isTaskClosed(task) ? statuses.find(s => s.type === OPEN_TYPE) : statuses.find(s => s.type === CLOSED_TYPE);
-    if (target) onStatusChange(task.id, target.id);
-  }
-
   if (loading) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -96,21 +91,9 @@ export function TaskListView({
               i < tasks.length - 1 && 'border-b border-gray-50',
             )}
           >
-            <button
-              onClick={e => { e.stopPropagation(); toggleComplete(task); }}
-              aria-label={closed ? 'Reopen task' : 'Mark task complete'}
-              title={closed ? 'Completed — click to reopen' : 'Mark complete'}
-              className={clsx(
-                'w-4 h-4 rounded border-2 shrink-0 flex items-center justify-center transition-colors',
-                closed ? 'bg-green-500 border-green-500' : 'border-gray-300 hover:border-green-400',
-              )}
-            >
-              {closed && (
-                <svg viewBox="0 0 12 12" className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M2 6l3 3 5-5" />
-                </svg>
-              )}
-            </button>
+            {/* A mark, not a control: the row's status dropdown is where a task is closed,
+                in the workflow's own words. See components/tasks/TaskStateMark. */}
+            <TaskStateMark closed={closed} size={16} />
 
             <span className={clsx('flex-1 text-sm min-w-0 truncate', closed ? 'line-through text-gray-400' : 'text-gray-800')}>
               {task.title}

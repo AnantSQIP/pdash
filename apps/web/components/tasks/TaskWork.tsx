@@ -43,6 +43,10 @@ export function humanMinutes(total: number): string {
  * is arithmetic. A request a second per person would be a lot of traffic to tell somebody
  * something their own machine can work out.
  *
+ * The figure counts ON from the sittings already recorded. A pause ends its session and a resume
+ * opens a new one, so reading the running session alone made every resumed clock restart at zero
+ * and look as though the morning's work had been dropped.
+ *
  * A list, because several clocks may run at once. When more than one does, it says so plainly —
  * an hour with three clocks running records three hours, which is what was asked for, but it
  * should never be a surprise at the end of the day.
@@ -70,7 +74,7 @@ export function RunningTimersBar({ running, onPaused }: {
       qc.invalidateQueries({ queryKey: ['running-timer'] });
       qc.invalidateQueries({ queryKey: ['timer-today'] });
       qc.invalidateQueries({ queryKey: ['tasks-me'] });
-      offerToLog(taskId, r.minutes, onPaused);
+      offerToLog(taskId, r.minutes, onPaused, r.myMinutes);
     } catch (e) { toastError(e, 'Could not pause the clock.'); }
     finally { setBusyId(''); }
   };
@@ -85,7 +89,13 @@ export function RunningTimersBar({ running, onPaused }: {
       )}
       <ul className="divide-y divide-white/10">
         {running.map(r => {
-          const elapsed = Math.max(0, Math.floor((now - new Date(r.startedAt).getTime()) / 60_000));
+          const sitting = Math.max(0, Math.floor((now - new Date(r.startedAt).getTime()) / 60_000));
+          // Pause ends a session and Resume opens a new one, so this sitting is not the time on
+          // the task. The figure shown is everything the person has put in, counting on from
+          // where they left off; the sitting is kept beside it, because that is the number the
+          // toast will offer to file when they stop.
+          const prior = r.priorMinutes ?? 0;
+          const total = prior + sitting;
           return (
             <li key={r.id} className="flex items-center gap-3 px-4 py-2.5">
               <span className="relative flex h-2 w-2 shrink-0">
@@ -94,7 +104,10 @@ export function RunningTimersBar({ running, onPaused }: {
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-medium">{r.task.title}</p>
-                <p className="text-[11.5px] tabular-nums text-gray-400">Running · {humanMinutes(elapsed)}</p>
+                <p className="text-[11.5px] tabular-nums text-gray-400">
+                  Running · {humanMinutes(total)}
+                  {prior > 0 && <span className="text-gray-500"> · {humanMinutes(sitting)} this sitting</span>}
+                </p>
               </div>
               <button
                 onClick={() => pause(r.taskId)}
@@ -116,15 +129,24 @@ export function RunningTimersBar({ running, onPaused }: {
  * toast carries the figure and one action; the dialog opens pre-filled if they take it.
  * Below a quarter-hour there is nothing a timesheet could record, so nothing is offered.
  */
-function offerToLog(taskId: string, minutes: number, onPaused?: (taskId: string, minutes: number) => void) {
+function offerToLog(
+  taskId: string, minutes: number,
+  onPaused?: (taskId: string, minutes: number) => void,
+  /** This person's own running total on the task, never the whole team's. */
+  myMinutes?: number,
+) {
   const h = quarterHours(minutes);
+  // Two figures, never conflated: the sitting just ended is what may be filed, the total is what
+  // the task has taken. Saying only one of them is how a resumed clock came to look like lost work.
+  const total = myMinutes && myMinutes > minutes ? ` ${humanMinutes(myMinutes)} on this task so far.` : '';
+  const line = `Paused — ${humanMinutes(minutes)} this sitting.${total}`;
   if (onPaused && h >= 0.25) {
-    toast(`Paused — ${humanMinutes(minutes)} on this task.`, 'success', {
+    toast(line, 'success', {
       action: { label: `Log ${h}h to timesheet`, onClick: () => onPaused(taskId, minutes) },
       duration: 8000,
     });
   } else {
-    toast(`Paused — ${humanMinutes(minutes)} on this task.`, 'success');
+    toast(line, 'success');
   }
 }
 
@@ -157,7 +179,7 @@ export function TimerButton({ taskId, running, hasTracked, disabled, onPaused }:
   });
   const pause = useMutation({
     mutationFn: () => api.tasks.pauseTimer(taskId),
-    onSuccess: r => { refresh(); offerToLog(taskId, r.minutes, onPaused); },
+    onSuccess: r => { refresh(); offerToLog(taskId, r.minutes, onPaused, r.myMinutes); },
     onError: e => toastError(e, 'Could not pause the clock.'),
   });
   const busy = start.isPending || pause.isPending;
