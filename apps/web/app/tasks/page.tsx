@@ -34,7 +34,13 @@ function statusCategory(t: ApiTask): 'Open' | 'In Progress' | 'Closed' {
   if ((t.currentStatus?.name ?? '').toLowerCase().includes('progress')) return 'In Progress';
   return 'Open';
 }
-const isOverdue = (t: ApiTask) => isPastDue(t.dueDate) && !isTaskClosed(t);
+/**
+ * The deadline that applies to THIS person: their own seat's date when one was set for them
+ * (a manager gave them more time from the capacity board), otherwise the task's.
+ */
+const myDue = (t: ApiTask, uid?: string | null): string | null | undefined =>
+  (uid && t.assignees?.find(a => a.userId === uid && a.dueDate)?.dueDate) || t.dueDate;
+const isOverdue = (t: ApiTask, uid?: string | null) => isPastDue(myDue(t, uid)) && !isTaskClosed(t);
 
 /**
  * Reopen a closed task.
@@ -118,7 +124,7 @@ export default function TasksPage() {
       if (search && !t.title.toLowerCase().includes(search.toLowerCase())) return false;
       if (priorityFilter !== 'All' && t.priority !== priorityFilter) return false;
       if (statusFilter === 'All') return true;
-      if (statusFilter === 'Overdue') return isOverdue(t);
+      if (statusFilter === 'Overdue') return isOverdue(t, currentUser?.id);
       return statusCategory(t) === statusFilter;
     })
     .sort(nextUpFirst);
@@ -126,7 +132,7 @@ export default function TasksPage() {
   const counts: Record<StatusFilter, number> = { All: tasks.length, Open: 0, 'In Progress': 0, Closed: 0, Overdue: 0 };
   for (const t of tasks) {
     counts[statusCategory(t)]++;
-    if (isOverdue(t)) counts.Overdue++;
+    if (isOverdue(t, currentUser?.id)) counts.Overdue++;
   }
 
   // Optimistically patch a task in the cache, then reconcile with the server.
@@ -300,7 +306,8 @@ export default function TasksPage() {
                 key={task.id}
                 task={task}
                 closed={isTaskClosed(task)}
-                overdue={isOverdue(task)}
+                overdue={isOverdue(task, currentUser?.id)}
+                due={myDue(task, currentUser?.id)}
                 statuses={statuses}
                 onToggle={() => toggleComplete(task)}
                 onStatus={id => changeStatus(task, id)}
@@ -315,7 +322,9 @@ export default function TasksPage() {
           <TableShell>
             {filtered.map(task => {
               const closed = isTaskClosed(task);
-              const overdue = isOverdue(task);
+              const overdue = isOverdue(task, currentUser?.id);
+              const due = myDue(task, currentUser?.id);
+              const ownDue = !!due && due !== task.dueDate;
               const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
               const project = task.projectTasks?.[0]?.project;
               return (
@@ -364,9 +373,10 @@ export default function TasksPage() {
                     <AvatarStack users={taskAssigneeUsers(task)} size={22} />
                   </td>
                   <td className="px-4 py-3">
-                    {task.dueDate ? (
-                      <span className={clsx('text-xs', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
-                        {formatDate(task.dueDate)}{overdue && ' (overdue)'}
+                    {due ? (
+                      <span className={clsx('text-xs', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}
+                        title={ownDue ? `Your own deadline on this task${task.dueDate ? ` — the task itself is due ${formatDate(task.dueDate)}` : ''}` : undefined}>
+                        {formatDate(due)}{ownDue && <span className="text-gray-400"> · yours</span>}{overdue && ' (overdue)'}
                       </span>
                     ) : <span className="text-xs text-gray-400">—</span>}
                   </td>
@@ -491,10 +501,12 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgress, onLogTime }: {
+function TaskCard({ task, closed, overdue, due, statuses, onToggle, onStatus, onProgress, onLogTime }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
+  /** The deadline that applies to this person (their own, when one was set). */
+  due?: string | null;
   statuses: WorkflowStatus[];
   onToggle: () => void;
   onStatus: (id: string) => void;
@@ -542,9 +554,9 @@ function TaskCard({ task, closed, overdue, statuses, onToggle, onStatus, onProgr
 
           <div className="flex items-center justify-between gap-3 mt-3">
             <div className="flex items-center gap-2 min-w-0">
-              {task.dueDate && (
+              {due && (
                 <span className={clsx('text-xs whitespace-nowrap', overdue ? 'text-red-500 font-medium' : 'text-gray-400')}>
-                  {formatDate(task.dueDate)}{overdue && ' · overdue'}
+                  {formatDate(due)}{due !== task.dueDate && ' · yours'}{overdue && ' · overdue'}
                 </span>
               )}
               {/* The phone gets the same in-place timesheet as the table — the whole point was

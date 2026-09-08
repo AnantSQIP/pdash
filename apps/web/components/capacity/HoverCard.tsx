@@ -121,7 +121,9 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
                     </div>
                     <p className="truncate font-medium text-gray-900">{seg.task.title}</p>
                     <p className="text-[11px] text-gray-500">
-                      {priorityWord(seg.task.priority)} · <span className={due.cls}>{due.text}</span> · {seg.task.remainingHours}h left
+                      {priorityWord(seg.task.priority)} · <span className={due.cls}>{due.text}</span>
+                      {seg.task.ownDeadline && <span className="text-gray-400"> (own{seg.task.taskDueDate ? `; task ${formatDate(seg.task.taskDueDate)}` : ''})</span>}
+                      {' · '}{seg.task.remainingHours}h left
                     </p>
                     {seg.task.estimatedHours != null && (
                       <p className="text-[11px] text-gray-400 tabular-nums">

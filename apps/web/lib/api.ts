@@ -1126,6 +1126,9 @@ export type CapacityOpenTask = {
   isTeamWork?: boolean;
   dueDate?: string | null; priority: string; completionPercentage: number;
   projectPriority?: string; projectDueDate?: string | null;
+  /** The task's own deadline, beside a personal one (`dueDate` is THIS person's when `ownDeadline`). */
+  taskDueDate?: string | null;
+  ownDeadline?: boolean;
   /** Planned start; the board never schedules the task before it. */
   startDate?: string | null;
   /** This person's estimate, what they have logged against it, and whether the ledger has
@@ -1770,6 +1773,9 @@ export const api = {
     setAssignees: (id: string, assigneeIds: string[]) =>
       req<ApiTask>(`/tasks/${id}/assignees`, { method: 'PUT', body: JSON.stringify({ assigneeIds }) }),
     /** Role-based staffing (PM/Reviewer/Analyst + per-person hours). */
+    /** Move ONE person's deadline on a task (their seat's date); null clears it. Nobody else's moves. */
+    setAssigneeDeadline: (id: string, userId: string, dueDate: string | null) =>
+      req<{ taskId: string; userId: string; dueDate: string | null }>(`/tasks/${id}/assignees/${userId}/deadline`, { method: 'PATCH', body: JSON.stringify({ dueDate }) }),
     setStaffing: (id: string, assignees: StaffingEntry[]) =>
       req<ApiTask>(`/tasks/${id}/staffing`, { method: 'PUT', body: JSON.stringify({ assignees }) }),
     delete: (id: string) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),
