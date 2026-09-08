@@ -12,7 +12,7 @@ import { useLayoutEffect, useState } from 'react';
 import type { CapacityDay, CapacityRow } from '@/lib/api';
 import { Portal } from '@/components/ui/Portal';
 import { formatDate } from '@/lib/date';
-import { daysOverdue } from '@/lib/project-colors';
+import { daysOverdue, textureStyle } from '@/lib/project-colors';
 import { DAILY_CAPACITY, type Segment } from './grid';
 import { pidLabel } from '@/lib/mock-data';
 
@@ -67,8 +67,12 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
 
   const { row, day, segments } = target;
   const working = day.capacity > 0;
-  const over = working && day.load > DAILY_CAPACITY + 0.05;
-  const free = Math.max(0, DAILY_CAPACITY - day.load);
+  const cap = working ? day.capacity : DAILY_CAPACITY;
+  const over = working && day.load > cap + 0.05;
+  const free = Math.max(0, cap - day.load);
+  const when = day.weekOf
+    ? `week of ${formatDate(day.weekOf, { day: 'numeric', month: 'short' })}`
+    : formatDate(day.date, { weekday: 'short', day: 'numeric', month: 'short' });
   const shown = (segments ?? []).slice(0, MAX_ROWS);
   const more = (segments?.length ?? 0) - shown.length;
 
@@ -81,14 +85,14 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
         style={{ width: WIDTH, left: pos?.left ?? -9999, top: pos?.top ?? -9999, maxHeight: pos?.maxH, overflow: 'hidden' }}
       >
         <div className="flex items-baseline justify-between gap-3">
-          <span className="font-semibold text-gray-900">{row.name.split(' ')[0]} · {formatDate(day.date, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+          <span className="font-semibold text-gray-900">{row.name.split(' ')[0]} · {when}</span>
           {working ? (
             over
               // Neutral, not red: red on this board means a task is late; too much on one day is the dark edge.
-              ? <span className="font-semibold text-gray-900 tabular-nums">{day.load}h of {DAILY_CAPACITY}h · over by {Math.round((day.load - DAILY_CAPACITY) * 10) / 10}h</span>
+              ? <span className="font-semibold text-gray-900 tabular-nums">{day.load}h of {cap}h · over by {Math.round((day.load - cap) * 10) / 10}h</span>
               : day.load > 0
-                ? <span className="text-gray-600 tabular-nums">{day.load}h of {DAILY_CAPACITY}h · <span className="text-emerald-700">{Math.round(free * 10) / 10}h free</span></span>
-                : <span className="font-medium text-emerald-700">Free all day</span>
+                ? <span className="text-gray-600 tabular-nums">{day.load}h of {cap}h · <span className="text-emerald-700">{Math.round(free * 10) / 10}h free</span></span>
+                : <span className="font-medium text-emerald-700">{day.weekOf ? 'Free all week' : 'Free all day'}</span>
           ) : (
             <span className="text-gray-500">{day.note ?? day.state.toLowerCase().replace('_', ' ')}</span>
           )}
@@ -104,7 +108,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
               const pid = seg.task.projectPid ? pidLabel(seg.task.projectPid, seg.task.projectRound) : null;
               return (
                 <li key={seg.taskId} className="flex gap-2">
-                  <span className="relative mt-0.5 h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: seg.fill }}>
+                  <span className="relative mt-0.5 h-2.5 w-3.5 shrink-0 rounded-sm" style={{ backgroundColor: seg.fill, ...textureStyle(seg.hue.texture) }}>
                     {seg.rail && <span className="absolute inset-x-0 bottom-0 h-[2px]" style={{ background: seg.rail }} />}
                   </span>
                   <div className="min-w-0 flex-1">
@@ -119,6 +123,12 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
                     <p className="text-[11px] text-gray-500">
                       {priorityWord(seg.task.priority)} · <span className={due.cls}>{due.text}</span> · {seg.task.remainingHours}h left
                     </p>
+                    {seg.task.estimatedHours != null && (
+                      <p className="text-[11px] text-gray-400 tabular-nums">
+                        {seg.task.loggedHours ?? 0}h logged of {seg.task.estimatedHours}h estimated
+                        {seg.task.overEstimate && <span className="text-amber-700"> · over the estimate</span>}
+                      </p>
+                    )}
                   </div>
                 </li>
               );

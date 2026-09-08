@@ -5,9 +5,11 @@ import { EVENTS } from '../../common/events/canonical-events';
 import { CreateIssueDto, UpdateIssueDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { ProjectAccessService } from '../../common/access/project-access.module';
+import { serialize, dayKeyFor } from '../../common/db/serialize';
+import { startOfIstDay } from '../../common/dates';
+import { MAX_HOURS_PER_DAY } from '../timesheets/timesheets.service';
 
 // A person cannot log more than a full day across all entries — same cap as timesheets.
-const MAX_HOURS_PER_DAY = 24;
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true };
 const TS_SELECT = { id: true, hoursLogged: true, billable: true, date: true } as const;
 
@@ -68,22 +70,27 @@ export class IssuesService {
     const reportedBy = getActorId() ?? 'system';
     const hours = dto.hours && dto.hours > 0 ? dto.hours : 0;
     // Issue time feeds capacity/performance exactly like a timesheet, so it must obey the same
-    // rules: normalise to the calendar-day boundary, reject a future date, and enforce the
-    // 24h/day cap across ALL the user's entries (this path previously bypassed both).
-    const entryDay = new Date((dto.date ? String(dto.date) : new Date().toISOString()).slice(0, 10));
-    const today = new Date(new Date().toISOString().slice(0, 10));
+    // rules: normalise to the IST calendar day (the org's day, not UTC's — a UTC "today" is
+    // still yesterday until 05:30 IST), reject a future date, and enforce the same 16h/day cap
+    // across ALL the user's entries.
+    const today = startOfIstDay(new Date());
+    const entryDay = dto.date ? new Date(String(dto.date).slice(0, 10)) : today;
     if (isNaN(entryDay.getTime())) throw new BadRequestException('A valid date is required.');
     if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
-    if (hours > 0) {
-      const dayAgg = await this.prisma.timesheet.aggregate({
-        where: { userId: reportedBy, date: entryDay, deletedAt: null }, _sum: { hoursLogged: true },
-      });
-      if ((dayAgg._sum.hoursLogged ?? 0) + hours > MAX_HOURS_PER_DAY) {
-        const left = Math.max(0, MAX_HOURS_PER_DAY - (dayAgg._sum.hoursLogged ?? 0));
-        throw new BadRequestException(`That would exceed ${MAX_HOURS_PER_DAY}h logged for the day — ${left}h remaining.`);
+    // The cap check, the issue and its time entry in ONE transaction under the same
+    // per-person-per-day lock every timesheet write takes (common/db/serialize.ts). Read outside
+    // the lock, the check was the exact race it exists to prevent: simultaneous submissions all
+    // saw the same total and all passed.
+    const issue = await serialize(this.prisma, dayKeyFor(reportedBy, entryDay), async (tx) => {
+      if (hours > 0) {
+        const dayAgg = await tx.timesheet.aggregate({
+          where: { userId: reportedBy, date: entryDay, deletedAt: null }, _sum: { hoursLogged: true },
+        });
+        if ((dayAgg._sum.hoursLogged ?? 0) + hours > MAX_HOURS_PER_DAY) {
+          const left = Math.max(0, MAX_HOURS_PER_DAY - (dayAgg._sum.hoursLogged ?? 0));
+          throw new BadRequestException(`That would exceed ${MAX_HOURS_PER_DAY}h logged for the day — ${left}h remaining.`);
+        }
       }
-    }
-    const issue = await this.prisma.$transaction(async (tx) => {
       const created = await tx.issue.create({
         data: { projectId: dto.projectId, title: dto.title, description: dto.description ?? null, reportedBy },
       });

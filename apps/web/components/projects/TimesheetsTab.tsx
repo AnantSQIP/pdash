@@ -10,6 +10,7 @@ import { Avatar } from '@/components/Avatar';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
+import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 function fmtHours(h: number): string {
   const whole = Math.floor(h);
@@ -43,12 +44,9 @@ export default function TimesheetsTab({ projectId }: { projectId: string }) {
     staleTime: 30_000,
   });
 
-  function invalidate() {
-    qc.invalidateQueries({ queryKey: ['timesheets', projectId] });
-    // L30: logging/deleting time recomputes Task.actualHours + project rollup server-side.
-    qc.invalidateQueries({ queryKey: ['tasks', projectId] });
-    qc.invalidateQueries({ queryKey: ['project', projectId] });
-  }
+  // Logging/deleting time recomputes Task.actualHours and the project rollup server-side, and
+  // the same hours show on My Tasks, the capacity board and Home — all of it refreshes together.
+  function invalidate() { invalidateTimesheetCaches(qc); }
 
   async function deleteEntry(id: string) {
     if (!await confirmDialog({ title: 'Delete this time entry?', danger: true, confirmLabel: 'Delete' })) return;

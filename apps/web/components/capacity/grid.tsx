@@ -15,7 +15,7 @@ import type { CapacityDay, CapacityOpenTask, CapacityRow, DayState } from '@/lib
 import { formatDate, todayIST } from '@/lib/date';
 import {
   type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED, SEGMENT_RING,
-  segmentFill, deadlineState, railStyle, urgencyOrder, type DeadlineState,
+  segmentFill, textOnFill, textureStyle, deadlineState, railStyle, urgencyOrder, type DeadlineState,
 } from '@/lib/project-colors';
 
 /** Cell classes for the day states that are NOT drawn as segments. */
@@ -41,6 +41,25 @@ export function dayNum(iso: string) { return new Date(`${iso}T00:00:00Z`).getUTC
 export function isToday(iso: string) { return iso === todayIST(); }
 
 export const DAILY_CAPACITY = 8;
+
+/**
+ * The words printed INSIDE a segment when it is wide enough to hold them: the PID's serial
+ * ("003"), or the space for team work. A legend is what you consult when a label will not fit;
+ * a label is what you read without looking away. The full PID and title are always in the hover.
+ */
+export function segmentLabel(task: CapacityOpenTask): string | null {
+  if (task.isTeamWork) return 'team';
+  if (task.projectPid) {
+    const serial = task.projectPid.split(/[_\-/]/).pop() ?? task.projectPid;
+    return task.projectRound && task.projectRound > 1 ? `${serial}·P${task.projectRound}` : serial;
+  }
+  // No PID yet (a project still waiting for one): the initials of its title's first words.
+  const words = (task.project ?? '').split(/[^A-Za-z0-9]+/).filter(w => w.length > 2);
+  return words.length ? words.slice(0, 3).map(w => w[0].toUpperCase()).join('') : null;
+}
+/** A segment must be at least this wide (px) before a label goes inside it. */
+const LABEL_MIN_PX = 26;
+const LABEL_HOURS_MIN_PX = 54;
 
 /** One task's share of one day, resolved to everything the cell, the hover and the panel show. */
 export type Segment = {
@@ -95,7 +114,7 @@ export function segmentsFor(
 }
 
 export function DayCell({
-  day, segments, focusProjectId, compact, today, maxSegments = 8, inert, onHover, onLeave, onClick,
+  day, segments, focusProjectId, compact, today, maxSegments = 8, inert, cellWidth, tabIndex, dataRow, dataCol, onHover, onLeave, onClick,
 }: {
   day: CapacityDay;
   /** null = no itemisation in the payload → plain fill; [] = a genuinely free day. */
@@ -113,6 +132,12 @@ export function DayCell({
   maxSegments?: number;
   /** A display-only strip (the person panel): not a tab stop. */
   inert?: boolean;
+  /** The cell's rendered width in px, when the board has measured it — turns on labels inside segments. */
+  cellWidth?: number;
+  /** Roving tabindex: the board makes ONE cell tabbable and moves focus with the arrow keys. */
+  tabIndex?: number;
+  dataRow?: number;
+  dataCol?: number;
   onHover?: (e: MouseEvent<HTMLButtonElement> | FocusEvent<HTMLButtonElement>) => void;
   onLeave?: () => void;
   onClick?: () => void;
@@ -120,13 +145,17 @@ export function DayCell({
   const working = day.capacity > 0;
   const s = STATE_STYLE[day.state];
   const load = day.load;
-  const over = working && load > DAILY_CAPACITY + 0.05;
-  // Scale so an 8h day fills the track and an overloaded day compresses rather than clips —
+  // The cell's own capacity: 8h for a day, the week's working hours for a rolled-up week cell.
+  const cap = working ? day.capacity : DAILY_CAPACITY;
+  const over = working && load > cap + 0.05;
+  // Scale so a full day fills the track and an overloaded one compresses rather than clips —
   // every task stays visible, and the neutral edge says the day is over.
-  const scale = Math.max(DAILY_CAPACITY, load);
+  const scale = Math.max(cap, load);
+  const when = day.weekOf ? `Week of ${formatDate(day.weekOf, { month: 'short', day: 'numeric' })}` : formatDate(day.date, { weekday: 'short', month: 'short', day: 'numeric' });
   const label = working
-    ? `${formatDate(day.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${load}h of ${day.capacity}h${over ? ` · over by ${Math.round((load - DAILY_CAPACITY) * 10) / 10}h` : ''}`
-    : `${formatDate(day.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${day.note ?? s.label}`;
+    ? `${when} · ${load}h of ${day.capacity}h${over ? ` · over by ${Math.round((load - cap) * 10) / 10}h` : ''}`
+    : `${when} · ${day.note ?? s.label}`;
+  const innerWidth = cellWidth ? Math.max(0, cellWidth - 4) : 0; // inset-0.5 on both sides
 
   const legacy = working && segments === null;
   const pendingLeave = day.state === 'LEAVE_PENDING';
@@ -139,7 +168,9 @@ export function DayCell({
     <button
       type="button"
       aria-label={label + (working ? taskWord : '')}
-      tabIndex={inert ? -1 : undefined}
+      tabIndex={inert ? -1 : tabIndex}
+      data-row={dataRow}
+      data-col={dataCol}
       onMouseEnter={onHover}
       onFocus={onHover}
       onMouseLeave={onLeave}
@@ -166,17 +197,29 @@ export function DayCell({
         <div className="absolute inset-0.5 flex gap-px overflow-hidden rounded-[3px]">
           {shown.map(seg => {
             const faded = !!focusProjectId && seg.task.projectId !== focusProjectId;
+            const px = innerWidth * (seg.hours / scale);
+            const text = px >= LABEL_MIN_PX ? segmentLabel(seg.task) : null;
+            const hours = px >= LABEL_HOURS_MIN_PX ? `${Math.round(seg.hours * 10) / 10}h` : null;
             return (
               <div
                 key={seg.taskId}
-                className="relative h-full shrink-0 rounded-[2px] transition-opacity"
+                className="relative h-full shrink-0 overflow-hidden rounded-[2px] transition-opacity"
                 style={{
                   width: `max(6px, ${(seg.hours / scale) * 100}%)`,
                   backgroundColor: seg.fill,
+                  ...textureStyle(seg.hue.texture),
                   boxShadow: SEGMENT_RING,
                   opacity: faded ? 0.25 : 1,
                 }}
               >
+                {text && (
+                  <span
+                    className="pointer-events-none absolute inset-x-0 top-0 truncate px-1 font-mono text-[9px] leading-[14px]"
+                    style={{ color: textOnFill(seg.task.priority), bottom: seg.rail ? 3 : 0 }}
+                  >
+                    {text}{hours && <span className="opacity-80"> {hours}</span>}
+                  </span>
+                )}
                 {seg.rail && (
                   <span
                     className="absolute inset-x-0 bottom-0 h-[3px] border-t border-white"

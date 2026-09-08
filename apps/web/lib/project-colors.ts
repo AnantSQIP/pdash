@@ -14,6 +14,14 @@
 //   a rail     = HOW CLOSE THE DEADLINE IS.  A 3px strip on the segment's bottom edge — solid
 //                red for overdue, dotted amber for due within two working days — in the two
 //                hues no project is ever given. Position and pattern, so it survives greyscale.
+//   a texture  = WHICH PROJECT, AGAIN, for the fifth hue onwards. With green, teal, red and amber
+//                all reserved, seven distinct hues cannot all survive red–green colour blindness:
+//                simulated (Machado 2009) the blue-purple family collapses to a ΔE of 2. So the
+//                hues are ASSIGNED in the order that keeps the first four furthest apart for
+//                protan, deutan and normal vision alike (worst-case ΔE 121 → 51 → 20), and the
+//                last three carry a faint hatch or dot texture as a second, colour-free channel
+//                (Bertin's texture variable). The PID label inside wide segments, in the legend
+//                and in every hover is the third.
 //
 // Palette rules inherited from lib/calendar-colors.ts and kept here:
 //   · no green or teal (40°–195° is excluded outright): green means "done" everywhere else;
@@ -28,6 +36,8 @@
 
 export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
+export type HueTexture = 'none' | 'hatch' | 'dots' | 'cross';
+
 export type ProjectHue = {
   name: string;
   h: number; s: number;
@@ -35,27 +45,47 @@ export type ProjectHue = {
   critical: string; high: string; medium: string; low: string;
   /** Chip surfaces in the app's tint + ring form. Text on a tint uses `critical`. */
   tint: string; ring: string;
+  /** A colour-free second channel for the hues that collide under colour blindness. */
+  texture: HueTexture;
 };
 
 /**
- * Seven hues, in assignment order. Cool and warm alternate so the first N projects are as far
- * apart as the wheel allows. Bronze was tried and dropped: it sits in the amber band, so the
- * due-soon rail vanished on it. Slate is deliberately desaturated — it is separated from indigo and azure by
- * chroma rather than by angle, which is also how a colour-blind viewer separates them.
+ * Seven hues, in ASSIGNMENT order — the order that keeps each prefix furthest apart under normal,
+ * protan and deutan vision at once (greedy on the worst case of the three; see the header). The
+ * first four are plain; the last three carry a texture, because from the fifth hue on no
+ * arrangement of these families keeps a red–green-blind viewer's ΔE above 10.
+ *
+ * Bronze was tried and dropped: it sits in the amber band, so the due-soon rail vanished on it.
+ * Slate is deliberately desaturated — separated from the blues by chroma rather than by angle,
+ * which is also how a colour-blind viewer separates them.
  */
 export const PROJECT_HUES: readonly ProjectHue[] = [
-  { name: 'indigo',  h: 244, s: 0.72, critical: '#221a9d', high: '#392ddd', medium: '#655ce4', low: '#a7a2e9', tint: '#eae9fb', ring: '#aca7f1' },
-  { name: 'copper',  h: 19,  s: 0.82, critical: '#5c2309', high: '#8a350e', medium: '#bf4a13', low: '#e69772', tint: '#fdeee8', ring: '#f6bda2' },
-  { name: 'azure',   h: 203, s: 0.80, critical: '#093854', high: '#0e5480', medium: '#1475b1', low: '#65b2e2', tint: '#e8f5fc', ring: '#a3d6f5' },
-  { name: 'fuchsia', h: 293, s: 0.68, critical: '#591363', high: '#861c94', medium: '#b827cc', low: '#d890e1', tint: '#f9eafb', ring: '#e7a9ef' },
-  { name: 'slate',   h: 215, s: 0.26, critical: '#293546', high: '#3f516b', medium: '#577195', low: '#9cabc0', tint: '#eff2f6', ring: '#bfcad9' },
-  { name: 'pink',    h: 330, s: 0.72, critical: '#66113b', high: '#971958', medium: '#d02279', low: '#e490ba', tint: '#fbe9f2', ring: '#f1a7cc' },
-  { name: 'violet',  h: 268, s: 0.80, critical: '#480f88', high: '#6b17cb', medium: '#9143ea', low: '#c099ec', tint: '#f2e8fc', ring: '#c9a3f5' },
+  { name: 'copper',  h: 19,  s: 0.82, critical: '#5c2309', high: '#8a350e', medium: '#bf4a13', low: '#e69772', tint: '#fdeee8', ring: '#f6bda2', texture: 'none' },
+  { name: 'violet',  h: 268, s: 0.80, critical: '#480f88', high: '#6b17cb', medium: '#9143ea', low: '#c099ec', tint: '#f2e8fc', ring: '#c9a3f5', texture: 'none' },
+  { name: 'pink',    h: 330, s: 0.72, critical: '#66113b', high: '#971958', medium: '#d02279', low: '#e490ba', tint: '#fbe9f2', ring: '#f1a7cc', texture: 'none' },
+  { name: 'azure',   h: 203, s: 0.80, critical: '#093854', high: '#0e5480', medium: '#1475b1', low: '#65b2e2', tint: '#e8f5fc', ring: '#a3d6f5', texture: 'none' },
+  { name: 'slate',   h: 215, s: 0.26, critical: '#293546', high: '#3f516b', medium: '#577195', low: '#9cabc0', tint: '#eff2f6', ring: '#bfcad9', texture: 'hatch' },
+  { name: 'fuchsia', h: 293, s: 0.68, critical: '#591363', high: '#861c94', medium: '#b827cc', low: '#d890e1', tint: '#f9eafb', ring: '#e7a9ef', texture: 'dots' },
+  { name: 'indigo',  h: 244, s: 0.72, critical: '#221a9d', high: '#392ddd', medium: '#655ce4', low: '#a7a2e9', tint: '#eae9fb', ring: '#aca7f1', texture: 'cross' },
 ];
+
+/**
+ * The texture as a CSS background: a faint white pattern laid over the fill. Faint on purpose —
+ * it is a tie-breaker for the eye that cannot use the hue, not decoration for the one that can.
+ * Textures scale with nothing, so a 6px sliver shows a hint of one and a 60px bar shows it plainly.
+ */
+export function textureStyle(texture: HueTexture): { backgroundImage?: string; backgroundSize?: string } {
+  switch (texture) {
+    case 'hatch': return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0 1px, transparent 1px 4px)' };
+    case 'dots':  return { backgroundImage: 'radial-gradient(rgba(255,255,255,0.45) 0.7px, transparent 0.8px)', backgroundSize: '4px 4px' };
+    case 'cross': return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.22) 0 1px, transparent 1px 5px), repeating-linear-gradient(-45deg, rgba(255,255,255,0.22) 0 1px, transparent 1px 5px)' };
+    default:      return {};
+  }
+}
 
 /** Work that belongs to no project (a team space, or nothing at all): neutral, never a hue. */
 export const NO_PROJECT_HUE: ProjectHue = {
-  name: 'none', h: 0, s: 0, critical: '#374151', high: '#4b5563', medium: '#6b7280', low: '#b0b6bf', tint: '#f3f4f6', ring: '#d1d5db',
+  name: 'none', h: 0, s: 0, critical: '#374151', high: '#4b5563', medium: '#6b7280', low: '#b0b6bf', tint: '#f3f4f6', ring: '#d1d5db', texture: 'none',
 };
 
 /** The deadline rail. Red and amber are excluded from PROJECT_HUES so these are unambiguous. */

@@ -1115,6 +1115,8 @@ export type CapacityDay = {
   utilization: number; free: number; note?: string;
   /** The day's load itemised by task (working days only), largest first. Join taskId → openTasks. */
   tasks?: { taskId: string; hours: number }[];
+  /** Set on a CLIENT-SIDE week roll-up cell (the board's "by week" view): the Monday it starts. */
+  weekOf?: string;
 };
 export type CapacityOpenTask = {
   id: string; title: string; projectId?: string; project?: string;
@@ -1124,6 +1126,11 @@ export type CapacityOpenTask = {
   isTeamWork?: boolean;
   dueDate?: string | null; priority: string; completionPercentage: number;
   projectPriority?: string; projectDueDate?: string | null;
+  /** Planned start; the board never schedules the task before it. */
+  startDate?: string | null;
+  /** This person's estimate, what they have logged against it, and whether the ledger has
+   *  already passed the estimate (absent on a payload from an older API). */
+  estimatedHours?: number; loggedHours?: number; overEstimate?: boolean;
   remainingHours: number; overdue: boolean;
 };
 export type CapacityRow = {
@@ -1133,7 +1140,7 @@ export type CapacityRow = {
   freeHours: number; committedHours: number; overCommittedHours: number; capacityHours: number; utilization: number;
   nextFreeDate: string | null; freeRunDays: number; availableNow: boolean; overdueCount: number;
 };
-export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[] };
+export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[]; generatedAt?: string };
 
 // Retrospective (past-window) view — actual attendance, not projected load.
 export type HistoryRow = {

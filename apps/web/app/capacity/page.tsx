@@ -8,19 +8,18 @@
 // what fills it; click a name (or a day) for the whole plan. The most available people sort
 // to the top, and assigning into a free window is one click from the panel.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge,
-  ArrowRight, Zap, X, Plus, Search, Clock, CalendarPlus, Plane, Flag, Building2,
+  Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge, X, Search, CalendarPlus,
 } from 'lucide-react';
 
-/** Human label for an office/branch grouping key. */
-const officeLabel = (o: string) =>
-  o === 'GURGAON' ? 'Gurgaon' : o === 'JAIPUR' ? 'Jaipur' : o;
 import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
+
+/** How often the board re-reads the server while it is on screen. */
+const POLL_MS = 30_000;
 
 type RangeKey = 'next-7' | 'next-14' | 'next-30' | 'past-30';
 const RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
@@ -35,9 +34,9 @@ import { useToast } from '@/components/ui/Toast';
 import { PersonPanel, ExtendMenu } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
-import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holidaysOf, type Segment } from '@/components/capacity/grid';
-import { BoardLegend } from '@/components/capacity/BoardLegend';
-import { HoverCard, type HoverTarget, type HoverIntent } from '@/components/capacity/HoverCard';
+import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, projectsOf, holidaysOf } from '@/components/capacity/grid';
+import { Board, officeLabel } from '@/components/capacity/Board';
+import { LiveStatus } from '@/components/capacity/LiveStatus';
 import { assignProjectHues } from '@/lib/project-colors';
 import { todayIST } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
@@ -57,8 +56,6 @@ export default function CapacityPage() {
   // latest payload, so an Extend done inside it is reflected without closing and reopening.
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [assignTo, setAssignTo] = useState<{ row: CapacityRow; start?: string; due?: string } | null>(null);
-  const [hover, setHover] = useState<HoverTarget | null>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [focusDate, setFocusDate] = useState<string | undefined>();
   const today = todayIST();
@@ -69,11 +66,14 @@ export default function CapacityPage() {
 
   // Forward projected-capacity board (default). Disabled while viewing the past. When a project
   // is selected, scope the board to that project's members (auto-synced from ProjectMember).
-  const { data, isLoading: fwdLoading } = useQuery<TeamCapacity>({
+  // Polled while the tab is visible (plus the app-wide refetch on focus/reconnect), so a task
+  // assigned, closed or logged against anywhere shows here within the interval without a reload.
+  const { data, isLoading: fwdLoading, dataUpdatedAt, isFetching, refetch } = useQuery<TeamCapacity>({
     queryKey: ['capacity', org?.id, days, projectId],
     queryFn: () => projectId ? api.capacity.forProject(projectId, days) : api.capacity.team(days),
     enabled: allowed && !!org?.id && !isPast,
-    staleTime: 60_000,
+    staleTime: POLL_MS,
+    refetchInterval: POLL_MS,
   });
 
   // Retrospective actual-attendance board (the "Past 30 days" option).
@@ -97,7 +97,8 @@ export default function CapacityPage() {
     queryKey: ['coverage-risks', org?.id, days],
     queryFn: () => api.capacity.coverageRisks(days),
     enabled: allowed && !!org?.id && !isPast,
-    staleTime: 60_000,
+    staleTime: POLL_MS,
+    refetchInterval: POLL_MS,
   });
 
   const isLoading = isPast ? histLoading : fwdLoading;
@@ -106,43 +107,8 @@ export default function CapacityPage() {
   const hues = useMemo(() => assignProjectHues(projectsOf(fwdRows)), [fwdRows]);
   const holidays = useMemo(() => holidaysOf(fwdRows), [fwdRows]);
   const selected = useMemo(() => fwdRows.find(r => r.userId === selectedUserId) ?? null, [fwdRows, selectedUserId]);
-  // Every cell's segments, once per payload — not once per hover. A hover changes page state,
-  // which re-renders every row; without this each of 26 × 30 cells re-derived its segments.
-  const segmentsByKey = useMemo(() => {
-    const m = new Map<string, Segment[] | null>();
-    for (const r of fwdRows) for (const d of r.days) m.set(`${r.userId}|${d.date}`, segmentsFor(r, d, hues, today, holidays));
-    return m;
-  }, [fwdRows, hues, holidays, today]);
-  // A cell fits five 6px segments at the 30-day range, eight at 14, a dozen at 7.
-  const maxSegments = days >= 30 ? 5 : days >= 14 ? 8 : 12;
   // A pinned project belongs to the board it was pinned on.
   useEffect(() => { setFocusProjectId(null); }, [range, projectId]);
-
-  // The hover card is fixed to the viewport, so it must go the moment anything moves.
-  useEffect(() => {
-    if (!hover) return;
-    const close = () => setHover(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); window.removeEventListener('keydown', onKey); };
-  }, [hover]);
-  const beginHover = (t: HoverIntent) => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    // The rect is read when the card is about to show, so 120ms of scrolling cannot leave the
-    // card beside where the cell used to be.
-    hoverTimer.current = setTimeout(() => {
-      if (!t.el.isConnected) return;
-      setHover({ row: t.row, day: t.day, segments: t.segments, rect: t.el.getBoundingClientRect() });
-    }, 120);
-  };
-  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
-  const endHover = () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-    setHover(null);
-  };
   const histRows = history?.rows ?? [];
   const allRows: { name: string; department?: string }[] = isPast ? histRows : fwdRows;
 
@@ -259,6 +225,7 @@ export default function CapacityPage() {
             >
               {RANGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
+            {!isPast && <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => { refetch(); qc.invalidateQueries({ queryKey: ['coverage-risks'] }); }} intervalMs={POLL_MS} className="ml-1" />}
           </div>
         </div>
 
@@ -286,13 +253,10 @@ export default function CapacityPage() {
           </div>
         ) : allRows.length === 0 ? (
           <div className="text-center py-20 text-gray-400 text-sm">No active team members.</div>
-        ) : (
-          // The board is a fixed date-header ABOVE an independently-scrolling rows region:
-          // the dates never move and rows scroll strictly BELOW them (never behind).
+        ) : isPast ? (
+          // The retrospective (attendance) view: one state per day, no segments — its own card,
+          // laid out like the board: a pinned date header above an independently scrolling body.
           <div className="bg-white rounded-xl border border-gray-200 flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Day header — pinned (not sticky): it sits outside the scroll area entirely.
-                scrollbar-gutter reserves the same space the rows' scrollbar takes, so the
-                date columns stay aligned with the cells below. */}
             <div className="flex items-end gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50 shrink-0 rounded-t-xl overflow-y-auto" style={{ scrollbarGutter: 'stable' }}>
               <div className="w-56 shrink-0 text-xs font-semibold uppercase tracking-wide text-gray-500">Member</div>
               <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${header.length}, minmax(0, 1fr))` }}>
@@ -312,100 +276,37 @@ export default function CapacityPage() {
                   );
                 })}
               </div>
-              <div className="w-40 shrink-0 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">{isPast ? 'Summary' : 'Availability'}</div>
+              <div className="w-40 shrink-0 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Summary</div>
             </div>
-
-            {/* Rows — the ONLY scrolling region; the header above and legend below stay put. */}
             <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-50" style={{ scrollbarGutter: 'stable' }}>
-              {isPast ? (
-                visibleHist.length === 0
-                  ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
-                  : visibleHist.map(row => <HistoryRowView key={row.userId} row={row} />)
-              ) : (
-                visibleFwd.length === 0
-                  ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
-                  : groupedFwd.map(g => (
-                    <div key={g.office || 'all'}>
-                      {g.office && (
-                        <div className="sticky top-0 z-[5] flex items-center gap-1.5 px-4 py-1.5 bg-gray-100/95 backdrop-blur border-y border-gray-200 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                          <Building2 size={12} className="text-gray-400" />
-                          {officeLabel(g.office)}
-                          <span className="normal-case font-normal text-gray-400">· {g.rows.length}</span>
-                        </div>
-                      )}
-                      {g.rows.map(row => (
-                    <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
-                      <button onClick={() => { setFocusDate(undefined); setSelectedUserId(row.userId); }} className="w-56 shrink-0 flex items-center gap-2.5 text-left">
-                        <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={30} />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate group-hover:text-brand-600 transition-colors">{row.name}</p>
-                          <p className="text-[11px] text-gray-400 truncate">{row.designation ?? '—'}</p>
-                        </div>
-                      </button>
-                      <div className="flex-1 grid gap-1" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
-                        {row.days.map(d => {
-                          const segments = segmentsByKey.get(`${row.userId}|${d.date}`) ?? null;
-                          return (
-                            <DayCell
-                              key={d.date} day={d} segments={segments} focusProjectId={focusProjectId} today={isToday(d.date)} maxSegments={maxSegments}
-                              onHover={e => beginHover({ row, day: d, segments, el: e.currentTarget })}
-                              onLeave={endHover}
-                              // A day opens the person's plan at that day. Adding work is the
-                              // panel's job, where you can see what is already there first.
-                              onClick={() => { endHover(); setFocusDate(d.date); setSelectedUserId(row.userId); }}
-                            />
-                          );
-                        })}
-                      </div>
-                      <div className="w-40 shrink-0 flex items-center justify-end gap-2">
-                        <div className="text-right">
-                          {row.availableNow ? (
-                            <p className="text-xs font-semibold text-emerald-600">Available now</p>
-                          ) : row.nextFreeDate ? (
-                            <p className="text-xs font-medium text-gray-600">Free {formatDate(row.nextFreeDate)}</p>
-                          ) : (
-                            // No day under a quarter loaded. If hours are still free, say that rather
-                            // than "fully booked" beside "37h free" — the two read as a contradiction.
-                            <p className="text-xs font-medium text-red-500">{row.freeHours > 0 ? 'No free day' : 'Fully booked'}</p>
-                          )}
-                          <p className="text-[10px] tabular-nums text-gray-400">
-                            {row.freeHours}h free
-                            {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-gray-900">· {row.overCommittedHours}h over</span>}
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => setAssignTo({ row, start: row.nextFreeDate ?? undefined, due: row.nextFreeDate ?? undefined })}
-                          title={`Assign a task to ${row.name}`}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-gray-900 transition-colors shrink-0"
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
-                    </div>
-                      ))}
-                    </div>
-                  ))
-              )}
+              {visibleHist.length === 0
+                ? <p className="px-4 py-10 text-center text-sm text-gray-400">No one matches those filters.</p>
+                : visibleHist.map(row => <HistoryRowView key={row.userId} row={row} />)}
             </div>
-
-            {/* Legend */}
-            {isPast ? (
-              <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
-                {(['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT', 'NOT_MARKED'] as DayState[]).map(st => (
-                  <span key={st} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
-                    <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[st].dot)} />{STATE_STYLE[st].label}
-                  </span>
-                ))}
-                <span className="text-[11px] text-gray-400 ml-auto">Actual attendance over the past 30 days</span>
-              </div>
-            ) : (
-              <BoardLegend rows={fwdRows} hues={hues} focusProjectId={focusProjectId} onFocus={setFocusProjectId} />
-            )}
+            <div className="shrink-0 flex items-center gap-4 flex-wrap px-4 py-2.5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+              {(['PRESENT', 'COMPOFF', 'LEAVE', 'HOLIDAY', 'WEEKEND', 'ABSENT', 'NOT_MARKED'] as DayState[]).map(st => (
+                <span key={st} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
+                  <span className={clsx('w-2.5 h-2.5 rounded-sm', STATE_STYLE[st].dot)} />{STATE_STYLE[st].label}
+                </span>
+              ))}
+              <span className="text-[11px] text-gray-400 ml-auto">Actual attendance over the past 30 days</span>
+            </div>
           </div>
+        ) : (
+          <Board
+            allRows={fwdRows}
+            groups={groupedFwd.map(g => ({ key: g.office || 'all', label: g.office ? officeLabel(g.office) : undefined, rows: g.rows }))}
+            days={days}
+            focusProjectId={focusProjectId}
+            onFocus={setFocusProjectId}
+            onSelectPerson={(userId, date) => { setFocusDate(date); setSelectedUserId(userId); }}
+            onAssign={row => setAssignTo({ row, start: row.nextFreeDate ?? undefined, due: row.nextFreeDate ?? undefined })}
+            emptyText="No one matches those filters."
+            fill
+            hoverSuppressed={!!selected || !!assignTo}
+          />
         )}
       </div>
-
-      {hover && !selected && !assignTo && <HoverCard target={hover} today={today} />}
 
       {/* Person drill-down */}
       {selected && (
