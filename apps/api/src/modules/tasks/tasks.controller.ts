@@ -31,10 +31,16 @@ export class TasksController {
   // Declared ABOVE @Get(':id'): Nest matches routes in declaration order, so putting these
   // after it would make "standards" and "timer" be read as task ids.
 
-  /** The session this person currently has running, if any. Drives the My Tasks header. */
+  /** Every clock this person has running. Several at once is allowed. Drives the My Tasks header. */
   @Get('timer/running') @RequirePermission('task.view')
-  runningTimer() {
+  runningTimers() {
     return this.time.running();
+  }
+
+  /** Today: what the clock recorded per task, what is filed, and what the day still owes. */
+  @Get('timer/today') @RequirePermission('task.view')
+  today() {
+    return this.time.todayBoard();
   }
 
   /** Every learned standard and the number of completions behind it. */
@@ -48,26 +54,19 @@ export class TasksController {
     return this.time.start(id);
   }
 
-  @Post(':id/stop') @RequirePermission('task.view')
-  stopTimer(@Param('id') id: string) {
-    return this.time.stop(id);
+  /** Pause the clock. Resuming is Start again — there is no third state to get wrong. */
+  @Post(':id/pause') @RequirePermission('task.view')
+  pauseTimer(@Param('id') id: string) {
+    return this.time.pause(id);
   }
 
-  /** What to show in the close dialog: tracked time, and the expectation to compare against. */
-  @Get(':id/closing-summary') @RequirePermission('task.view')
-  closingSummary(@Param('id') id: string) {
-    return this.time.closingSummary(id);
-  }
-
-  @Post(':id/complete') @RequirePermission('task.view')
-  complete(@Param('id') id: string, @Body() body: { hours: number; closedStatusId?: string }) {
-    return this.time.complete(id, Number(body?.hours), body?.closedStatusId);
-  }
-
-  /** Record my hours without closing — the analyst finishes, the reviewer closes later. */
-  @Post(':id/log-my-part') @RequirePermission('task.view')
-  logMyPart(@Param('id') id: string, @Body() body: { hours: number }) {
-    return this.time.logMyPart(id, Number(body?.hours));
+  /**
+   * Finish the task. One click: no hours to enter, no dialog. The clock stops, what it recorded
+   * teaches the estimate, and today's share of it is filed to the timesheet.
+   */
+  @Post(':id/finish') @RequirePermission('task.view')
+  finish(@Param('id') id: string, @Body() body: { closedStatusId?: string }) {
+    return this.tasks.finish(id, body?.closedStatusId);
   }
 
   @Post(':id/reopen') @RequirePermission('task.view')

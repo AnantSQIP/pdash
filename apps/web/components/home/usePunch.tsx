@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Check, LogIn, LogOut, Loader } from 'lucide-react';
-import { api, type Attendance, type LeaveBalance } from '@/lib/api';
+import { api, type Attendance, type LeaveBalance, type PunchOutCheck } from '@/lib/api';
+import { PunchOutGate } from '@/components/attendance/PunchOutGate';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -46,10 +47,12 @@ export function usePunch() {
   const punch = useMutation({
     // Location is mandatory — capture it first and block the punch if the browser denies it.
     // Reverse-geocode to a human area/landmark (best-effort; never blocks the punch).
-    mutationFn: async () => {
+    // `earlyReason` is only sent when leaving with the timesheet short; the server records it
+    // on the day and lets the punch through.
+    mutationFn: async (earlyReason?: string) => {
       const loc = await getCurrentLocation();
       const area = await reverseGeocode(loc.lat, loc.lng);
-      return api.attendance.punch({ ...loc, area });
+      return api.attendance.punch({ ...loc, area, ...(earlyReason ? { earlyReason } : {}) });
     },
     onSuccess: (row) => {
       // The overnight-close path returns YESTERDAY's row (it closed the forgotten shift
@@ -90,24 +93,39 @@ export function usePunch() {
 export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'card' }) {
   const { allowed, ready, att, clockedIn, dayComplete, busy, punch, totalLeave, leaveKnown } = usePunch();
   const [confirmingOut, setConfirmingOut] = useState(false);
+  // The day the punch-out would close, when the timesheet is not ready for it.
+  const [gate, setGate] = useState<PunchOutCheck | null>(null);
+  const [checking, setChecking] = useState(false);
   if (!allowed) return null;
 
   const statusLabel = dayComplete ? 'Day complete' : clockedIn ? 'Clocked in' : !ready ? 'Loading…' : 'Not clocked in';
-  const doPunch = () => {
-    if (!ready || busy || dayComplete) return;
+  const doPunch = async () => {
+    if (!ready || busy || checking || dayComplete) return;
     // Punching out ends and locks the day — require a confirm so a misclick can't do it.
     if (clockedIn && !confirmingOut) { setConfirmingOut(true); setTimeout(() => setConfirmingOut(false), 3000); return; }
     setConfirmingOut(false);
-    punch.mutate();
+    if (clockedIn) {
+      // Ask before pressing. The server enforces the same rule on the punch itself — a check the
+      // client can skip is not a rule — but being told at the door what the day still owes, with
+      // the tracked time sitting there ready to file, is the difference between a rule people
+      // keep and a rule people resent.
+      setChecking(true);
+      try {
+        const check = await api.attendance.punchOutCheck();
+        if (!check.ok) { setGate(check); return; }
+      } catch { /* the check is a courtesy; the server still decides */ }
+      finally { setChecking(false); }
+    }
+    punch.mutate(undefined);
   };
-  const label = busy ? 'Saving…'
+  const label = checking ? 'Checking…' : busy ? 'Saving…'
     : dayComplete ? 'Completed for today'
     : clockedIn ? (confirmingOut ? 'Confirm punch out?' : 'Punch Out')
     : 'Punch In';
   const icon = busy ? <Loader size={15} className="animate-spin" />
     : dayComplete ? <Check size={15} />
     : clockedIn ? <LogOut size={15} /> : <LogIn size={15} />;
-  const disabled = !ready || busy || dayComplete;
+  const disabled = !ready || busy || checking || dayComplete;
   const btnColor = dayComplete ? 'bg-gray-300'
     : confirmingOut ? 'bg-red-600 hover:bg-red-700'
     : clockedIn ? 'bg-red-500 hover:bg-red-600'
@@ -142,6 +160,15 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
     </>
   );
 
+  const gateDialog = gate && (
+    <PunchOutGate
+      check={gate}
+      onClose={() => setGate(null)}
+      onReady={() => { setGate(null); punch.mutate(undefined); }}
+      onLeaveAnyway={reason => { setGate(null); punch.mutate(reason); }}
+    />
+  );
+
   if (variant === 'card') {
     return (
       <div className="px-5 py-4">
@@ -150,6 +177,7 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
           <div className="min-w-0">{statusLine}</div>
         </div>
         {button}
+        {gateDialog}
       </div>
     );
   }
@@ -158,6 +186,7 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
     <div className="flex items-center gap-3">
       <div className="text-right hidden sm:block">{statusLine}</div>
       {button}
+      {gateDialog}
     </div>
   );
 }

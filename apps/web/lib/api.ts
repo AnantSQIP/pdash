@@ -738,23 +738,66 @@ export type ApiCommentPage = { items: ApiComment[]; total: number; hasMore: bool
 export const COMMENT_PAGE_SIZE = 100;
 
 // ── Task timing ──────────────────────────────────────────────────────────────
-/** The one task this person currently has the clock running on. */
+/** One running clock. A person may hold several at once. */
 export type RunningTimer = {
   id: string; taskId: string; startedAt: string;
   task: { id: string; title: string };
-} | null;
+};
 
-/** What to show when closing: your own time, your role's expectation, and the task's. */
-export type ClosingSummary = {
-  taskId: string; title: string; role: string;
-  trackedMinutes: number; suggestedHours: number;
+/** One task's share of a day: what the clock recorded, and how much of it is filed. */
+export type TrackedTask = {
+  taskId: string; title: string;
+  projectId?: string; project?: string; projectPid?: string | null; projectRound?: number;
+  minutes: number; filedHours: number; unfiledHours: number;
+  running: boolean; finished: boolean;
+};
+
+/** A person's day: what it owes, what is filed, and what the clock has ready to file. */
+export type DayStatus = {
+  date: string;
+  /** Hours owed: 8 normally, 4 on an approved half day, 0 on leave, a holiday or a weekend. */
+  target: number;
+  logged: number;
+  missing: number;
+  complete: boolean;
+  trackedMinutes: number;
+  trackedHours: number;
+  unfiledHours: number;
+  running: number;
+  tracked: TrackedTask[];
+};
+
+/** What punching out would say, asked before pressing it. */
+export type PunchOutCheck = {
+  clockedIn: boolean;
+  ok: boolean;
+  /** Hours since you punched in, or null when you are not clocked in. */
+  attendedHours: number | null;
+  /** The clock recorded more than you have been here — several timers left running at once. */
+  overTracked: boolean;
+  day: DayStatus;
+};
+
+/** Anything unresolved behind you, for the catch-up banner. */
+export type CatchUp = {
+  days: (DayStatus & { autoClosed: boolean })[];
+  autoClosed: { date: string; hours: number | null }[];
+  running: { sessionId: string; taskId: string; title: string; startedAt: string; capped: boolean; hours: number | null }[];
+  clear: boolean;
+};
+
+/** What settling a finished task did: the clock, the estimate and the timesheet. */
+export type FinishSettle = {
+  settled: boolean;
+  role: string | null;
+  trackedMinutes: number;
+  todayMinutes: number;
+  counted: boolean;
   expectedHoursForMyRole: number | null;
   basedOnCompletions: number;
-  expectedHoursForTask: number | null;
-  alreadyCounted: boolean;
-  /** Hours already in your timesheet for this task; closing adds only any shortfall. */
-  loggedHours: number;
-};
+  timesheetHours: number;
+  timesheetWarning: string | null;
+} | null;
 
 /** A learned standard: what each role takes, and the task total as their sum. */
 export type TaskStandardGroup = {
@@ -1793,25 +1836,22 @@ export const api = {
 
     // ── Timing ────────────────────────────────────────────────────────────────
     /** The task whose clock is running for me, if any. */
-    runningTimer: () => req<RunningTimer>('/tasks/timer/running'),
+    /** Every clock this person has running — several at once is allowed. */
+    runningTimers: () => req<RunningTimer[]>('/tasks/timer/running'),
+    /** Today: tracked per task, what is filed, and what the day still owes. */
+    today: () => req<DayStatus>('/tasks/timer/today'),
     /** What each standard task has actually taken, per role. */
     standards: () => req<TaskStandardGroup[]>('/tasks/standards'),
     /** Start the clock. Starting a second task stops the first — one thing at a time. */
     startTimer: (id: string) =>
       req<{ id: string; taskId: string; startedAt: string; resumed: boolean }>(`/tasks/${id}/start`, { method: 'POST' }),
-    stopTimer: (id: string) =>
-      req<{ stopped: boolean; /** THIS sitting's minutes. */ minutes: number; totalMinutes: number }>(`/tasks/${id}/stop`, { method: 'POST' }),
-    closingSummary: (id: string) => req<ClosingSummary>(`/tasks/${id}/closing-summary`),
-    /** Record my hours and close the task. */
-    completeWithHours: (id: string, hours: number, closedStatusId?: string) =>
-      req<{ id: string; role: string; myHours: number; expectedHoursForMyRole: number | null; basedOnCompletions: number; counted: boolean;
-            /** Hours the close added to your timesheet (0 if already logged), and why it could not if it could not. */
-            timesheetHours: number; timesheetWarning: string | null }>(
-        `/tasks/${id}/complete`, { method: 'POST', body: JSON.stringify({ hours, closedStatusId }) }),
-    /** Record my hours WITHOUT closing — the analyst finishes, the reviewer closes later. */
-    logMyPart: (id: string, hours: number) =>
-      req<{ id: string; role: string; myHours: number; timesheetHours: number; timesheetWarning: string | null }>(
-        `/tasks/${id}/log-my-part`, { method: 'POST', body: JSON.stringify({ hours }) }),
+    /** Pause the clock. Resuming is Start again. */
+    pauseTimer: (id: string) =>
+      req<{ paused: boolean; /** THIS sitting's minutes. */ minutes: number; totalMinutes: number; todayMinutes: number }>(
+        `/tasks/${id}/pause`, { method: 'POST' }),
+    /** Finish the task: one click. The clock stops and today's tracked time is filed. */
+    finishTask: (id: string, closedStatusId?: string) =>
+      req<ApiTask & { settle: FinishSettle }>(`/tasks/${id}/finish`, { method: 'POST', body: JSON.stringify({ closedStatusId }) }),
     reopenTask: (id: string, openStatusId?: string) =>
       req<{ id: string; reopenedCount: number }>(`/tasks/${id}/reopen`, { method: 'POST', body: JSON.stringify({ openStatusId }) }),
   },
@@ -2230,8 +2270,13 @@ export const api = {
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
     // No work mode is sent: a day is recorded as worked from home only through an approved
     // regularisation request of that type.
-    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string }) =>
+    /** `earlyReason` is only read when punching out with the timesheet short — it is recorded on the day. */
+    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string; earlyReason?: string }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
+    /** What punching out would say, before pressing it. */
+    punchOutCheck: () => req<PunchOutCheck>('/attendance/me/punch-out-check'),
+    /** Short days, a shift closed at 11:59 pm, a clock still running — the catch-up banner. */
+    catchUp: () => req<CatchUp>('/attendance/me/catch-up'),
     regularize: (id: string, reason: string, newStatus?: string) =>
       req<Attendance>(`/attendance/${id}/regularize`, { method: 'POST', body: JSON.stringify({ reason, newStatus }) }),
     mark: (data: { userId: string; date: string; status: string; note?: string }) =>
