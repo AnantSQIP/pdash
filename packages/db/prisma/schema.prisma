@@ -167,7 +167,6 @@ model User {
   leaveCoverFor             LeaveRequest[]             @relation("LeaveAlternateEmployee")
   regularizationRequests    RegularizationRequest[]
   compOffRequests           CompOffRequest[]
-  wfhRequests               WfhRequest[]
   timesheetBackdateRequests TimesheetBackdateRequest[]
   expenses                  Expense[]
   calendarEventAttendees    CalendarEventAttendee[]
@@ -1380,7 +1379,8 @@ model Attendance {
   // Default is ABSENT, never PRESENT: an attendance row that nobody explicitly filled in must not
   // assert that somebody showed up. Every app write sets this explicitly.
   status           String    @default("ABSENT")
-  // Where the work happened — a WORK MODE, not a leave type. OFFICE | WFH.
+  // Where the work happened — a WORK MODE, not a leave type. OFFICE | WFH. A day becomes WFH
+  // only through an APPROVED regularisation request of type WFH; nothing else writes it.
   workMode         String    @default("OFFICE")
   note             String?
   // Regularisation (correcting a missed / incorrect mark)
@@ -1519,33 +1519,6 @@ model TimesheetBackdateRequest {
   @@index([userId])
   @@index([organizationId, status])
   @@map("timesheet_backdate_request")
-}
-
-// Work-from-home request: WFH is a WORK MODE (the person still works, it is not
-// absence), but working it must be AGREED, not self-declared. The employee raises a
-// request for a date range from the Leaves section; HR/Admin (attendance.manage)
-// approves or rejects. Punch then derives workMode=WFH automatically on days covered
-// by an approved request — there is no WFH button on the punch screen.
-model WfhRequest {
-  id             String    @id @default(cuid())
-  userId         String
-  organizationId String?
-  startDate      DateTime
-  endDate        DateTime
-  reason         String
-  // PENDING | APPROVED | REJECTED | CANCELLED
-  status         String    @default("PENDING")
-  reviewedBy     String?
-  reviewedAt     DateTime?
-  reviewNote     String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([organizationId, status])
-  @@map("wfh_request")
 }
 
 model LeaveRequest {
@@ -2471,7 +2444,7 @@ model MessageMention {
 // One row per user. `status` is the MANUAL availability the person chose
 // (AVAILABLE | BUSY | DND | BRB | OFFLINE=appear offline), null = auto. The
 // EFFECTIVE presence shown to others is computed on read from this row's
-// lastSeenAt (a heartbeat) plus approved leave/WFH for today — never stored.
+// lastSeenAt (a heartbeat) plus approved leave for today — never stored.
 // ═══════════════════════════════════════════════════════════════
 
 model Presence {

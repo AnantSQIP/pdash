@@ -64,7 +64,7 @@ eq(shiftDay('not-a-day', 1), 'not-a-day', 'an unparseable day is returned unchan
 
 // ── The 5:30am window: the reason todayUtc() is not "today" ───────────────────
 // Between midnight and 05:30 IST the UTC date is still yesterday. Everything that means
-// "today" — a timesheet's default date, the max on a date picker, matching an approved WFH
+// "today" — a timesheet's default date, the max on a date picker, matching an approved leave
 // against the current day — has to use todayIST().
 const earlyMorningIST = new Date('2026-09-07T03:00:00+05:30');
 eq(istDay(earlyMorningIST), '2026-09-07', 'at 3am IST the office day is the 7th');

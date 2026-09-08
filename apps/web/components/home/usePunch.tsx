@@ -46,10 +46,10 @@ export function usePunch() {
   const punch = useMutation({
     // Location is mandatory — capture it first and block the punch if the browser denies it.
     // Reverse-geocode to a human area/landmark (best-effort; never blocks the punch).
-    mutationFn: async (workMode?: 'WFH' | 'OFFICE') => {
+    mutationFn: async () => {
       const loc = await getCurrentLocation();
       const area = await reverseGeocode(loc.lat, loc.lng);
-      return api.attendance.punch({ ...loc, area, ...(workMode ? { workMode } : {}) });
+      return api.attendance.punch({ ...loc, area });
     },
     onSuccess: (row) => {
       // The overnight-close path returns YESTERDAY's row (it closed the forgotten shift
@@ -93,12 +93,12 @@ export function PunchControl({ variant = 'banner' }: { variant?: 'banner' | 'car
   if (!allowed) return null;
 
   const statusLabel = dayComplete ? 'Day complete' : clockedIn ? 'Clocked in' : !ready ? 'Loading…' : 'Not clocked in';
-  const doPunch = (workMode?: 'WFH' | 'OFFICE') => {
+  const doPunch = () => {
     if (!ready || busy || dayComplete) return;
     // Punching out ends and locks the day — require a confirm so a misclick can't do it.
     if (clockedIn && !confirmingOut) { setConfirmingOut(true); setTimeout(() => setConfirmingOut(false), 3000); return; }
     setConfirmingOut(false);
-    punch.mutate(workMode);
+    punch.mutate();
   };
   const label = busy ? 'Saving…'
     : dayComplete ? 'Completed for today'

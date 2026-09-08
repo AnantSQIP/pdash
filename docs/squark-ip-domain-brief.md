@@ -31,7 +31,7 @@ Matter flow: client sends matter → Manager/Consultant **scopes + opens a proje
 list + PID `SQ_26_27_nnn`) → RAs/SRAs do search/analysis → **mandatory 2nd-reviewer QA** → Consultant/Manager
 finalises deliverable → delivered. Analysts **log time per matter/task** (effort varies by task type: light HML
 ~15–30 min/patent vs. rigorous charting 4–8 h/patent). Working norms: standard corporate India (punch-in/out,
-approved leave, WFH work-mode, India holidays).
+approved leave, India holidays).
 
 ## Realistic QA scenarios by persona
 1. **Intern/RA (Employee)** — logs 6h on an "Exhaustive Multi-Database Search" task; punch-in; half-day leave. → timesheets, task update, attendance, no PII/billable access.
@@ -39,7 +39,7 @@ approved leave, WFH work-mode, India holidays).
 3. **Consultant/Sr. Consultant** — 2nd-reviewer QA on a claim chart, rework, finalise; Discuss comment. → review gate, state transitions.
 4. **Manager** — creates a "Claim Chart — New" project (auto tasks + PID), assigns team, sets internal vs client deadline, checks Capacity. → project+templates, PID, assignment, dual-deadline redaction, capacity.
 5. **Super Admin** — /patents portal: registers a client's real numbers behind the passcode (`Pat_MLK_001`), links to a matter; reviews Performance. → Super-Admin-only portal, passcode, no-leak, performance.
-6. **HR** — approves WFH + regularization; views an employee's PII (redacted for others); runs appraisal cycle. → HR-only PII, approvals, people-ops scope.
+6. **HR** — approves regularization (including days worked from home); views an employee's PII (redacted for others); runs appraisal cycle. → HR-only PII, approvals, people-ops scope.
 7. **Admin** — reviews a new project's billable flag; reassigns coverage on emergency leave. → admin billable review, notifications, coverage.
 
 _Flags: team size (~30) and RA stipend figures are aggregator listings; leadership names unverified; Indian working-hour norms are general-practice inferences. The two repo research briefs (docs/research/, branch docs-patent-hml-research) are research, not spec._

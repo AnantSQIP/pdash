@@ -22,7 +22,7 @@ const prisma = new PrismaClient();
  *   • timesheet backfill 31 / 92 days → SELF_FILL_DAYS, APPROVAL_MAX_DAYS (timesheets.service.ts)
  *   • 12 CL / 8 SL / 15 EL            → LeaveType.annualQuota (seed.ts)
  *   • 2 optional holidays a year      → the published Squark IP 2026 calendar
- *   • WFH approved by attendance.manage holders — HR, Admin, Super Admin
+ *   • worked-from-home recorded only via an approved regularisation (attendance.regularize)
  *
  * That distinction matters. A staff handbook is HR's to write and the firm's to sign off. What the
  * software does is a fact, and staff being unable to read that fact anywhere is the actual gap
@@ -78,19 +78,12 @@ const POLICIES: Draft[] = [
     category: 'Attendance',
     description: CITATION,
     body: [
-      'TWO WAYS A DAY BECOMES A WORK-FROM-HOME DAY',
+      'HOW A DAY BECOMES A WORK-FROM-HOME DAY',
       '',
-      '1. AGREED IN ADVANCE. Raise a work-from-home request from the Leaves section. It is reviewed',
-      '   by HR or an administrator. Once approved, the days it covers are recorded as WFH',
-      '   automatically when you punch in — you do not need to choose anything.',
-      '',
-      '2. ON THE DAY. The first-login prompt offers "Punch In — Working from home". This is the only',
-      '   place in the Dashboard where work-from-home can be chosen on the day, deliberately: it',
-      '   belongs to the once-a-day moment of starting work, whereas a permanent button beside the',
-      '   clock invites a mis-click on a day nobody meant to change.',
-      '',
-      'An approved request always wins. If you have one covering today, the day is WFH regardless of',
-      'which button you press.',
+      'Working from home is not requested in advance and is not chosen at punch time. Punch in and out',
+      'as usual, then raise a regularisation request for that date from the Attendance section and pick',
+      '"Worked from home" as the type. HR reviews it (attendance.regularize); on approval the day is',
+      'recorded as worked from home.',
       '',
       'WHAT IT IS NOT',
       '',

@@ -7,15 +7,13 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// The eight Gurgaon members (by login email). "Ankit Kumar Verma" = ankit.verma,
+// The six Gurgaon members (by login email). "Ankit Kumar Verma" = ankit.verma,
 // "Vijay" = the one Vijay Mishra — both verified as the only match in the roster.
 const GURGAON = [
   'anant.gupta@squarkip.com',
   'ankit.verma@squarkip.com',
   'rajesh.joshi@squarkip.com',
   'meetu.singh@squarkip.com',
-  'nitin.goel@squarkip.com',
-  'arjun.ghosh@squarkip.com',
   'vijay.mishra@squarkip.com',
   'ketan.dagar@squarkip.com',
 ];

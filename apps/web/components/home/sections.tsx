@@ -35,7 +35,7 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went
 function prettyLeave(code: string): string {
   const map: Record<string, string> = {
     SICK: 'Sick', SL: 'Sick', CASUAL: 'Casual', CL: 'Casual', EARNED: 'Earned', EL: 'Earned',
-    COMP_OFF: 'Comp-off', CO: 'Comp-off', WFH: 'WFH', UNPAID: 'Unpaid', LOP: 'Unpaid',
+    COMP_OFF: 'Comp-off', CO: 'Comp-off', UNPAID: 'Unpaid', LOP: 'Unpaid',
   };
   return map[code] ?? code.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }

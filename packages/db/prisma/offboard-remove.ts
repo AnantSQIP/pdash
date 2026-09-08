@@ -27,8 +27,8 @@
 //
 // TAKE A BACKUP FIRST. ./scripts/backup.sh
 //
-//   DATABASE_URL=... npx ts-node packages/db/prisma/offboard-remove.ts --retire "Arjun Ghosh"
-//   node packages/db/prisma/dist/offboard-remove.js --anonymise "Arjun Ghosh" "Nitin Goel"
+//   DATABASE_URL=... npx ts-node packages/db/prisma/offboard-remove.ts --retire "First Last"
+//   node packages/db/prisma/dist/offboard-remove.js --anonymise "First Last" "Another Person"
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { User, CheckSquare, Settings, LogOut, Home, Plane } from 'lucide-react';
+import { User, CheckSquare, Settings, LogOut, Plane } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useOrg } from '@/lib/org-context';
 import { usePresence, presenceMeta } from '@/lib/presence-context';
@@ -57,7 +57,6 @@ function StatusPicker() {
       <div className="flex items-center gap-2 mb-2">
         <span className={clsx('w-2.5 h-2.5 rounded-full', meta.dot)} />
         <span className="text-sm font-medium text-gray-800">{meta.label}</span>
-        {mine?.workMode === 'WFH' && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full"><Home size={9} /> WFH</span>}
         {mine?.effective === 'ON_LEAVE' && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded-full"><Plane size={9} /> Leave</span>}
       </div>
       {mine?.statusMessage && <p className="text-xs text-gray-500 mb-2 truncate">“{mine.statusMessage}”</p>}

@@ -106,7 +106,7 @@ export function TimesheetCalendar({ selectedDate, onSelectDate }: { selectedDate
               const isSelected = date === selectedDate;
               const compPending = cell?.compOff === 'PENDING';
               const compApproved = cell?.compOff === 'APPROVED';
-              // Any undecided leave/WFH/comp-off on this day. The hours are still owed (nothing
+              // Any undecided leave/comp-off on this day. The hours are still owed (nothing
               // is approved yet) — the dashed amber outline just says "you've asked about this".
               const pend = cell?.pending;
               return (

@@ -778,7 +778,7 @@ export type TimesheetCalendarDay = {
   status: 'COMPLETE' | 'PARTIAL' | 'LOW' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'FUTURE';
   /** Set when the day has a comp-off claim — APPROVED makes it a required working day; PENDING shows an asterisk. */
   compOff?: 'APPROVED' | 'PENDING';
-  /** An undecided leave/WFH/comp-off request covering this day. The target is unchanged — the
+  /** An undecided leave/comp-off request covering this day. The target is unchanged — the
    *  hours are still owed until the request is actually approved. */
   pending?: { kind: string; label: string } | null;
 };
@@ -800,7 +800,7 @@ export type CalendarEvent = {
   location?: string | null; joinUrl?: string | null; reminderMinutes?: number | null;
   recurrence?: string | null; recurrenceUntil?: string | null; recurrenceParentId?: string | null; notes?: string | null;
   attendees?: { userId: string; response?: string; user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'email'> }[];
-  /** True for a leave/WFH/comp-off request that has been raised but NOT yet approved. These are
+  /** True for a leave/comp-off request that has been raised but NOT yet approved. These are
    *  derived server-side (id is `pending:<kind>:<requestId>`) and cannot be edited or deleted. */
   pending?: boolean;
 };
@@ -958,9 +958,9 @@ export type NotificationPrefs = {
   soundEnabled: boolean;
 };
 // Effective presence for one person (computed server-side).
-export type PresenceEntry = { userId: string; status: string; workMode: string; statusMessage?: string | null };
+export type PresenceEntry = { userId: string; status: string; statusMessage?: string | null };
 // The signed-in user's own presence (manual choice + resolved effective).
-export type MyPresence = { status: string | null; statusMessage: string | null; statusExpiresAt: string | null; effective: string; workMode: string };
+export type MyPresence = { status: string | null; statusMessage: string | null; statusExpiresAt: string | null; effective: string };
 export type MessageReaction = { emoji: string; userId: string };
 // A poll carried on its own message (message.content is the question).
 export type MessagePoll = {
@@ -1224,7 +1224,7 @@ export type Attendance = {
 export type AttendanceDay = {
   date: string; status: string; workMode?: string; checkIn?: string | null; checkOut?: string | null;
   totalHours?: number | null; isRegularized: boolean; note?: string | null;
-  /** A leave/WFH/comp-off request covering this day that has NOT been decided yet. The day's
+  /** A leave/comp-off request covering this day that has NOT been decided yet. The day's
    *  `status` is unaffected — nothing is agreed until it's approved. */
   pending?: { kind: string; label: string } | null;
 };
@@ -1282,16 +1282,6 @@ export type CompOffEvidence = {
   timesheets: { task: string; hours: number; notes?: string }[];
   attendance: { checkIn?: string | null; checkOut?: string | null; totalHours?: number | null } | null;
 };
-// WFH is agreed in advance: request a date range → HR/Admin (attendance.manage) approves →
-// punching on a covered day records workMode WFH automatically; a person can also choose WFH
-// at punch time for a single day, without raising a request first.
-export type WfhRequestItem = {
-  id: string; userId: string; organizationId?: string | null;
-  startDate: string; endDate: string; reason: string;
-  status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
-  createdAt: string;
-  user?: { id: string; firstName: string; lastName: string; email: string; profilePhoto?: string | null };
-};
 export type CompOffRequest = {
   id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
   projectRef?: string | null; hoursWorked?: number | null; status: string;
@@ -1312,19 +1302,6 @@ export type LeaveBalance = {
   isCompOff?: boolean; credits?: number;
 };
 export type Holiday = { id: string; organizationId: string; name: string; date: string; type: string; recurring: boolean };
-
-/** WFH-vs-office across a window. `mode` is only WFH/OFFICE on a day actually worked — leave,
- *  holidays, weekends and no-shows report as themselves rather than counting as "office". */
-export type WorkModeCell = {
-  date: string; mode: 'WFH' | 'OFFICE' | 'LEAVE' | 'HOLIDAY' | 'WEEKEND' | 'ABSENT' | 'NOT_MARKED';
-  wfhStatus?: string | null; checkIn?: string | null; area?: string | null;
-};
-export type OrgWorkModes = {
-  from: string; to: string; dates: string[];
-  rows: { userId: string; name: string; designation?: string; office?: string; profilePhoto?: string;
-          days: WorkModeCell[]; wfhDays: number; officeDays: number }[];
-  today: { wfh: number; office: number; leave: number; notMarked: number; absent: number };
-};
 
 export type Expense = {
   id: string; userId: string; organizationId?: string | null;
@@ -2238,23 +2215,10 @@ export const api = {
     today: () => req<Attendance | null>('/attendance/me/today'),
     myMonth: (year: number, month: number) => req<AttendanceMonth>(`/attendance/me/month?year=${year}&month=${month}`),
     userMonth: (userId: string, year: number, month: number) => req<AttendanceMonth>(`/attendance/users/${userId}/month?year=${year}&month=${month}`),
-    // workMode is derived server-side (approved WFH request ⇒ WFH, else OFFICE).
-    /** `workMode: 'WFH'` records the day as work-from-home without a prior request. */
-    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string; workMode?: 'WFH' | 'OFFICE' }) =>
+    // No work mode is sent: a day is recorded as worked from home only through an approved
+    // regularisation request of that type.
+    punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
-    // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
-    requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
-      req<WfhRequestItem>('/attendance/wfh', { method: 'POST', body: JSON.stringify(data) }),
-    myWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/me'),
-    /** Who is working from home vs the office — today plus the preceding days. HR/Admin only. */
-    orgWorkModes: (days = 7) => req<OrgWorkModes>(`/attendance/org/work-modes?days=${days}`),
-    pendingWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/pending'),
-    approveWfh: (id: string, note?: string) =>
-      req<WfhRequestItem>(`/attendance/wfh/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
-    rejectWfh: (id: string, note?: string) =>
-      req<WfhRequestItem>(`/attendance/wfh/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
-    cancelWfh: (id: string) =>
-      req<WfhRequestItem>(`/attendance/wfh/${id}/cancel`, { method: 'POST' }),
     regularize: (id: string, reason: string, newStatus?: string) =>
       req<Attendance>(`/attendance/${id}/regularize`, { method: 'POST', body: JSON.stringify({ reason, newStatus }) }),
     mark: (data: { userId: string; date: string; status: string; note?: string }) =>

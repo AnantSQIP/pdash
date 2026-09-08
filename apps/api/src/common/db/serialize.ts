@@ -60,8 +60,5 @@ export const dayKeyFor = (userId: string, day: Date) =>
 /** One person's leave — overlap is a range test across their whole set, so it is keyed per person. */
 export const leaveKeyFor = (userId: string) => `leave:${userId}`;
 
-/** One person's work-from-home requests, same reasoning as leave. */
-export const wfhKeyFor = (userId: string) => `wfh:${userId}`;
-
 /** One organisation's department names — the uniqueness rule is org-wide. */
 export const departmentKeyFor = (organizationId: string) => `dept:${organizationId}`;
