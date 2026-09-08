@@ -6,19 +6,13 @@ import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
-  Users, Gauge, Settings, Bell, ChevronDown, LineChart, Receipt,
+  Users, Gauge, Settings, LineChart, Receipt,
   ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, Users2, TrendingUp, type LucideIcon, MessageSquareHeart, ScanSearch,
  UserCog,} from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
-import { useQuery } from '@tanstack/react-query';
-import { NotificationsPanel } from './NotificationsPanel';
-import { UserMenu } from './UserMenu';
-import { api } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { fullName } from '@/lib/avatar';
-import { Avatar } from '@/components/Avatar';
 
 type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | string[]; superAdminOnly?: boolean };
 
@@ -86,18 +80,6 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
   const { can, isSuperAdmin } = usePermissions();
   // A nav entry is visible when its permission passes, or when it's Super-Admin-only and you are one.
   const navVisible = (n: NavItem) => (n.superAdminOnly ? isSuperAdmin : !n.perm || can(n.perm));
-  // Real unread-notification count. Polled at 30s, and paused while the tab is
-  // hidden (refetchIntervalInBackground defaults false) to avoid idle background load.
-  const { data: unread } = useQuery({
-    queryKey: ['notifications-unread'],
-    queryFn: () => api.notifications.unreadCount(),
-    enabled: !!currentUser?.id,
-    refetchInterval: 30_000,
-    staleTime: 20_000,
-  });
-  const unreadCount = unread?.count ?? 0;
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
   // Restore persisted state on mount
@@ -126,8 +108,6 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
     return () => window.removeEventListener('keydown', onKey);
   }, [toggle]);
 
-  const name = currentUser ? fullName(currentUser) : 'Loading…';
-  const email = currentUser?.email ?? '';
 
   return (
     <>
@@ -246,26 +226,10 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
         )}
       </nav>
 
-      {/* Bottom: notifications + settings + user */}
+      {/* Bottom: settings only. Notifications and the account moved to the top-right corner,
+          where a web application's account controls belong and where the punch button now
+          lives beside them. */}
       <div className="border-t border-white/10 p-3 space-y-0.5">
-        <button
-          onClick={() => setShowNotifications(v => !v)}
-          title={collapsed ? 'Notifications' : undefined}
-          className={clsx(
-            'w-full flex items-center rounded-lg text-sm text-white/60 hover:bg-sidebar-hover hover:text-white transition-colors',
-            collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
-          )}
-        >
-          <span className="relative shrink-0">
-            <Bell size={17} />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
-            )}
-          </span>
-          {!collapsed && 'Notifications'}
-        </button>
         <Link
           href="/settings"
           title={collapsed ? 'Settings' : undefined}
@@ -277,29 +241,8 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
           <Settings size={17} className="shrink-0" />
           {!collapsed && 'Settings'}
         </Link>
-        <div
-          onClick={() => setShowUserMenu(v => !v)}
-          title={collapsed ? name : undefined}
-          className={clsx(
-            'flex items-center rounded-lg hover:bg-sidebar-hover cursor-pointer mt-1',
-            collapsed ? 'justify-center px-0 py-2' : 'gap-2 px-3 py-2',
-          )}
-        >
-          <Avatar user={currentUser} size={28} />
-          {!collapsed && (
-            <>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-white truncate">{name}</p>
-                <p className="text-[10px] text-white/40 truncate">{email}</p>
-              </div>
-              <ChevronDown size={13} className="text-white/40 shrink-0" />
-            </>
-          )}
-        </div>
       </div>
 
-      {showNotifications && <NotificationsPanel onClose={() => setShowNotifications(false)} collapsed={collapsed} />}
-      {showUserMenu && <UserMenu onClose={() => setShowUserMenu(false)} collapsed={collapsed} />}
       </aside>
     </>
   );

@@ -10,6 +10,7 @@ import { ForcePasswordReset } from './ForcePasswordReset';
 import { CompleteProfile } from './CompleteProfile';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { NotificationToaster } from '@/components/layout/NotificationToaster';
+import { TopBar } from './TopBar';
 
 const PUBLIC_ROUTES = ['/login', '/signup'];
 
@@ -83,12 +84,19 @@ export function AppShell({ children }: { children: ReactNode }) {
     <>
       <Sidebar mobileOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {/* Phone / tablet: the drawer handle and the brand, with the same controls on the right. */}
         <header className="lg:hidden flex items-center gap-3 h-14 px-4 bg-sidebar text-white shrink-0">
           <button onClick={() => setDrawerOpen(true)} aria-label="Open menu" className="p-1.5 -ml-1.5 rounded-md hover:bg-white/10">
             <Menu size={22} />
           </button>
           <Image src="/fav.png" alt="Squark Dashboard" width={26} height={26} className="rounded-md" />
-          <span className="font-bold tracking-tight">Squark Dashboard</span>
+          <span className="font-bold tracking-tight truncate">Squark Dashboard</span>
+          <div className="ml-auto shrink-0"><TopBar dark /></div>
+        </header>
+        {/* Desktop: the sidebar already carries the brand, so this bar is the controls alone —
+            your day, your notifications, your account, in the corner people look in. */}
+        <header className="hidden lg:flex items-center h-14 px-6 bg-white border-b border-gray-200 shrink-0">
+          <div className="ml-auto"><TopBar /></div>
         </header>
         <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">{children}</div>
       </div>
