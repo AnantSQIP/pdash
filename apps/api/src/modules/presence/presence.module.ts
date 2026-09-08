@@ -97,10 +97,9 @@ export class PresenceService {
 
   async myPresence(userId: string) {
     const today = istToday();
-    const [p, leave, wfh] = await Promise.all([
+    const [p, leave] = await Promise.all([
       this.prisma.presence.findUnique({ where: { userId } }),
       this.prisma.leaveRequest.findFirst({ where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { id: true } }),
-      this.prisma.wfhRequest.findFirst({ where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { id: true } }),
     ]);
     const nowMs = Date.now();
     return {
@@ -108,7 +107,6 @@ export class PresenceService {
       statusMessage: this.validMessage(nowMs, p),
       statusExpiresAt: p?.statusExpiresAt ?? null,
       effective: this.effective(nowMs, p, !!leave),
-      workMode: wfh ? 'WFH' : 'OFFICE',
     };
   }
 
@@ -121,21 +119,18 @@ export class PresenceService {
     const ids = users.map(u => u.id);
     if (!ids.length) return [];
     const today = istToday();
-    const [pres, leaves, wfhs] = await Promise.all([
+    const [pres, leaves] = await Promise.all([
       this.prisma.presence.findMany({ where: { userId: { in: ids } } }),
       this.prisma.leaveRequest.findMany({ where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { userId: true } }),
-      this.prisma.wfhRequest.findMany({ where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { userId: true } }),
     ]);
     const pByU = new Map(pres.map(p => [p.userId, p]));
     const onLeave = new Set(leaves.map(l => l.userId));
-    const onWfh = new Set(wfhs.map(w => w.userId));
     const nowMs = Date.now();
     return ids.map(id => {
       const p = pByU.get(id) ?? null;
       return {
         userId: id,
         status: this.effective(nowMs, p, onLeave.has(id)),
-        workMode: onWfh.has(id) ? 'WFH' : 'OFFICE',
         statusMessage: this.validMessage(nowMs, p),
       };
     });

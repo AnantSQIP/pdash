@@ -39,7 +39,7 @@ graph TD
     end
 
     subgraph People["People operations"]
-      H1[Attendance · punch · WFH · regularisation]
+      H1[Attendance · punch · regularisation]
       H2[Leave · comp-off · cancellation]
       H3[Expenses · submit → approve → reimburse]
       H4[People directory · profiles · PII boundary]

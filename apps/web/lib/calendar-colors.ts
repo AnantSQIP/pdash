@@ -16,9 +16,9 @@
 
 export type CalendarEventType =
   | 'EVENT' | 'MEETING' | 'TASK_DUE' | 'MILESTONE' | 'REMINDER'
-  | 'HOLIDAY' | 'LEAVE' | 'COMPOFF' | 'WFH';
+  | 'HOLIDAY' | 'LEAVE' | 'COMPOFF';
 
-// These nine were chosen by search, not by eye, against three hard constraints:
+// These eight were chosen by search, not by eye, against three hard constraints:
 //   · every pair is at least ΔE 34 apart in CIELAB (the closest is EVENT/COMPOFF at 34.2) —
 //     the old palette had a pair at ΔE 0.0, i.e. literally the same colour;
 //   · white text on each clears WCAG AA 4.5:1, because these render as filled chips;
@@ -34,7 +34,6 @@ export const EVENT_COLORS: Record<CalendarEventType, string> = {
   HOLIDAY:   '#dc2626', // red       — org-wide non-working day
   LEAVE:     '#db2777', // pink      — this person is away
   COMPOFF:   '#1e3a8a', // navy      — comp-off earned or used
-  WFH:       '#0e7490', // cyan      — working, from home
 };
 
 /**
@@ -42,7 +41,7 @@ export const EVENT_COLORS: Record<CalendarEventType, string> = {
  *
  * NOT a CalendarEventType: it never appears on the month/week/agenda calendar, only as an
  * availability chip in the team view. So it is held to the palette rule against the chips it
- * actually sits beside (meeting, leave, comp-off, WFH, event, holiday) rather than all nine:
+ * actually sits beside (meeting, leave, comp-off, event, holiday) rather than all eight:
  * ΔE 42.4 from its nearest neighbour, 15.2:1 against white text. Near-black also reads as
  * "closed off", which is exactly what it means.
  */
@@ -50,12 +49,12 @@ export const BLOCKED_COLOR = '#292524';
 
 export const EVENT_LABELS: Record<CalendarEventType, string> = {
   EVENT: 'Event', MEETING: 'Meeting', TASK_DUE: 'Task due', MILESTONE: 'Milestone',
-  REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off', WFH: 'WFH',
+  REMINDER: 'Reminder', HOLIDAY: 'Holiday', LEAVE: 'Leave', COMPOFF: 'Comp-off',
 };
 
 /** The order types appear in legends — grouped: schedule, delivery, then availability. */
 export const EVENT_LEGEND_ORDER: CalendarEventType[] = [
-  'EVENT', 'MEETING', 'REMINDER', 'TASK_DUE', 'MILESTONE', 'HOLIDAY', 'LEAVE', 'WFH', 'COMPOFF',
+  'EVENT', 'MEETING', 'REMINDER', 'TASK_DUE', 'MILESTONE', 'HOLIDAY', 'LEAVE', 'COMPOFF',
 ];
 
 const TYPES = new Set<string>(Object.keys(EVENT_COLORS));

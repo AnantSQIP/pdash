@@ -6,7 +6,7 @@
 //        DATABASE_URL=... npx ts-node packages/db/prisma/regrant-roles.ts
 //        DATABASE_URL=... npx ts-node packages/db/prisma/roster-fix-2026-07.ts
 //   2. Clears the SEED-GENERATED activity history (timesheets, task assignments,
-//      attendance, leave, comp-off, WFH, regularisations) for a set of members, so they
+//      attendance, leave, comp-off, regularisations) for a set of members, so they
 //      start from a clean slate. Their account, login, profile and project memberships are
 //      KEPT. Task.actualHours is recomputed for any task whose timesheets were removed.
 // Safe to re-run.
@@ -55,16 +55,15 @@ async function main() {
   });
   const affectedTaskIds = [...new Set(affectedTs.map(t => t.taskId).filter((x): x is string => !!x))];
 
-  const [ts, ta, att, lv, co, wfh, reg] = await prisma.$transaction([
+  const [ts, ta, att, lv, co, reg] = await prisma.$transaction([
     prisma.timesheet.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.taskAssignee.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.attendance.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.leaveRequest.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.compOffRequest.deleteMany({ where: { userId: { in: userIds } } }),
-    prisma.wfhRequest.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.regularizationRequest.deleteMany({ where: { userId: { in: userIds } } }),
   ]);
-  console.log(`  removed: timesheets=${ts.count} taskAssignees=${ta.count} attendance=${att.count} leaves=${lv.count} compoff=${co.count} wfh=${wfh.count} regularisations=${reg.count}`);
+  console.log(`  removed: timesheets=${ts.count} taskAssignees=${ta.count} attendance=${att.count} leaves=${lv.count} compoff=${co.count} regularisations=${reg.count}`);
 
   // ── 3) Recompute Task.actualHours for tasks that lost timesheets ─────────────
   for (const taskId of affectedTaskIds) {

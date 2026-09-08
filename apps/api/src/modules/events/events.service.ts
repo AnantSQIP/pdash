@@ -90,7 +90,7 @@ export class EventsService {
   }
 
   /**
-   * Leave / WFH / comp-off that has been REQUESTED but not yet decided.
+   * Leave / comp-off that has been REQUESTED but not yet decided.
    *
    * A calendar row is only written when a request is approved, so until then the day looked
    * completely free — people booked over each other's pending leave. These are derived at read
@@ -105,12 +105,8 @@ export class EventsService {
     // Overlap window; unbounded on either side when the caller didn't constrain it.
     const startsBeforeEnd = to ? { lte: to } : undefined;
     const endsAfterStart = from ? { gte: from } : undefined;
-    const [leaves, wfh, compoffs] = await Promise.all([
+    const [leaves, compoffs] = await Promise.all([
       this.prisma.leaveRequest.findMany({
-        where: { organizationId, status: 'PENDING', startDate: startsBeforeEnd, endDate: endsAfterStart },
-        include: { user: { select: { firstName: true, lastName: true } } },
-      }),
-      this.prisma.wfhRequest.findMany({
         where: { organizationId, status: 'PENDING', startDate: startsBeforeEnd, endDate: endsAfterStart },
         include: { user: { select: { firstName: true, lastName: true } } },
       }),
@@ -139,10 +135,6 @@ export class EventsService {
       ...leaves.map(l => virtual(
         `pending:leave:${l.id}`, `${who(l.user)} — ${l.leaveType} leave (requested)`, 'LEAVE',
         l.startDate, l.endDate, 'Awaiting approval',
-      )),
-      ...wfh.map(w => virtual(
-        `pending:wfh:${w.id}`, `${who(w.user)} — Working from home (requested)`, 'WFH',
-        w.startDate, w.endDate, 'Awaiting approval',
       )),
       ...compoffs.map(c => virtual(
         `pending:compoff:${c.id}`, `${who(c.user)} — Comp-off claim (requested)`, 'COMPOFF',
@@ -392,7 +384,7 @@ export class EventsService {
     if (!ids.length) return [];
     const fromD = new Date(from);
     const toD = new Date(to);
-    const [events, leaves, wfh, blocks, compoffs] = await Promise.all([
+    const [events, leaves, blocks, compoffs] = await Promise.all([
       this.prisma.calendarEvent.findMany({
         where: {
           organizationId, deletedAt: null,
@@ -406,10 +398,6 @@ export class EventsService {
       // Both decided and undecided: a pending request is exactly what a team schedule needs to
       // show, so nobody plans work onto a day somebody has already asked to be away.
       this.prisma.leaveRequest.findMany({
-        where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
-        select: { userId: true, startDate: true, endDate: true, status: true },
-      }),
-      this.prisma.wfhRequest.findMany({
         where: { userId: { in: ids }, status: { in: ['APPROVED', 'PENDING'] }, startDate: { lte: toD }, endDate: { gte: fromD }, user: { organizationId } },
         select: { userId: true, startDate: true, endDate: true, status: true },
       }),
@@ -444,13 +432,6 @@ export class EventsService {
       busy.get(l.userId)?.push({
         start: l.startDate.toISOString(), end: l.endDate.toISOString(),
         title: pending ? 'Leave (requested)' : 'Leave', allDay: true, kind: 'LEAVE', pending,
-      });
-    }
-    for (const w of wfh) {
-      const pending = w.status === 'PENDING';
-      busy.get(w.userId)?.push({
-        start: w.startDate.toISOString(), end: w.endDate.toISOString(),
-        title: pending ? 'WFH (requested)' : 'WFH', allDay: true, kind: 'WFH', pending,
       });
     }
     for (const b of blocks) {

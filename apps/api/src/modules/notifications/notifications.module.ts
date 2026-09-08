@@ -12,7 +12,7 @@ export function categoryOf(type: string): string {
   if (type.startsWith('discussion.')) return 'discussions';
   if (type.startsWith('task.')) return 'tasks';
   if (type.startsWith('project.')) return 'projects';
-  if (type.startsWith('leave.') || type.startsWith('compoff.') || type.startsWith('wfh.') || type.startsWith('attendance.')) return 'attendance';
+  if (type.startsWith('leave.') || type.startsWith('compoff.') || type.startsWith('attendance.')) return 'attendance';
   if (type.startsWith('expense.')) return 'expenses';
   return 'other';
 }

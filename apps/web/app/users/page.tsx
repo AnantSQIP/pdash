@@ -23,11 +23,10 @@ function fullName(u: UserSummary) {
 
 type Tab = 'All Members' | 'Departments';
 
-// Small chip shown next to a person when they're working from home / on leave today.
+// Small chip shown next to a person when they're on leave today.
 function WorkChip({ userId }: { userId: string }) {
   const { presenceOf } = usePresence();
   const p = presenceOf(userId);
-  if (p?.workMode === 'WFH') return <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">WFH</span>;
   if (p?.status === 'ON_LEAVE') return <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">On leave</span>;
   return null;
 }

@@ -6,10 +6,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { format } from 'date-fns';
 import {
-  Clock, LogIn, LogOut, CalendarDays, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil, Home, MapPin,
+  Clock, LogIn, LogOut, CalendarDays, Loader, Check, X, ChevronLeft, ChevronRight, Plus, Pencil, MapPin,
 } from 'lucide-react';
 import {
-  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest, type WfhRequestItem,
+  api, type Attendance, type AttendanceMonth, type LeaveBalance, type LeaveRequestItem, type LeaveType, type Holiday, type OrgAttendanceSummary, type RegularizationRequest, type CompOffRequest,
 } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -95,7 +95,6 @@ export default function AttendancePage() {
   const canReviewReg = can('attendance.regularize');
   const { data: pendingReg = [] } = useQuery<RegularizationRequest[]>({ queryKey: ['reg-pending', org?.id], queryFn: () => api.attendance.pendingRegularizations(), enabled: !!org?.id && canReviewReg && tab === 'team', staleTime: 15_000 });
   const { data: myReg = [] } = useQuery<RegularizationRequest[]>({ queryKey: ['reg-mine', currentUser?.id], queryFn: () => api.attendance.myRegularizations(), enabled: !!currentUser?.id, staleTime: 15_000 });
-  const { data: myWfh = [] } = useQuery<WfhRequestItem[]>({ queryKey: ['wfh-mine'], queryFn: () => api.attendance.myWfhRequests(), enabled: !!currentUser?.id, staleTime: 15_000 });
 
   // ── live timer while clocked-in ──
   const [, tick] = useState(0);
@@ -123,9 +122,6 @@ export default function AttendancePage() {
   const clockedIn = !!today?.checkIn && !today?.checkOut;
   const dayComplete = !!today?.checkIn && !!today?.checkOut; // clocked in AND out — locked for the day
   const elapsed = today?.checkIn ? Date.now() - new Date(today.checkIn).getTime() : 0;
-  // An approved WFH request covering today — the punch will be recorded as WFH.
-  const todayKey = todayIST();
-  const wfhApprovedToday = myWfh.some(w => w.status === 'APPROVED' && w.startDate.slice(0, 10) <= todayKey && todayKey <= w.endDate.slice(0, 10));
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -152,7 +148,6 @@ export default function AttendancePage() {
                   <div>
                     <p className="text-xs text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
                       Today · {format(new Date(), 'EEE, MMM d')}
-                      {(today?.workMode === 'WFH' || wfhApprovedToday) && <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-cyan-800 bg-cyan-100 px-1.5 py-0.5 rounded-full" title="You have approved work-from-home today"><Home size={10} /> WFH approved</span>}
                     </p>
                     <p className="text-2xl font-bold text-gray-900 mt-1">{clockedIn ? fmtElapsed(elapsed) : (today?.checkOut ? 'Day complete' : 'Not clocked in')}</p>
                     <p className="text-xs text-gray-500 mt-1">In {timeOf(today?.checkIn)} · Out {timeOf(today?.checkOut)}{today?.totalHours != null ? ` · ${today.totalHours}h` : ''}</p>
@@ -177,10 +172,10 @@ export default function AttendancePage() {
                       {dayComplete ? 'Completed' : 'Punch Out'}
                     </button>
                   ) : (
-                    // One button — where you work is not chosen here. A WFH day comes from
-                    // an APPROVED request (raised under Leaves); the punch derives the mode.
+                    // One button — where you work is not chosen here. A day worked from home is
+                    // recorded through a regularisation request of that type.
                     <button onClick={punch} disabled={busy}
-                      title={wfhApprovedToday ? 'Clock in — today is recorded as work-from-home (approved)' : 'Clock in for the day. Working from home? Request it under Leaves first.'}
+                      title="Clock in for the day."
                       className="inline-flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
                       {busy ? <Loader size={16} className="animate-spin" /> : <LogIn size={16} />} Punch In
                     </button>
@@ -248,7 +243,7 @@ export default function AttendancePage() {
           <>
             <LeavesHome balances={balances} myRequests={myRequests} leaveTypes={leaveTypes} holidays={holidays}
               onChanged={() => invalidate('leave-mine', 'leave-balances', 'compoff-mine', 'attn-month', 'attn-org')} busy={busy} setBusy={setBusy} />
-            <div className="mt-4 space-y-4"><WfhCard /><CompOffCard /></div>
+            <div className="mt-4 space-y-4"><CompOffCard /></div>
           </>
         )}
 
@@ -552,94 +547,6 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
 
 /** Days as people say them: "0.5" reads as a bug, "half a day" reads as an answer. */
 
-// ── Work from home: request a WFH period — HR/Admin approves; punch then records WFH ──
-const WFH_STATUS: Record<string, string> = {
-  PENDING: 'bg-amber-100 text-amber-700', APPROVED: 'bg-green-100 text-green-700',
-  REJECTED: 'bg-red-100 text-red-600', CANCELLED: 'bg-gray-100 text-gray-500',
-};
-function WfhCard() {
-  const qc = useQueryClient();
-  const { data: requests = [] } = useQuery<WfhRequestItem[]>({ queryKey: ['wfh-mine'], queryFn: () => api.attendance.myWfhRequests(), staleTime: 15_000 });
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ startDate: '', endDate: '', reason: '' });
-  const [busy, setBusy] = useState(false);
-  const today = todayIST();
-  const inv = () => { qc.invalidateQueries({ queryKey: ['wfh-mine'] }); qc.invalidateQueries({ queryKey: ['wfh-pending'] }); };
-
-  async function submit() {
-    if (busy || !form.startDate || !form.endDate || !form.reason.trim()) return;
-    setBusy(true);
-    try {
-      await api.attendance.requestWfh({ startDate: form.startDate, endDate: form.endDate, reason: form.reason.trim() });
-      setShowForm(false); setForm({ startDate: '', endDate: '', reason: '' });
-      inv();
-    } catch (e) { toastError(e, 'Could not submit the WFH request.'); }
-    finally { setBusy(false); }
-  }
-  async function cancel(id: string) {
-    setBusy(true);
-    try { await api.attendance.cancelWfh(id); inv(); }
-    catch (e) { toastError(e, 'Could not cancel.'); }
-    finally { setBusy(false); }
-  }
-  const range = (r: WfhRequestItem) => {
-    const s = format(new Date(r.startDate), 'EEE, MMM d');
-    const e = format(new Date(r.endDate), 'EEE, MMM d');
-    return s === e ? s : `${s} – ${e}`;
-  };
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Home size={14} className="text-purple-600" /> Work from home</h3>
-          <p className="text-[11px] text-gray-400">Planning to work from home? Request it here — HR/Admin approves, and your punch on those days is recorded as WFH automatically.</p>
-        </div>
-        <button onClick={() => setShowForm(s => !s)} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 shrink-0"><Plus size={13} /> Request</button>
-      </div>
-      {showForm && (
-        <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/60 space-y-2.5">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">From</label>
-              <DateField type="date" value={form.startDate} min={today} onChange={e => setForm(f => ({ ...f, startDate: e.target.value, endDate: f.endDate && f.endDate < e.target.value ? e.target.value : f.endDate }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">To</label>
-              <DateField type="date" value={form.endDate} min={form.startDate || today} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Why work from home?</label>
-              <input value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Awaiting a delivery / medical appointment nearby" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
-            </div>
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => setShowForm(false)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">Cancel</button>
-            <button onClick={submit} disabled={busy || !form.startDate || !form.endDate || !form.reason.trim()} className="text-sm font-medium px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50">Submit request</button>
-          </div>
-        </div>
-      )}
-      <ul className="divide-y divide-gray-50">
-        {requests.length === 0 && <li className="px-5 py-6 text-center text-sm text-gray-300">No WFH requests yet</li>}
-        {requests.map(r => (
-          <li key={r.id} className="px-5 py-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-800">{range(r)}</p>
-              <p className="text-xs text-gray-400 truncate">{r.reason}{r.reviewNote ? ` · Note: ${r.reviewNote}` : ''}</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className={clsx('text-[11px] px-2 py-0.5 rounded-full font-medium', WFH_STATUS[r.status] ?? 'bg-gray-100 text-gray-600')}>{r.status.charAt(0) + r.status.slice(1).toLowerCase()}</span>
-              {['PENDING', 'APPROVED'].includes(r.status) && (
-                <button onClick={() => cancel(r.id)} disabled={busy} className="text-xs text-gray-400 hover:text-red-600 disabled:opacity-50">Cancel</button>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 // ── Comp-off: claim a compensatory day off for working a non-working day ─────────
 const COMPOFF_STATUS: Record<string, string> = {
   PENDING: 'bg-amber-100 text-amber-700', APPROVED: 'bg-green-100 text-green-700',
@@ -733,120 +640,6 @@ function CompOffCard() {
 }
 
 // ── Team tab (admin) ──────────────────────────────────────────────────────────────
-/**
- * Who is working from home vs the office. The punch-location table answers "where was this person
- * standing"; this answers what an admin actually asks — how much of the team is remote right now,
- * and how that has looked over the past week. A day nobody worked (leave, holiday, weekend, no
- * punch) is shown as itself rather than being quietly counted as "office".
- */
-const WORK_MODE_META: Record<string, { label: string; cell: string; short: string }> = {
-  WFH:        { label: 'Work from home', cell: 'bg-cyan-100 text-cyan-800 border-cyan-200',    short: 'H' },
-  OFFICE:     { label: 'In office',      cell: 'bg-brand-100 text-brand-700 border-brand-200', short: 'O' },
-  LEAVE:      { label: 'On leave',       cell: 'bg-pink-50 text-pink-600 border-pink-200',     short: 'L' },
-  HOLIDAY:    { label: 'Holiday',        cell: 'bg-red-50 text-red-500 border-red-100',        short: '·' },
-  WEEKEND:    { label: 'Weekend',        cell: 'bg-gray-50 text-gray-300 border-gray-100',     short: '' },
-  ABSENT:     { label: 'No punch',       cell: 'bg-white text-gray-300 border-gray-200',       short: '–' },
-  NOT_MARKED: { label: 'Not marked yet', cell: 'bg-white text-gray-300 border-dashed border-gray-300', short: '?' },
-};
-
-function WorkModePanel() {
-  const [days, setDays] = useState(7);
-  const { data, isLoading } = useQuery({
-    queryKey: ['attn-work-modes', days],
-    queryFn: () => api.attendance.orgWorkModes(days),
-    staleTime: 30_000,
-  });
-  const dow = (iso: string) => WEEKDAYS_SHORT[(new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7];
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2 flex-wrap">
-        <h3 className="text-sm font-semibold text-gray-700">Working from home vs office</h3>
-        {isLoading && <Loader size={13} className="animate-spin text-gray-400" />}
-        <select value={days} onChange={e => setDays(Number(e.target.value))}
-          className="ml-auto text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-600 focus:outline-none focus:border-brand-400">
-          <option value={1}>Today</option>
-          <option value={7}>Today + past week</option>
-          <option value={14}>Past 2 weeks</option>
-          <option value={30}>Past 30 days</option>
-        </select>
-      </div>
-
-      {/* Today at a glance — the number most people open this panel for. */}
-      {data && (
-        <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-5 flex-wrap">
-          {([['From home', data.today.wfh, 'text-cyan-700'], ['In office', data.today.office, 'text-brand-700'],
-             ['On leave', data.today.leave, 'text-pink-600'], ['Not punched in', data.today.notMarked, 'text-gray-400']] as const).map(([l, v, c]) => (
-            <div key={l}>
-              <p className={clsx('text-2xl font-bold tabular-nums leading-none', c)}>{v}</p>
-              <p className="text-[11px] text-gray-400 mt-0.5">{l} today</p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="px-4 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky left-0 bg-gray-50">Member</th>
-              {(data?.dates ?? []).map(d => (
-                <th key={d} className="px-1 py-2 text-center text-[10px] font-semibold text-gray-500">
-                  <span className="block">{dow(d)}</span>
-                  <span className="block text-gray-400 font-normal">{d.slice(8, 10)}</span>
-                </th>
-              ))}
-              <th className="px-3 py-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-right whitespace-nowrap">Home / Office</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {(data?.rows ?? []).length === 0 && !isLoading && (
-              <tr><td colSpan={(data?.dates?.length ?? 0) + 2} className="px-4 py-6 text-center text-xs text-gray-400">No members to show.</td></tr>
-            )}
-            {(data?.rows ?? []).map(r => (
-              <tr key={r.userId} className="hover:bg-gray-50/60">
-                <td className="px-4 py-2 sticky left-0 bg-white">
-                  <p className="text-sm text-gray-800 truncate">{r.name}</p>
-                  {r.office && <p className="text-[10px] text-gray-400">{r.office}</p>}
-                </td>
-                {r.days.map(c => {
-                  const meta = WORK_MODE_META[c.mode] ?? WORK_MODE_META.ABSENT;
-                  const pendingWfh = c.mode === 'WFH' && c.wfhStatus === 'PENDING';
-                  return (
-                    <td key={c.date} className="px-1 py-1.5 text-center">
-                      <span title={`${c.date} · ${meta.label}${pendingWfh ? ' (request awaiting approval)' : ''}${c.area ? ` · ${c.area}` : ''}`}
-                        className={clsx('inline-flex items-center justify-center w-7 h-7 rounded-md border text-[11px] font-bold', meta.cell,
-                          pendingWfh && 'border-dashed border-amber-400')}>
-                        {meta.short}
-                      </span>
-                    </td>
-                  );
-                })}
-                <td className="px-3 py-2 text-right text-xs tabular-nums whitespace-nowrap">
-                  <span className="text-cyan-700 font-semibold">{r.wfhDays}</span>
-                  <span className="text-gray-300"> / </span>
-                  <span className="text-brand-700 font-semibold">{r.officeDays}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="px-5 py-2.5 border-t border-gray-100 flex items-center gap-3 flex-wrap">
-        {['WFH', 'OFFICE', 'LEAVE', 'HOLIDAY', 'ABSENT', 'NOT_MARKED'].map(k => (
-          <span key={k} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
-            <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded border text-[9px] font-bold', WORK_MODE_META[k].cell)}>{WORK_MODE_META[k].short}</span>
-            {WORK_MODE_META[k].label}
-          </span>
-        ))}
-        <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">
-          <span className="w-4 h-4 rounded border border-dashed border-amber-400" />WFH request awaiting approval
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }: {
   orgSummary?: OrgAttendanceSummary; pending: LeaveRequestItem[];
   pendingReg: RegularizationRequest[]; onReviewed: () => void; onRegReviewed: () => void;
@@ -917,23 +710,6 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
     finally { setExporting(false); }
   }
   const { data: pendingCompoff = [] } = useQuery<CompOffRequest[]>({ queryKey: ['compoff-pending'], queryFn: () => api.leave.pendingCompOffs(), staleTime: 15_000 });
-  // WFH review is HR/Admin only (attendance.manage) — don't even query without it.
-  const canReviewWfh = can('attendance.manage');
-  const { data: pendingWfh = [] } = useQuery<WfhRequestItem[]>({ queryKey: ['wfh-pending'], queryFn: () => api.attendance.pendingWfhRequests(), enabled: canReviewWfh, staleTime: 15_000 });
-  async function reviewWfh(id: string, action: 'approve' | 'reject') {
-    setBusyId(id);
-    try {
-      if (action === 'reject') {
-        const note = window.prompt('Reason for rejecting (optional):') ?? undefined;
-        await api.attendance.rejectWfh(id, note);
-      } else {
-        await api.attendance.approveWfh(id);
-      }
-      qc.invalidateQueries({ queryKey: ['wfh-pending'] });
-      qc.invalidateQueries({ queryKey: ['wfh-mine'] });
-    } catch (e) { toastError(e, `Could not ${action} the request.`); }
-    finally { setBusyId(''); }
-  }
   async function reviewCompoff(id: string, action: 'approve' | 'reject') {
     setBusyId(id);
     try {
@@ -971,14 +747,13 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
   }
   const REG_TYPE_LABEL: Record<string, string> = {
     FORGOT_IN: 'Forgot punch-in', LATE_IN: 'Late punch-in', FORGOT_OUT: 'Forgot punch-out',
-    WRONG_TIME: 'Wrong time', WFH: 'WFH / on-site', OTHER: 'Other',
+    WRONG_TIME: 'Wrong time', WFH: 'Worked from home', OTHER: 'Other',
   };
   const rows = orgSummary?.rows ?? [];
 
   return (
     <div className="space-y-6">
       {/* Who is remote vs in the office — today and the days before it. */}
-      <WorkModePanel />
 
       {/* Punch locations — HR/Admin see where each member clocked in/out, on any day in the last
           year, with the office area; full data exports to CSV. */}
@@ -1118,36 +893,6 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
           ))}
         </ul>
       </div>
-
-      {/* Pending work-from-home requests — HR/Admin decide where people work */}
-      {canReviewWfh && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Home size={14} className="text-purple-600" /> Work-from-home requests</h3>
-            {pendingWfh.length > 0 && <span className="text-[11px] bg-purple-100 text-purple-700 rounded-full px-2 py-0.5 font-medium">{pendingWfh.length}</span>}
-          </div>
-          <ul className="divide-y divide-gray-50">
-            {pendingWfh.length === 0 && <li className="px-5 py-8 text-center text-sm text-gray-300">No WFH requests to review 🎉</li>}
-            {pendingWfh.map(w => (
-              <li key={w.id} className="px-5 py-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <Avatar user={w.user} size={32} />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">
-                      {w.user?.firstName} {w.user?.lastName} · {format(new Date(w.startDate), 'MMM d')}{w.startDate.slice(0, 10) !== w.endDate.slice(0, 10) ? ` – ${format(new Date(w.endDate), 'MMM d')}` : ''}
-                    </p>
-                    <p className="text-xs text-gray-400 truncate">{w.reason}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={() => reviewWfh(w.id, 'approve')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 disabled:opacity-50"><Check size={13} /> Approve</button>
-                  <button onClick={() => reviewWfh(w.id, 'reject')} disabled={!!busyId} className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"><X size={13} /> Reject</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {/* Pending comp-off claims — with the day's actual work as evidence */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

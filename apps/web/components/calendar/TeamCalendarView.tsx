@@ -21,7 +21,7 @@ const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.get
 /**
  * The calendar days a busy block covers, as `YYYY-MM-DD` keys.
  *
- * Two kinds of value arrive here and they are NOT read the same way. Leave, WFH and comp-off
+ * Two kinds of value arrive here and they are NOT read the same way. Leave and comp-off
  * are date-only values stored at UTC midnight, so their day is the UTC day. Meetings and
  * blocked time are real instants, so their day is the one they fall on in IST. Reading either
  * through the other's rule moves it a day.
@@ -68,7 +68,6 @@ const ROW_H = 64;
 /** Chip colour per availability kind — same palette the rest of the calendar uses. */
 const KIND_COLOR: Record<string, string> = {
   LEAVE: EVENT_COLORS.LEAVE,
-  WFH: EVENT_COLORS.WFH,
   COMPOFF: EVENT_COLORS.COMPOFF,
   MEETING: EVENT_COLORS.MEETING,
   BLOCKED: BLOCKED_COLOR,
@@ -142,7 +141,7 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
   }, [holidayGroups]);
 
   // Org-wide happenings: all-day calendar entries that belong to nobody in particular
-  // (company events, announcements). Personal leave/WFH rows are excluded — they belong to
+  // (company events, announcements). Personal leave/comp-off rows are excluded — they belong to
   // the member rows, not the company row.
   const { data: orgEvents = [] } = useQuery<CalendarEvent[]>({
     queryKey: ['team-org-events', orgId, dayKey(from), dayKey(to)],
@@ -152,7 +151,7 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
   });
   const companyByDay = useMemo(() => {
     const m = new Map<string, CalendarEvent[]>();
-    const PERSONAL = new Set(['LEAVE', 'WFH', 'COMPOFF']);
+    const PERSONAL = new Set(['LEAVE', 'COMPOFF']);
     for (const e of orgEvents) {
       if (PERSONAL.has(e.type) || e.pending) continue;
       if (e.attendees && e.attendees.length > 0) continue; // targeted at specific people
@@ -361,7 +360,7 @@ export function TeamCalendarView({ users }: { users: UserSummary[] }) {
         </table>
       </div>
       <div className="px-4 py-2.5 border-t border-gray-100 flex items-center gap-x-4 gap-y-1.5 flex-wrap">
-        {([['Leave', EVENT_COLORS.LEAVE], ['WFH', EVENT_COLORS.WFH], ['Comp-off', EVENT_COLORS.COMPOFF],
+        {([['Leave', EVENT_COLORS.LEAVE], ['Comp-off', EVENT_COLORS.COMPOFF],
            ['Meeting', EVENT_COLORS.MEETING], ['Holiday', EVENT_COLORS.HOLIDAY],
            ['Unavailable', BLOCKED_COLOR]] as const).map(([label, c]) => (
           <span key={label} className="inline-flex items-center gap-1.5 text-[11px] text-gray-500">

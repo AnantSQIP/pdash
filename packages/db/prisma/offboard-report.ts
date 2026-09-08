@@ -13,9 +13,9 @@
 // what, and a record that disappears when the person leaves is not an audit log. "Erase them
 // completely" therefore means deleting their audit trail first, as a separate decision.
 //
-//   DATABASE_URL=... npx ts-node packages/db/prisma/offboard-report.ts "Arjun Ghosh" "Nitin Goel"
+//   DATABASE_URL=... npx ts-node packages/db/prisma/offboard-report.ts "First Last" "Another Person"
 // or, in the production container:
-//   node packages/db/prisma/dist/offboard-report.js "Arjun Ghosh" "Nitin Goel"
+//   node packages/db/prisma/dist/offboard-report.js "First Last" "Another Person"
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();

@@ -7,7 +7,7 @@ import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
-import { serialize, leaveKeyFor, wfhKeyFor } from '../../common/db/serialize';
+import { serialize, leaveKeyFor } from '../../common/db/serialize';
 import { entitlementsFor } from './leave-entitlement';
 import { CapacityModule, CapacityService } from '../capacity/capacity.module';
 import { PermissionService } from '../permissions/permission.service';
@@ -78,8 +78,8 @@ function parseDayStrict(s: unknown, field = 'date'): Date {
 // Statuses an admin may set manually / a regularisation may resolve to. Free-text status
 // used to be written straight through, silently corrupting attendance reports.
 const MARK_STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE', 'HOLIDAY', 'LATE'];
-// What kind of day a regularisation is about (free-form before — a rogue "WFH" type even
-// re-routed around the dedicated WFH approval flow).
+// What kind of day a regularisation is about. WFH is the ONE way a day is recorded as worked
+// from home: there is no request flow and nothing is chosen at punch time.
 // PAST_MIDNIGHT covers the rare case of working past 23:59: the auto punch-out closes every
 // shift at the end of its own IST day, so hours after midnight are only credited through a
 // regularisation an approver signs off on.
@@ -210,11 +210,8 @@ export class AttendanceService {
 
   /**
    * Daily punch with exactly ONE check-in and ONE check-out:
-   *   1. no check-in yet        → clock in. WFH is set either by the person choosing
-   *      "Punch in — Work from home" at this moment, or by an APPROVED WfhRequest that
-   *      already covers today; otherwise OFFICE. Self-declaring it is deliberate: the
-   *      approval route still exists for arrangements agreed in advance, but somebody
-   *      working from home for a single day should not need a request to record the fact.
+   *   1. no check-in yet        → clock in, as an OFFICE day. A day becomes WFH only through
+   *      an approved regularisation of type WFH — nothing is chosen at punch time.
    *   2. clocked in, not out    → clock out; status is DERIVED from hours worked
    *      (< HALF_DAY_HOURS ⇒ HALF_DAY) so an immediate in→out is not a full present day
    *   3. already clocked out    → REJECT — the day is locked so a stray third
@@ -223,7 +220,6 @@ export class AttendanceService {
   async punch(
     userId: string,
     coords: { lat: number; lng: number; accuracy?: number; area?: string },
-    opts: { workMode?: string } = {},
   ) {
     // The day a punch belongs to is the IST CALENDAR day, not the UTC one. utcDay() put every
     // punch made between 00:00 and 05:29 IST onto the PREVIOUS day's row — so an early-morning
@@ -261,22 +257,13 @@ export class AttendanceService {
           return this.prisma.attendance.update({ where: { id: openPrior.id }, data: { checkOut: closeAt, totalHours, status: statusForHours(totalHours) } });
         }
       }
-      const approvedWfh = await this.prisma.wfhRequest.findFirst({
-        where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } },
-      });
       const organizationId = await this.orgOf(userId);
-      // Chosen at the button ("Punch in — Work from home"), or inherited from an approved
-      // request covering today. Anything else is an office day. Only these two values are
-      // accepted, so a stray string cannot invent a third work mode.
-      const asked = (opts.workMode ?? '').toUpperCase();
-      if (asked && asked !== 'WFH' && asked !== 'OFFICE') {
-        throw new BadRequestException('workMode must be WFH or OFFICE.');
-      }
-      const workMode = asked === 'WFH' || approvedWfh ? 'WFH' : 'OFFICE';
+      // The work mode is not chosen here. A new row takes the schema default (OFFICE); a row an
+      // approved WFH regularisation has already marked keeps its mode.
       return this.prisma.attendance.upsert({
         where: { userId_date: { userId, date: today } },
-        create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', workMode, ...inLoc },
-        update: { checkIn: now, status: 'PRESENT', workMode, ...inLoc },
+        create: { userId, organizationId, date: today, checkIn: now, status: 'PRESENT', ...inLoc },
+        update: { checkIn: now, status: 'PRESENT', ...inLoc },
       });
     }
     if (existing.checkOut) {
@@ -458,179 +445,6 @@ export class AttendanceService {
     return this.prisma.regularizationRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
   }
 
-  // ── work-from-home requests (request → HR/Admin approval → punch derives WFH) ────
-  /** Who reviews WFH requests — holders of attendance.manage: HR, Admin, Super Admin. */
-  private async wfhApproverIds(organizationId: string | null): Promise<string[]> {
-    if (!organizationId) return [];
-    const rows = await this.prisma.user.findMany({
-      where: {
-        organizationId, deletedAt: null, status: 'ACTIVE',
-        userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'attendance.manage' } } } } } },
-      },
-      select: { id: true },
-    });
-    return rows.map(r => r.id);
-  }
-
-  async requestWfh(userId: string, data: { startDate: string; endDate: string; reason: string }) {
-    if (!data?.reason?.trim()) throw new BadRequestException('A reason is required.');
-    if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
-    const start = parseDayStrict(data.startDate, 'startDate');
-    const end = parseDayStrict(data.endDate, 'endDate');
-    if (end < start) throw new BadRequestException('endDate must be on or after startDate');
-    if (end < istDay(new Date())) throw new BadRequestException('Cannot request work-from-home for dates in the past.');
-    // A runaway range would silently turn everything WFH — long arrangements go through HR.
-    if ((end.getTime() - start.getTime()) / 86_400_000 > 31) {
-      throw new BadRequestException('WFH requests are limited to 31 days — please arrange longer periods with HR directly.');
-    }
-    const organizationId = await this.orgOf(userId);
-    // Both clash tests and the write go in one locked transaction. Checked outside it they are
-    // races — four simultaneous requests for the same day were all accepted in testing, leaving
-    // HR three phantom requests to dismiss after approving the real one.
-    const req = await serialize(this.prisma, wfhKeyFor(userId), async tx => {
-      const clash = await tx.wfhRequest.findFirst({
-        where: { userId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } },
-        select: { id: true },
-      });
-      if (clash) throw new BadRequestException('You already have a WFH request overlapping these dates.');
-      // A day can't be both approved leave and WFH — you're either off or working.
-      const onLeave = await tx.leaveRequest.findFirst({
-        where: { userId, status: 'APPROVED', startDate: { lte: end }, endDate: { gte: start } },
-        select: { id: true },
-      });
-      if (onLeave) throw new BadRequestException('You have approved leave overlapping these dates.');
-      return tx.wfhRequest.create({
-        data: { userId, organizationId, startDate: start, endDate: end, reason: data.reason.trim(), status: 'PENDING' },
-        include: { user: this.regUserSelect },
-      });
-    });
-    const u = (req as any).user;
-    const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'An employee';
-    const range = dayKey(start) === dayKey(end) ? dayKey(start) : `${dayKey(start)} – ${dayKey(end)}`;
-    await this.notifications.notify(await this.wfhApproverIds(organizationId), {
-      type: 'wfh.requested',
-      title: 'Work-from-home request to review',
-      message: `${name} asked to work from home ${range}: ${req.reason}`,
-      link: '/attendance',
-    });
-    return req;
-  }
-
-  myWfhRequests(userId: string) {
-    return this.prisma.wfhRequest.findMany({
-      where: { userId }, orderBy: { createdAt: 'desc' }, take: 60,
-      include: { user: this.regUserSelect },
-    });
-  }
-
-  /** The pending WFH queue, scoped to the reviewer's own org. */
-  async pendingWfhRequests(reviewerId: string) {
-    const organizationId = await this.orgOf(reviewerId);
-    if (!organizationId) return [];
-    return this.prisma.wfhRequest.findMany({
-      where: { organizationId, status: 'PENDING' }, orderBy: { createdAt: 'asc' },
-      include: { user: this.regUserSelect },
-    });
-  }
-
-  async approveWfh(id: string, actorId: string, note?: string) {
-    const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
-    if (!req) throw new NotFoundException('WFH request not found');
-    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('WFH request not found');
-    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be approved.');
-    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own WFH request.');
-
-    await this.prisma.$transaction([
-      this.prisma.wfhRequest.update({
-        where: { id }, data: { status: 'APPROVED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
-      }),
-      // Days in the range already worked (e.g. approved later the same day, after the
-      // punch-in) get their mode corrected; future days derive WFH at punch time.
-      this.prisma.attendance.updateMany({
-        where: { userId: req.userId, date: { gte: req.startDate, lte: req.endDate }, status: { in: ['PRESENT', 'HALF_DAY', 'LATE'] } },
-        data: { workMode: 'WFH' },
-      }),
-    ]);
-
-    const updated = await this.prisma.wfhRequest.findUnique({ where: { id }, include: { user: this.regUserSelect } });
-    // Surface the agreed WFH period on the shared calendar, like leave and comp-off.
-    if (req.organizationId) {
-      const u = (updated as any)?.user;
-      const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() : 'Employee';
-      await this.prisma.calendarEvent.create({
-        data: {
-          organizationId: req.organizationId, title: `${name} — Working from home`,
-          type: 'WFH', startDate: req.startDate, endDate: req.endDate,
-          allDay: true, color: '#0e7490', createdBy: req.userId, // WFH — see apps/web/lib/calendar-colors.ts
-        },
-      });
-    }
-    const range = dayKey(req.startDate) === dayKey(req.endDate) ? dayKey(req.startDate) : `${dayKey(req.startDate)} – ${dayKey(req.endDate)}`;
-    await this.notifications.notify(req.userId, {
-      type: 'wfh.approved',
-      title: 'Work-from-home approved',
-      message: `Your WFH request for ${range} was approved. Punch in as usual — the day is recorded as WFH.`,
-      link: '/attendance',
-    });
-    return updated;
-  }
-
-  async rejectWfh(id: string, actorId: string, note?: string) {
-    const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
-    if (!req) throw new NotFoundException('WFH request not found');
-    if (req.organizationId && req.organizationId !== await this.orgOf(actorId)) throw new NotFoundException('WFH request not found');
-    if (req.status !== 'PENDING') throw new BadRequestException('Only a pending request can be rejected.');
-    if (req.userId === actorId) throw new ForbiddenException('You cannot review your own WFH request.');
-    const updated = await this.prisma.wfhRequest.update({
-      where: { id }, data: { status: 'REJECTED', reviewedBy: actorId, reviewedAt: new Date(), reviewNote: note ?? null },
-      include: { user: this.regUserSelect },
-    });
-    // A "punch in from home" marks the day WFH up front. If it's declined, the day must stop
-    // claiming WFH — unless some OTHER approved request still covers it.
-    const stillApproved = await this.prisma.wfhRequest.findMany({
-      where: { userId: req.userId, status: 'APPROVED', startDate: { lte: req.endDate }, endDate: { gte: req.startDate } },
-      select: { startDate: true, endDate: true },
-    });
-    const covered = (d: Date) => stillApproved.some(a => a.startDate <= d && d <= a.endDate);
-    const toRevert: Date[] = [];
-    for (let d = new Date(req.startDate); d <= req.endDate; d = new Date(d.getTime() + 86_400_000)) {
-      if (!covered(d)) toRevert.push(utcDay(d));
-    }
-    if (toRevert.length) {
-      await this.prisma.attendance.updateMany({
-        where: { userId: req.userId, date: { in: toRevert }, workMode: 'WFH' },
-        data: { workMode: 'OFFICE' },
-      });
-    }
-    const range = dayKey(req.startDate) === dayKey(req.endDate) ? dayKey(req.startDate) : `${dayKey(req.startDate)} – ${dayKey(req.endDate)}`;
-    await this.notifications.notify(req.userId, {
-      type: 'wfh.rejected',
-      title: 'Work-from-home rejected',
-      message: `Your WFH request for ${range} was not approved${note ? `: ${note}` : '.'}`,
-      link: '/attendance',
-    });
-    return updated;
-  }
-
-  async cancelWfh(id: string, actorId: string) {
-    const req = await this.prisma.wfhRequest.findUnique({ where: { id } });
-    if (!req) throw new NotFoundException('WFH request not found');
-    if (req.userId !== actorId) throw new ForbiddenException('You can only cancel your own WFH requests.');
-    // An APPROVED future/ongoing WFH can be cancelled too (plans changed — coming to the
-    // office). Days already punched keep their recorded mode; later punches derive OFFICE.
-    if (!['PENDING', 'APPROVED'].includes(req.status)) throw new BadRequestException('Cannot cancel this request.');
-    const wasApproved = req.status === 'APPROVED';
-    const updated = await this.prisma.wfhRequest.update({ where: { id }, data: { status: 'CANCELLED' } });
-    // Approval published a "Working from home" event to the shared calendar — remove it,
-    // or the person keeps showing as WFH after cancelling.
-    if (wasApproved && req.organizationId) {
-      await this.prisma.calendarEvent.deleteMany({
-        where: { organizationId: req.organizationId, type: 'WFH', createdBy: req.userId, startDate: req.startDate, endDate: req.endDate },
-      });
-    }
-    return updated;
-  }
-
   /**
    * Merged month view — explicit attendance wins, then approved leave, holiday,
    * weekend, then "present" inferred from a logged timesheet that day, else absent.
@@ -645,7 +459,7 @@ export class AttendanceService {
     const daysInMonth = last.getUTCDate();
     const organizationId = await this.orgOf(userId);
 
-    const [rows, leaves, holidays, sheets, pendLeave, pendWfh, pendCompoff] = await Promise.all([
+    const [rows, leaves, holidays, sheets, pendLeave, pendCompoff] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } } }),
       this.prisma.holiday.findMany({ where: { organizationId: organizationId ?? undefined, date: { gte: first, lte: last } } }),
@@ -654,7 +468,6 @@ export class AttendanceService {
       // agreed yet) but the day is marked so the calendar can show "requested" rather than
       // looking as if nothing has been asked for.
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } } }),
-      this.prisma.wfhRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } } }),
       this.prisma.compOffRequest.findMany({ where: { userId, status: 'PENDING', workDate: { gte: first, lte: last } } }),
     ]);
     const byDay = new Map(rows.map(r => [dayKey(r.date), r]));
@@ -665,12 +478,10 @@ export class AttendanceService {
     // IST every cell for the real today was treated as past and rendered ABSENT.
     const todayKey = dayKey(istDay(new Date()));
 
-    // A day carries at most one pending marker; leave outranks WFH outranks comp-off.
+    // A day carries at most one pending marker; leave outranks comp-off.
     const pendingFor = (k: string): { kind: string; label: string } | null => {
       const l = pendLeave.find(r => dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
       if (l) return { kind: 'LEAVE', label: `${l.leaveType} leave requested` };
-      const w = pendWfh.find(r => dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
-      if (w) return { kind: 'WFH', label: 'Work from home requested' };
       const c = pendCompoff.find(r => dayKey(r.workDate) === k);
       if (c) return { kind: 'COMPOFF', label: `Comp-off claim (${c.dayType === 'HALF' ? 'half' : 'full'} day)` };
       return null;
@@ -807,79 +618,6 @@ export class AttendanceService {
           checkOutLat: a?.checkOutLat ?? null, checkOutLng: a?.checkOutLng ?? null, checkOutArea: a?.checkOutArea ?? null,
         };
       }),
-    };
-  }
-
-  /**
-   * Who worked from HOME vs the OFFICE, for today and the days before it (default a week).
-   *
-   * The punch-location table answers "where was this person standing"; this answers the question
-   * an admin actually asks — how much of the team is remote right now, and how has that been
-   * trending. Work mode is only meaningful on a day somebody was actually working, so leave,
-   * holidays, weekends and no-shows are reported as their own states rather than being silently
-   * counted as "office".
-   */
-  async orgWorkModes(organizationId: string, days = 7) {
-    const span = Math.max(1, Math.min(31, Math.trunc(days) || 7));
-    const today = istDay(new Date());
-    const from = new Date(today.getTime() - (span - 1) * 86_400_000);
-    const [users, att, holidays, wfhReqs] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { organizationId, deletedAt: null, status: 'ACTIVE' },
-        select: { id: true, firstName: true, lastName: true, designation: true, office: true, profilePhoto: true },
-        orderBy: [{ firstName: 'asc' }],
-      }),
-      this.prisma.attendance.findMany({ where: { organizationId, date: { gte: from, lte: today } } }),
-      this.prisma.holiday.findMany({ where: { organizationId, date: { gte: from, lte: today } }, select: { date: true, name: true } }),
-      // Pending requests matter here: a day can be worked-from-home while HR hasn't decided yet,
-      // and an admin looking at this table is often the person who needs to decide.
-      this.prisma.wfhRequest.findMany({
-        where: { organizationId, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: today }, endDate: { gte: from } },
-        select: { userId: true, startDate: true, endDate: true, status: true },
-      }),
-    ]);
-    const dayKeys: string[] = [];
-    for (let d = new Date(from); d <= today; d = new Date(d.getTime() + 86_400_000)) dayKeys.push(dayKey(d));
-    const attByUserDay = new Map(att.map(a => [`${a.userId}|${dayKey(a.date)}`, a]));
-    const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
-    const wfhStatusFor = (userId: string, k: string): string | null => {
-      const hit = wfhReqs.filter(r => r.userId === userId && dayKey(r.startDate) <= k && k <= dayKey(r.endDate));
-      if (!hit.length) return null;
-      return hit.some(r => r.status === 'APPROVED') ? 'APPROVED' : 'PENDING';
-    };
-    const todayKey = dayKey(today);
-
-    const rows = users.map(u => {
-      const cells = dayKeys.map(k => {
-        const a = attByUserDay.get(`${u.id}|${k}`);
-        const wd = new Date(`${k}T00:00:00Z`).getUTCDay();
-        const wfhStatus = wfhStatusFor(u.id, k);
-        let mode: string;
-        if (a && (a.status === 'PRESENT' || a.status === 'HALF_DAY' || a.status === 'LATE' || a.checkIn)) {
-          mode = a.workMode === 'WFH' ? 'WFH' : 'OFFICE';
-        } else if (a?.status === 'ON_LEAVE') mode = 'LEAVE';
-        else if (holidayByDay.has(k)) mode = 'HOLIDAY';
-        else if (wd === 0 || wd === 6) mode = 'WEEKEND';
-        else if (k === todayKey) mode = 'NOT_MARKED';   // the day isn't over — not an absence
-        else mode = 'ABSENT';
-        return { date: k, mode, wfhStatus, checkIn: a?.checkIn ?? null, area: a?.checkInArea ?? null };
-      });
-      return {
-        userId: u.id, name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined,
-        office: u.office ?? undefined, profilePhoto: u.profilePhoto ?? undefined,
-        days: cells,
-        wfhDays: cells.filter(c => c.mode === 'WFH').length,
-        officeDays: cells.filter(c => c.mode === 'OFFICE').length,
-      };
-    });
-
-    const countToday = (m: string) => rows.filter(r => r.days[r.days.length - 1]?.mode === m).length;
-    return {
-      from: dayKeys[0], to: todayKey, dates: dayKeys, rows,
-      today: {
-        wfh: countToday('WFH'), office: countToday('OFFICE'), leave: countToday('LEAVE'),
-        notMarked: countToday('NOT_MARKED'), absent: countToday('ABSENT'),
-      },
     };
   }
 
@@ -1142,7 +880,7 @@ export class LeaveService {
         link: '/attendance',
       });
     }
-    // Route the request to approvers — parity with WFH and comp-off, which both notify.
+    // Route the request to approvers — parity with comp-off, which notifies too.
     const u = (created as { user?: { firstName?: string; lastName?: string } }).user;
     const name = u ? `${u.firstName ?? ''} ${u.lastName ?? ''}`.trim() || 'An employee' : 'An employee';
     const range = dayKey(start) === dayKey(end) ? dayKey(start) : `${dayKey(start)} – ${dayKey(end)}`;
@@ -1648,10 +1386,10 @@ class AttendanceController {
     return this.svc.getMonth(actorId, y, m);
   }
 
-  // Location is MANDATORY on every punch (in and out). `mode` is still accepted but ignored
-  // (workMode is derived server-side from an approved WFH request, never client-chosen).
+  // Location is MANDATORY on every punch (in and out). No work mode is accepted here: a day is
+  // recorded as worked from home only through an approved regularisation.
   @Post('punch')
-  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string; workMode?: string }) {
+  punch(@Actor() actorId: string | null, @Body() body: { lat?: number; lng?: number; accuracy?: number; area?: string }) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
     const lat = Number(body?.lat), lng = Number(body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
@@ -1659,49 +1397,7 @@ class AttendanceController {
     }
     const accuracy = Number.isFinite(Number(body?.accuracy)) ? Number(body.accuracy) : undefined;
     const area = typeof body?.area === 'string' ? body.area : undefined;
-    return this.svc.punch(actorId, { lat, lng, accuracy, area }, { workMode: body?.workMode });
-  }
-
-  // ── work-from-home requests ────────────────────────────────────────────────────
-  /** Raise a WFH request (from the Leaves section) — goes to HR/Admin for approval. */
-  @Post('wfh')
-  requestWfh(@Actor() actorId: string | null, @Body() body: { startDate: string; endDate: string; reason: string }) {
-    if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.requestWfh(actorId, body);
-  }
-
-  @Get('wfh/me')
-  myWfhRequests(@Actor() actorId: string | null) {
-    if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.myWfhRequests(actorId);
-  }
-
-  /** Pending WFH queue for reviewers — HR/Admin only (attendance.manage). */
-  @Get('wfh/pending')
-  @RequirePermission('attendance.manage')
-  pendingWfhRequests(@Actor() actorId: string | null) {
-    if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.pendingWfhRequests(actorId);
-  }
-
-  @Post('wfh/:id/approve')
-  @RequirePermission('attendance.manage')
-  approveWfh(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { note?: string }) {
-    if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.approveWfh(id, actorId, body?.note);
-  }
-
-  @Post('wfh/:id/reject')
-  @RequirePermission('attendance.manage')
-  rejectWfh(@Actor() actorId: string | null, @Param('id') id: string, @Body() body: { note?: string }) {
-    if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.rejectWfh(id, actorId, body?.note);
-  }
-
-  @Post('wfh/:id/cancel')
-  cancelWfh(@Actor() actorId: string | null, @Param('id') id: string) {
-    if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.cancelWfh(id, actorId);
+    return this.svc.punch(actorId, { lat, lng, accuracy, area });
   }
 
   // An employee RAISES a regularisation request. This no longer edits attendance directly —
@@ -1781,13 +1477,6 @@ class AttendanceController {
   @RequirePermission('attendance.view.organization')
   async orgPunchLocations(@Query('date') date?: string) {
     return this.svc.orgPunchLocations(await this.actor.requireOrgId(), date);
-  }
-
-  /** Who is working from home vs the office — today plus the preceding days (default a week). */
-  @Get('org/work-modes')
-  @RequirePermission('attendance.view.organization')
-  async orgWorkModes(@Query('days') days?: string) {
-    return this.svc.orgWorkModes(await this.actor.requireOrgId(), Number(days) || 7);
   }
 
   /** Full attendance data for a date range (up to 1 year) — admins/HR, for the CSV export. */

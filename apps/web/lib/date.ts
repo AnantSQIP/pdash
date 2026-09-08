@@ -78,7 +78,7 @@ export function formatTimeIST(value: string | Date | null | undefined): string {
  *
  * Almost never what you want. IST is UTC+5:30, so between midnight and 5:30am this returns
  * YESTERDAY — which is how "today" rows stopped matching, date pickers refused the current
- * day, and a WFH approval covering today went unrecognised at 3am. Use `todayIST()` for
+ * day, and an approved request covering today went unrecognised at 3am. Use `todayIST()` for
  * "today" and `istDay()`/`toUtcDay()` to key a specific value.
  *
  * Kept only for the rare caller that genuinely means the UTC date.

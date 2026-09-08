@@ -19,7 +19,6 @@ import {
   RiCalendarScheduleLine,
   RiFlightTakeoffLine,
   RiExchangeLine,
-  RiHomeOfficeLine,
   RiForbid2Line,
   type RemixiconComponentType,
 } from '@remixicon/react';
@@ -47,11 +46,10 @@ const TYPE_ICONS: Record<EventType, RemixiconComponentType> = {
   HOLIDAY:   RiCalendarEventLine,
   LEAVE:     RiFlightTakeoffLine,
   COMPOFF:   RiExchangeLine,
-  WFH:       RiHomeOfficeLine,
 };
 
 // Derived entries that have no editable CalendarEvent row behind them: company holidays
-// (managed under Attendance) and not-yet-approved leave/WFH/comp-off requests (which live on
+// (managed under Attendance) and not-yet-approved leave/comp-off requests (which live on
 // their own request records and are decided from Attendance, not here).
 const isReadOnlyEvent = (id: string) => id.startsWith('holiday-') || id.startsWith('pending:');
 // Grouped for the legend: schedule → delivery → availability.
@@ -325,7 +323,7 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
   );
 }
 
-// Compact chip rendered inside a day cell / week column. A PENDING request (leave/WFH/comp-off
+// Compact chip rendered inside a day cell / week column. A PENDING request (leave/comp-off
 // not yet approved) is drawn hollow — dashed outline in the type colour rather than a solid
 // fill — so "requested" never reads as "confirmed" at a glance.
 function EventChip({ ev, onSelect }: { ev: CalendarEvent; onSelect: (ev: CalendarEvent) => void }) {

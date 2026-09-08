@@ -34,7 +34,6 @@ const ROSTER: Record<string, Person> = {
   'mohit@squarkip.com':               { designation: 'VP',                                     role: 'Super Admin' },
   'yash@squarkip.com':                { designation: 'AVP',                                    role: 'Super Admin' },
   'shavetasharma@squarkip.com':       { designation: 'HR Specialist',                          role: 'HR' },
-  'nitin.goel@squarkip.com':          { designation: 'Manager (Delivery)',                     role: 'Manager' },
   'neha.shukla@squarkip.com':         { designation: 'Senior Consultant',                      role: 'Senior Consultant' },
 
   // Senior Consultant RIGHTS on a Senior Associate Consultant title — decided 23 Aug 2026. Same
@@ -62,7 +61,6 @@ const ROSTER: Record<string, Person> = {
   'drishti.jain@squarkip.com':        { designation: 'Research Associate',                     role: 'Employee' },
   'ronak.khandelwal@squarkip.com':    { designation: 'Research Associate',                     role: 'Employee' },
   'sugandh.raghav@squarkip.com':      { designation: 'Research Associate',                     role: 'Employee' },
-  'arjun.ghosh@squarkip.com':         { designation: 'Research Associate',                     role: 'Employee' },
   'vandana.boora@squarkip.com':       { designation: 'Research Associate',                     role: 'Employee' },
 
   'poorvi.gupta@squarkip.com':        { designation: 'Intern- Research Associate',             role: 'Employee' },

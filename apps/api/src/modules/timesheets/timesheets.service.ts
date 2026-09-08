@@ -499,7 +499,7 @@ export class TimesheetsService {
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     const orgId = user?.organizationId;
 
-    const [att, leaves, holidays, sheets, compOffs, pendLeave, pendWfh] = await Promise.all([
+    const [att, leaves, holidays, sheets, compOffs, pendLeave] = await Promise.all([
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } }, select: { date: true, status: true } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true, dayType: true } }),
       orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: first, lte: last } }, select: { date: true } }) : Promise.resolve([]),
@@ -507,11 +507,10 @@ export class TimesheetsService {
       // Comp-off: a non-working day the user WORKED. Approved → a required working day here; pending
       // → shown with an asterisk (not yet required).
       this.prisma.compOffRequest.findMany({ where: { userId, status: { in: ['APPROVED', 'PENDING'] }, workDate: { gte: first, lte: last } }, select: { workDate: true, status: true, dayType: true } }),
-      // Leave / WFH still awaiting a decision. These do NOT change the day's target — nothing is
+      // Leave still awaiting a decision. These do NOT change the day's target — nothing is
       // agreed until approved, so the hours are still owed — but the day is flagged so the
       // timesheet calendar shows the same "requested" state as every other calendar.
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true, leaveType: true } }),
-      this.prisma.wfhRequest.findMany({ where: { userId, status: 'PENDING', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true } }),
     ]);
     const dk = (d: Date) => d.toISOString().slice(0, 10);
     const attByDay = new Map(att.map(a => [dk(a.date), a.status]));
@@ -527,8 +526,6 @@ export class TimesheetsService {
     const pendingFor = (k: string): { kind: string; label: string } | null => {
       const l = pendLeave.find(r => dk(r.startDate) <= k && k <= dk(r.endDate));
       if (l) return { kind: 'LEAVE', label: `${l.leaveType} leave requested` };
-      const w = pendWfh.find(r => dk(r.startDate) <= k && k <= dk(r.endDate));
-      if (w) return { kind: 'WFH', label: 'Work from home requested' };
       const c = compOffByDay.get(k);
       if (c?.status === 'PENDING') return { kind: 'COMPOFF', label: `Comp-off claim (${c.dayType === 'HALF' ? 'half' : 'full'} day)` };
       return null;

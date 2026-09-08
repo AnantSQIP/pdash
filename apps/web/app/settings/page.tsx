@@ -511,7 +511,7 @@ const NOTIF_CATS = [
   { id: 'discussions', label: 'Discussions',        desc: 'Being added to a discussion channel' },
   { id: 'tasks',      label: 'Tasks',               desc: 'Task assignments and updates' },
   { id: 'projects',   label: 'Projects',            desc: 'Approvals, billable decisions, lifecycle' },
-  { id: 'attendance', label: 'Attendance & Leave',  desc: 'Leave, WFH, comp-off and regularisation' },
+  { id: 'attendance', label: 'Attendance & Leave',  desc: 'Leave, comp-off and regularisation' },
   { id: 'expenses',   label: 'Expenses',            desc: 'Expense approvals and reimbursements' },
   { id: 'other',      label: 'Everything else',     desc: 'Any other notification' },
 ];

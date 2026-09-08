@@ -6,7 +6,7 @@
 // integrations, dashboards, notification prefs).
 //
 // DELETES: every piece of operational / activity content — projects, tasks, subtasks,
-// patents, clients, PID requests, timesheets, attendance, leave/comp-off/WFH/expense,
+// patents, clients, PID requests, timesheets, attendance, leave/comp-off/expense,
 // notifications, discussions, calendar, approvals, comments, issues, announcements,
 // policies, appraisals, rewards, analytics/audit/activity, documents — and RESETS every
 // user's profile (clears PII + re-arms the first-login profile gate) and the PID / patent
@@ -62,7 +62,6 @@ async function main() {
     ['attendance', () => prisma.attendance.deleteMany()],
     ['expense', () => prisma.expense.deleteMany()],
     ['compOffRequest', () => prisma.compOffRequest.deleteMany()],
-    ['wfhRequest', () => prisma.wfhRequest.deleteMany()],
     ['leaveRequest', () => prisma.leaveRequest.deleteMany()],
     // discuss / calendar / comms
     ['messageReaction', () => prisma.messageReaction.deleteMany()],
