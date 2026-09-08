@@ -31,7 +31,7 @@ const RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
-import { PersonPanel, ExtendMenu } from '@/components/capacity/PersonPanel';
+import { PersonPanel, ExtendMenu, type ExtendScope } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, projectsOf, holidaysOf } from '@/components/capacity/grid';
@@ -391,17 +391,19 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
     } finally { setBusy(''); }
   }
 
-  async function extend(scope: 'task' | 'project', task: { id: string; projectId?: string }, iso: string) {
+  async function extend(scope: ExtendScope, task: { id: string; projectId?: string }, iso: string, userId: string) {
     setBusy(task.id);
     try {
       if (scope === 'project') {
         if (!task.projectId) throw new Error('This task has no project.');
         await api.projects.update(task.projectId, { dueDate: iso });
-      } else {
+      } else if (scope === 'task') {
         await api.tasks.update(task.id, { dueDate: iso });
+      } else {
+        await api.tasks.setAssigneeDeadline(task.id, userId, iso);
       }
       refresh();
-      toast(`Deadline extended to ${formatDate(iso)}`, 'success');
+      toast(scope === 'person' ? `Their deadline on this task moved to ${formatDate(iso)} — nobody else's changed` : `Deadline extended to ${formatDate(iso)}`, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
     } finally { setBusy(''); }
@@ -441,8 +443,8 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {canTask && (
-                      <ExtendMenu task={t} canProject={canProject} disabled={busy === t.id}
-                        onExtend={(scope, iso) => extend(scope, t, iso)} />
+                      <ExtendMenu task={t} person={{ userId: risk.userId, name: risk.name }} canProject={canProject} disabled={busy === t.id}
+                        onExtend={(scope, iso) => extend(scope, t, iso, risk.userId)} />
                     )}
                     {canAssign && (
                       <select

@@ -95,9 +95,9 @@ export const RAIL = {
 } as const;
 
 /**
- * Over-commitment on a day: the cell's own edge and a corner mark, in NEUTRAL near-black — not
- * red. Red on the board means exactly one thing, "this task is late" (the rail); a second red
- * on the cell's edge for "too much today" would be one red too many on a 36px cell.
+ * Over-commitment on a day: a black line UNDER the cell — not red, and not on the box itself.
+ * Red on the board means exactly one thing, "this task is late" (the rail); and the green box
+ * with its segments stays exactly as drawn, the line beneath it saying "more than a day's work".
  */
 export const OVER_COMMITTED = '#111827';
 

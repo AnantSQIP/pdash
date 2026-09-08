@@ -188,7 +188,6 @@ export function DayCell({
       )}
       style={{
         ...(working ? { backgroundColor: FREE_BASE.bg } : {}),
-        ...(over ? { borderColor: OVER_COMMITTED, borderWidth: 2 } : {}),
         // The legacy fill, only when the API gave no itemisation: darker green = fuller day.
         ...(legacy ? { backgroundImage: `linear-gradient(90deg, rgba(5,150,105,0.35) ${Math.min(100, day.utilization * 100)}%, transparent ${Math.min(100, day.utilization * 100)}%)` } : {}),
       }}
@@ -238,12 +237,13 @@ export function DayCell({
           )}
         </div>
       )}
-      {/* Over 8h: a neutral corner mark, the same idiom as a spreadsheet note. Not red. */}
+      {/* More than the day's hours planned: a black line UNDER the box — the overloaded mark.
+          Under, not on, so the green box and the work in it stay exactly as drawn. Not red. */}
       {over && (
-        <span className="pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[7px] border-t-[7px] border-l-transparent" style={{ borderTopColor: OVER_COMMITTED }} />
+        <span className="pointer-events-none absolute inset-x-0.5 h-[3px] rounded-full" style={{ bottom: -5, backgroundColor: OVER_COMMITTED }} aria-hidden />
       )}
       {day.state === 'LEAVE' && <Plane size={11} className="absolute inset-0 m-auto text-purple-500" />}
-      {pendingLeave && <Plane size={10} className={clsx('absolute top-1 text-purple-500', over ? 'left-1' : 'right-1')} />}
+      {pendingLeave && <Plane size={10} className="absolute top-1 right-1 text-purple-500" />}
       {day.state === 'HOLIDAY' && <Flag size={11} className="absolute inset-0 m-auto text-amber-500" />}
     </button>
   );

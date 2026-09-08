@@ -5,8 +5,8 @@
 // Capacity tools that people actually use (Float, Jira's capacity view, ClickUp's workload)
 // all put allocated-vs-available directly beside the schedule, in three bands — under, at,
 // over — rather than a single alarm. The bands here are the same three the board already draws
-// in its cells: green while there is room, amber as a day fills, and the neutral near-black
-// the cell edge uses for "over", never red (red on this board means a task is late).
+// in its cells: green while there is room, amber as a day fills, and the black of the line under
+// an over-planned day for "over", never red (red on this board means a task is late).
 
 import clsx from 'clsx';
 import type { CapacityRow, CapacityDay } from '@/lib/api';

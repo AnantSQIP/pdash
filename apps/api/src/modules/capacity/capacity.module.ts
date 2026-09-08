@@ -84,7 +84,15 @@ export interface CapacityRow {
     /** The project's own priority and INTERNAL deadline — the board shades urgency from these. */
     projectPriority?: string;
     projectDueDate?: string | null;
+    /**
+     * THIS PERSON's deadline on the task: their own seat's date when one was set (a deadline
+     * extended for them alone), otherwise the task's. The board plans them to this date.
+     */
     dueDate?: string | null; priority: string; completionPercentage: number;
+    /** The task's own deadline, for the words "task due …" beside a personal one. */
+    taskDueDate?: string | null;
+    /** True when this person's deadline differs from the task's — it was set for them alone. */
+    ownDeadline: boolean;
     /** When the task is planned to begin (the board never schedules it before this). */
     startDate?: string | null;
     /** This person's own estimate for the task (their staffing hours, or an even split). */
@@ -211,7 +219,7 @@ export class CapacityService {
           estimatedHours: true, completionPercentage: true,
           // Per-person estimated hours (role-based staffing). When present, each person's own
           // hours drive their capacity — NOT an even split of the task total.
-          assignees: { select: { userId: true, estimatedHours: true } },
+          assignees: { select: { userId: true, estimatedHours: true, dueDate: true } },
           projectTasks: {
             // A PID can hold several projects, so the title alone no longer identifies the work —
             // the code + round do.
@@ -296,15 +304,19 @@ export class CapacityService {
       const done = (task.completionPercentage ?? 0) / 100;
       // Fallback (legacy tasks with no per-person hours): split the task estimate evenly.
       const evenSplit = (task.estimatedHours ?? DEFAULT_TASK_HOURS) / Math.max(1, task.assignees.length);
-      const overdue = !!task.dueDate && startOfUtcDay(task.dueDate) < today;
 
       // Each person's OWN estimated hours drive their capacity (fall back to the even split when
       // a legacy task never recorded per-person hours). A person holding two roles on one task is
       // ONE entry whose estimate is the sum of both roles — summed first, so their logged hours
       // are subtracted once, not once per role.
       const estimateByUser = new Map<string, number>();
+      // A person's OWN deadline on the task (their seat's date), when one was set for them —
+      // "give Anant until Friday" moves Anant's plan and nobody else's. Two roles: the later one.
+      const ownDueByUser = new Map<string, Date | null>();
       for (const a of task.assignees) {
         estimateByUser.set(a.userId, (estimateByUser.get(a.userId) ?? 0) + (a.estimatedHours != null ? a.estimatedHours : evenSplit));
+        const prev = ownDueByUser.get(a.userId) ?? null;
+        ownDueByUser.set(a.userId, a.dueDate && (!prev || a.dueDate > prev) ? a.dueDate : prev);
       }
 
       for (const [userId, personEstimate] of estimateByUser) {
@@ -317,6 +329,9 @@ export class CapacityService {
         const byProgress = Math.max(0, personEstimate * (1 - done));
         const byLedger = personEstimate - loggedHrs;
         const remaining = byLedger > 0 ? Math.min(byProgress, byLedger) : byProgress;
+        const ownDue = ownDueByUser.get(userId) ?? null;
+        const personDue = ownDue ?? task.dueDate;
+        const overdue = !!personDue && startOfUtcDay(personDue) < today;
         const mine = openByUser.get(userId) ?? new Map<string, CapacityRow['openTasks'][number]>();
         mine.set(task.id, {
           id: task.id,
@@ -329,7 +344,9 @@ export class CapacityService {
           projectRound: project?.roundSeq,
           isTeamWork: !project && !!team,
           startDate: task.startDate ? dayKey(task.startDate) : null,
-          dueDate: task.dueDate ? dayKey(task.dueDate) : null,
+          dueDate: personDue ? dayKey(personDue) : null,
+          taskDueDate: task.dueDate ? dayKey(task.dueDate) : null,
+          ownDeadline: !!ownDue && (!task.dueDate || dayKey(ownDue) !== dayKey(task.dueDate)),
           priority: task.priority,
           projectPriority: project?.priority ?? undefined,
           projectDueDate: project?.dueDate ? dayKey(project.dueDate) : null,
@@ -356,7 +373,7 @@ export class CapacityService {
         // has already passed within the window → it lands on the first workable day: it is
         // blocking them right now.
         const startsAt = task.startDate && startOfUtcDay(task.startDate) > today ? startOfUtcDay(task.startDate) : today;
-        const endsAt = task.dueDate ? startOfUtcDay(task.dueDate) : addDays(today, horizon - 1);
+        const endsAt = personDue ? startOfUtcDay(personDue) : addDays(today, horizon - 1);
         let span = workable.filter(d => d >= startsAt && d <= endsAt);
         if (!span.length) span = [workable[0]]; // overdue / same-day: put it on the first workable day
 
@@ -601,15 +618,21 @@ export class CapacityService {
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
-        dueDate: { not: null, lt: windowEnd },
         assignees: { some: { userId: { in: userIds } } },
-        OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
+        AND: [
+          { OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+          // Due before the window ends — by the task's deadline, or by a person's OWN deadline on it.
+          { OR: [
+            { dueDate: { not: null, lt: windowEnd } },
+            { assignees: { some: { userId: { in: userIds }, dueDate: { not: null, lt: windowEnd } } } },
+          ] },
+        ],
         projectTasks: { some: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } } },
       },
       select: {
         id: true, title: true, priority: true, dueDate: true,
         estimatedHours: true, completionPercentage: true,
-        assignees: { select: { userId: true } },
+        assignees: { select: { userId: true, dueDate: true } },
         projectTasks: {
           where: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } },
           select: { project: { select: { id: true, title: true, priority: true } } },
@@ -622,9 +645,13 @@ export class CapacityService {
       const project = t.projectTasks[0]?.project;
       const estimate = t.estimatedHours ?? DEFAULT_TASK_HOURS;
       const remaining = Math.max(0, estimate * (1 - (t.completionPercentage ?? 0) / 100));
+      // Each person's deadline on the task: their own seat's date when one was set, else the task's.
+      const dueByUser: Record<string, Date | null> = {};
+      for (const a of t.assignees) dueByUser[a.userId] = a.dueDate ?? t.dueDate ?? null;
       return {
         id: t.id, title: t.title, priority: t.priority,
-        dueDate: t.dueDate as Date,
+        dueDate: t.dueDate,
+        dueByUser,
         projectId: project?.id, project: project?.title, projectPriority: project?.priority,
         remainingHours: r1(remaining),
         overdue: !!t.dueDate && startOfUtcDay(t.dueDate) < today,
@@ -686,8 +713,15 @@ export class CapacityService {
       const mine = tasks
         // Only work that comes due DURING the leave is a risk caused by it. A task already
         // overdue before the leave began was late independently — don't blame the leave.
-        .filter(t => t.userIds.includes(lv.userId) && startOfUtcDay(t.dueDate) >= start && startOfUtcDay(t.dueDate) <= end)
-        .map(({ userIds: _uids, ...rest }) => ({ ...rest, dueDate: dayKey(rest.dueDate) }))
+        .filter(t => {
+          const due = t.dueByUser[lv.userId];
+          if (!due) return false;
+          return t.userIds.includes(lv.userId) && startOfUtcDay(due) >= start && startOfUtcDay(due) <= end;
+        })
+        .map(({ userIds: _uids, dueByUser, ...rest }) => {
+          const due = dueByUser[lv.userId] as Date; // present: the filter above required it
+          return { ...rest, dueDate: dayKey(due), overdue: startOfUtcDay(due) < today };
+        })
         .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
       const u = lv.user;
       return {
@@ -732,8 +766,13 @@ export class CapacityService {
     const start = startOfUtcDay(leave.startDate);
     const end = startOfUtcDay(leave.endDate);
     const tasks = (await this.atRiskTasks([userId], addDays(end, 1)))
-      // Only tasks falling due DURING the leave — not ones already overdue before it began.
-      .filter(t => t.userIds.includes(userId) && startOfUtcDay(t.dueDate) >= start && startOfUtcDay(t.dueDate) <= end);
+      // Only tasks falling due DURING the leave — by THIS person's deadline on them — not ones
+      // already overdue before it began.
+      .filter(t => {
+        const due = t.dueByUser[userId];
+        if (!due) return false;
+        return t.userIds.includes(userId) && startOfUtcDay(due) >= start && startOfUtcDay(due) <= end;
+      });
     if (!tasks.length) return;
     const projectIds = [...new Set(tasks.map(t => t.projectId).filter((x): x is string => !!x))];
     const reviewers = (await this.coverageReviewers(organizationId, projectIds)).filter(id => id !== userId);

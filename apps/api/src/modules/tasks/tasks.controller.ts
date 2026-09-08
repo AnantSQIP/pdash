@@ -124,6 +124,12 @@ export class TasksController {
     return this.tasks.setStaffing(id, dto);
   }
 
+  /** Move ONE person's deadline on the task (their seat's date); `dueDate: null` clears it. */
+  @Patch(':id/assignees/:userId/deadline') @RequirePermission('task.update')
+  setAssigneeDeadline(@Param('id') id: string, @Param('userId') userId: string, @Body() body: { dueDate?: string | null }) {
+    return this.tasks.setAssigneeDeadline(id, userId, body?.dueDate ?? null);
+  }
+
   @Delete(':id') @RequirePermission('task.delete')
   remove(@Param('id') id: string) {
     return this.tasks.softDelete(id);

@@ -640,6 +640,43 @@ export class TasksService {
   }
 
   /**
+   * Move ONE person's deadline on a task — their seat's own due date — leaving the task's
+   * deadline and everyone else's untouched. The capacity board plans each person to their own
+   * deadline when they have one, so this is how "give Anant until Friday" is said without giving
+   * it to the whole team. `null` clears it; they then fall back to the task's deadline.
+   */
+  async setAssigneeDeadline(taskId: string, userId: string, dueDate: string | null) {
+    await this.access.assertTaskAccess(getActorId(), taskId);
+    const task = await this.getRaw(taskId);
+    const seats = await this.prisma.taskAssignee.findMany({ where: { taskId, userId }, select: { id: true, dueDate: true } });
+    if (!seats.length) throw new NotFoundException('That person is not assigned to this task.');
+    const due = dueDate ? new Date(dueDate) : null;
+    if (due && isNaN(due.getTime())) throw new BadRequestException('A valid date is required.');
+    // Every seat the person holds on the task (two roles are still one person, one deadline).
+    await this.prisma.taskAssignee.updateMany({ where: { taskId, userId }, data: { dueDate: due } });
+    await this.events.emit({
+      action: EVENTS.TASK_UPDATED,
+      entityType: 'TASK',
+      entityId: taskId,
+      oldValue: { assigneeDeadline: { userId, dueDate: seats[0].dueDate } },
+      newValue: { assigneeDeadline: { userId, dueDate: due } },
+      metadata: { projectId: (task as any).projectTasks?.[0]?.projectId, title: task.title, assigneeDeadline: true },
+    });
+    if (userId !== getActorId()) {
+      const when = due ? due.toISOString().slice(0, 10) : null;
+      await this.notifications.notify([userId], {
+        type: 'task.deadline',
+        title: when ? 'Your deadline moved' : 'Your own deadline was cleared',
+        message: when
+          ? `Your deadline on "${task.title}" is now ${when}. Nobody else's moved.`
+          : `Your own deadline on "${task.title}" was cleared — the task's deadline applies again.`,
+        link: '/tasks',
+      });
+    }
+    return { taskId, userId, dueDate: due };
+  }
+
+  /**
    * Recompute a project's completionPercentage from its (non-deleted) tasks.
    * A task counts as 100% when it is in a CLOSED-type workflow status, otherwise
    * its own completionPercentage. Project progress = the average across all tasks

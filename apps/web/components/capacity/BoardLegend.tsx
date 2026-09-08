@@ -140,12 +140,12 @@ export function BoardLegend({
         <span className="inline-flex items-center gap-1.5"><span className="inline-flex h-2.5 w-2.5 items-center justify-center rounded-sm bg-amber-100 text-amber-500"><Flag size={8} /></span>Holiday</span>
         <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-gray-100" />Weekend</span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="relative h-2.5 w-2.5 rounded-sm border-2 bg-white" style={{ borderColor: OVER_COMMITTED }}>
-            <span className="absolute right-0 top-0 h-0 w-0 border-l-[4px] border-t-[4px] border-l-transparent" style={{ borderTopColor: OVER_COMMITTED }} />
-          </span>Over 8h
+          <span className="relative mb-1 h-2.5 w-3.5 rounded-sm border" style={{ backgroundColor: FREE_BASE.bg, borderColor: FREE_BASE.border }}>
+            <span className="absolute inset-x-0 h-[2px] rounded-full" style={{ bottom: -4, backgroundColor: OVER_COMMITTED }} />
+          </span>More than 8h that day
         </span>
 
-        <span className="ml-auto text-gray-400">Label inside a bar = the PID's serial · dark cell edge = over 8h that day · red rail = that task is late</span>
+        <span className="ml-auto text-gray-400">Label inside a bar = the PID's serial · black line under a day = more than 8h planned · red rail = that task is late</span>
       </div>
     </div>
   );

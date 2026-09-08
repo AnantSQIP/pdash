@@ -36,15 +36,19 @@ function extendedISO(currentDue: string | null | undefined, days: number): strin
 }
 
 type ExtendTarget = { id: string; dueDate?: string | null; projectId?: string | null };
+export type ExtendScope = 'person' | 'task' | 'project';
 
-export function ExtendMenu({ task, canProject, disabled, onExtend }: {
+export function ExtendMenu({ task, person, canProject, disabled, onExtend }: {
   task: ExtendTarget;
+  /** The person whose plan is on screen: the default scope moves THEIR deadline only. */
+  person?: { userId: string; name: string };
   canProject: boolean;
   disabled: boolean;
-  onExtend: (scope: 'task' | 'project', iso: string) => void;
+  onExtend: (scope: ExtendScope, iso: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [scope, setScope] = useState<'task' | 'project'>('task');
+  const [scope, setScope] = useState<ExtendScope>(person ? 'person' : 'task');
+  const first = person?.name.split(' ')[0] ?? '';
   const [custom, setCustom] = useState('');
   const applyPreset = (days: number) => { onExtend(scope, extendedISO(task.dueDate, days)); setOpen(false); };
   const applyCustom = () => {
@@ -66,14 +70,17 @@ export function ExtendMenu({ task, canProject, disabled, onExtend }: {
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 mt-1 z-50 w-56 bg-white rounded-lg border border-gray-200 shadow-lg p-3">
-            {canProject && task.projectId && (
+            {(person || (canProject && task.projectId)) && (
               <div className="flex gap-0.5 mb-2 bg-gray-100 rounded-md p-0.5 text-[11px] font-medium">
-                <button onClick={() => setScope('task')} className={clsx('flex-1 py-1 rounded', scope === 'task' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>This task</button>
-                <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Whole project</button>
+                {person && <button onClick={() => setScope('person')} className={clsx('flex-1 py-1 rounded', scope === 'person' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Only {first}</button>}
+                <button onClick={() => setScope('task')} className={clsx('flex-1 py-1 rounded', scope === 'task' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Whole task</button>
+                {canProject && task.projectId && <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Project</button>}
               </div>
             )}
             <p className="text-[11px] text-gray-400 mb-1.5">
-              {scope === 'project' ? 'Push the project deadline' : 'Push this task’s deadline'}
+              {scope === 'person' ? `Give ${first} more time on this task — nobody else's deadline moves`
+                : scope === 'project' ? 'Push the project deadline'
+                  : 'Push this task’s deadline for everyone on it'}
             </p>
             <div className="flex gap-1 mb-2">
               {EXTEND_PRESETS.map(p => (
@@ -220,18 +227,21 @@ export function PersonPanel({
     return () => clearTimeout(t);
   }, [focusIds]);
 
-  async function extend(scope: 'task' | 'project', task: CapacityRow['openTasks'][number], iso: string) {
+  async function extend(scope: ExtendScope, task: CapacityRow['openTasks'][number], iso: string) {
     setBusyTaskId(task.id);
     try {
       if (scope === 'project') {
         if (!task.projectId) throw new Error('This task has no project.');
         await api.projects.update(task.projectId, { dueDate: iso });
-      } else {
+      } else if (scope === 'task') {
         await api.tasks.update(task.id, { dueDate: iso });
+      } else {
+        // This person's seat only: the task's deadline and everyone else's stay where they are.
+        await api.tasks.setAssigneeDeadline(task.id, row.userId, iso);
       }
       invalidateTaskCaches(qc);
       qc.invalidateQueries({ queryKey: ['coverage-risks'] });
-      toast(`Deadline extended to ${formatDate(iso)}`, 'success');
+      toast(scope === 'person' ? `${row.name.split(' ')[0]}'s deadline on this task moved to ${formatDate(iso)} — nobody else's changed` : `Deadline extended to ${formatDate(iso)}`, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
     } finally {
@@ -267,6 +277,7 @@ export function PersonPanel({
           <p className="mt-0.5 text-[11px] text-gray-500">
             <span className="text-gray-600">{priorityWord(t.priority)}</span>
             {' · '}<span className={due.cls}>{due.text}</span>
+            {t.ownDeadline && <span className="text-gray-400" title="A deadline set for this person alone; the task's own deadline is unchanged"> · own deadline{t.taskDueDate ? ` (task due ${formatDate(t.taskDueDate)})` : ''}</span>}
             {scheduled && <>{' · '}<span className="tabular-nums">{rangeText(footprints.get(t.id))}</span></>}
           </p>
           {t.estimatedHours != null && (
@@ -278,7 +289,7 @@ export function PersonPanel({
         </div>
         {canTask && (
           <div className="shrink-0 opacity-0 transition-opacity group-hover/task:opacity-100 focus-within:opacity-100">
-            <ExtendMenu task={t} canProject={canProject} disabled={busyTaskId === t.id} onExtend={(scope, iso) => extend(scope, t, iso)} />
+            <ExtendMenu task={t} person={{ userId: row.userId, name: row.name }} canProject={canProject} disabled={busyTaskId === t.id} onExtend={(scope, iso) => extend(scope, t, iso)} />
           </div>
         )}
       </div>
