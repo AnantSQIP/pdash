@@ -1335,6 +1335,16 @@ export type CompOffEvidence = {
   timesheets: { task: string; hours: number; notes?: string }[];
   attendance: { checkIn?: string | null; checkOut?: string | null; totalHours?: number | null } | null;
 };
+// Work-from-home, arranged in advance: request a date range → HR/Admin (attendance.manage)
+// approves → punching on a covered day records workMode WFH automatically. The retrospective
+// route for a day already worked is a regularisation of type WFH.
+export type WfhRequestItem = {
+  id: string; userId: string; organizationId?: string | null;
+  startDate: string; endDate: string; reason: string;
+  status: string; reviewedBy?: string | null; reviewedAt?: string | null; reviewNote?: string | null;
+  createdAt: string;
+  user?: { id: string; firstName: string; lastName: string; email: string; profilePhoto?: string | null };
+};
 export type CompOffRequest = {
   id: string; userId: string; organizationId?: string | null; workDate: string; reason: string;
   projectRef?: string | null; hoursWorked?: number | null; status: string;
@@ -2273,6 +2283,17 @@ export const api = {
     /** `earlyReason` is only read when punching out with the timesheet short — it is recorded on the day. */
     punch: (coords: { lat: number; lng: number; accuracy?: number; area?: string; earlyReason?: string }) =>
       req<Attendance>('/attendance/punch', { method: 'POST', body: JSON.stringify(coords) }),
+    // WFH requests: raised from the Leaves tab, reviewed by HR/Admin (attendance.manage).
+    requestWfh: (data: { startDate: string; endDate: string; reason: string }) =>
+      req<WfhRequestItem>('/attendance/wfh', { method: 'POST', body: JSON.stringify(data) }),
+    myWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/me'),
+    pendingWfhRequests: () => req<WfhRequestItem[]>('/attendance/wfh/pending'),
+    approveWfh: (id: string, note?: string) =>
+      req<WfhRequestItem>(`/attendance/wfh/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+    rejectWfh: (id: string, note?: string) =>
+      req<WfhRequestItem>(`/attendance/wfh/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+    cancelWfh: (id: string) =>
+      req<WfhRequestItem>(`/attendance/wfh/${id}/cancel`, { method: 'POST' }),
     /** What punching out would say, before pressing it. */
     punchOutCheck: () => req<PunchOutCheck>('/attendance/me/punch-out-check'),
     /** Short days, a shift closed at 11:59 pm, a clock still running — the catch-up banner. */

@@ -26,7 +26,6 @@ import {
   Card, CardHeader, CountBadge, StatTile, MetricRow, EmptyHint, ErrorState, SkeletonRows,
   PersonRow, ConfirmButton, BADGE, phaseChip, priorityDotClass,
 } from './shared';
-import { PunchControl } from './usePunch';
 import { homeKeys } from './keys';
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong. Please try again.');
@@ -82,7 +81,6 @@ export function PersonaBanner() {
           </div>
         </div>
       </div>
-      <div className="shrink-0"><PunchControl variant="banner" /></div>
     </header>
   );
 }

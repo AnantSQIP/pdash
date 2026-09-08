@@ -166,6 +166,7 @@ model User {
   leaveRequests             LeaveRequest[]
   leaveCoverFor             LeaveRequest[]             @relation("LeaveAlternateEmployee")
   regularizationRequests    RegularizationRequest[]
+  wfhRequests               WfhRequest[]
   compOffRequests           CompOffRequest[]
   timesheetBackdateRequests TimesheetBackdateRequest[]
   expenses                  Expense[]
@@ -1492,6 +1493,37 @@ model CompOffRequest {
   @@index([userId])
   @@index([organizationId, status])
   @@map("comp_off_request")
+}
+
+// Work-from-home request: WFH is a WORK MODE (the person still works, it is not absence), but
+// working it must be AGREED, not self-declared. The employee raises a request for a date range
+// from the Leaves section; HR/Admin (attendance.manage) approves or rejects, and punch then
+// records workMode=WFH on the days it covers.
+//
+// This is the PLANNED route. The other is retrospective: a regularisation request of type WFH,
+// for a day already worked from home that nobody arranged in advance. Both end in the same place
+// — Attendance.workMode on the day — and neither is a leave type: it consumes no balance and
+// counts as a full working day.
+model WfhRequest {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  startDate      DateTime
+  endDate        DateTime
+  reason         String
+  // PENDING | APPROVED | REJECTED | CANCELLED
+  status         String    @default("PENDING")
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId, status])
+  @@map("wfh_request")
 }
 
 // Backdated timesheet approval: entries for the last ~1 month can be filled freely, but

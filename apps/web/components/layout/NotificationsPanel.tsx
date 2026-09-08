@@ -35,6 +35,9 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'attendance.regularization_requested': { Icon: RiTimeLine,           color: 'text-amber-600', bg: 'bg-amber-50' },
   'attendance.regularization_approved':  { Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
   'attendance.regularization_rejected':  { Icon: RiCloseCircleLine,    color: 'text-red-600',   bg: 'bg-red-50' },
+  'wfh.requested':     { Icon: RiTimeLine,           color: 'text-cyan-600',  bg: 'bg-cyan-50' },
+  'wfh.approved':      { Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
+  'wfh.rejected':      { Icon: RiCloseCircleLine,    color: 'text-red-600',   bg: 'bg-red-50' },
   'compoff.requested': { Icon: RiTimeLine,           color: 'text-indigo-600', bg: 'bg-indigo-50' },
   'compoff.approved':  { Icon: RiCheckboxCircleLine, color: 'text-green-600',  bg: 'bg-green-50' },
   'compoff.rejected':  { Icon: RiCloseCircleLine,    color: 'text-red-600',    bg: 'bg-red-50' },
@@ -69,7 +72,12 @@ const KIND_META: Record<Reminder['kind'], { Icon: typeof RiAlarmWarningLine; col
   milestone: { Icon: RiFlag2Line,         color: 'text-purple-600', bg: 'bg-purple-50' },
 };
 
-export function NotificationsPanel({ onClose, collapsed = false }: { onClose: () => void; collapsed?: boolean }) {
+export function NotificationsPanel({ onClose, collapsed = false, anchor = 'sidebar' }: {
+  onClose: () => void;
+  collapsed?: boolean;
+  /** Where the panel hangs from: the sidebar's bell, or the top-right one. */
+  anchor?: 'sidebar' | 'topbar';
+}) {
   const { org, currentUser } = useOrg();
   const qc = useQueryClient();
   const router = useRouter();
@@ -143,7 +151,9 @@ export function NotificationsPanel({ onClose, collapsed = false }: { onClose: ()
   return (
     <Portal>
       <div className="fixed inset-0 z-[60]" onClick={onClose} />
-      <div className={`fixed bottom-4 z-[61] max-h-[80vh] lg:max-h-[520px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col left-4 right-4 lg:right-auto lg:w-96 ${collapsed ? 'lg:left-20' : 'lg:left-[240px]'}`}>
+      <div className={anchor === 'topbar'
+        ? 'fixed top-14 right-2 z-[61] max-h-[80vh] lg:max-h-[520px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col left-4 sm:left-auto sm:w-96 sm:right-4'
+        : `fixed bottom-4 z-[61] max-h-[80vh] lg:max-h-[520px] rounded-xl shadow-2xl bg-white overflow-hidden flex flex-col left-4 right-4 lg:right-auto lg:w-96 ${collapsed ? 'lg:left-20' : 'lg:left-[240px]'}`}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
           <div className="flex items-center gap-2">
             <RiNotification3Line size={16} className="text-gray-600" />
