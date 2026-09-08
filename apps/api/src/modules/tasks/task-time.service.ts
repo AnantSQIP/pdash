@@ -137,14 +137,38 @@ export class TaskTimeService {
    * The consequence, that a day can total more hours than were lived, is surfaced rather than
    * hidden: My Tasks says how many clocks are running, and the punch-out check compares tracked
    * hours against the hours actually attended.
+   *
+   * Each running clock carries what the person had already put into that task, so a resumed
+   * timer counts on rather than restarting at zero.
    */
   async running(userId = this.actor()) {
     await this.reconcileStale(userId);
-    return this.prisma.taskWorkSession.findMany({
+    const open = await this.prisma.taskWorkSession.findMany({
       where: { userId, endedAt: null },
       orderBy: { startedAt: 'asc' },
       select: { id: true, taskId: true, startedAt: true, task: { select: { id: true, title: true } } },
     });
+    if (!open.length) return [];
+
+    // Pausing ENDS a session and resuming opens a new one, so the running session on its own
+    // says nothing about the work already done on that task. A clock resumed after two hours
+    // read "0m", which looks like the two hours were thrown away — they were not, they are in
+    // the sessions just closed. The earlier sittings are sent with the running one so the
+    // screen can count on from where the person left off.
+    const now = new Date();
+    const earlier = await this.prisma.taskWorkSession.findMany({
+      where: { userId, taskId: { in: open.map(s => s.taskId) }, endedAt: { not: null } },
+      select: { taskId: true, startedAt: true, endedAt: true, minutes: true },
+    });
+    const prior = new Map<string, number>();
+    for (const s of earlier) {
+      prior.set(s.taskId, (prior.get(s.taskId) ?? 0) + sessionMinutes(s, now, MAX_SESSION_MINUTES));
+    }
+    return open.map(s => ({
+      ...s,
+      /** This person's finished sittings on the task — everything before the clock now running. */
+      priorMinutes: prior.get(s.taskId) ?? 0,
+    }));
   }
 
   /**
@@ -196,7 +220,14 @@ export class TaskTimeService {
       where: { taskId, userId, endedAt: null },
       orderBy: { startedAt: 'desc' },
     });
-    if (!open) return { paused: false, minutes: 0, totalMinutes: await this.minutesOn(taskId), todayMinutes: await this.minutesToday(taskId, userId) };
+    if (!open) {
+      return {
+        paused: false, minutes: 0,
+        totalMinutes: await this.minutesOn(taskId),
+        myMinutes: await this.minutesFor(taskId, userId),
+        todayMinutes: await this.minutesToday(taskId, userId),
+      };
+    }
     const minutes = elapsedMinutes(open.startedAt, now);
     await this.prisma.taskWorkSession.update({
       where: { id: open.id },
@@ -205,7 +236,16 @@ export class TaskTimeService {
     // `minutes` is THIS sitting — what the person just did, and what the toast offers to log.
     // The cumulative figures are returned beside it; neither may be the one pre-filled, or a
     // second session of the day books the first one again.
-    return { paused: true, minutes, totalMinutes: await this.minutesOn(taskId), todayMinutes: await this.minutesToday(taskId, userId) };
+    //
+    // `myMinutes` is this person's own running total on the task and `totalMinutes` is
+    // everybody's. Anything said TO a person about how long they have spent must use theirs:
+    // quoting the task's total would tell an analyst they had worked their reviewer's hours too.
+    return {
+      paused: true, minutes,
+      totalMinutes: await this.minutesOn(taskId),
+      myMinutes: await this.minutesFor(taskId, userId),
+      todayMinutes: await this.minutesToday(taskId, userId),
+    };
   }
 
   /**

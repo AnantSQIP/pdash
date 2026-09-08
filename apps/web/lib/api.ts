@@ -742,6 +742,8 @@ export const COMMENT_PAGE_SIZE = 100;
 export type RunningTimer = {
   id: string; taskId: string; startedAt: string;
   task: { id: string; title: string };
+  /** Your finished sittings on this task before the clock now running — so Resume counts on. */
+  priorMinutes: number;
 };
 
 /** One task's share of a day: what the clock recorded, and how much of it is filed. */
@@ -1857,7 +1859,13 @@ export const api = {
       req<{ id: string; taskId: string; startedAt: string; resumed: boolean }>(`/tasks/${id}/start`, { method: 'POST' }),
     /** Pause the clock. Resuming is Start again. */
     pauseTimer: (id: string) =>
-      req<{ paused: boolean; /** THIS sitting's minutes. */ minutes: number; totalMinutes: number; todayMinutes: number }>(
+      req<{
+        paused: boolean;
+        /** THIS sitting's minutes. */ minutes: number;
+        /** Everybody's minutes on the task. */ totalMinutes: number;
+        /** YOUR minutes on the task — the figure to quote back to the person. */ myMinutes: number;
+        todayMinutes: number;
+      }>(
         `/tasks/${id}/pause`, { method: 'POST' }),
     /** Finish the task: one click. The clock stops and today's tracked time is filed. */
     finishTask: (id: string, closedStatusId?: string) =>
