@@ -11,21 +11,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Plane, Flag } from 'lucide-react';
 import type { CapacityRow } from '@/lib/api';
-import { type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED, RAIL } from '@/lib/project-colors';
+import { type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED, RAIL, textureStyle } from '@/lib/project-colors';
 import { pidLabel } from '@/lib/mock-data';
 
 const RAMP = ['#3d3d3d', '#595959', '#808080', '#a8a8a8'];
 const RAMP_LABEL = ['Critical', 'High', 'Medium', 'Low'];
 
 export function BoardLegend({
-  rows, hues, focusProjectId, onFocus,
+  rows, hues, focusProjectId, onFocus, defaultPinned = null,
 }: {
   rows: CapacityRow[];
   hues: Map<string, ProjectHue>;
   focusProjectId: string | null;
   onFocus: (projectId: string | null) => void;
+  /** Start with this project pinned — the parent must seed its focus state with the same id. */
+  defaultPinned?: string | null;
 }) {
-  const [pinned, setPinned] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(defaultPinned);
 
   // Every project with at least one open task on the board, by PID.
   const projects = useMemo(() => {
@@ -89,7 +91,7 @@ export function BoardLegend({
                   className="inline-flex max-w-[240px] items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-opacity hover:bg-white"
                   style={{ opacity: faded ? 0.4 : 1, ...(pinned === p.id ? { boxShadow: `inset 0 0 0 1px ${hue?.ring ?? '#d1d5db'}`, backgroundColor: hue?.tint } : {}) }}
                 >
-                  <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: hue?.medium ?? '#6b7280' }} />
+                  <span className="h-2.5 w-3.5 shrink-0 rounded-sm" style={{ backgroundColor: hue?.medium ?? '#6b7280', ...textureStyle(hue?.texture ?? 'none') }} />
                   {p.pid && <span className="font-mono text-[10.5px] text-gray-500">{pidLabel(p.pid, p.round)}</span>}
                   <span className="truncate text-gray-700">{p.title}</span>
                 </button>
@@ -143,7 +145,7 @@ export function BoardLegend({
           </span>Over 8h
         </span>
 
-        <span className="ml-auto text-gray-400">Dark cell edge = over 8h that day · red rail = that task is late</span>
+        <span className="ml-auto text-gray-400">Label inside a bar = the PID's serial · dark cell edge = over 8h that day · red rail = that task is late</span>
       </div>
     </div>
   );

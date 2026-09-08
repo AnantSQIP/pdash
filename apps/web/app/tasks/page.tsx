@@ -15,6 +15,7 @@ import { formatDate, isPastDue } from '@/lib/date';
 import { RunningTimerBar, TimerButton, CompleteTaskDialog, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
 import { pidLabel } from '@/lib/mock-data';
 import type { RunningTimer } from '@/lib/api';
+import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 const PRIORITY_META = {
   CRITICAL: { label: 'Critical', color: 'text-red-600',    bg: 'bg-red-50',    dot: 'bg-red-500'    },
@@ -133,15 +134,7 @@ export default function TasksPage() {
     qc.setQueryData<ApiTask[]>(meKey, old => (old ?? []).map(t => (t.id === taskId ? { ...t, ...patch } : t)));
   }
 
-  // Every cache a new timesheet entry touches. invalidateTaskCaches covers the task's own
-  // actualHours; the Timesheets page, its fill calendar and the running clock are separate keys.
-  function afterTimeLogged() {
-    invalidateTaskCaches(qc);
-    qc.invalidateQueries({ queryKey: ['timesheets-mine', currentUser?.id] });
-    qc.invalidateQueries({ queryKey: ['ts-calendar'] });
-    qc.invalidateQueries({ queryKey: ['timesheets'] });
-    qc.invalidateQueries({ queryKey: ['running-timer'] });
-  }
+  function afterTimeLogged() { invalidateTimesheetCaches(qc); }
   const openLogFromTimer = (taskId: string, minutes: number) => {
     const task = tasks.find(t => t.id === taskId);
     if (task) setLogging({ task, hours: quarterHours(minutes) });

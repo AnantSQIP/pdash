@@ -11,6 +11,7 @@ import { Avatar } from '@/components/Avatar';
 import { DateField } from '@/components/ui/DateField';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { todayIST } from '@/lib/date';
+import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 // Technical issues / glitches. Raising one logs the time it cost as NON-BILLABLE time,
 // so it shows up under the project's non-billable timesheets.
@@ -101,7 +102,8 @@ export default function IssuesTab({ projectId }: { projectId: string }) {
   });
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['issues', projectId] });
-    qc.invalidateQueries({ queryKey: ['timesheets', projectId] });
+    // An issue can carry hours: a ledger row, with everything downstream of one.
+    invalidateTimesheetCaches(qc);
   };
 
   async function deleteIssue(id: string) {

@@ -85,6 +85,14 @@ export interface CapacityRow {
     projectPriority?: string;
     projectDueDate?: string | null;
     dueDate?: string | null; priority: string; completionPercentage: number;
+    /** When the task is planned to begin (the board never schedules it before this). */
+    startDate?: string | null;
+    /** This person's own estimate for the task (their staffing hours, or an even split). */
+    estimatedHours: number;
+    /** Hours this person has logged against the task in the timesheet ledger. */
+    loggedHours: number;
+    /** Logged more than estimated and the task is still open — the estimate needs revisiting. */
+    overEstimate: boolean;
     remainingHours: number; overdue: boolean;
   }[];
   /** Free capacity (hours) across the whole window. */
@@ -163,7 +171,7 @@ export class CapacityService {
     organizationId: string,
     days = DEFAULT_DAYS,
     onlyUserIds?: string[],
-  ): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[] }> {
+  ): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[]; generatedAt: string }> {
     const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
     const to = addDays(today, horizon);
@@ -224,6 +232,20 @@ export class CapacityService {
       this.optionalHolidays.approvedDayKeys(organizationId, today, to),
     ]);
 
+    // What each person has already LOGGED against each open task. The ledger is the second signal
+    // of remaining effort beside the task's completion %: a task with 4h logged of an 8h estimate
+    // has 4h left even while nobody has moved the percentage, so time filed from My Tasks or the
+    // Timesheets module shrinks the person's plotted load the next time the board loads.
+    const taskIds = tasks.map(t => t.id);
+    const logged = taskIds.length
+      ? await this.prisma.timesheet.groupBy({
+          by: ['userId', 'taskId'],
+          where: { deletedAt: null, taskId: { in: taskIds } },
+          _sum: { hoursLogged: true },
+        })
+      : [];
+    const loggedByUserTask = new Map(logged.map(g => [`${g.userId}|${g.taskId}`, g._sum.hoursLogged ?? 0]));
+
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
     const leaveByUserDay = new Map<string, string>();        // APPROVED — reduces capacity
     const pendingLeaveByUserDay = new Map<string, string>(); // PENDING — shown, but tentative
@@ -263,7 +285,7 @@ export class CapacityService {
     // could say "6h on Tuesday" and nothing about what — so the board could only paint a day
     // one colour. Keyed by taskId so a person holding two roles on one task is one entry.
     const tasksByUserDay = new Map<string, Map<string, number>>();
-    // Keyed by taskId per user for the same reason: two assignee rows (two roles) are one task.
+    // Keyed by taskId per user: two assignee rows (two roles) are one task for one person.
     const openByUser = new Map<string, Map<string, CapacityRow['openTasks'][number]>>();
 
     for (const task of tasks) {
@@ -276,37 +298,48 @@ export class CapacityService {
       const evenSplit = (task.estimatedHours ?? DEFAULT_TASK_HOURS) / Math.max(1, task.assignees.length);
       const overdue = !!task.dueDate && startOfUtcDay(task.dueDate) < today;
 
+      // Each person's OWN estimated hours drive their capacity (fall back to the even split when
+      // a legacy task never recorded per-person hours). A person holding two roles on one task is
+      // ONE entry whose estimate is the sum of both roles — summed first, so their logged hours
+      // are subtracted once, not once per role.
+      const estimateByUser = new Map<string, number>();
       for (const a of task.assignees) {
-        const userId = a.userId;
-        // Each person's OWN estimated hours drive their capacity; fall back to the even split
-        // when a legacy task never recorded per-person hours.
-        const personEstimate = a.estimatedHours != null ? a.estimatedHours : evenSplit;
-        const remaining = Math.max(0, personEstimate * (1 - done));
+        estimateByUser.set(a.userId, (estimateByUser.get(a.userId) ?? 0) + (a.estimatedHours != null ? a.estimatedHours : evenSplit));
+      }
+
+      for (const [userId, personEstimate] of estimateByUser) {
+        // Remaining effort has two signals and the board believes whichever says less is left:
+        //   by progress → estimate × (1 − completion%)   (someone moved the percentage)
+        //   by ledger   → estimate − hours logged          (someone filed time)
+        // When the ledger has already passed the estimate the task is simply under-estimated;
+        // progress is then the only honest signal, and the entry is flagged so the panel can say so.
+        const loggedHrs = loggedByUserTask.get(`${userId}|${task.id}`) ?? 0;
+        const byProgress = Math.max(0, personEstimate * (1 - done));
+        const byLedger = personEstimate - loggedHrs;
+        const remaining = byLedger > 0 ? Math.min(byProgress, byLedger) : byProgress;
         const mine = openByUser.get(userId) ?? new Map<string, CapacityRow['openTasks'][number]>();
-        const existing = mine.get(task.id);
-        if (existing) {
-          // Second role on the same task: their part is the sum of both roles' remaining hours.
-          existing.remainingHours = r1(existing.remainingHours + remaining);
-        } else {
-          mine.set(task.id, {
-            id: task.id,
-            title: task.title,
-            projectId: project?.id ?? team?.id,
-            // Team work has no PID and no round — it is labelled by the space it belongs to, and
-            // flagged so the UI can tell a client matter from an internal one.
-            project: project?.title ?? team?.name,
-            projectPid: project?.code ?? null,
-            projectRound: project?.roundSeq,
-            isTeamWork: !project && !!team,
-            dueDate: task.dueDate ? dayKey(task.dueDate) : null,
-            priority: task.priority,
-            projectPriority: project?.priority ?? undefined,
-            projectDueDate: project?.dueDate ? dayKey(project.dueDate) : null,
-            completionPercentage: task.completionPercentage ?? 0,
-            remainingHours: r1(remaining),
-            overdue,
-          });
-        }
+        mine.set(task.id, {
+          id: task.id,
+          title: task.title,
+          projectId: project?.id ?? team?.id,
+          // Team work has no PID and no round — it is labelled by the space it belongs to, and
+          // flagged so the UI can tell a client matter from an internal one.
+          project: project?.title ?? team?.name,
+          projectPid: project?.code ?? null,
+          projectRound: project?.roundSeq,
+          isTeamWork: !project && !!team,
+          startDate: task.startDate ? dayKey(task.startDate) : null,
+          dueDate: task.dueDate ? dayKey(task.dueDate) : null,
+          priority: task.priority,
+          projectPriority: project?.priority ?? undefined,
+          projectDueDate: project?.dueDate ? dayKey(project.dueDate) : null,
+          completionPercentage: task.completionPercentage ?? 0,
+          estimatedHours: r1(personEstimate),
+          loggedHours: r1(loggedHrs),
+          overEstimate: loggedHrs > personEstimate + 0.05,
+          remainingHours: r1(remaining),
+          overdue,
+        });
         openByUser.set(userId, mine);
 
         if (remaining <= 0) continue;
@@ -443,7 +476,8 @@ export class CapacityService {
     // Most available first — this board exists to answer "who can take more work?".
     rows.sort((a, b) => b.freeHours - a.freeHours);
 
-    return { from: dayKey(today), to: dayKey(addDays(to, -1)), capacityPerDay: DAILY_CAPACITY_HOURS, rows };
+    // Stamped so the client can say how fresh the board is, and how long since it last changed.
+    return { from: dayKey(today), to: dayKey(addDays(to, -1)), capacityPerDay: DAILY_CAPACITY_HOURS, rows, generatedAt: new Date().toISOString() };
   }
 
   /**

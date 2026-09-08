@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
-import { X, Plus, ArrowRight, CalendarPlus, ChevronDown } from 'lucide-react';
+import { X, Plus, ArrowRight, CalendarPlus, ChevronDown, AlertTriangle } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, type CapacityRow, type CapacityOpenTask } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
@@ -16,8 +16,8 @@ import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
-import { type ProjectHue, NO_PROJECT_HUE, segmentFill, deadlineState, railStyle, urgencyOrder } from '@/lib/project-colors';
-import { DayCell, DOW, dayNum, dayOfWeek, isToday, segmentsFor, DAILY_CAPACITY } from './grid';
+import { type ProjectHue, NO_PROJECT_HUE, segmentFill, textureStyle, deadlineState, railStyle, urgencyOrder } from '@/lib/project-colors';
+import { DayCell, DOW, dayNum, dayOfWeek, isToday, segmentsFor } from './grid';
 import { dueText, priorityWord } from './HoverCard';
 
 // Extending a deadline spreads the same remaining work over more days, which lowers the
@@ -134,6 +134,11 @@ export function PersonPanel({
   const { toast } = useToast();
   const [busyTaskId, setBusyTaskId] = useState('');
   const [showUnscheduled, setShowUnscheduled] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(true);
+  // The day whose tasks are flashed: seeded by the cell that opened the panel, and moved from
+  // inside it by the over-committed list.
+  const [focus, setFocus] = useState<string | undefined>(focusDate);
+  useEffect(() => { setFocus(focusDate); }, [focusDate]);
   const canTask = can('task.update');
   const canProject = can('project.update');
 
@@ -193,10 +198,18 @@ export function PersonPanel({
 
   // Opened from a cell: the tasks on that day get a moment's ring, and the first scrolls into view.
   const focusIds = useMemo(() => {
-    if (!focusDate) return new Set<string>();
-    const d = row.days.find(x => x.date === focusDate);
+    if (!focus) return new Set<string>();
+    const d = row.days.find(x => x.date === focus);
     return new Set((d?.tasks ?? []).map(a => a.taskId));
-  }, [row.days, focusDate]);
+  }, [row.days, focus]);
+  // Days planned beyond capacity — the conflicts, as a list you can act on, not just a dark edge.
+  const overDays = useMemo(() => row.days.filter(d => d.capacity > 0 && d.load > d.capacity + 0.05), [row.days]);
+  // Every scheduled task in group order, for the timeline.
+  const timeline = useMemo(() => {
+    const out: { t: CapacityOpenTask; hue: ProjectHue }[] = [];
+    for (const g of groups) for (const t of g.tasks) if ((footprints.get(t.id)?.hours ?? 0) > 0) out.push({ t, hue: g.hue });
+    return out;
+  }, [groups, footprints]);
   const [flash, setFlash] = useState(false);
   const firstFocusRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -243,7 +256,7 @@ export function PersonPanel({
         className={clsx('group/task flex gap-2.5 px-1 py-2 transition-shadow',
           focused && flash && 'rounded-md ring-2 ring-gray-900')}
       >
-        <span className="relative mt-0.5 h-6 w-3 shrink-0 rounded-[2px]" style={{ backgroundColor: fill, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.18)' }}>
+        <span className="relative mt-0.5 h-6 w-3 shrink-0 rounded-[2px]" style={{ backgroundColor: fill, ...textureStyle(hue.texture), boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.18)' }}>
           {rail && <span className="absolute inset-x-0 bottom-0 h-[3px] border-t border-white" style={{ background: rail }} />}
         </span>
         <div className="min-w-0 flex-1">
@@ -256,6 +269,12 @@ export function PersonPanel({
             {' · '}<span className={due.cls}>{due.text}</span>
             {scheduled && <>{' · '}<span className="tabular-nums">{rangeText(footprints.get(t.id))}</span></>}
           </p>
+          {t.estimatedHours != null && (
+            <p className="mt-0.5 text-[10.5px] tabular-nums text-gray-400">
+              {t.loggedHours ?? 0}h logged of {t.estimatedHours}h estimated
+              {t.overEstimate && <span className="text-amber-700"> · over the estimate</span>}
+            </p>
+          )}
         </div>
         {canTask && (
           <div className="shrink-0 opacity-0 transition-opacity group-hover/task:opacity-100 focus-within:opacity-100">
@@ -301,7 +320,65 @@ export function PersonPanel({
             {row.nextFreeDate && !row.availableNow && <>{' · '}free from {formatDate(row.nextFreeDate)}</>}
             {row.availableNow && <>{' · '}<span className="text-emerald-700">free now</span></>}
           </p>
+          {overDays.length > 0 && (
+            <ul className="mt-2 space-y-1" aria-label="Days planned beyond capacity">
+              {overDays.map(d => (
+                <li key={d.date} className="flex items-center justify-between gap-2 rounded-md bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    <AlertTriangle size={11} className="text-gray-900" />
+                    <span className="font-medium text-gray-900">{formatDate(d.date, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+                    {' · '}{d.load}h planned · <span className="font-medium text-gray-900">{Math.round((d.load - d.capacity) * 10) / 10}h over</span>
+                  </span>
+                  <button type="button" onClick={() => setFocus(d.date)} className="shrink-0 font-medium text-brand-600 hover:underline">See the tasks</button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
+
+        {/* When each task lands: one block per day it puts hours on, in its own colour — the plan
+            as a timeline, across every project at once. */}
+        {timeline.length > 0 && (
+          <div className="border-b border-gray-100 px-5 py-2">
+            <button onClick={() => setShowTimeline(v => !v)}
+              className="flex w-full items-center gap-1.5 rounded-md py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600">
+              <ChevronDown size={12} className={clsx('transition-transform', !showTimeline && '-rotate-90')} />
+              Timeline · {timeline.length} {timeline.length === 1 ? 'task' : 'tasks'} in this window
+            </button>
+            {showTimeline && (
+              <div className="mt-1 space-y-1">
+                {timeline.slice(0, 14).map(({ t, hue }) => {
+                  const f = footprints.get(t.id)!;
+                  const byDay = new Map(f.days.map((d, i) => [d, f.perDay[i]]));
+                  const fill = segmentFill(hue, t.priority);
+                  const rail = railStyle(deadlineState(t.dueDate, today, holidays));
+                  return (
+                    <div key={t.id} className="flex items-center gap-2">
+                      <button type="button" onClick={() => setFocus(f.days[0])} title={`${t.title} — ${rangeText(f)}`}
+                        className="w-[104px] shrink-0 truncate text-left text-[10.5px] text-gray-600 hover:text-gray-900">
+                        <span className="mr-1 inline-block h-2 w-2 rounded-[2px] align-middle" style={{ backgroundColor: fill }} />{t.title}
+                      </button>
+                      <div className="grid flex-1 gap-[3px]" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
+                        {row.days.map(d => {
+                          const h = byDay.get(d.date);
+                          return (
+                            <div key={d.date} title={h ? `${formatDate(d.date, { weekday: 'short', day: 'numeric' })} · ${Math.round(h * 10) / 10}h` : undefined}
+                              className={clsx('relative h-2.5 rounded-[2px]', isToday(d.date) && 'ring-1 ring-gray-900/40')}
+                              style={h ? { backgroundColor: fill, ...textureStyle(hue.texture), boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.18)' } : { backgroundColor: d.capacity > 0 ? '#f3f4f6' : 'transparent' }}>
+                              {h && rail && <span className="absolute inset-x-0 bottom-0 h-[2px]" style={{ background: rail }} />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-gray-400">{Math.round(f.hours * 10) / 10}h</span>
+                    </div>
+                  );
+                })}
+                {timeline.length > 14 && <p className="text-[10.5px] text-gray-400">+{timeline.length - 14} more below</p>}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto px-5 py-3">
           {row.openTasks.length === 0 ? (
@@ -311,7 +388,7 @@ export function PersonPanel({
               {groups.filter(g => !itemised || g.tasks.some(t => (footprints.get(t.id)?.hours ?? 0) > 0)).map(g => (
                 <section key={g.key}>
                   <div className="flex items-center gap-2 rounded-md px-1 py-1.5" style={{ backgroundColor: g.hue.tint }}>
-                    <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: g.hue.medium }} />
+                    <span className="h-3 w-4 shrink-0 rounded-sm" style={{ backgroundColor: g.hue.medium, ...textureStyle(g.hue.texture) }} />
                     {g.pid && <span className="font-mono text-[11px] font-semibold" style={{ color: g.hue.critical }}>{pidLabel(g.pid, g.round)}</span>}
                     {g.id && !g.isTeam
                       ? <Link href={`/projects/${g.id}`} className="min-w-0 truncate text-[12.5px] font-medium text-gray-800 hover:underline">{g.title}</Link>

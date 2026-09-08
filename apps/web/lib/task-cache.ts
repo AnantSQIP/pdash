@@ -28,8 +28,10 @@ export const TASK_INVALIDATES = [
   'projects',        // project list cards: progress
   'project-rounds',  // round cards under a PID
   'perf-user-tasks', // performance panel task breakdown
-  'capacity',        // capacity board: who is loaded
+  'capacity',        // capacity board: who is loaded (and the project tab, same prefix)
+  'coverage-risks',  // emergency-leave coverage: remaining hours on at-risk tasks
   'analytics-dashboard', // Home stats (open/overdue counts)
+  'perf-me',         // Home "My Performance" card: completed / overdue counts
   'activity',        // activity feed entries
 ] as const;
 

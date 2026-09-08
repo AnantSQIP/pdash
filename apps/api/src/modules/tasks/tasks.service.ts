@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
@@ -44,8 +45,11 @@ export class TasksService {
     taskId: string,
     title: string,
     wanted: { userId: string; role?: string | null; estimatedHours?: number | null; dueDate?: Date | null }[],
+    tx?: Prisma.TransactionClient,
   ) {
-    const existing = await this.prisma.taskAssignee.findMany({
+    // Read through the caller's transaction when there is one, so the plan is built from the
+    // same snapshot it is applied to.
+    const existing = await (tx ?? this.prisma).taskAssignee.findMany({
       where: { taskId },
       select: { id: true, userId: true, role: true, confirmedHours: true, standardKey: true, standardMinutes: true },
     });
@@ -98,7 +102,9 @@ export class TasksService {
     const needsOrg = removed.length > 0 || reclassified.length > 0;
     const organizationId = needsOrg ? await this.orgOfActor() : null;
 
-    await this.prisma.$transaction(async tx => {
+    // Runs inside the caller's transaction when one is given, so the task fields written
+    // alongside the seats (assignedById, the summed estimate) land or fail with them.
+    const run = async (tx: Prisma.TransactionClient) => {
       // Withdraw before deleting: once the row is gone there is nothing left that could ever
       // take its hours back out of the learned average.
       if (removed.length) {
@@ -129,7 +135,8 @@ export class TasksService {
         }
         if (Object.keys(data).length) await tx.taskAssignee.update({ where: { id: row.id }, data });
       }
-    });
+    };
+    if (tx) await run(tx); else await this.prisma.$transaction(run);
   }
 
   /** The signed-in actor's organisation, or null when it cannot be resolved. */
@@ -399,7 +406,10 @@ export class TasksService {
     // a future slip is reported again while the same slip never alerts twice.
     const rearm = !!before.overdueNotifiedAt && (!internalDue || internalDue >= startOfUtcDay(new Date()));
 
-    const updated = await this.prisma.task.update({
+    // The task edit and the project progress it moves are one transaction: a progress bar that
+    // reads from a task the update never committed (or the reverse) is a lie on two screens.
+    const updated = await this.prisma.$transaction(async tx => {
+      const u = await tx.task.update({
       where: { id },
       data: {
         title: dto.title,
@@ -414,8 +424,10 @@ export class TasksService {
         ...(rearm ? { overdueNotifiedAt: null } : {}),
       },
       include: this.taskInclude(),
+      });
+      if (dto.completionPercentage !== undefined) await this.recomputeForTask(id, tx);
+      return u;
     });
-    if (dto.completionPercentage !== undefined) await this.recomputeForTask(id);
     // M17: task edits now appear in the audit/activity/analytics feed.
     await this.events.emit({
       action: EVENTS.TASK_UPDATED,
@@ -505,6 +517,7 @@ export class TasksService {
       // reopened individually. (The subtask bar reading 100% under a reopened task is honest —
       // the work really was done — not an inconsistency.)
 
+      await this.recomputeForTask(id, tx); // status change → progress bar re-syncs, atomically
       return u;
     });
 
@@ -517,7 +530,6 @@ export class TasksService {
       newValue: { status: status.name, type: status.type },
       metadata: { projectId, title: task.title },
     });
-    await this.recomputeForTask(id); // status change → progress bar re-syncs
     return updated;
   }
 
@@ -531,8 +543,10 @@ export class TasksService {
     // Whoever changes the assignees is the "assigned by" — the person delegating the work.
     // Clear it when the task is left unassigned.
     const assignedById = dto.assigneeIds.length ? (getActorId() ?? null) : null;
-    await this.reconcileAssignees(id, before.title, dto.assigneeIds.map(userId => ({ userId, role: null })));
-    await this.prisma.task.update({ where: { id }, data: { assignedById } });
+    await this.prisma.$transaction(async tx => {
+      await this.reconcileAssignees(id, before.title, dto.assigneeIds.map(userId => ({ userId, role: null })), tx);
+      await tx.task.update({ where: { id }, data: { assignedById } });
+    });
     // Notify the NEWLY-added assignees only.
     const added = dto.assigneeIds.filter(uid => !prev.has(uid));
     await this.notifications.notify(added, {
@@ -579,13 +593,17 @@ export class TasksService {
     const totalHours = entries.reduce((s, e) => s + (e.estimatedHours ?? 0), 0);
     const assignedById = entries.length ? (getActorId() ?? null) : null;
 
-    await this.reconcileAssignees(id, before.title, entries.map(e => ({
-      userId: e.userId, role: e.role,
-      estimatedHours: e.estimatedHours ?? 0,
-      dueDate: e.dueDate ? new Date(e.dueDate) : null,
-    })));
-    // The task's estimate is the sum of the per-person hours (drives the capacity board).
-    await this.prisma.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } });
+    // Seats and the task's summed estimate land together: the capacity board reads both, and a
+    // crash between them left a task whose estimate did not match the hours on its seats.
+    await this.prisma.$transaction(async tx => {
+      await this.reconcileAssignees(id, before.title, entries.map(e => ({
+        userId: e.userId, role: e.role,
+        estimatedHours: e.estimatedHours ?? 0,
+        dueDate: e.dueDate ? new Date(e.dueDate) : null,
+      })), tx);
+      // The task's estimate is the sum of the per-person hours (drives the capacity board).
+      await tx.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } });
+    });
 
     const added = [...new Set(entries.map(e => e.userId))].filter(uid => !prev.has(uid));
     await this.notifications.notify(added, {
@@ -607,9 +625,10 @@ export class TasksService {
     // Otherwise a deleted task keeps shaping what every future task of its kind is expected
     // to take, with no row on any screen to explain why.
     await this.time.withdraw(id);
-    const result = await this.prisma.task.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    const result = await this.prisma.$transaction(async tx => {
+      const r = await tx.task.update({ where: { id }, data: { deletedAt: new Date() } });
+      await this.recomputeForTask(id, tx); // deleted task excluded → progress recomputes, atomically
+      return r;
     });
     await this.events.emit({
       action: EVENTS.TASK_DELETED,
@@ -617,7 +636,6 @@ export class TasksService {
       entityId: id,
       metadata: { projectId: (task as any).projectTasks?.[0]?.projectId, title: task.title },
     });
-    await this.recomputeForTask(id); // deleted task excluded → progress recomputes
     return result;
   }
 
@@ -628,24 +646,26 @@ export class TasksService {
    * (0 when the project has no tasks). This is the single source of truth for the
    * progress bars — called after every task create / status change / edit / delete.
    */
-  private async recomputeProjectProgress(projectId: string): Promise<void> {
-    const tasks = await this.prisma.task.findMany({
+  private async recomputeProjectProgress(projectId: string, tx: Prisma.TransactionClient | PrismaService = this.prisma): Promise<void> {
+    const tasks = await tx.task.findMany({
       where: { deletedAt: null, projectTasks: { some: { projectId } } },
       select: { completionPercentage: true, currentStatus: { select: { type: true } } },
     });
     const effective = tasks.map(t => (t.currentStatus?.type === 'CLOSED' ? 100 : (t.completionPercentage ?? 0)));
     const pct = effective.length ? Math.round(effective.reduce((s, v) => s + v, 0) / effective.length) : 0;
-    await this.prisma.project.update({ where: { id: projectId }, data: { completionPercentage: pct } });
+    await tx.project.update({ where: { id: projectId }, data: { completionPercentage: pct } });
   }
 
   /**
    * Recompute every PARENT project a task rolls up into. A task is M2M with projects via
    * ProjectTask, so a single status change/edit/delete can move several progress bars.
    */
-  private async recomputeForTask(taskId: string): Promise<void> {
-    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
+  private async recomputeForTask(taskId: string, tx: Prisma.TransactionClient | PrismaService = this.prisma): Promise<void> {
+    const links = await tx.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
     const projectIds = [...new Set(links.map(l => l.projectId))];
-    await Promise.all(projectIds.map(id => this.recomputeProjectProgress(id)));
+    // Sequential, not Promise.all: an interactive transaction is one connection, and concurrent
+    // statements on it interleave in whatever order they arrive.
+    for (const id of projectIds) await this.recomputeProjectProgress(id, tx);
   }
 
   // ── Subtask methods (flat, one level only) ──────────────────

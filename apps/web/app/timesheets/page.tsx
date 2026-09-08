@@ -13,6 +13,7 @@ import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { todayIST, shiftDay } from '@/lib/date';
+import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
@@ -61,14 +62,9 @@ export default function TimesheetsPage() {
     enabled: !!currentUser?.id,
   });
 
-  function invalidate() {
-    qc.invalidateQueries({ queryKey: ['timesheets-mine', currentUser?.id] });
-    // The fill calendar has its OWN query — refresh it too so a just-logged day updates live
-    // (this was the "have to refresh to see it" bug).
-    qc.invalidateQueries({ queryKey: ['ts-calendar'] });
-    qc.invalidateQueries({ queryKey: ['tasks'] });
-    qc.invalidateQueries({ queryKey: ['timesheets'] });
-  }
+  // Every screen that renders the ledger — this page, the fill calendar, My Tasks (its hours
+  // are the ledger sum), the capacity board, the Home cards — refreshes together.
+  function invalidate() { invalidateTimesheetCaches(qc); }
 
   async function deleteEntry(id: string) {
     if (!await confirmDialog({ title: 'Delete this time entry?', danger: true, confirmLabel: 'Delete' })) return;

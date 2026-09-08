@@ -47,7 +47,7 @@ export default function UserDetailPage() {
   // stops the two feeling like unrelated halves to whoever can see both.
   const canManageAccess = isSuperAdmin || can('user.manage_access');
   const { data: capacity } = useQuery<TeamCapacity>({
-    queryKey: ['capacity-team', 14], queryFn: () => api.capacity.team(14),
+    queryKey: ['capacity', 'profile', 14], queryFn: () => api.capacity.team(14),
     enabled: canSeeLoad, staleTime: 60_000,
   });
   const row: CapacityRow | undefined = useMemo(

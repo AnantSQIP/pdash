@@ -15,7 +15,7 @@ import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 // Nobody can log more than this against a single calendar day. 16h is a deliberate upper cap: an
 // 8h working day with generous room for a genuinely long day, while still rejecting typos
 // (e.g. 80 instead of 8) and impossible totals.
-const MAX_HOURS_PER_DAY = 16;
+export const MAX_HOURS_PER_DAY = 16;
 
 // Backdating windows (whole days, measured in IST calendar days).
 //  • within the last ~1 month  → anyone may fill freely
@@ -113,13 +113,19 @@ export class TimesheetsService {
     return this.recomputeTaskActualHours(taskId);
   }
 
-  /** Keep Task.actualHours in sync = SUM of its non-deleted timesheet hours. */
-  private async recomputeTaskActualHours(taskId: string): Promise<void> {
-    const agg = await this.prisma.timesheet.aggregate({
+  /**
+   * Keep Task.actualHours in sync = SUM of its non-deleted timesheet hours.
+   *
+   * Pass the transaction the ledger row is being written in. Run afterwards in its own
+   * statement, a crash between the two left actualHours permanently wrong — nothing else ever
+   * recomputes it — so the ledger and the task disagreed with no row on any screen to say why.
+   */
+  private async recomputeTaskActualHours(taskId: string, tx: Prisma.TransactionClient | PrismaService = this.prisma): Promise<void> {
+    const agg = await tx.timesheet.aggregate({
       where: { taskId, deletedAt: null },
       _sum: { hoursLogged: true },
     });
-    await this.prisma.task.update({ where: { id: taskId }, data: { actualHours: agg._sum.hoursLogged ?? 0 } });
+    await tx.task.update({ where: { id: taskId }, data: { actualHours: agg._sum.hoursLogged ?? 0 } });
   }
 
   /** The project (id + type) a task belongs to — the task is the source of truth for the
@@ -235,7 +241,7 @@ export class TimesheetsService {
 
     // ── "Other" entry: miscellaneous NON-PROJECT time (admin, internal meetings, training).
     //    Always non-billable, never tied to a project/task, and never a PID buffer to assign —
-    //    it stands on its own. The 24h/day cap still applies. ──
+    //    it stands on its own. The 16h/day cap still applies. ──
     if (dto.category === 'OTHER') {
       const title = dto.title?.trim();
       if (!title) throw new BadRequestException('A title is required for "Other" time.');
@@ -301,7 +307,7 @@ export class TimesheetsService {
     }
 
     // ── Buffer entry: log hours now, assign the PID (task) later (within a week). No task yet
-    //    means no project/type; the 24h/day cap still applies. `entryDay` is normalised to the
+    //    means no project/type; the 16h/day cap still applies. `entryDay` is normalised to the
     //    calendar-day boundary so the cap can't be side-stepped with a time component. ──
     if (!dto.taskId) {
       const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
@@ -340,6 +346,7 @@ export class TimesheetsService {
     // The duplicate check and the cap check both look at the world and then write to it, so both
     // go inside the lock. Read outside it they are races: four identical six-hour submissions
     // arriving together each saw no duplicate and no hours logged, and all four were accepted.
+    const taskId = dto.taskId; // narrowed here; the closure below cannot see the narrowing
     const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
       // Reject an identical re-submission (same task, day and hours) — a double-billing vector.
       if (!opts.skipIdenticalCheck) {
@@ -351,7 +358,7 @@ export class TimesheetsService {
       }
       await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
 
-      return tx.timesheet.create({
+      const created = await tx.timesheet.create({
         data: {
           userId: actorId,
           taskId: dto.taskId,
@@ -367,6 +374,9 @@ export class TimesheetsService {
         },
         include: INCLUDE,
       });
+      // The task's total moves in the same transaction as the row that changes it.
+      await this.recomputeTaskActualHours(taskId, tx);
+      return created;
     });
     await this.events.emit({
       action: EVENTS.TIME_LOGGED,
@@ -375,7 +385,6 @@ export class TimesheetsService {
       actorId,
       metadata: { taskId: dto.taskId, projectId, hours: dto.hoursLogged, billable: entry.billable },
     });
-    await this.recomputeTaskActualHours(dto.taskId);
     return entry;
   }
 
@@ -404,20 +413,25 @@ export class TimesheetsService {
     // for ever, even though it now has a task.
     const teamId = projectId ? null : await this.teamOfTask(taskId);
     if (projectId) await this.access.assertProjectWritable(projectId);
-    // Don't let buffer→assign duplicate an existing identical task entry (double-billing).
-    const dupe = await this.prisma.timesheet.findFirst({
-      where: { userId: entry.userId, taskId, date: entry.date, hoursLogged: entry.hoursLogged, deletedAt: null, id: { not: id } },
-      select: { id: true },
+    // The duplicate check, the move and the task total, under the same per-person-per-day lock
+    // every other ledger write takes: read outside it, two simultaneous assigns of two buffer
+    // entries onto one task both passed the check and both landed.
+    return serialize(this.prisma, dayKeyFor(entry.userId, entry.date), async tx => {
+      // Don't let buffer→assign duplicate an existing identical task entry (double-billing).
+      const dupe = await tx.timesheet.findFirst({
+        where: { userId: entry.userId, taskId, date: entry.date, hoursLogged: entry.hoursLogged, deletedAt: null, id: { not: id } },
+        select: { id: true },
+      });
+      if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
+      const updated = await tx.timesheet.update({
+        where: { id },
+        // Internal work cannot be billable — see create().
+        data: { taskId, projectId, teamId, projectType, ...(teamId ? { billable: false } : {}) },
+        include: INCLUDE,
+      });
+      await this.recomputeTaskActualHours(taskId, tx);
+      return updated;
     });
-    if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
-    const updated = await this.prisma.timesheet.update({
-      where: { id },
-      // Internal work cannot be billable — see create().
-      data: { taskId, projectId, teamId, projectType, ...(teamId ? { billable: false } : {}) },
-      include: INCLUDE,
-    });
-    await this.recomputeTaskActualHours(taskId);
-    return updated;
   }
 
   async update(id: string, dto: UpdateTimesheetDto) {
@@ -442,7 +456,7 @@ export class TimesheetsService {
     const raising = dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged;
     const updated = await serialize(this.prisma, dayKeyFor(entry.userId, entry.date), async tx => {
       if (raising) await this.assertDayCap(entry.userId, entry.date, dto.hoursLogged!, id, tx);
-      return tx.timesheet.update({
+      const u = await tx.timesheet.update({
         where: { id },
         data: {
           hoursLogged: dto.hoursLogged,
@@ -451,8 +465,9 @@ export class TimesheetsService {
         },
         include: INCLUDE,
       });
+      if (dto.hoursLogged !== undefined && entry.taskId) await this.recomputeTaskActualHours(entry.taskId, tx);
+      return u;
     });
-    if (dto.hoursLogged !== undefined && entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
     return updated;
   }
 
@@ -462,9 +477,13 @@ export class TimesheetsService {
     await this.assertOwnerOrPrivileged(entry.userId);
     // A closed matter's ledger is frozen — deleting an entry would silently change its billed total.
     if (entry.projectId) await this.access.assertProjectWritable(entry.projectId);
-    const deleted = await this.prisma.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
-    if (entry.taskId) await this.recomputeTaskActualHours(entry.taskId);
-    return deleted;
+    // Same lock as every other write to this person's day, and the task total in the same
+    // transaction as the row leaving the ledger.
+    return serialize(this.prisma, dayKeyFor(entry.userId, entry.date), async tx => {
+      const deleted = await tx.timesheet.update({ where: { id }, data: { deletedAt: new Date() } });
+      if (entry.taskId) await this.recomputeTaskActualHours(entry.taskId, tx);
+      return deleted;
+    });
   }
 
   // ── Fill calendar + reminders ────────────────────────────────────────────────
