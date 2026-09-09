@@ -141,6 +141,8 @@ export interface CapacityRow {
     /** Set on the row of the person being covered: some of this task is somebody else's now,
      *  and `remainingHours` is what they kept rather than what they started with. */
     coveredAway?: boolean;
+    /** Who took it. Without a name, "part of this is covered" is a fact nobody can act on. */
+    coveredByUserId?: string;
     remainingHours: number; overdue: boolean;
   }[];
   /** Free capacity (hours) across the whole window. */
@@ -531,8 +533,8 @@ export class CapacityService {
 
     /** What the stand-in ends up carrying, so their row can say whose work it is. */
     const coveringHours = new Map<string, { hours: number; fromUserId: string }>();
-    /** What the person being covered still has left once their stand-in's share is taken out. */
-    const keptHours = new Map<string, number>();
+    /** What the person being covered still has left, and who took the rest. */
+    const keptHours = new Map<string, { kept: number; by: string }>();
 
     for (const s of scheduled) {
       const allDays = workingDaysFor(s.userId).filter(d => d >= s.startAt);
@@ -556,7 +558,7 @@ export class CapacityService {
         // What they keep re-plans itself AROUND the gap, so an absence pushes work later instead
         // of quietly compressing it into the days either side.
         placements = kept > 0 ? place(kept, daysOutsideWindow(allDays, from, until)) : [];
-        keptHours.set(`${s.userId}|${s.taskId}`, kept);
+        keptHours.set(`${s.userId}|${s.taskId}`, { kept, by: cover.toUserId });
 
         if (moved > 0) {
           const standIn = cover.toUserId;
@@ -622,7 +624,7 @@ export class CapacityService {
       const moved = hoursInWindow(span.map(d => ({ date: d, hours: perDay })), from, until);
       const kept = Math.max(0, u.remaining - moved);
       const keptDays = daysOutsideWindow(span, from, until);
-      keptHours.set(`${u.userId}|${u.taskId}`, kept);
+      keptHours.set(`${u.userId}|${u.taskId}`, { kept, by: cover.toUserId });
       if (kept > 0 && keptDays.length) {
         const keptPerDay = kept / Math.max(1, denom - (span.length - keptDays.length));
         for (const d of keptDays) addLoad(u.userId, d, u.taskId, keptPerDay);
@@ -673,12 +675,13 @@ export class CapacityService {
     }
     // And the covered person's side: what they have left is what they kept, not what they started
     // with. Left alone, the person who is away would still read as carrying the whole job.
-    for (const [key, kept] of keptHours) {
+    for (const [key, k] of keptHours) {
       const sep = key.indexOf('|');
       const entry = openByUser.get(key.slice(0, sep))?.get(key.slice(sep + 1));
       if (entry) {
-        entry.remainingHours = r1(kept);
+        entry.remainingHours = r1(k.kept);
         entry.coveredAway = true;
+        entry.coveredByUserId = k.by;
       }
     }
 

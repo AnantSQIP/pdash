@@ -1203,6 +1203,11 @@ export type CapacityOpenTask = {
   /** True when they named their own start, so their hours are placed on the days they meant
    *  rather than spread evenly to the deadline. */
   scheduled?: boolean;
+  /** On the stand-in's row: whose work this is. `remainingHours` is the share they took on. */
+  coveringForUserId?: string;
+  /** On the covered person's row: part of this is somebody else's now. */
+  coveredAway?: boolean;
+  coveredByUserId?: string;
   /** The last day their placed hours land on — when the plan actually finishes. Scheduled only. */
   plannedFinish?: string | null;
   /** Working days by which that plan misses their deadline; 0 or absent when it fits. */

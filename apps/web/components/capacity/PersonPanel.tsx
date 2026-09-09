@@ -11,6 +11,7 @@ import { X, Plus, ArrowRight, CalendarPlus, ChevronDown, AlertTriangle } from 'l
 import { useQueryClient } from '@tanstack/react-query';
 import { api, type CapacityRow, type CapacityOpenTask } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
@@ -137,6 +138,12 @@ export function PersonPanel({
   onAssign?: () => void;
 }) {
   const { can } = usePermissions();
+  const { users } = useOrg();
+  /** A person's first name, for saying WHO is covering rather than that somebody is. */
+  const firstNameOf = (id?: string) => {
+    const u = users.find(x => x.id === id);
+    return u ? u.firstName : 'someone else';
+  };
   const qc = useQueryClient();
   const { toast } = useToast();
   const [busyTaskId, setBusyTaskId] = useState('');
@@ -291,6 +298,21 @@ export function PersonPanel({
               left. This is what an absence looks like once the work is on the calendar: the days
               lost to leave push the fill later, and the shortfall shows up here — beside the
               Extend control, which is the usual answer to it. */}
+          {/* Cover was computed and shown nowhere, so a manager could arrange it and neither the
+              person away nor the stand-in would ever see it on the board they plan from. The
+              hours moved silently, which looks exactly like hours going missing. */}
+          {t.coveringForUserId && (
+            <p className="mt-1 text-[10.5px] font-medium text-brand-700">
+              Covering {firstNameOf(t.coveringForUserId)} — {t.remainingHours}h of their work
+            </p>
+          )}
+          {t.coveredAway && (
+            // Named on both sides. "8h stays with them" read as if the hours were the stand-in's,
+            // which is the opposite of what it means.
+            <p className="mt-1 text-[10.5px] font-medium text-brand-700">
+              {firstNameOf(t.coveredByUserId)} is covering part of this — {row.name.split(' ')[0]} keeps {t.remainingHours}h
+            </p>
+          )}
           {!!t.overrunDays && t.plannedFinish && (
             <p className="mt-1 text-[10.5px] font-medium text-amber-700">
               Plan finishes {formatDate(t.plannedFinish)} — {t.overrunDays} working day{t.overrunDays === 1 ? '' : 's'} past this deadline.

@@ -74,8 +74,12 @@ async function main() {
     console.error(`Could not sign in as ${EMAIL}: ${login.status} ${JSON.stringify(login.data)}`);
     process.exit(1);
   }
+  const me0 = await api('/auth/me');
+  const MY_ORG = (me0.data?.user ?? me0.data)?.organizationId;
   const orgs = await api('/organizations');
-  ORG_ID = orgs.data?.[0]?.id;
+  // The signed-in user's own org — never index 0. Anything else that creates an organisation
+  // (tools/smoke.mjs does) would otherwise retarget the whole suite at a stranger's settings.
+  ORG_ID = (orgs.data ?? []).find(o => o.id === MY_ORG)?.id ?? orgs.data?.[0]?.id;
   if (!ORG_ID) { console.error('No organisation found.'); process.exit(1); }
 
   console.log('— the flow a firm starts on —');
