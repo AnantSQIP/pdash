@@ -196,7 +196,10 @@ export class PerformanceService {
         // used to count as completed in MARCH, inflating the current period and emptying the one
         // where the work actually happened.
         where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to } },
-        select: { dueDate: true, completedAt: true },
+        // THIS person's seat, for their own deadline — a personal extension is a decision
+        // somebody made, and scoring them against the task's original date marks them late for
+        // delivering exactly what was asked of them.
+        select: { dueDate: true, completedAt: true, assignees: { where: { userId }, select: { dueDate: true } } },
       }),
       // Delivery performance excludes "Other" (non-project) time — admin/meeting/training hours
       // shouldn't inflate a person's delivery hours or score. (billable already excludes it.)
@@ -214,8 +217,11 @@ export class PerformanceService {
       this.prisma.comment.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
       this.prisma.analyticsEvent.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
     ]);
-    const withDue = completed.filter(t => t.dueDate && t.completedAt);
-    const onTime = withDue.filter(t => t.dueDate && t.completedAt && isOnTime(t.completedAt, t.dueDate)).length;
+    // Their seat's date when they have one, the task's otherwise.
+    const dueFor = (t: { dueDate: Date | null; assignees: { dueDate: Date | null }[] }) =>
+      t.assignees[0]?.dueDate ?? t.dueDate;
+    const withDue = completed.filter(t => dueFor(t) && t.completedAt);
+    const onTime = withDue.filter(t => t.completedAt && isOnTime(t.completedAt, dueFor(t)!)).length;
     return {
       tasksCompleted: completed.length,
       onTimeRate: pct(onTime, withDue.length),
@@ -355,7 +361,7 @@ export class PerformanceService {
         // Windowed and judged on completedAt, exactly as the per-user query is — the two must
         // agree or the leaderboard contradicts the individual pages it is built from.
         where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
-        select: { dueDate: true, completedAt: true, assignees: { select: { userId: true } } },
+        select: { dueDate: true, completedAt: true, assignees: { select: { userId: true, dueDate: true } } },
       }),
       this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
       this.prisma.issue.groupBy({ by: ['assigneeId'], where: { deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to }, assignee: { organizationId } }, _count: { _all: true } }),
@@ -376,7 +382,13 @@ export class PerformanceService {
       for (const a of t.assignees) {
         const x = at(a.userId);
         x.tasksCompleted++;
-        if (t.dueDate && t.completedAt) { x.withDueCount++; if (isOnTime(t.completedAt, t.dueDate)) x.onTime++; }
+        // Judged against THEIR OWN deadline when they were given one. A personal extension is a
+        // decision somebody made — "you have until Friday" — and scoring them against the task's
+        // original date anyway marks them late for delivering exactly what was asked of them.
+        // The DISTINCT org figures above keep using the task's date: that is one number about
+        // one task, and it has no single person to belong to.
+        const personDue = a.dueDate ?? t.dueDate;
+        if (personDue && t.completedAt) { x.withDueCount++; if (isOnTime(t.completedAt, personDue)) x.onTime++; }
       }
     }
     for (const h of hoursByUser) at(h.userId).hoursLogged = Math.round((h._sum.hoursLogged ?? 0) * 10) / 10;

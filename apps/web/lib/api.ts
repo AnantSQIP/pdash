@@ -1855,8 +1855,10 @@ export const api = {
     /** Move ONE person's deadline on a task (their seat's date); null clears it. Nobody else's moves. */
     setAssigneeDeadline: (id: string, userId: string, dueDate: string | null) =>
       req<{ taskId: string; userId: string; dueDate: string | null }>(`/tasks/${id}/assignees/${userId}/deadline`, { method: 'PATCH', body: JSON.stringify({ dueDate }) }),
+    /** Saves the staffing and returns the task, plus anything questionable about the schedule
+     *  that is worth saying but not worth refusing (e.g. starting before a predecessor is due). */
     setStaffing: (id: string, assignees: StaffingEntry[]) =>
-      req<ApiTask>(`/tasks/${id}/staffing`, { method: 'PUT', body: JSON.stringify({ assignees }) }),
+      req<ApiTask & { scheduleWarnings?: string[] }>(`/tasks/${id}/staffing`, { method: 'PUT', body: JSON.stringify({ assignees }) }),
     delete: (id: string) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),
     createSubtask: (taskId: string, data: { title: string; priority?: string; dueDate?: string; assigneeIds?: string[] }) =>
       req<Subtask>(`/tasks/${taskId}/subtasks`, { method: 'POST', body: JSON.stringify(data) }),

@@ -699,7 +699,42 @@ export class TasksService {
       action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: id,
       metadata: { projectId: (before as any).projectTasks?.[0]?.projectId, title: before.title, added, staffing: true },
     });
-    return this.get(id);
+    const task = await this.get(id);
+    return Object.assign(task as object, { scheduleWarnings: await this.scheduleWarnings(id, entries) });
+  }
+
+  /**
+   * Things about a schedule that are probably wrong but are not ours to refuse.
+   *
+   * Dependencies have always been stored and never consulted — nothing stopped work being planned
+   * to start before the task it waits on is even due. That is sometimes deliberate (an overlap the
+   * lead has decided to take), so it is said rather than blocked; the person planning is better
+   * placed than the server to know whether the two really can run together.
+   */
+  private async scheduleWarnings(
+    taskId: string,
+    entries: { userId: string; startDate?: string | null }[],
+  ): Promise<string[]> {
+    const starts = entries.map(e => e.startDate).filter((d): d is string => !!d).sort();
+    if (!starts.length) return [];
+    const earliest = startOfUtcDay(new Date(starts[0]));
+
+    const deps = await this.prisma.taskDependency.findMany({
+      where: { successorTaskId: taskId },
+      select: { predecessor: { select: { title: true, dueDate: true, currentStatus: { select: { type: true } } } } },
+    });
+    const warnings: string[] = [];
+    for (const d of deps) {
+      const p = d.predecessor;
+      // A predecessor already finished cannot hold anything up, whatever its date said.
+      if (p.currentStatus?.type === 'CLOSED') continue;
+      if (p.dueDate && startOfUtcDay(p.dueDate) > earliest) {
+        warnings.push(
+          `This starts before "${p.title}" is due to finish (${startOfUtcDay(p.dueDate).toISOString().slice(0, 10)}), and this task waits on it.`,
+        );
+      }
+    }
+    return warnings;
   }
 
   async softDelete(id: string) {

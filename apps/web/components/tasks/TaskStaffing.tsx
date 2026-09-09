@@ -85,6 +85,9 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
       const updated = await api.tasks.setStaffing(task.id, built);
       onSaved?.(updated);
       toast('Staffing saved', 'success');
+      // Said, not refused: starting before a task you depend on is due is sometimes a deliberate
+      // overlap, and the person planning knows better than the server whether it is.
+      for (const w of updated.scheduleWarnings ?? []) toast(w, 'error');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not save staffing', 'error');
     } finally { setSaving(false); }
