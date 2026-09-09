@@ -11,6 +11,7 @@ import { startOfIstDay } from '../../common/dates';
 import { istDayWindow, overlapMinutes, ceilQuarter, minutesToHours, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { NotificationsService } from '../notifications/notifications.module';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
+import { TIMESHEET_SOURCE } from '../time-mode/time-mode.module';
 
 // A person cannot log more than a full day against any single calendar day.
 // Nobody can log more than this against a single calendar day. 16h is a deliberate upper cap: an
@@ -174,6 +175,86 @@ export class TimesheetsService {
     }
   }
 
+  /**
+   * Fill in a whole day at once — the manual flow's single Log time.
+   *
+   * WHY THIS DELEGATES ROW BY ROW INSTEAD OF INSERTING IN BULK
+   *
+   * `create()` carries every rule that makes an entry legitimate: the backdating windows, the
+   * 16h day cap, needing a seat on the task, a project that is still open, the tenant boundary.
+   * A bulk insert would have to restate all of it, and the copy would drift from the original the
+   * first time one of those rules changed — with the drift landing on the path people use most.
+   * So the sheet validates what it can see up front, for a decent error before anything is
+   * written, and then hands each row to the one implementation that knows the rules.
+   *
+   * WHY THE RESULT REPORTS PARTIAL SUCCESS RATHER THAN PRETENDING TO BE ATOMIC
+   *
+   * The rows go in one at a time, so a failure on the fourth leaves three saved. Rolling those
+   * back is not obviously right either — the person did do that work. Reporting exactly which
+   * rows were saved and which were not is honest, and the screen can keep the failures on the
+   * form for another go. Pre-flight catches essentially all of it; this covers the race.
+   */
+  async createDay(dto: {
+    date: string;
+    entries: {
+      taskId?: string; projectId?: string; hoursLogged: number;
+      billable?: boolean; notes?: string; category?: string; title?: string;
+    }[];
+  }) {
+    const actorId = await this.actor();
+    const rows = dto.entries ?? [];
+    if (!rows.length) throw new BadRequestException('Add at least one line before saving the day.');
+    if (rows.length > 40) throw new BadRequestException('That is more lines than a day can hold — split it across entries.');
+
+    const entryDay = new Date(String(dto.date).slice(0, 10));
+    if (isNaN(entryDay.getTime())) throw new BadRequestException('A valid date is required.');
+    if (entryDay > startOfIstDay(new Date())) throw new BadRequestException('You cannot log time for a future date.');
+    // Asked once for the whole sheet rather than per row: the window depends on the DATE, so
+    // thirty identical refusals would be thirty ways of saying the same thing.
+    await this.assertBackfillAllowed(actorId, entryDay);
+
+    for (const [i, r] of rows.entries()) {
+      if (!(r.hoursLogged > 0)) throw new BadRequestException(`Line ${i + 1}: enter how many hours you worked.`);
+      if (r.hoursLogged > MAX_HOURS_PER_DAY) throw new BadRequestException(`Line ${i + 1}: ${r.hoursLogged}h is more than a day can hold.`);
+    }
+
+    // The cap applies to the DAY, so it has to be checked against the sheet's total — row by row
+    // the fourth line would be refused while the first three were already in, which reads as a
+    // bug rather than as "you have run out of day".
+    const adding = rows.reduce((sum, r) => sum + r.hoursLogged, 0);
+    const already = (await this.prisma.timesheet.aggregate({
+      where: { userId: actorId, date: entryDay, deletedAt: null },
+      _sum: { hoursLogged: true },
+    }))._sum.hoursLogged ?? 0;
+    if (already + adding > MAX_HOURS_PER_DAY) {
+      const left = Math.round(Math.max(0, MAX_HOURS_PER_DAY - already) * 100) / 100;
+      throw new BadRequestException(
+        `That totals ${Math.round(adding * 100) / 100}h and you already have ${Math.round(already * 100) / 100}h on this day — ${left}h left before the ${MAX_HOURS_PER_DAY}h limit.`,
+      );
+    }
+
+    const saved: unknown[] = [];
+    const failed: { index: number; message: string }[] = [];
+    for (const [index, r] of rows.entries()) {
+      try {
+        saved.push(await this.create(
+          {
+            date: dto.date, taskId: r.taskId, projectId: r.projectId,
+            hoursLogged: r.hoursLogged, billable: r.billable, notes: r.notes,
+            category: r.category, title: r.title,
+          } as CreateTimesheetDto,
+          // Two lines of the same length against the same task on the same day is ordinary in a
+          // day sheet — two sittings — so the identical-entry guard, which exists to catch a
+          // double-submitted single form, would refuse honest work here.
+          { skipIdenticalCheck: true, source: TIMESHEET_SOURCE.MANUAL },
+        ));
+      } catch (e) {
+        failed.push({ index, message: e instanceof Error ? e.message : 'Could not save this line.' });
+      }
+    }
+    return { date: dto.date, saved, failed, savedCount: saved.length, failedCount: failed.length };
+  }
+
   async listForProject(projectId: string) {
     // A project's full time ledger (every member's hours/billable/notes) is only for
     // people ON the project (or a delivery lead) — not any timesheet.view holder.
@@ -221,7 +302,13 @@ export class TimesheetsService {
    * Every other rule — assignee, matter open, backdating, the day cap, the per-day lock — still
    * applies.
    */
-  async create(dto: CreateTimesheetDto, opts: { skipIdenticalCheck?: boolean } = {}) {
+  /**
+   * `opts.source` records WHICH FLOW wrote the row — the stopwatch, the day sheet, or the top-up
+   * a Finish files. A firm can run one flow for months and then switch, and without this the
+   * history that comes out is one undifferentiated pile in which a measured hour and a remembered
+   * one look identical.
+   */
+  async create(dto: CreateTimesheetDto, opts: { skipIdenticalCheck?: boolean; source?: string } = {}) {
     // SECURITY: the owner is the authenticated actor — never the client-supplied
     // dto.userId (which is ignored). Prevents logging/inflating others' hours.
     const actorId = await this.actor();
@@ -253,6 +340,7 @@ export class TimesheetsService {
           data: {
             userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
             billable: false, category: 'OTHER', title, notes: dto.notes,
+            source: opts.source ?? null,
           },
           include: INCLUDE,
         });
@@ -296,6 +384,7 @@ export class TimesheetsService {
             userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
             projectId: project.id, projectType: project.projectType,
             billable, category: 'CLIENT_CALL', title, notes: dto.notes,
+            source: opts.source ?? null,
           },
           include: INCLUDE,
         });
@@ -316,6 +405,7 @@ export class TimesheetsService {
         return tx.timesheet.create({
           data: {
             userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged, billable, notes: dto.notes,
+            source: opts.source ?? null,
           },
           include: INCLUDE,
         });
@@ -366,6 +456,7 @@ export class TimesheetsService {
           projectId,
           teamId,
           projectType,
+          source: opts.source ?? null,
           date: entryDay,
           hoursLogged: dto.hoursLogged,
           // Internal work has no client to bill, so it is non-billable regardless of what was

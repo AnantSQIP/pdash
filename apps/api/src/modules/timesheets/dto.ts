@@ -1,4 +1,5 @@
-import { IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateTimesheetDto {
   // IGNORED by the server — the owner is derived from the authenticated actor.
@@ -76,4 +77,35 @@ export class UpdateTimesheetDto {
   @IsOptional()
   @MaxLength(2000)
   notes?: string;
+}
+
+/** One line of a day sheet: a task (or a PID for a client call), and how long it took. */
+export class DayEntryDto {
+  @IsOptional() @IsString() taskId?: string;
+  @IsOptional() @IsString() projectId?: string;
+
+  @IsNumber() @Min(0.01) @Max(24)
+  hoursLogged!: number;
+
+  @IsOptional() @IsBoolean() billable?: boolean;
+  @IsOptional() @IsString() @MaxLength(1000) notes?: string;
+  @IsOptional() @IsString() category?: string;
+  @IsOptional() @IsString() @MaxLength(200) title?: string;
+}
+
+/**
+ * A whole day, filled in once.
+ *
+ * The 40-line ceiling is not a storage limit — it is a sanity one. Nobody works forty separate
+ * pieces of a single day, and a payload claiming to is either a mistake or an attempt to make the
+ * server do forty transactions on one request.
+ */
+export class CreateDayDto {
+  @IsDateString()
+  date!: string;
+
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => DayEntryDto)
+  entries!: DayEntryDto[];
 }

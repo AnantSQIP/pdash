@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { TimesheetsService } from './timesheets.service';
-import { AssignTimesheetDto, CreateTimesheetDto, UpdateTimesheetDto } from './dto';
+import { AssignTimesheetDto, CreateDayDto, CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 // SECURITY: every route is permission-gated (PermissionGuard is global but opt-in
@@ -63,6 +63,18 @@ export class TimesheetsController {
   @Post() @RequirePermission('timesheet.create')
   create(@Body() dto: CreateTimesheetDto) {
     return this.timesheets.create(dto);
+  }
+
+  /**
+   * Fill in a whole day at once — several tasks, their hours, one save.
+   *
+   * The manual flow's only way of recording time, and available in the timer flow too: filling a
+   * day in by hand is a reasonable thing to want whichever way the firm normally works, and
+   * refusing it here would leave somebody who forgot to start a clock with no way to catch up.
+   */
+  @Post('day') @RequirePermission('timesheet.create')
+  createDay(@Body() dto: CreateDayDto) {
+    return this.timesheets.createDay(dto);
   }
 
   @Patch(':id') @RequirePermission('timesheet.update')

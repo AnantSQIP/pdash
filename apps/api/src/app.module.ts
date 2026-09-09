@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ProjectAccessModule } from './common/access/project-access.module';
 import { ActorContextModule } from './common/context/actor-context.service';
 import { AuditEventsModule } from './modules/audit-events/audit-events.module';
+import { TimeModeModule } from './modules/time-mode/time-mode.module';
 import { PermissionsModule } from './modules/permissions/permissions.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuthGuard } from './common/guards/auth.guard';
@@ -63,6 +64,7 @@ import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
     ProjectAccessModule, // object-level authz for the delivery domain (projects/tasks/issues)
     ActorContextModule, // session-derived org identity (never client-supplied)
     AuditEventsModule,
+    TimeModeModule,
     PermissionsModule,
     DeadlinesModule,
     AuthModule,

@@ -31,6 +31,7 @@ import { ProfilePhotoCard } from '@/components/ProfilePhotoCard';
 import { ProfileCard } from '@/components/people/ProfileCard';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
+import { TimeModeCard } from '@/components/settings/TimeModeCard';
 
 // Only tabs backed by real functionality are shown. Notifications / Workflows /
 // Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
@@ -288,6 +289,7 @@ function GeneralTab() {
       <ProfilePhotoCard />
       <ChangePasswordCard />
       <ChangePasscodeCard />
+      {org && <TimeModeCard org={org} />}
       {/* Organization card */}
       <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Organization</h2>

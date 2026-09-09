@@ -34,6 +34,22 @@ model Organization {
   logo                 String?
   // Hour (IST, 0–23) at which the daily admin digest is sent. Admin-editable. Default 10pm.
   digestHourIst        Int      @default(22)
+  // HOW THIS FIRM RECORDS TIME. One of two flows, switched by an admin:
+  //
+  //   TIMER  — a stopwatch per task. Start / Pause / Resume, and finishing a task settles the
+  //            clock, learns how long that kind of task takes, and files today's share to the
+  //            timesheet. What the product has always done.
+  //   MANUAL — no stopwatch anywhere. A task can only be finished or reopened, and time is
+  //            filled in once for the whole day: pick the tasks worked on, type the hours.
+  //
+  // Defaulting to TIMER is what makes this safe to ship: every existing organisation keeps the
+  // flow it already has until somebody deliberately changes it.
+  //
+  // The two flows share ONE ledger. A Timesheet row is a Timesheet row whichever produced it, so
+  // switching does not strand history and reports spanning a switch need no special case —
+  // `Timesheet.source` records which flow wrote each row, and TimeTrackingModeChange records when
+  // the firm changed its mind.
+  timeTrackingMode     String   @default("TIMER")
   // Step-up "big change" passcode — argon2id hash of the org-wide passcode required
   // (on top of RBAC) for sensitive org/people/RBAC mutations. Null = feature not yet
   // configured (guard is a no-op). Updatable via POST /auth/passcode.
@@ -1222,6 +1238,31 @@ model TaskCoverage {
   @@map("task_coverage")
 }
 
+// Every time this firm changed how it records time, and what that change had to tidy up.
+//
+// Kept as rows rather than left implicit in the current setting, for two reasons that both bite
+// later. A report covering March cannot be read honestly without knowing which flow was in force
+// in March. And switching AWAY from the stopwatch has to close whatever clocks were running at
+// that moment — the buttons that would have stopped them are about to disappear — so how many
+// were closed, and how much they were carrying, is a fact somebody will want back.
+model TimeTrackingModeChange {
+  id             String   @id @default(cuid())
+  organizationId String
+  // TIMER | MANUAL
+  fromMode       String
+  toMode         String
+  changedBy      String
+  changedAt      DateTime @default(now())
+  note           String?
+  // Clocks that were still running when the firm left the stopwatch behind, and the minutes they
+  // were holding. Zero on every switch in the other direction.
+  timersClosed   Int      @default(0)
+  minutesClosed  Int      @default(0)
+
+  @@index([organizationId, changedAt])
+  @@map("time_tracking_mode_change")
+}
+
 // Flat subtask table — one level only per ERD v2.0.
 model Subtask {
   id          String    @id @default(cuid())
@@ -1834,6 +1875,17 @@ model Timesheet {
   // existing rows are unaffected). "OTHER" = miscellaneous non-project time (admin, internal
   // meetings, training) — never billable, never a PID buffer to assign.
   category    String?
+  // WHICH FLOW WROTE THIS ROW — TIMER | MANUAL | FINISH_TOPUP, or NULL for anything logged
+  // before provenance was recorded.
+  //
+  // A firm can run the manual flow for months, switch to the stopwatch, and switch back. Without
+  // this, the history that comes out the other side is a single undifferentiated pile of hours
+  // and nobody can tell a measured hour from a remembered one — which is exactly the question
+  // somebody asks the first time two periods disagree.
+  //
+  // NULL is deliberate for existing rows rather than a guess: they were written before anything
+  // recorded how, and inventing a value would be worse than admitting it is unknown.
+  source      String?
   // A short label for the entry. Used by "OTHER" (non-project) time, which has no task to take
   // its name from; null for normal task/buffer entries (they show the task title instead).
   title       String?
