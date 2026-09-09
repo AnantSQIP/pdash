@@ -600,13 +600,17 @@ export class TaskTimeService {
     // closing dialog — showed a Reopen button that answered "That task is not closed."
     const isClosed = !!task.completedAt || task.currentStatus?.type === 'CLOSED';
     if (!isClosed) throw new BadRequestException('That task is not closed.');
+    // Resolve one when the caller did not name it, exactly as Finish resolves a closed status.
+    // Without this the task came back with no completedAt but still in a CLOSED status, which
+    // every screen reads as closed — so the reopen appeared to do nothing.
+    const landing = openStatusId ?? await this.openStatusFor(taskId);
     const updated = await this.prisma.task.update({
       where: { id: taskId },
       data: {
         completedAt: null,
         reopenedCount: { increment: 1 },
         completionPercentage: 99,
-        ...(openStatusId ? { currentWorkflowStatusId: openStatusId } : {}),
+        ...(landing ? { currentWorkflowStatusId: landing } : {}),
       },
       select: { id: true, reopenedCount: true, completedAt: true },
     });
@@ -651,12 +655,46 @@ export class TaskTimeService {
   }
 
   /** The CLOSED-type status of the workflow this task is in, or null if it has no status yet. */
-  async closedStatusFor(taskId: string): Promise<string | undefined> {
+  /**
+   * The status a reopened task should land in, when the caller did not name one.
+   *
+   * The mirror of closedStatusFor, and it has to exist for the same reason. Reopening cleared
+   * `completedAt` but left the task in whatever CLOSED status it was in, so it came back
+   * finished-but-not-complete: every screen that asks the STATUS still read it as closed, the
+   * Reopen button stayed where the task's own buttons should be, and pressing it again did
+   * nothing visible. The earliest open status is the front of the workflow, which is where work
+   * that has to be done again belongs.
+   */
+  async openStatusFor(taskId: string): Promise<string | undefined> {
+    const workflowId = await this.workflowOf(taskId);
+    if (!workflowId) return undefined;
+    const open = await this.prisma.workflowStatus.findFirst({
+      where: { workflowId, type: { not: 'CLOSED' } }, orderBy: { sequence: 'asc' }, select: { id: true },
+    });
+    return open?.id;
+  }
+
+  /**
+   * The workflow a task follows.
+   *
+   * Its OWN column first, and only then the workflow of whatever status it currently sits in.
+   * Reading the status alone looked equivalent and was not: a task that has a workflow but has
+   * not been given a status yet — created through the API, imported, or made by any path that
+   * does not name one — resolved to nothing. Finishing it then failed with "this task has no
+   * completed status in its workflow", which is untrue and unactionable: the workflow has one,
+   * the task simply was not pointing at it. That is a dead end in the manual flow, where
+   * finishing is one of only two things a person can do to a task.
+   */
+  private async workflowOf(taskId: string): Promise<string | undefined> {
     const t = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { currentStatus: { select: { workflowId: true } } },
+      select: { workflowId: true, currentStatus: { select: { workflowId: true } } },
     });
-    const workflowId = t?.currentStatus?.workflowId;
+    return t?.workflowId ?? t?.currentStatus?.workflowId ?? undefined;
+  }
+
+  async closedStatusFor(taskId: string): Promise<string | undefined> {
+    const workflowId = await this.workflowOf(taskId);
     if (!workflowId) return undefined;
     const closed = await this.prisma.workflowStatus.findFirst({
       where: { workflowId, type: 'CLOSED' }, orderBy: { sequence: 'desc' }, select: { id: true },
