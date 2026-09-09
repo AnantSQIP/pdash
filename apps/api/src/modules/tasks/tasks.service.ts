@@ -44,7 +44,10 @@ export class TasksService {
   private async reconcileAssignees(
     taskId: string,
     title: string,
-    wanted: { userId: string; role?: string | null; estimatedHours?: number | null; dueDate?: Date | null }[],
+    wanted: {
+      userId: string; role?: string | null; estimatedHours?: number | null; dueDate?: Date | null;
+      startDate?: Date | null; hoursPerDay?: number | null;
+    }[],
     tx?: Prisma.TransactionClient,
   ) {
     // Read through the caller's transaction when there is one, so the plan is built from the
@@ -121,6 +124,11 @@ export class TasksService {
         const data: Record<string, unknown> = {
           ...(w.estimatedHours !== undefined ? { estimatedHours: w.estimatedHours ?? 0 } : {}),
           ...(w.dueDate !== undefined ? { dueDate: w.dueDate ?? null } : {}),
+          // `undefined` means the caller did not mention the field and the stored value stands;
+          // an explicit null clears it. Distinguishing the two matters here — a caller that only
+          // edits hours must not silently unschedule the seat.
+          ...(w.startDate !== undefined ? { startDate: w.startDate ?? null } : {}),
+          ...(w.hoursPerDay !== undefined ? { hoursPerDay: w.hoursPerDay ?? null } : {}),
         };
         if (!row) {
           await tx.taskAssignee.create({ data: { taskId, userId: w.userId, role: w.role ?? null, ...data } });
@@ -647,6 +655,12 @@ export class TasksService {
       if (seen.has(key)) throw new BadRequestException('The same person is added twice in the same role.');
       seen.add(key);
       if (e.estimatedHours != null && e.estimatedHours < 0) throw new BadRequestException('Estimated hours cannot be negative.');
+      // A plan that starts after it is due is not a plan. Caught here rather than left to the
+      // board, which would otherwise place the work after the deadline and simply call it late.
+      if (e.startDate && e.dueDate && new Date(e.startDate) > new Date(e.dueDate)) {
+        throw new BadRequestException('A start date cannot be after the deadline for the same person.');
+      }
+      if (e.hoursPerDay != null && e.hoursPerDay < 0) throw new BadRequestException('Hours per day cannot be negative.');
     }
     if (entries.filter(e => e.role === 'PM').length > 1) {
       throw new BadRequestException('A task can have only one Project Manager.');
@@ -664,6 +678,8 @@ export class TasksService {
         userId: e.userId, role: e.role,
         estimatedHours: e.estimatedHours ?? 0,
         dueDate: e.dueDate ? new Date(e.dueDate) : null,
+        startDate: e.startDate ? new Date(e.startDate) : null,
+        hoursPerDay: e.hoursPerDay != null && e.hoursPerDay > 0 ? e.hoursPerDay : null,
       })), tx);
       // The task's estimate is the sum of the per-person hours (drives the capacity board).
       await tx.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } });

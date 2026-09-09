@@ -158,6 +158,20 @@ export class StaffingEntryDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string | null;
+
+  // When THIS person plans to start. Optional: absent means unscheduled, and unscheduled work is
+  // still spread to the deadline exactly as it was before scheduling existed.
+  @IsOptional()
+  @IsDateString()
+  startDate?: string | null;
+
+  // Optional ceiling on how much of a day this seat may take. Absent means "as much as is free".
+  // Capped at a day's capacity: a seat cannot claim 30 hours of an 8-hour day.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(24)
+  hoursPerDay?: number | null;
 }
 
 export class SetStaffingDto {

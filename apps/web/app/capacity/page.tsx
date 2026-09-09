@@ -521,6 +521,11 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
   const [role, setRole] = useState<'PM' | 'REVIEWER' | 'ANALYST'>('ANALYST');
   const [hours, setHours] = useState('');
   const [due, setDue] = useState(dueDate ?? '');
+  // Prefilled from the day that was clicked on the board. It used to be shown in the header and
+  // then thrown away for anything but a brand-new task; now it is the seat's start, so clicking
+  // a free day and assigning into it puts the work on that day.
+  const [start, setStart] = useState(startDate ?? '');
+  const [perDay, setPerDay] = useState('');
   const [saving, setSaving] = useState(false);
 
   const assignable = projects.filter(p => !['ARCHIVED', 'CANCELLED'].includes(p.projectPhase));
@@ -535,19 +540,33 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
     if (!canSubmit) return;
     setSaving(true);
     try {
-      const entry = { userId: row.userId, role, estimatedHours: hours ? parseFloat(hours) : 0, dueDate: due || null };
+      const entry = {
+        userId: row.userId, role,
+        estimatedHours: hours ? parseFloat(hours) : 0,
+        dueDate: due || null,
+        startDate: start || null,
+        hoursPerDay: perDay ? parseFloat(perDay) : null,
+      };
       if (taskId === NEW) {
         const created = await api.tasks.create({
           title: newTitle.trim(), projectId, taskListId: taskList!.id,
-          createdBy: row.userId, startDate: startDate || undefined, dueDate: due || undefined,
+          createdBy: row.userId, startDate: start || undefined, dueDate: due || undefined,
         });
         await api.tasks.setStaffing(created.id, [entry]);
       } else {
-        // Add this person to an EXISTING task without disturbing the current staffing.
+        // Add this person to an EXISTING task without disturbing the current staffing. Every
+        // other seat is re-sent exactly as it stands — including its own start and ceiling, which
+        // would otherwise be wiped by the very act of adding somebody else to the task.
         const t = await api.tasks.get(taskId);
         const existing = (t.assignees ?? [])
           .filter(a => a.role && !(a.userId === row.userId && a.role === role))
-          .map(a => ({ userId: a.userId, role: a.role as 'PM' | 'REVIEWER' | 'ANALYST', estimatedHours: a.estimatedHours ?? 0, dueDate: a.dueDate ?? null }));
+          .map(a => ({
+            userId: a.userId, role: a.role as 'PM' | 'REVIEWER' | 'ANALYST',
+            estimatedHours: a.estimatedHours ?? 0,
+            dueDate: a.dueDate ?? null,
+            startDate: a.startDate ?? null,
+            hoursPerDay: a.hoursPerDay ?? null,
+          }));
         await api.tasks.setStaffing(taskId, [...existing, entry]);
       }
       toast(`Assigned ${row.name.split(' ')[0]} as ${roleLabel}`, 'success');
@@ -624,7 +643,28 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
                     className="w-full px-2 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
                 </div>
               </div>
-              <p className="text-[11px] text-gray-400">{row.name.split(' ')[0]} will be added as <span className="font-medium">{roleLabel}</span>{due ? ` · due ${formatDate(due)}` : ''}.</p>
+              {/* The start is what puts the hours on a DAY. Without it the board can only spread
+                  them between now and the deadline, which is why 7h due in 10 days used to show
+                  as 0.7h every day instead of a day's work on the day it was meant to happen. */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Starts</label>
+                  <input type="date" value={start} max={due || undefined} onChange={e => setStart(e.target.value)}
+                    className="w-full px-2 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Hours a day <span className="font-normal text-gray-400">· optional</span></label>
+                  <input type="number" min="0" max="24" step="0.5" value={perDay} onChange={e => setPerDay(e.target.value)} placeholder="fills the day"
+                    className="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                {row.name.split(' ')[0]} will be added as <span className="font-medium">{roleLabel}</span>
+                {due ? ` · due ${formatDate(due)}` : ''}.
+                {start
+                  ? ` Their ${hours || '0'}h are placed from ${formatDate(start)}${perDay ? `, at ${perDay}h a day` : ''}.`
+                  : ' With no start date the hours are spread evenly up to the deadline.'}
+              </p>
             </>
           )}
 
