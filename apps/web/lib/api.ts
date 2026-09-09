@@ -1223,6 +1223,16 @@ export type CoverageRisk = {
   leaveType: string; startDate: string; endDate: string; noticeDays: number;
   tasks: CoverageRiskTask[];
 };
+/** Somebody standing in for somebody else on a task — for named days, or for good. */
+export type CoverageRecord = {
+  id: string; taskId: string;
+  fromDate: string; toDate: string | null;
+  mode: 'COVER' | 'HANDOVER';
+  reason?: string | null; createdAt: string;
+  task?: { id: string; title: string };
+  fromUser?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'>;
+  toUser?: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'>;
+};
 export type CoverageSuggestion = {
   userId: string; name: string; profilePhoto?: string | null;
   freeHours: number; availableNow: boolean; nextFreeDate: string | null;
@@ -2289,6 +2299,20 @@ export const api = {
     /** Retrospective: actual attendance over the past `days` (ending today). */
     history: (days = 30) =>
       req<TeamHistory>(`/capacity/history?days=${days}`),
+    /** Live covers — who is standing in for whom, and until when. */
+    coverage: (taskId?: string) =>
+      req<CoverageRecord[]>(`/capacity/coverage${taskId ? `?taskId=${taskId}` : ''}`),
+    /**
+     * Arrange a cover. COVER hands the work back on `toDate`; HANDOVER keeps it.
+     * Nothing about the existing staffing is overwritten, so this can be undone.
+     */
+    createCoverage: (body: {
+      taskId: string; fromUserId: string; toUserId: string;
+      fromDate: string; toDate?: string | null; mode: 'COVER' | 'HANDOVER'; reason?: string;
+    }) => req<CoverageRecord>('/capacity/coverage', { method: 'POST', body: JSON.stringify(body) }),
+    /** Withdraw a cover — the leave was cancelled, or they came back early. */
+    revokeCoverage: (id: string) =>
+      req<CoverageRecord>(`/capacity/coverage/${id}/revoke`, { method: 'POST' }),
   },
 
   overdue: {

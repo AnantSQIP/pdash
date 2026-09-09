@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Controller, Get, Injectable, Module, NotFoundException, Param, Query,
+  BadRequestException, Body, Controller, Get, Injectable, Module, NotFoundException, Param, Post, Query,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -8,7 +8,10 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
 import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
-import { compareScheduled, placeForward, type ScheduledSeat } from './placement';
+import {
+  compareScheduled, placeForward, hoursInWindow, daysOutsideWindow, inCoverageWindow,
+  type ScheduledSeat, type Placement,
+} from './placement';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -130,6 +133,14 @@ export interface CapacityRow {
     loggedHours: number;
     /** Logged more than estimated and the task is still open — the estimate needs revisiting. */
     overEstimate: boolean;
+    /**
+     * Set on the STAND-IN's row: whose work this is. Their own seat carries no hours — it exists
+     * so they may log time — so `remainingHours` here is the share they have taken on.
+     */
+    coveringForUserId?: string;
+    /** Set on the row of the person being covered: some of this task is somebody else's now,
+     *  and `remainingHours` is what they kept rather than what they started with. */
+    coveredAway?: boolean;
     remainingHours: number; overdue: boolean;
   }[];
   /** Free capacity (hours) across the whole window. */
@@ -226,7 +237,7 @@ export class CapacityService {
     // An APPROVED optional holiday is a non-working day for ONE person. It therefore belongs with
     // that person's leave, not with the firm's holidays — the whole reason optional holidays are
     // not rows in `holiday`.
-    const [users, holidays, leaves, tasks, optionalOff] = await Promise.all([
+    const [users, holidays, leaves, tasks, optionalOff, coverages] = await Promise.all([
       this.prisma.user.findMany({
         where: { organizationId, deletedAt: null, status: 'ACTIVE', ...userFilter },
         select: {
@@ -276,6 +287,16 @@ export class CapacityService {
         },
       }),
       this.optionalHolidays.approvedDayKeys(organizationId, today, to),
+      // Live cover: somebody standing in on named days, or for good. A withdrawn record is
+      // ignored entirely, which is what makes cancelling a leave restore the original plan.
+      this.prisma.taskCoverage.findMany({
+        where: {
+          revokedAt: null,
+          fromUser: { organizationId },
+          OR: [{ toDate: null }, { toDate: { gte: today } }],
+        },
+        select: { taskId: true, fromUserId: true, toUserId: true, fromDate: true, toDate: true, mode: true },
+      }),
     ]);
 
     // What each person has already LOGGED against each open task. The ledger is the second signal
@@ -357,6 +378,7 @@ export class CapacityService {
     const unscheduled: {
       userId: string; taskId: string; remaining: number; taskStart: Date | null; personDue: Date | null;
     }[] = [];
+    const anyEntryForTask = new Map<string, CapacityRow['openTasks'][number]>();
 
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
@@ -441,6 +463,9 @@ export class CapacityService {
           overdue,
         });
         openByUser.set(userId, mine);
+        // Kept so a stand-in who holds only a zero-hour seat (created purely so they may log
+        // time) still gets a row describing the task they are covering.
+        if (!anyEntryForTask.has(task.id)) anyEntryForTask.set(task.id, mine.get(task.id)!);
 
         if (remaining <= 0) continue;
         if (!workingDaysFor(userId).length) continue;
@@ -490,20 +515,61 @@ export class CapacityService {
     // invisible compression and becomes a number somebody can act on.
     const plannedFinish = new Map<string, Date>();
     const overrunDays = new Map<string, number>();
-    for (const s of scheduled) {
-      const days = workingDaysFor(s.userId).filter(d => d >= s.startAt);
-      const placements = placeForward({
-        remaining: s.remaining,
-        days,
-        perDayCap: s.cap,
-        capacityOn: d => capacityOn(s.userId, d),
-        usedOn: d => placedByDay.get(`${s.userId}|${dayKey(d)}`) ?? 0,
-      });
+
+    /** The live cover on this person's part of this task, if somebody is standing in. */
+    const coverFor = (userId: string, taskId: string) =>
+      coverages.find(c => c.fromUserId === userId && c.taskId === taskId);
+
+    /** Lay a set of placements onto a person's days and remember what they claimed. */
+    const commit = (userId: string, taskId: string, placements: Placement[]) => {
       for (const p of placements) {
-        addLoad(s.userId, p.date, s.taskId, p.hours);
-        const k = `${s.userId}|${dayKey(p.date)}`;
+        addLoad(userId, p.date, taskId, p.hours);
+        const k = `${userId}|${dayKey(p.date)}`;
         placedByDay.set(k, (placedByDay.get(k) ?? 0) + p.hours);
       }
+    };
+
+    /** What the stand-in ends up carrying, so their row can say whose work it is. */
+    const coveringHours = new Map<string, { hours: number; fromUserId: string }>();
+    /** What the person being covered still has left once their stand-in's share is taken out. */
+    const keptHours = new Map<string, number>();
+
+    for (const s of scheduled) {
+      const allDays = workingDaysFor(s.userId).filter(d => d >= s.startAt);
+      const place = (remaining: number, days: Date[], userId = s.userId) => placeForward({
+        remaining, days, perDayCap: s.cap,
+        capacityOn: d => capacityOn(userId, d),
+        usedOn: d => placedByDay.get(`${userId}|${dayKey(d)}`) ?? 0,
+      });
+
+      let placements = place(s.remaining, allDays);
+      const cover = coverFor(s.userId, s.taskId);
+      if (cover) {
+        // Measure from the plan they WOULD have had, then split it. Deciding an amount first and
+        // subtracting it is how the same hours end up on two people at once — nothing would make
+        // the two halves add back up to the work there was to do.
+        const from = startOfUtcDay(cover.fromDate);
+        const until = cover.toDate ? startOfUtcDay(cover.toDate) : null;
+        const moved = hoursInWindow(placements, from, until);
+        const kept = Math.max(0, s.remaining - moved);
+
+        // What they keep re-plans itself AROUND the gap, so an absence pushes work later instead
+        // of quietly compressing it into the days either side.
+        placements = kept > 0 ? place(kept, daysOutsideWindow(allDays, from, until)) : [];
+        keptHours.set(`${s.userId}|${s.taskId}`, kept);
+
+        if (moved > 0) {
+          const standIn = cover.toUserId;
+          const theirDays = workingDaysFor(standIn)
+            .filter(d => d >= from && (until === null || d <= until));
+          commit(standIn, s.taskId, place(moved, theirDays, standIn));
+          const key = `${standIn}|${s.taskId}`;
+          const prev = coveringHours.get(key);
+          coveringHours.set(key, { hours: (prev?.hours ?? 0) + moved, fromUserId: s.userId });
+        }
+      }
+
+      commit(s.userId, s.taskId, placements);
       if (!placements.length) continue;
       const key = `${s.userId}|${s.taskId}`;
       const finish = placements[placements.length - 1].date;
@@ -541,7 +607,38 @@ export class CapacityService {
         for (let d = new Date(to); d <= cappedEnd; d = addDays(d, 1)) if (!isWeekend(d)) denom++;
       }
       const perDay = u.remaining / Math.max(1, denom);
-      for (const d of span) addLoad(u.userId, d, u.taskId, perDay);
+      const cover = coverFor(u.userId, u.taskId);
+      if (!cover) {
+        for (const d of span) addLoad(u.userId, d, u.taskId, perDay);
+        continue;
+      }
+
+      // Spread work is covered the same way placed work is: measure the share that falls in the
+      // window, move exactly that, and re-spread what is left over the days that remain. Cover
+      // has to work here too — most work in the system is still unscheduled, and an emergency
+      // does not wait for somebody to have named a start date.
+      const from = startOfUtcDay(cover.fromDate);
+      const until = cover.toDate ? startOfUtcDay(cover.toDate) : null;
+      const moved = hoursInWindow(span.map(d => ({ date: d, hours: perDay })), from, until);
+      const kept = Math.max(0, u.remaining - moved);
+      const keptDays = daysOutsideWindow(span, from, until);
+      keptHours.set(`${u.userId}|${u.taskId}`, kept);
+      if (kept > 0 && keptDays.length) {
+        const keptPerDay = kept / Math.max(1, denom - (span.length - keptDays.length));
+        for (const d of keptDays) addLoad(u.userId, d, u.taskId, keptPerDay);
+      }
+      if (moved > 0) {
+        const standIn = cover.toUserId;
+        const theirDays = workingDaysFor(standIn).filter(d => inCoverageWindow(d, from, until));
+        commit(standIn, u.taskId, placeForward({
+          remaining: moved, days: theirDays, perDayCap: null,
+          capacityOn: d => capacityOn(standIn, d),
+          usedOn: d => placedByDay.get(`${standIn}|${dayKey(d)}`) ?? 0,
+        }));
+        const key = `${standIn}|${u.taskId}`;
+        const prev = coveringHours.get(key);
+        coveringHours.set(key, { hours: (prev?.hours ?? 0) + moved, fromUserId: u.userId });
+      }
     }
 
     // Hand each placed seat its planned finish. Done after both passes because the entries were
@@ -552,6 +649,36 @@ export class CapacityService {
         if (!finish) continue;
         entry.plannedFinish = dayKey(finish);
         entry.overrunDays = overrunDays.get(`${userId}|${taskId}`) ?? 0;
+      }
+    }
+
+    // The stand-in's side of a cover. Their seat carries no hours of its own — it exists so they
+    // may log time — so without this their row would show the task with nothing left to do on it
+    // while their days visibly filled up with its work.
+    for (const [key, cover] of coveringHours) {
+      const sep = key.indexOf('|');
+      const userId = key.slice(0, sep);
+      const taskId = key.slice(sep + 1);
+      const mine = openByUser.get(userId) ?? new Map<string, CapacityRow['openTasks'][number]>();
+      let entry = mine.get(taskId);
+      if (!entry) {
+        const template = anyEntryForTask.get(taskId);
+        if (!template) continue;
+        entry = { ...template, estimatedHours: 0, loggedHours: 0, overEstimate: false };
+        mine.set(taskId, entry);
+        openByUser.set(userId, mine);
+      }
+      entry.remainingHours = r1(cover.hours);
+      entry.coveringForUserId = cover.fromUserId;
+    }
+    // And the covered person's side: what they have left is what they kept, not what they started
+    // with. Left alone, the person who is away would still read as carrying the whole job.
+    for (const [key, kept] of keptHours) {
+      const sep = key.indexOf('|');
+      const entry = openByUser.get(key.slice(0, sep))?.get(key.slice(sep + 1));
+      if (entry) {
+        entry.remainingHours = r1(kept);
+        entry.coveredAway = true;
       }
     }
 
@@ -760,6 +887,146 @@ export class CapacityService {
     });
 
     return { from: dayKey(from), to: dayKey(today), mode: 'history' as const, rows };
+  }
+
+  // ── Standing in for somebody ─────────────────────────────────────────────────
+
+  /**
+   * Arrange a cover.
+   *
+   * Nothing about the existing staffing is overwritten — that is the whole point. The record
+   * sits beside the seats, the board splits the work from it, and withdrawing it puts the plan
+   * back exactly as it was. The old route through the staffing call destroyed what it replaced.
+   */
+  async createCoverage(organizationId: string, dto: CreateCoverageDto) {
+    const mode = dto.mode ?? 'COVER';
+    if (mode !== 'COVER' && mode !== 'HANDOVER') {
+      throw new BadRequestException('A cover is either COVER (named days) or HANDOVER (permanent).');
+    }
+    if (!dto.taskId || !dto.fromUserId || !dto.toUserId || !dto.fromDate) {
+      throw new BadRequestException('taskId, fromUserId, toUserId and fromDate are all required.');
+    }
+    if (dto.fromUserId === dto.toUserId) {
+      throw new BadRequestException('Somebody cannot stand in for themselves.');
+    }
+    const from = startOfUtcDay(new Date(dto.fromDate));
+    const to = mode === 'HANDOVER' ? null : (dto.toDate ? startOfUtcDay(new Date(dto.toDate)) : null);
+    if (Number.isNaN(from.getTime())) throw new BadRequestException('That start date is not a date.');
+    // A COVER with no end is a handover wearing the wrong name, and the difference matters: one
+    // hands the work back and the other does not.
+    if (mode === 'COVER' && !to) throw new BadRequestException('Say which day the cover ends, or make it a handover.');
+    if (to && to < from) throw new BadRequestException('A cover cannot end before it starts.');
+
+    const task = await this.prisma.task.findFirst({
+      where: { id: dto.taskId, deletedAt: null },
+      select: { id: true, title: true, assignees: { select: { userId: true, role: true } } },
+    });
+    if (!task) throw new NotFoundException('Task not found.');
+    // You can only hand over work you actually hold.
+    if (!task.assignees.some(a => a.userId === dto.fromUserId)) {
+      throw new BadRequestException('That person is not on this task, so there is nothing of theirs to cover.');
+    }
+
+    const [away, standIn] = await Promise.all([
+      this.prisma.user.findFirst({ where: { id: dto.fromUserId, organizationId }, select: { id: true, firstName: true } }),
+      this.prisma.user.findFirst({ where: { id: dto.toUserId, organizationId, deletedAt: null, status: 'ACTIVE' }, select: { id: true, firstName: true, lastName: true } }),
+    ]);
+    if (!away) throw new NotFoundException('The person being covered is not in this organisation.');
+    if (!standIn) throw new NotFoundException('The stand-in is not an active member of this organisation.');
+
+    // Two live covers over the same days would put the same hours on two people at once.
+    const clashes = await this.prisma.taskCoverage.findMany({
+      where: { taskId: dto.taskId, fromUserId: dto.fromUserId, revokedAt: null },
+      select: { id: true, fromDate: true, toDate: true },
+    });
+    const overlaps = clashes.some(c => {
+      const cFrom = startOfUtcDay(c.fromDate);
+      const cTo = c.toDate ? startOfUtcDay(c.toDate) : null;
+      return (cTo === null || cTo >= from) && (to === null || to >= cFrom);
+    });
+    if (overlaps) throw new BadRequestException('Those days are already covered for this person on this task.');
+
+    // Handing work to somebody who is themselves away just moves the problem, and the board would
+    // then quietly push their share past the window rather than telling anyone.
+    const awayThen = await this.prisma.leaveRequest.findFirst({
+      where: {
+        userId: dto.toUserId, status: 'APPROVED', dayType: 'FULL',
+        startDate: { lte: to ?? addDays(from, 30) },
+        endDate: { gte: from },
+      },
+      select: { startDate: true, endDate: true },
+    });
+    if (awayThen) {
+      throw new BadRequestException(
+        `${standIn.firstName} is on approved leave over those days — pick somebody who is in.`,
+      );
+    }
+
+    const actorId = this.actor.requireActorId();
+    const created = await this.prisma.$transaction(async tx => {
+      const row = await tx.taskCoverage.create({
+        data: {
+          taskId: dto.taskId, fromUserId: dto.fromUserId, toUserId: dto.toUserId,
+          fromDate: from, toDate: to, mode, reason: dto.reason?.trim() || null, createdBy: actorId,
+        },
+      });
+      // The stand-in needs a REAL seat, or they can do the work and then not book an hour of it:
+      // time may only be filed against a task you are assigned to. It carries no hours of its own
+      // — the board works their share out from the cover — and it is left in place when the cover
+      // is withdrawn, because by then it may have timesheets hanging off it.
+      const existing = await tx.taskAssignee.findFirst({
+        where: { taskId: dto.taskId, userId: dto.toUserId }, select: { id: true },
+      });
+      if (!existing) {
+        await tx.taskAssignee.create({
+          data: { taskId: dto.taskId, userId: dto.toUserId, role: 'ANALYST', estimatedHours: 0 },
+        });
+      }
+      return row;
+    });
+
+    await this.notifications.notify([dto.toUserId], {
+      type: 'coverage.assigned',
+      title: mode === 'HANDOVER' ? 'A task has been handed to you' : 'You are covering a task',
+      message: `${away.firstName}'s work on "${task.title}"${to ? ` from ${dayKey(from)} to ${dayKey(to)}` : ` from ${dayKey(from)} onwards`}.`,
+      link: `/tasks?taskId=${dto.taskId}`,
+    });
+    return created;
+  }
+
+  /**
+   * Withdraw a cover. The record is kept and stamped rather than deleted — who covered whom, and
+   * why, is a question a firm has to be able to answer afterwards.
+   *
+   * The stand-in's seat stays. It may already carry logged time, and deleting it would strand
+   * those hours; with the cover gone it simply holds no share of the work.
+   */
+  async revokeCoverage(organizationId: string, id: string) {
+    const row = await this.prisma.taskCoverage.findFirst({
+      where: { id, fromUser: { organizationId } },
+      select: { id: true, revokedAt: true },
+    });
+    if (!row) throw new NotFoundException('That cover does not exist.');
+    if (row.revokedAt) return row; // already withdrawn — saying so twice is not an error
+    return this.prisma.taskCoverage.update({
+      where: { id },
+      data: { revokedAt: new Date(), revokedBy: this.actor.requireActorId() },
+    });
+  }
+
+  /** Live covers, newest first. */
+  async listCoverage(organizationId: string, taskId?: string) {
+    return this.prisma.taskCoverage.findMany({
+      where: { revokedAt: null, fromUser: { organizationId }, ...(taskId ? { taskId } : {}) },
+      select: {
+        id: true, taskId: true, fromDate: true, toDate: true, mode: true, reason: true, createdAt: true,
+        task: { select: { id: true, title: true } },
+        fromUser: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
+        toUser: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
   }
 
   // ── Emergency-leave coverage ─────────────────────────────────────────────────
@@ -991,6 +1258,32 @@ class CapacityController {
     return this.capacity.coverageRisks(organizationId, parseHorizon(days));
   }
 
+  /**
+   * Arrange for somebody to stand in — for named days (COVER) or for good (HANDOVER).
+   *
+   * Behind task.assign, the same right that staffing a task needs: deciding who does the work is
+   * one decision whether it is made at the start or halfway through.
+   */
+  @Post('coverage')
+  @RequirePermission('task.assign')
+  async createCoverage(@Body() dto: CreateCoverageDto) {
+    return this.capacity.createCoverage(await this.actor.requireOrgId(), dto);
+  }
+
+  /** Withdraw a cover — the leave was cancelled, or they came back early. */
+  @Post('coverage/:id/revoke')
+  @RequirePermission('task.assign')
+  async revokeCoverage(@Param('id') id: string) {
+    return this.capacity.revokeCoverage(await this.actor.requireOrgId(), id);
+  }
+
+  /** Live covers, for the panel that arranges them. */
+  @Get('coverage')
+  @RequirePermission('capacity.view')
+  async listCoverage(@Query('taskId') taskId?: string) {
+    return this.capacity.listCoverage(await this.actor.requireOrgId(), taskId);
+  }
+
   /** Availability of one project's members — the capacity view opened from a project. */
   @Get('project/:projectId')
   @RequirePermission('capacity.view')
@@ -998,6 +1291,17 @@ class CapacityController {
     if (!projectId?.trim()) throw new BadRequestException('projectId is required');
     return this.capacity.forProject(projectId, parseHorizon(days));
   }
+}
+
+export interface CreateCoverageDto {
+  taskId: string;
+  fromUserId: string;
+  toUserId: string;
+  fromDate: string;
+  /** Omitted or null for a permanent handover. */
+  toDate?: string | null;
+  mode?: 'COVER' | 'HANDOVER';
+  reason?: string;
 }
 
 @Module({

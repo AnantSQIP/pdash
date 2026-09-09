@@ -150,6 +150,8 @@ model User {
   projectMemberships        ProjectMember[]
   taskAssignments           TaskAssignee[]
   tasksAssignedByMe         Task[]                     @relation("TaskAssignedBy")
+  coverageGivenUp           TaskCoverage[]             @relation("CoverageFrom")
+  coverageTakenOn           TaskCoverage[]             @relation("CoverageTo")
   dealsOwned                Deal[]                     @relation("DealOwner")
   optionalHolidays          OptionalHolidayElection[]
   subtaskAssignments        SubtaskAssignee[]
@@ -1087,6 +1089,7 @@ model Task {
   timesheets    Timesheet[]
   workSessions  TaskWorkSession[]
   taskDocuments TaskDocument[]
+  coverages     TaskCoverage[]
 
   @@index([deletedAt])
   // M14: index the columns the performance/report queries filter & sort on.
@@ -1166,6 +1169,57 @@ model TaskAssignee {
   @@unique([taskId, userId, role])
   @@index([userId])
   @@map("task_assignee")
+}
+
+// Somebody standing in for somebody else on a task, for named days or for good.
+//
+// WHY THIS IS A RECORD AND NOT A REASSIGNMENT
+//
+// Reassigning went through the staffing call, which REPLACES the seats on a task — so covering an
+// absence destroyed the staffing it replaced and there was no way back when the leave was
+// cancelled. It could also only ever be all-or-nothing: a seat is unique per person per role, so
+// "Priya takes days 3 to 5 and Anant keeps the rest" had nowhere to live.
+//
+// Holding it as its own row makes both work. The cover is a fact with an author, a reason and a
+// date range; withdrawing it restores the original plan exactly, because the original plan was
+// never overwritten.
+//
+// MODE
+// COVER    — toDate set. Only the hours falling in [fromDate, toDate] move; the rest stays with
+// the original person and re-plans itself around the gap.
+// HANDOVER — toDate null. Everything from fromDate onward moves for good. The person leaving
+// keeps the hours they already logged, so neither of them is judged for the other's
+// share of the work.
+//
+// The stand-in is also given a real TaskAssignee seat. Without one they can do the work and then
+// not book an hour of it — time may only be filed against a task you hold a seat on.
+model TaskCoverage {
+  id         String    @id @default(cuid())
+  taskId     String
+  // Who is away.
+  fromUserId String
+  // Who is standing in.
+  toUserId   String
+  fromDate   DateTime
+  // NULL = a permanent handover, with no date it comes back.
+  toDate     DateTime?
+  mode       String    @default("COVER")
+  reason     String?
+  createdBy  String
+  createdAt  DateTime  @default(now())
+  // Set when the cover is withdrawn — the leave was cancelled, or they came back early.
+  // Kept rather than deleted: who covered whom, and why, is a question a firm has to answer.
+  revokedAt  DateTime?
+  revokedBy  String?
+
+  task     Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fromUser User @relation("CoverageFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser   User @relation("CoverageTo", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([fromUserId])
+  @@index([toUserId])
+  @@map("task_coverage")
 }
 
 // Flat subtask table — one level only per ERD v2.0.
