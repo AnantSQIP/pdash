@@ -244,6 +244,70 @@ async function main() {
     Math.abs((taskA.data?.actualHours ?? 0) - filedOnA) < 0.05,
     `actualHours=${taskA.data?.actualHours} ledger=${filedOnA}`);
 
+
+  // ── finishing and reopening, which in the manual flow is ALL a person can do ──────────────
+  //
+  // These were the last paths still untested, and both turned out to be broken in ways that
+  // barely showed while the stopwatch existed: with five buttons on a task row, a Reopen that
+  // silently did nothing and a Finish that refused a statusless task were annoyances. With two,
+  // they are the feature.
+  console.log('\n— finishing and reopening with no clock —');
+  await setMode('MANUAL');
+  const F = MY_TASKS[0];
+  await api('/timesheets/day', { method: 'POST', body: { date: today(), entries: [{ taskId: F.id, hoursLogged: 2, notes: 'lifecycle' }] } });
+
+  const stdBefore = (await api('/tasks/standards')).data;
+  const fin = await api(`/tasks/${F.id}/finish`, { method: 'POST' });
+  checkThat('a task finishes with no clock running', fin.status === 200 || fin.status === 201, `status ${fin.status}`);
+  const closedNow = (await api(`/tasks/${F.id}`)).data;
+  checkThat('and it really is closed', closedNow.currentStatus?.type === 'CLOSED' || !!closedNow.completedAt,
+    JSON.stringify({ type: closedNow.currentStatus?.type, completedAt: closedNow.completedAt }));
+  checkThat('the finish measured the FILED hours, there being no clock to measure',
+    (fin.data?.settle?.trackedMinutes ?? 0) > 0, `trackedMinutes=${fin.data?.settle?.trackedMinutes}`);
+  check('and filed nothing extra, because the hours were already filed', fin.data?.settle?.timesheetHours ?? 0, 0);
+
+  const sizeOf = x => (Array.isArray(x) ? x.length : Object.keys(x ?? {}).length);
+  const stdAfter = (await api('/tasks/standards')).data;
+  checkThat('the firm still learns how long its work takes', sizeOf(stdAfter) >= sizeOf(stdBefore),
+    `before=${sizeOf(stdBefore)} after=${sizeOf(stdAfter)}`);
+
+  const re = await api(`/tasks/${F.id}/reopen`, { method: 'POST' });
+  checkThat('a finished task reopens', re.status === 200 || re.status === 201, `status ${re.status}`);
+  const openNow = (await api(`/tasks/${F.id}`)).data;
+  // Reopening used to clear completedAt and leave the task in its CLOSED status, so every screen
+  // still read it as closed and pressing Reopen appeared to do nothing at all.
+  checkThat('and it is genuinely open again, not merely un-completed',
+    openNow.currentStatus?.type !== 'CLOSED' && !openNow.completedAt,
+    JSON.stringify({ type: openNow.currentStatus?.type, completedAt: openNow.completedAt }));
+
+  await api(`/tasks/${F.id}/finish`, { method: 'POST' });
+  check('finishing a second time counts once, not twice', sizeOf((await api('/tasks/standards')).data), sizeOf(stdAfter));
+  await api(`/tasks/${F.id}/reopen`, { method: 'POST' });
+
+  // A task with a workflow but no status yet — made by the API, an import, or any path that does
+  // not name one. Finishing it used to fail with "this task has no completed status in its
+  // workflow", which was untrue: the workflow had one, the task was not pointing at it.
+  const proj = (await api('/projects')).data?.[0];
+  const lists = (await api(`/projects/${proj.id}`)).data?.taskLists ?? [];
+  const fresh = await api('/tasks', { method: 'POST', body: {
+    title: 'e2e statusless task', projectId: proj.id,
+    taskListId: (lists.find(l => l.isDefault) ?? lists[0])?.id, createdBy: MY_ID,
+  } });
+  if (fresh.data?.id) {
+    await api(`/tasks/${fresh.data.id}/staffing`, { method: 'PUT', body: { assignees: [{ userId: MY_ID, role: 'ANALYST', estimatedHours: 2 }] } });
+    const finFresh = await api(`/tasks/${fresh.data.id}/finish`, { method: 'POST' });
+    checkThat('a task that never had a status can still be finished',
+      finFresh.status === 200 || finFresh.status === 201,
+      `status ${finFresh.status} :: ${JSON.stringify(finFresh.data).slice(0, 200)}`);
+    check('and teaches the estimate nothing, having measured nothing', finFresh.data?.settle?.counted ?? false, false);
+    await api(`/tasks/${fresh.data.id}`, { method: 'DELETE' });
+  }
+
+  // Somebody who simply forgot to start a clock must still be able to write the day down.
+  await setMode('TIMER');
+  const catchUp = await api('/timesheets/day', { method: 'POST', body: { date: today(), entries: [{ taskId: F.id, hoursLogged: 0.5, notes: 'catch-up' }] } });
+  check('the day sheet works in the stopwatch flow too', catchUp.data?.savedCount, 1);
+
   // ── report ────────────────────────────────────────────────────────────────
   console.log(`\n${failures.length ? '✗' : '✓'} ${passed} passed, ${failures.length} failed\n`);
   if (failures.length) { failures.forEach(f => console.error(`  ✗ ${f}\n`)); process.exit(1); }
