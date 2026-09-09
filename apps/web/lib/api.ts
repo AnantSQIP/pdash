@@ -1186,6 +1186,10 @@ export type CapacityOpenTask = {
   /** True when they named their own start, so their hours are placed on the days they meant
    *  rather than spread evenly to the deadline. */
   scheduled?: boolean;
+  /** The last day their placed hours land on — when the plan actually finishes. Scheduled only. */
+  plannedFinish?: string | null;
+  /** Working days by which that plan misses their deadline; 0 or absent when it fits. */
+  overrunDays?: number;
   /** This person's estimate, what they have logged against it, and whether the ledger has
    *  already passed the estimate (absent on a payload from an older API). */
   estimatedHours?: number; loggedHours?: number; overEstimate?: boolean;

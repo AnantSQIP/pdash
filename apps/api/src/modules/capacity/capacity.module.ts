@@ -18,6 +18,13 @@ function r1(n: number): number { return Math.round((n ?? 0) * 10) / 10; }
 
 /** A 48h week over 5 weekdays — the same basis the Performance module uses. */
 const DAILY_CAPACITY_HOURS = 8; // office hours 9am–6pm IST minus a 1h lunch = 8 working hours/day
+/**
+ * What a HALF-day leave leaves behind. Leave carries a `dayType` of FULL or HALF and a half day
+ * is real work — the person is in for the morning or the afternoon. The board used to read any
+ * approved leave as the whole day gone, so four genuine hours vanished from the plan and somebody
+ * on a half day looked exactly as unavailable as somebody on a fortnight's holiday.
+ */
+const HALF_DAY_CAPACITY_HOURS = DAILY_CAPACITY_HOURS / 2;
 /** Assumed effort for a task with no estimate, so unestimated work still consumes time. */
 const DEFAULT_TASK_HOURS = 6;
 /** A day is "free" below this share of capacity — i.e. there's room for real work. */
@@ -105,6 +112,18 @@ export interface CapacityRow {
      * board has to make when nobody has said when the work happens.
      */
     scheduled: boolean;
+    /**
+     * The day this person's placed work is planned to FINISH — the last day their hours land on.
+     * Only on scheduled seats: for spread work the finish IS the deadline by construction, so
+     * reporting it would say nothing.
+     */
+    plannedFinish?: string | null;
+    /**
+     * Working days by which that plan misses their deadline; 0 when it fits. This is what makes
+     * an absence visible instead of silently compressing the work: days lost to leave push the
+     * fill later, and if it crosses the deadline the number says by how much.
+     */
+    overrunDays?: number;
     /** This person's own estimate for the task (their staffing hours, or an even split). */
     estimatedHours: number;
     /** Hours this person has logged against the task in the timesheet ledger. */
@@ -224,7 +243,7 @@ export class CapacityService {
         // Include PENDING (tentative) leave so it is VISIBLE on the board — it is shown
         // distinctly and does NOT reduce capacity until approved.
         where: { status: { in: ['APPROVED', 'PENDING'] }, startDate: { lt: to }, endDate: { gte: today }, user: { organizationId } },
-        select: { userId: true, startDate: true, endDate: true, leaveType: true, status: true },
+        select: { userId: true, startDate: true, endDate: true, leaveType: true, status: true, dayType: true },
       }),
       // Every OPEN task assigned to anyone in scope — capacity is cross-project by design.
       this.prisma.task.findMany({
@@ -274,7 +293,9 @@ export class CapacityService {
     const loggedByUserTask = new Map(logged.map(g => [`${g.userId}|${g.taskId}`, g._sum.hoursLogged ?? 0]));
 
     const holidayByDay = new Map(holidays.map(h => [dayKey(h.date), h.name]));
-    const leaveByUserDay = new Map<string, string>();        // APPROVED — reduces capacity
+    // APPROVED leave — reduces capacity. A HALF day only halves it: the person is in for the
+    // morning or the afternoon, and those four hours are real working hours.
+    const leaveByUserDay = new Map<string, { type: string; half: boolean }>();
     const pendingLeaveByUserDay = new Map<string, string>(); // PENDING — shown, but tentative
     for (const lv of leaves) {
       // Clamp the iteration to the visible window BEFORE looping. A leave whose endDate is
@@ -282,9 +303,11 @@ export class CapacityService {
       // guarantees the range OVERLAPS the window, not that it fits inside it.
       const from = startOfUtcDay(lv.startDate) < today ? today : startOfUtcDay(lv.startDate);
       const until = startOfUtcDay(lv.endDate) >= to ? addDays(to, -1) : startOfUtcDay(lv.endDate);
-      const target = lv.status === 'APPROVED' ? leaveByUserDay : pendingLeaveByUserDay;
+      const half = lv.dayType === 'HALF';
       for (let d = new Date(from); d <= until; d = addDays(d, 1)) {
-        target.set(`${lv.userId}|${dayKey(d)}`, lv.leaveType);
+        const k = `${lv.userId}|${dayKey(d)}`;
+        if (lv.status === 'APPROVED') leaveByUserDay.set(k, { type: lv.leaveType, half });
+        else pendingLeaveByUserDay.set(k, lv.leaveType);
       }
     }
 
@@ -292,16 +315,29 @@ export class CapacityService {
     const window: Date[] = [];
     for (let d = new Date(today); d < to; d = addDays(d, 1)) window.push(new Date(d));
 
-    /** Working days for a user (excludes weekends, firm holidays, their approved leave, and any
-     *  optional holiday they were granted). Memoised — this is asked once per task, and
-     *  recomputing it per task is O(tasks × window). */
+    /**
+     * How many hours of a given day this person actually has. THE single answer to that
+     * question — the day rows, the totals and the placement all read it, so a half day cannot
+     * mean four hours in one place and none in another.
+     *
+     * Zero on a weekend, a firm holiday, an optional holiday they were granted, or a full day of
+     * approved leave. Half on an approved HALF day. A full day otherwise.
+     */
+    const capacityOn = (userId: string, d: Date): number => {
+      const k = dayKey(d);
+      if (isWeekend(d) || holidayByDay.has(k) || optionalOff.has(`${userId}|${k}`)) return 0;
+      const lv = leaveByUserDay.get(`${userId}|${k}`);
+      if (lv) return lv.half ? HALF_DAY_CAPACITY_HOURS : 0;
+      return DAILY_CAPACITY_HOURS;
+    };
+
+    /** Days a user can actually work — anything with capacity left, half days included.
+     *  Memoised: this is asked once per task, and recomputing it is O(tasks × window). */
     const workingDaysCache = new Map<string, Date[]>();
     const workingDaysFor = (userId: string): Date[] => {
       const hit = workingDaysCache.get(userId);
       if (hit) return hit;
-      const wd = window.filter(d => !isWeekend(d) && !holidayByDay.has(dayKey(d))
-        && !leaveByUserDay.has(`${userId}|${dayKey(d)}`)
-        && !optionalOff.has(`${userId}|${dayKey(d)}`));
+      const wd = window.filter(d => capacityOn(userId, d) > 0);
       workingDaysCache.set(userId, wd);
       return wd;
     };
@@ -448,19 +484,37 @@ export class CapacityService {
     // What each person's day has already been claimed for BY PLACED WORK. The spread below is a
     // guess about unscheduled effort, not a claim on a day, so it never blocks a placement.
     const placedByDay = new Map<string, number>();
+    // When each placed seat is planned to FINISH, and by how many working days that misses its
+    // deadline. This is the whole point of placing work: with a plan on the calendar the finish
+    // is a known date rather than an assumption, so leave pushing the work later stops being
+    // invisible compression and becomes a number somebody can act on.
+    const plannedFinish = new Map<string, Date>();
+    const overrunDays = new Map<string, number>();
     for (const s of scheduled) {
       const days = workingDaysFor(s.userId).filter(d => d >= s.startAt);
       const placements = placeForward({
         remaining: s.remaining,
         days,
         perDayCap: s.cap,
-        dayCapacity: DAILY_CAPACITY_HOURS,
+        capacityOn: d => capacityOn(s.userId, d),
         usedOn: d => placedByDay.get(`${s.userId}|${dayKey(d)}`) ?? 0,
       });
       for (const p of placements) {
         addLoad(s.userId, p.date, s.taskId, p.hours);
         const k = `${s.userId}|${dayKey(p.date)}`;
         placedByDay.set(k, (placedByDay.get(k) ?? 0) + p.hours);
+      }
+      if (!placements.length) continue;
+      const key = `${s.userId}|${s.taskId}`;
+      const finish = placements[placements.length - 1].date;
+      plannedFinish.set(key, finish);
+      if (s.due) {
+        const due = startOfUtcDay(s.due);
+        // Counted in WORKING days, not calendar ones: "three days late" has to mean three days
+        // somebody could have worked, or a slip over a weekend reads as worse than it is.
+        if (finish > due) {
+          overrunDays.set(key, workingDaysFor(s.userId).filter(d => d > due && d <= finish).length);
+        }
       }
     }
 
@@ -490,6 +544,17 @@ export class CapacityService {
       for (const d of span) addLoad(u.userId, d, u.taskId, perDay);
     }
 
+    // Hand each placed seat its planned finish. Done after both passes because the entries were
+    // built while reading the tasks, before anything had been laid onto a day.
+    for (const [userId, mine] of openByUser) {
+      for (const [taskId, entry] of mine) {
+        const finish = plannedFinish.get(`${userId}|${taskId}`);
+        if (!finish) continue;
+        entry.plannedFinish = dayKey(finish);
+        entry.overrunDays = overrunDays.get(`${userId}|${taskId}`) ?? 0;
+      }
+    }
+
     const rows: CapacityRow[] = users.map(u => {
       const days: CapacityDay[] = window.map(d => {
         const k = dayKey(d);
@@ -502,11 +567,14 @@ export class CapacityService {
         if (isWeekend(d)) return { date: k, state: 'WEEKEND', load: 0, capacity: 0, utilization: 0, free: 0 };
         if (holiday) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: holiday };
         if (optional) return { date: k, state: 'HOLIDAY', load: 0, capacity: 0, utilization: 0, free: 0, note: 'Optional holiday' };
-        if (leave) return { date: k, state: 'LEAVE', load: 0, capacity: 0, utilization: 0, free: 0, note: `${leave} leave` };
+        // A FULL day of leave empties the day. A HALF day does not — it is a working day with
+        // four hours in it, so it falls through and is drawn like any other working day, noted.
+        if (leave && !leave.half) return { date: k, state: 'LEAVE', load: 0, capacity: 0, utilization: 0, free: 0, note: `${leave.type} leave` };
 
+        const capacity = capacityOn(u.id, d);
         const load = loadByUserDay.get(`${u.id}|${k}`) ?? 0;
-        const utilization = load / DAILY_CAPACITY_HOURS;
-        const free = r1(Math.max(0, DAILY_CAPACITY_HOURS - load));
+        const utilization = capacity > 0 ? load / capacity : 0;
+        const free = r1(Math.max(0, capacity - load));
         // Largest first, so the widest segment is drawn first and the tail of small ones is
         // what gets truncated on a crowded day.
         // Two decimals, not one: a 0.04h task rounded to 0.0 vanished from the day while its hours
@@ -520,7 +588,7 @@ export class CapacityService {
         const pending = pendingLeaveByUserDay.get(`${u.id}|${k}`);
         if (pending) {
           return {
-            date: k, state: 'LEAVE_PENDING', load: r1(load), capacity: DAILY_CAPACITY_HOURS,
+            date: k, state: 'LEAVE_PENDING', load: r1(load), capacity,
             utilization: Math.round(utilization * 100) / 100, free, tasks: dayTasks,
             note: `${pending} leave (pending approval)`,
           };
@@ -530,20 +598,25 @@ export class CapacityService {
             : utilization > FREE_THRESHOLD ? 'LIGHT'
               : 'FREE';
         return {
-          date: k, state, load: r1(load), capacity: DAILY_CAPACITY_HOURS,
+          date: k, state, load: r1(load), capacity,
           utilization: Math.round(utilization * 100) / 100, free, tasks: dayTasks,
+          // A half day is a working day at half strength — said plainly, because a 4h cell
+          // beside a row of 8h ones is otherwise unexplained.
+          ...(leave?.half ? { note: `${leave.type} leave (half day)` } : {}),
         };
       });
 
       const workDays = days.filter(d => d.capacity > 0);
-      const capacityHours = workDays.length * DAILY_CAPACITY_HOURS;
+      // Summed, not counted × 8: a half day contributes four hours, and counting days would put
+      // the other four back into the totals the day rows had already given up.
+      const capacityHours = workDays.reduce((s, d) => s + d.capacity, 0);
       const committedHours = workDays.reduce((s, d) => s + d.load, 0);
       const freeHours = workDays.reduce((s, d) => s + d.free, 0);
       // Hours committed BEYOND capacity on overloaded days. freeHours floors per-day free at
       // 0, so committed+free stops reconciling with capacity exactly when someone is
       // overloaded — this surfaces that overload instead of letting the window-average
       // utilization dilute (and hide) it.
-      const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - DAILY_CAPACITY_HOURS), 0);
+      const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - d.capacity), 0);
 
       // "When is this person free?" — the first workable day with real room, and how
       // many consecutive free days follow (a 2-day gap is a genuine assignment window).

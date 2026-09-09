@@ -43,39 +43,41 @@ const hoursOn = (out: { date: Date; hours: number }[]) =>
   out.map(p => [Math.round((p.date.getTime() - d0) / DAY), Math.round(p.hours * 100) / 100]);
 
 const NOTHING_USED = () => 0;
+/** Everybody has a whole 8h day, unless a case says otherwise. */
+const FULL_DAY = () => 8;
 
 // ── the case that started all of this ───────────────────────────────────────
 // Seven hours, starting on day 8 of a ten-day window. It belongs on day 8, and nowhere else.
 check(
   'seven hours starting on day 8 land entirely on day 8',
-  hoursOn(placeForward({ remaining: 7, days: days(7, 3), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 7, days: days(7, 3), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[7, 7]],
 );
 
 // A full day's work is a full day, not a day and a sliver.
 check(
   'exactly eight hours fill one day and do not spill',
-  hoursOn(placeForward({ remaining: 8, days: days(0, 5), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 8, days: days(0, 5), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[0, 8]],
 );
 
 // ── work longer than a day ──────────────────────────────────────────────────
 check(
   'twenty hours fill two days and part of a third',
-  hoursOn(placeForward({ remaining: 20, days: days(0, 5), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 20, days: days(0, 5), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[0, 8], [1, 8], [2, 4]],
 );
 
 // ── a ceiling on how much of a day one job may take ─────────────────────────
 check(
   'a two-hour-a-day ceiling stretches seven hours over four days',
-  hoursOn(placeForward({ remaining: 7, days: days(0, 6), perDayCap: 2, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 7, days: days(0, 6), perDayCap: 2, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[0, 2], [1, 2], [2, 2], [3, 1]],
 );
 
 check(
   'a ceiling above a day is clamped to the day — no seat claims 30h of an 8h day',
-  hoursOn(placeForward({ remaining: 12, days: days(0, 4), perDayCap: 30, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 12, days: days(0, 4), perDayCap: 30, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[0, 8], [1, 4]],
 );
 
@@ -84,7 +86,7 @@ check(
 check(
   'a partly-claimed day takes what fits and the rest moves to the next day',
   hoursOn(placeForward({
-    remaining: 6, days: days(0, 4), perDayCap: null, dayCapacity: 8,
+    remaining: 6, days: days(0, 4), perDayCap: null, capacityOn: FULL_DAY,
     usedOn: d => (d.getTime() === d0 ? 6 : 0),
   })),
   [[0, 2], [1, 4]],
@@ -94,7 +96,7 @@ check(
 check(
   'a full day is skipped, not given a zero-hour slice',
   hoursOn(placeForward({
-    remaining: 5, days: days(0, 3), perDayCap: null, dayCapacity: 8,
+    remaining: 5, days: days(0, 3), perDayCap: null, capacityOn: FULL_DAY,
     usedOn: d => (d.getTime() === d0 ? 8 : 0),
   })),
   [[1, 5]],
@@ -105,23 +107,50 @@ check(
 // to reveal, so the last day carries 8h of its own plus everything that did not fit.
 check(
   'hours that outlast the window pile onto the last day rather than vanishing',
-  hoursOn(placeForward({ remaining: 30, days: days(0, 3), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 30, days: days(0, 3), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[0, 8], [1, 8], [2, 14]],
 );
 
 check(
   'the overflow is added to the last day, not appended as a second entry for it',
-  placeForward({ remaining: 30, days: days(0, 3), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED }).length,
+  placeForward({ remaining: 30, days: days(0, 3), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED }).length,
   3,
 );
 
 // ── nothing to do ───────────────────────────────────────────────────────────
-check('no remaining effort places nothing', placeForward({ remaining: 0, days: days(0, 5), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED }), []);
-check('no workable days place nothing', placeForward({ remaining: 5, days: [], perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED }), []);
+check('no remaining effort places nothing', placeForward({ remaining: 0, days: days(0, 5), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED }), []);
+check('no workable days place nothing', placeForward({ remaining: 5, days: [], perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED }), []);
 check(
   'a floating-point sliver is not spread across a run of days',
-  hoursOn(placeForward({ remaining: 8.001, days: days(0, 5), perDayCap: null, dayCapacity: 8, usedOn: NOTHING_USED })),
+  hoursOn(placeForward({ remaining: 8.001, days: days(0, 5), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED })),
   [[0, 8]],
+);
+
+// ── half days ───────────────────────────────────────────────────────────────
+// An approved HALF day of leave is a working day at half strength. Reading it as a day off threw
+// away four real hours: somebody in for the morning looked exactly as unavailable as somebody on
+// a fortnight's holiday.
+const halfOnDay1 = (d: Date) => (d.getTime() === d0 + DAY ? 4 : 8);
+
+check(
+  'a half day takes four hours, and the rest moves on',
+  hoursOn(placeForward({ remaining: 16, days: days(0, 4), perDayCap: null, capacityOn: halfOnDay1, usedOn: NOTHING_USED })),
+  [[0, 8], [1, 4], [2, 4]],
+);
+
+check(
+  'a ceiling is clamped to the day it lands on, so 6h a day is 4h on a half day',
+  hoursOn(placeForward({ remaining: 10, days: days(0, 4), perDayCap: 6, capacityOn: halfOnDay1, usedOn: NOTHING_USED })),
+  [[0, 6], [1, 4]],
+);
+
+check(
+  'a day with no capacity at all is skipped entirely',
+  hoursOn(placeForward({
+    remaining: 8, days: days(0, 3), perDayCap: null,
+    capacityOn: d => (d.getTime() === d0 ? 0 : 8), usedOn: NOTHING_USED,
+  })),
+  [[1, 8]],
 );
 
 // ── the order days are claimed in ───────────────────────────────────────────

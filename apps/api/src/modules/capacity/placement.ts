@@ -84,21 +84,28 @@ export function placeForward(opts: {
   remaining: number;
   days: Date[];
   perDayCap: number | null;
-  dayCapacity: number;
+  /** Hours this person has on a given day — a full day, or half of one when they are on a
+   *  half-day's leave. Asked per day rather than given as a constant precisely so a half day
+   *  keeps its four real working hours instead of being treated as a day off. */
+  capacityOn: (d: Date) => number;
   usedOn: (d: Date) => number;
 }): Placement[] {
-  const { remaining, days, perDayCap, dayCapacity, usedOn } = opts;
+  const { remaining, days, perDayCap, capacityOn, usedOn } = opts;
   // A hundredth of an hour is well below anything a person books, so treating it as nothing keeps
   // floating-point remainders from producing 0.0000001h slivers on a run of days.
   const EPS = 0.01;
   if (!(remaining > EPS) || !days.length) return [];
 
-  const cap = perDayCap != null && perDayCap > 0 ? Math.min(perDayCap, dayCapacity) : dayCapacity;
   const out: Placement[] = [];
   let left = remaining;
 
   for (const d of days) {
     if (left <= EPS) break;
+    const dayCapacity = capacityOn(d);
+    if (dayCapacity <= EPS) continue; // no hours here at all
+    // The ceiling is clamped to the day it is being applied to, so "4h a day" on a half day is
+    // four hours of a four-hour day rather than a whole day's work squeezed into half of one.
+    const cap = perDayCap != null && perDayCap > 0 ? Math.min(perDayCap, dayCapacity) : dayCapacity;
     const room = Math.min(cap, Math.max(0, dayCapacity - usedOn(d)));
     if (room <= EPS) continue; // spoken for — try the next day
     const take = Math.min(room, left);
