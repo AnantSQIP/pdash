@@ -67,6 +67,79 @@ Verified on a real dump: 111 tables, every row count matching, zero errors.
 A backup nobody has restored is a file, not a backup. The failure mode is always the same — the
 nightly job runs green for months, and the first restore anyone attempts is during the incident.
 
+### The off-site copy — on your own machine
+
+Everything above writes to `/var/backups/pdash`, **on the same VPS as the data it protects**. That
+covers a bad migration or a dropped table. It does not cover the disk, the host, a billing lapse
+or a compromised root account — and in every one of those the backups go with the thing they were
+protecting. So pull a copy down:
+
+```bash
+# from WSL, in the repo, ON YOUR MACHINE (not the server)
+bash scripts/backup-pull.sh
+```
+
+It runs `backup.sh` on the server first (so the copy is minutes old, not up to 24 hours), fetches
+anything it doesn't already have, and **verifies what arrived** — valid gzip, tables declared,
+pg_dump's end-of-dump marker present. That last check is the one that matters here: a transfer cut
+off partway leaves a file of entirely plausible size that is not restorable, and only re-checking
+the copy catches it. A file that fails is deleted rather than kept as a decoy.
+
+| | |
+|---|---|
+| Lands in | `/mnt/c/Users/anant/pdash-backups` (`DEST=` to change — an external drive is better) |
+| Keeps | 90 days (`KEEP_DAYS=`) — deliberately longer than the server's 30 |
+| Log | `<DEST>/backup-pull.log` |
+
+It **never** deletes anything on the server, and never deletes a local file just because the
+server has pruned it — outliving the server's 30-day window is the whole point.
+
+It needs key-based ssh once (a scheduled job cannot type a passphrase):
+
+```bash
+ssh-keygen -t ed25519 -C "pdash-backup"        # if you don't have a key
+ssh-copy-id -p 2222 root@217.76.59.244         # asks for the root password once
+```
+
+**Do not point `DEST` inside this repo.** These dumps contain every person's PII, the patent
+register, the client ledger and every password hash, and this repository is public. The script
+refuses a destination inside the working tree, and `.gitignore` blocks `*.sql.gz` as a second
+line of defence — but the reason is worth knowing rather than discovering.
+
+#### Running it automatically
+
+Nightly at 21:00, from WSL:
+
+```bash
+crontab -e
+```
+```
+0 21 * * *  cd /mnt/c/Users/anant/Videos/pdash && bash scripts/backup-pull.sh >/dev/null 2>&1
+```
+
+WSL's cron only runs while WSL is running. If the machine is often shut down, drive it from
+Windows Task Scheduler instead — one daily task, action `wsl.exe`, arguments:
+
+```
+-d Ubuntu -- bash -lc "cd /mnt/c/Users/anant/Videos/pdash && bash scripts/backup-pull.sh"
+```
+
+with **"Run whether user is logged on or not"** and **"Run task as soon as possible after a
+scheduled start is missed"** ticked — otherwise a laptop that was closed at 21:00 simply skips
+that night, silently, forever.
+
+#### Checking a local copy actually restores
+
+The file being present is not the same as the file being good. Against a local Postgres, into a
+**scratch** database that is dropped afterwards — never against `pdash`:
+
+```bash
+createdb -h localhost -U pdash pdash_restore_check
+zcat /mnt/c/Users/anant/pdash-backups/pdash-db-<date>.sql.gz | psql -h localhost -U pdash -d pdash_restore_check
+psql -h localhost -U pdash -d pdash_restore_check -c "select count(*) from \"user\";"
+dropdb -h localhost -U pdash pdash_restore_check
+```
+
 ### Restoring for real
 
 ```bash

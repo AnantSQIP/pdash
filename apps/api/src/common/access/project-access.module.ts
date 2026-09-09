@@ -39,6 +39,22 @@ export class ProjectAccessService {
     return !!m;
   }
 
+  /**
+   * The manager OF THIS PROJECT — an active member carrying the MANAGER project role.
+   *
+   * Deliberately narrower than `hasOversight`: that asks "is this person a delivery lead
+   * anywhere", which is true for every Manager and Senior Consultant in the firm. This asks
+   * "does this person run THIS matter", which is what a per-project restriction means.
+   * A project whose manager has been removed has none, and callers fail closed.
+   */
+  async isProjectManager(actorId: string, projectId: string): Promise<boolean> {
+    const m = await this.prisma.projectMember.findFirst({
+      where: { projectId, userId: actorId, projectRole: 'MANAGER', isActive: true },
+      select: { id: true },
+    });
+    return !!m;
+  }
+
   /** The org that owns a project (reached through its members — Project has no org column). */
   private async projectOrg(projectId: string): Promise<string | null> {
     const m = await this.prisma.projectMember.findFirst({

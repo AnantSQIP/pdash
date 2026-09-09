@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Plus, MessageCircle, RefreshCw, Flag, CheckCircle, Trash2, FolderKanban, Clock, Download, Activity as ActivityIcon,
+  Play, Pause, RotateCcw,
 } from 'lucide-react';
 import { api, type ActivityItem } from '@/lib/api';
 import { fullName } from '@/lib/avatar';
@@ -17,6 +18,10 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'task.status_changed':  { verb: 'changed status of',     cat: 'Tasks',    icon: <RefreshCw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
   'task.updated':         { verb: 'updated task',          cat: 'Tasks',    icon: <ActivityIcon className="w-3.5 h-3.5" />, color: 'bg-blue-100 text-blue-600' },
   'task.deleted':         { verb: 'deleted task',          cat: 'Tasks',    icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'task.started':         { verb: 'started work on',       cat: 'Tasks',    icon: <Play className="w-3.5 h-3.5" />,        color: 'bg-emerald-100 text-emerald-600' },
+  'task.paused':          { verb: 'paused work on',        cat: 'Tasks',    icon: <Pause className="w-3.5 h-3.5" />,       color: 'bg-gray-100 text-gray-500' },
+  'task.finished':        { verb: 'finished task',         cat: 'Tasks',    icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'task.reopened':        { verb: 'reopened task',         cat: 'Tasks',    icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
   'comment.created':      { verb: 'commented',             cat: 'Comments', icon: <MessageCircle className="w-3.5 h-3.5" />, color: 'bg-purple-100 text-purple-600' },
   'issue.created':        { verb: 'reported issue',        cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },
   'issue.updated':        { verb: 'updated issue',         cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },

@@ -56,6 +56,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
+  const { currentUser } = useOrg();
   const [activeTab, setActiveTab] = useState<Tab>('Task List');
   const [showAddTask, setShowAddTask] = useState(false);
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
@@ -283,11 +284,17 @@ export function ProjectDetailClient({ projectId }: Props) {
   const defaultTaskList = project.taskLists?.find(tl => tl.isDefault) ?? project.taskLists?.[0];
   // The project's manager — used to pre-fill each task's Project Manager (still editable per task).
   const projectManagerId = project.members?.find(m => m.projectRole === 'MANAGER' && m.isActive)?.userId ?? null;
+  // The activity feed is the whole matter's history in one list, so it is oversight material:
+  // administrators (audit.view) and this project's own manager, nobody else. Being a member of
+  // the project is not enough. The API enforces exactly the same rule — hiding the tab only
+  // avoids offering a door that would not open.
+  const canSeeActivity = can('audit.view') || (!!currentUser && projectManagerId === currentUser.id);
   // Capacity is a manager-grade view, so the tab only appears for capacity.view holders —
   // and the API enforces it regardless (the tab is a convenience, not the gate).
-  const TABS: Tab[] = can('capacity.view')
-    ? [...BASE_TABS.slice(0, 5), 'Capacity', ...BASE_TABS.slice(5)]
-    : BASE_TABS;
+  const TABS: Tab[] = (can('capacity.view')
+    ? ([...BASE_TABS.slice(0, 5), 'Capacity', ...BASE_TABS.slice(5)] as Tab[])
+    : BASE_TABS
+  ).filter(t => t !== 'Activity' || canSeeActivity);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -558,7 +565,7 @@ export function ProjectDetailClient({ projectId }: Props) {
         {activeTab === 'Files' && <FilesTab projectId={projectId} />}
         {activeTab === 'Gantt' && <GanttView tasks={tasks} project={project} />}
         {activeTab === 'Issues' && <IssuesTab projectId={projectId} />}
-        {activeTab === 'Activity' && <ActivityTab projectId={projectId} />}
+        {activeTab === 'Activity' && canSeeActivity && <ActivityTab projectId={projectId} />}
         {activeTab === 'Timesheets' && <TimesheetsTab projectId={projectId} />}
         {activeTab === 'Discussions' && <DiscussionsTab projectId={projectId} />}
       </div>

@@ -7,6 +7,8 @@ import { istDayWindow, overlapMinutes, totalMinutes as sessionMinutes, ceilQuart
 import { serialize, timerKeyFor } from '../../common/db/serialize';
 import { TimesheetsService } from '../timesheets/timesheets.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
+import { EventService } from '../audit-events/event.service';
+import { EVENTS } from '../../common/events/canonical-events';
 
 /**
  * Timing a task, and learning how long that kind of task takes.
@@ -42,6 +44,7 @@ export class TaskTimeService {
     private readonly prisma: PrismaService,
     private readonly timesheets: TimesheetsService,
     private readonly access: ProjectAccessService,
+    private readonly events: EventService,
   ) {}
 
   private actor(): string {
@@ -80,6 +83,16 @@ export class TaskTimeService {
     if (!mine.length) throw new ForbiddenException('You can only time a task that is assigned to you.');
     const assignment = mine.find(a => (a.role ?? 'ANALYST') === 'ANALYST') ?? mine[0];
     return { task, assignment, role: (assignment.role ?? 'ANALYST').toUpperCase() };
+  }
+
+  /**
+   * The project a task belongs to. Carried on every lifecycle event as `metadata.projectId`,
+   * because that is the field the activity feed filters a project's history on — an event
+   * emitted without it is written, and then never shown to anybody.
+   */
+  private async projectIdOf(taskId: string): Promise<string | undefined> {
+    const link = await this.prisma.projectTask.findFirst({ where: { taskId }, select: { projectId: true } });
+    return link?.projectId;
   }
 
   private async orgOf(userId: string): Promise<string> {
@@ -192,7 +205,7 @@ export class TaskTimeService {
     await this.reconcileStale(userId);
     const now = new Date();
 
-    return serialize(this.prisma, timerKeyFor(userId), async tx => {
+    const session = await serialize(this.prisma, timerKeyFor(userId), async tx => {
       const already = await tx.taskWorkSession.findFirst({ where: { userId, taskId, endedAt: null } });
       if (already) return { id: already.id, taskId, startedAt: already.startedAt, resumed: true };
       // startedAt records when the task was FIRST picked up, and is never overwritten.
@@ -203,6 +216,18 @@ export class TaskTimeService {
       });
       return { ...created, resumed: false };
     });
+
+    // Emitted OUTSIDE the lock and after it commits: the serialized block is the contended
+    // section every Start on this person queues behind, and three inserts into the event spine
+    // do not belong inside it. `resumed` is carried so picking a task back up reads as that
+    // rather than as a second first-start.
+    await this.events.emit({
+      action: EVENTS.TASK_STARTED,
+      entityType: 'TASK',
+      entityId: taskId,
+      metadata: { projectId: await this.projectIdOf(taskId), resumed: session.resumed },
+    });
+    return session;
   }
 
   /**
@@ -232,6 +257,14 @@ export class TaskTimeService {
     await this.prisma.taskWorkSession.update({
       where: { id: open.id },
       data: { endedAt: now, minutes },
+    });
+    // Only a clock that was actually running is a pause worth recording — the no-session case
+    // returned above writes nothing, so pressing Pause twice does not litter the feed.
+    await this.events.emit({
+      action: EVENTS.TASK_PAUSED,
+      entityType: 'TASK',
+      entityId: taskId,
+      metadata: { projectId: await this.projectIdOf(taskId), minutes },
     });
     // `minutes` is THIS sitting — what the person just did, and what the toast offers to log.
     // The cumulative figures are returned beside it; neither may be the one pre-filled, or a
@@ -523,13 +556,24 @@ export class TaskTimeService {
    */
   async reopen(taskId: string, openStatusId?: string) {
     const userId = this.actor();
-    const { task } = await this.assertMine(taskId, userId);
+    // Reopening is a delivery decision, not a personal one: anyone staffed on the task OR a
+    // member of its project may take it. Requiring a seat on the TASK meant a colleague who
+    // spotted that finished work still needed doing could not say so — only whoever happened
+    // to be assigned could, and only while they stayed assigned. assertTaskAccess is the same
+    // project-membership rule the other reporting actions (status, progress) already use, so
+    // reopening now matches finishing instead of being stricter than it.
+    await this.access.assertTaskAccess(userId, taskId);
+    const task = await this.prisma.task.findFirst({
+      where: { id: taskId, deletedAt: null },
+      select: { id: true, title: true, completedAt: true, currentStatus: { select: { type: true } } },
+    });
+    if (!task) throw new NotFoundException('Task not found.');
     // Closed by the dialog OR closed by status. Requiring completedAt alone meant every task
     // closed the ordinary way — which is all of them, including everything predating the
     // closing dialog — showed a Reopen button that answered "That task is not closed."
     const isClosed = !!task.completedAt || task.currentStatus?.type === 'CLOSED';
     if (!isClosed) throw new BadRequestException('That task is not closed.');
-    return this.prisma.task.update({
+    const updated = await this.prisma.task.update({
       where: { id: taskId },
       data: {
         completedAt: null,
@@ -539,6 +583,15 @@ export class TaskTimeService {
       },
       select: { id: true, reopenedCount: true, completedAt: true },
     });
+    // This path writes the task row directly rather than going through setStatus, so without
+    // this the reopen left no trace at all — the count went up and nothing said who did it.
+    await this.events.emit({
+      action: EVENTS.TASK_REOPENED,
+      entityType: 'TASK',
+      entityId: taskId,
+      metadata: { projectId: await this.projectIdOf(taskId), title: task.title },
+    });
+    return updated;
   }
 
   /**

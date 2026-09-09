@@ -37,6 +37,14 @@ coverage/
 # ── Backup files (created during dev) ─────────────────────
 *.bak
 
+# ── Database dumps — NEVER commit ─────────────────────────
+# These hold every person's PII, the patent register, the client ledger and every password
+# hash, and this repo is public. scripts/backup-pull.sh refuses to write inside the repo at
+# all; this is the second line of defence for a dump copied here by hand.
+pdash-backups/
+*.sql.gz
+pdash-docs-*.tar.gz
+
 # ── Binary documents (source docs; committed reference PDFs live in docs/reference/) ─
 *.docx
 *.doc
