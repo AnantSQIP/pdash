@@ -38,7 +38,11 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   await admin('/auth/login', { method: 'POST', body: { email: ADMIN, password: PW } });
   const login2 = await staff('/auth/login', { method: 'POST', body: { email: STAFF, password: PW } });
   if (login2.status >= 400) { console.error(`cannot sign in as ${STAFF}: ${login2.status}`); process.exit(1); }
-  const org = (await admin('/organizations')).data[0];
+  const meA0 = (await admin('/auth/me')).data;
+  const MY_ORG = (meA0.user ?? meA0)?.organizationId;
+  // The signed-in user's own org — never index 0 (see the note in time-mode.e2e.mjs).
+  const org = ((await admin('/organizations')).data ?? []).find(o => o.id === MY_ORG)
+           ?? (await admin('/organizations')).data[0];
   const meS = (await staff('/auth/me')).data; const STAFF_ID = meS.user?.id ?? meS.id;
   const setMode = m => admin(`/organizations/${org.id}/time-mode`, { method: 'PATCH', body: { mode: m }, passcode: PASSCODE });
 
@@ -58,6 +62,12 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
     staffTaskId = S.id;
     const blocked = await staff(`/tasks/${S.id}/start`, { method: 'POST' });
     eq('is refused a stopwatch, exactly as an administrator is', blocked.status, 403);
+    // The duplicate guard refuses the same task, day AND duration — including the row this
+    // suite wrote last time it ran. Clear it, so the assertion is about the day sheet.
+    for (const t of ((await staff(`/timesheets?userId=${STAFF_ID}`)).data ?? [])
+         .filter(t => t.notes === 'staff day sheet' && String(t.date).slice(0, 10) === today())) {
+      await staff(`/timesheets/${t.id}`, { method: 'DELETE' });
+    }
     const dayOK = await staff('/timesheets/day', { method: 'POST', body: { date: today(), entries: [{ taskId: S.id, hoursLogged: 1, notes: 'staff day sheet' }] } });
     eq('can fill in their own day', dayOK.data?.savedCount, 1);
     const finS = await staff(`/tasks/${S.id}/finish`, { method: 'POST' });
@@ -94,6 +104,10 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   // ── the day sheet respects the rules it delegates to ─────────────────────
   console.log('\n— the day sheet does not become a way around the rules —');
   const old = new Date(Date.now() - 200 * 86400e3).toISOString().slice(0, 10);
+  for (const t of ((await admin(`/timesheets?userId=${ADMIN_ID}`)).data ?? [])
+       .filter(t => String(t.date).slice(0, 10) === old)) {
+    await admin(`/timesheets/${t.id}`, { method: 'DELETE' });
+  }
   const adminOld = await admin('/timesheets/day', { method: 'POST', body: { date: old, entries: [{ taskId: A.id, hoursLogged: 1 }] } });
   ok('a Super Admin may still fill an old day, as they may everywhere else', adminOld.status < 400, `status ${adminOld.status}`);
   if (staffTaskId) {
@@ -164,6 +178,47 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   eq('with nothing on the clock', gate.data?.trackedMinutes ?? 0, 0);
 
   await setMode('TIMER');
+
+  // ── cover is visible on the board, not merely computed ───────────────────
+  //
+  // The split was right from the start and shown NOWHERE: a manager could arrange cover and
+  // neither the person away nor the stand-in would ever see it on the board they plan from. Hours
+  // moving silently looks exactly like hours going missing.
+  console.log('\n— cover shows up on the board, on both sides —');
+  const cproj = (await admin('/projects')).data.find(p => !['ARCHIVED', 'CANCELLED', 'COMPLETED', 'CLOSED'].includes(p.projectPhase));
+  const cfull = (await admin(`/projects/${cproj.id}`)).data;
+  const clist = (cfull.taskLists ?? []).find(l => l.isDefault) ?? (cfull.taskLists ?? [])[0];
+  const mate = (cfull.members ?? []).map(m => m.userId).find(u => u !== ADMIN_ID);
+  const fwd = n => { const d = new Date(Date.now() + 5.5 * 3600e3); let c = 0; while (c < n) { d.setUTCDate(d.getUTCDate() + 1); const w = d.getUTCDay(); if (w !== 0 && w !== 6) c++; } return d.toISOString().slice(0, 10); };
+  if (mate) {
+    const ct = await admin('/tasks', { method: 'POST', body: { title: 'e2e cover visibility', projectId: cproj.id, taskListId: clist.id, createdBy: ADMIN_ID, dueDate: fwd(12), priority: 'HIGH' } });
+    await admin(`/tasks/${ct.data.id}/staffing`, { method: 'PUT', body: { assignees: [{ userId: ADMIN_ID, role: 'ANALYST', estimatedHours: 16, startDate: fwd(1), dueDate: fwd(12) }] } });
+    const made = await admin('/capacity/coverage', { method: 'POST', body: { taskId: ct.data.id, fromUserId: ADMIN_ID, toUserId: mate, fromDate: fwd(2), toDate: fwd(4), mode: 'COVER', reason: 'e2e' } });
+    ok('the cover is created', made.status === 201 || made.status === 200, `status ${made.status} ${msg(made)}`);
+
+    const board = (await admin('/capacity/team?days=20')).data;
+    const rowOf = id => (board.rows ?? []).find(r => r.userId === id);
+    const mineRow = (rowOf(ADMIN_ID)?.openTasks ?? []).find(t => t.id === ct.data.id);
+    const theirRow = (rowOf(mate)?.openTasks ?? []).find(t => t.id === ct.data.id);
+
+    ok('the covered person is marked as covered', mineRow?.coveredAway === true, JSON.stringify(mineRow ?? null).slice(0, 200));
+    eq('and it names WHO is covering, not just that somebody is', mineRow?.coveredByUserId, mate);
+    eq('the stand-in is shown whose work it is', theirRow?.coveringForUserId, ADMIN_ID);
+    ok('and the two halves still add up to the whole job',
+       Math.abs((mineRow?.remainingHours ?? 0) + (theirRow?.remainingHours ?? 0) - 16) < 0.05,
+       `${mineRow?.remainingHours} + ${theirRow?.remainingHours}`);
+
+    // Withdrawing restores the plan, which is the point of holding cover as a record.
+    await admin(`/capacity/coverage/${made.data.id}/revoke`, { method: 'POST' });
+    const after = (await admin('/capacity/team?days=20')).data;
+    const restored = ((after.rows ?? []).find(r => r.userId === ADMIN_ID)?.openTasks ?? []).find(t => t.id === ct.data.id);
+    ok('withdrawing it gives the whole job back', Math.abs((restored?.remainingHours ?? 0) - 16) < 0.05, `remaining=${restored?.remainingHours}`);
+    ok('and clears the marking', !restored?.coveredAway, JSON.stringify({ coveredAway: restored?.coveredAway }));
+    await admin(`/tasks/${ct.data.id}`, { method: 'DELETE' });
+  }
+
+  await setMode('TIMER');
+
   console.log(`\n${fails.length ? '✗' : '✓'} ${passed} passed, ${fails.length} failed\n`);
   fails.forEach(f => console.error('  ✗ ' + f + '\n'));
   process.exit(fails.length ? 1 : 0);
