@@ -2,6 +2,11 @@
 // Tests via Prisma directly — no service class imports required,
 // so it works before/without building the NestJS app.
 //
+//   DATABASE_URL=postgresql://…/a_scratch_db node tools/smoke.mjs
+//
+// IT WRITES, AND IT DOES NOT CLEAN UP. Point it at a scratch database, never at the live demo
+// or production: it creates an organisation, users, a project and tasks and leaves them there.
+//
 // Key invariants tested:
 //   D2 — project approval via generic Approval + ApprovalAction entities
 //   "General" task list auto-created on project creation (isDefault invariant)
@@ -241,33 +246,30 @@ async function main() {
   check('AuditLog created with entityType=PROJECT', log.entityType === 'PROJECT');
   check('AuditLog has immutable timestamp', log.timestamp instanceof Date);
 
-  // ── Milestone + TaskList relationship ─────────────────────
-  console.log('\n[M1] Milestone + TaskList hierarchy');
+  // ── TaskList hierarchy ────────────────────────────────────
+  //
+  // This used to test milestones too. They were removed from the product entirely (commit
+  // b75e23a), and this file kept calling prisma.milestone.create — so the whole suite has been
+  // dying here ever since, taking every check BELOW this point with it. A smoke test nobody can
+  // run is not a smoke test, and its silence is easy to mistake for good news.
+  console.log('\n[M1] TaskList hierarchy');
 
-  const milestone = await prisma.milestone.create({
-    data: { projectId: project.id, name: 'Phase 1', sequence: 0 },
-  });
   const sprintList = await prisma.taskList.create({
-    data: { projectId: project.id, milestoneId: milestone.id, name: 'Sprint 1', sequence: 1 },
+    data: { projectId: project.id, name: 'Sprint 1', sequence: 1 },
   });
   const task3 = await prisma.task.create({
     data: {
-      title: 'Milestone task',
+      title: 'Task in a list',
       createdBy: admin.id,
       projectTasks: {
-        create: {
-          projectId: project.id,
-          taskListId: sprintList.id,
-          milestoneId: milestone.id,
-          sequence: 0,
-        },
+        create: { projectId: project.id, taskListId: sprintList.id, sequence: 0 },
       },
     },
     include: { projectTasks: true },
   });
 
-  check('Task linked to milestone via ProjectTask', task3.projectTasks[0].milestoneId === milestone.id);
-  check('TaskList linked to milestone', sprintList.milestoneId === milestone.id);
+  check('TaskList belongs to the project', sprintList.projectId === project.id);
+  check('Task linked to the list via ProjectTask', task3.projectTasks[0].taskListId === sprintList.id);
 
   // ── Multiple managers per user (UserManager) ─────────────
   console.log('\n[M1] Multiple managers per user');
