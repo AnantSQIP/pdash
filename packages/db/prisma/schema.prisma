@@ -1125,6 +1125,24 @@ model TaskAssignee {
   estimatedHours  Float?
   // Per-assignment deadline for THIS person in THIS role on the task (optional).
   dueDate         DateTime?
+  // WHEN THIS PERSON PLANS TO START — their own scheduled start, not the task's.
+  //
+  // The deadline says when the work must be finished; this says when it is meant to be done.
+  // They are different facts, and holding only the first is what forced the capacity board to
+  // GUESS the second by spreading every task evenly from today to its deadline: seven hours due
+  // in ten days read as 0.7h every day for ten days, so nobody ever looked genuinely free and a
+  // day could never be claimed for one piece of work.
+  //
+  // Set here rather than on the Task because a task's people do not start together — an analyst
+  // may begin on Monday and the reviewer only once there is something to review. The hours and
+  // the deadline are already per person; the start was the one part of the plan that was not.
+  //
+  // NULL means unscheduled, and unscheduled is still spread to the deadline exactly as before.
+  // Every task that existed before this column keeps its old behaviour until someone schedules it.
+  startDate       DateTime?
+  // Optional ceiling on how much of a day this seat may take (e.g. 2h a day for a week).
+  // NULL means "as much of the day as is free" — the ordinary case.
+  hoursPerDay     Float?
   // The hours this person confirmed for THEIR part, and which standard that fed.
   //
   // Held on the assignment rather than the task because each person contributes their own

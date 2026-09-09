@@ -186,9 +186,16 @@ export type AssigneeRef = {
   role?: TaskRole | null;
   estimatedHours?: number | null;
   dueDate?: string | null;
+  /** When THIS person starts. Null = unscheduled, and unscheduled work is spread to the deadline. */
+  startDate?: string | null;
+  /** Optional ceiling on how much of a day this seat may take. Null = as much as is free. */
+  hoursPerDay?: number | null;
   user: Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'profilePhoto'>;
 };
-export type StaffingEntry = { userId: string; role: TaskRole; estimatedHours?: number; dueDate?: string | null };
+export type StaffingEntry = {
+  userId: string; role: TaskRole; estimatedHours?: number; dueDate?: string | null;
+  startDate?: string | null; hoursPerDay?: number | null;
+};
 
 export type Subtask = {
   id: string; taskId: string; title: string; status: string; priority: string;
@@ -1174,8 +1181,11 @@ export type CapacityOpenTask = {
   /** The task's own deadline, beside a personal one (`dueDate` is THIS person's when `ownDeadline`). */
   taskDueDate?: string | null;
   ownDeadline?: boolean;
-  /** Planned start; the board never schedules the task before it. */
+  /** THIS person's start — their own when they have one, otherwise the task's. */
   startDate?: string | null;
+  /** True when they named their own start, so their hours are placed on the days they meant
+   *  rather than spread evenly to the deadline. */
+  scheduled?: boolean;
   /** This person's estimate, what they have logged against it, and whether the ledger has
    *  already passed the estimate (absent on a payload from an older API). */
   estimatedHours?: number; loggedHours?: number; overEstimate?: boolean;

@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.module';
 import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
 import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
+import { compareScheduled, placeForward, type ScheduledSeat } from './placement';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -93,8 +94,17 @@ export interface CapacityRow {
     taskDueDate?: string | null;
     /** True when this person's deadline differs from the task's — it was set for them alone. */
     ownDeadline: boolean;
-    /** When the task is planned to begin (the board never schedules it before this). */
+    /**
+     * When THIS PERSON starts: their own seat's start when one was set, otherwise the task's.
+     * The board never places their work before it.
+     */
     startDate?: string | null;
+    /**
+     * True when this person named their own start, so their hours are PLACED on the days they
+     * meant — rather than spread evenly between today and the deadline, which is a guess the
+     * board has to make when nobody has said when the work happens.
+     */
+    scheduled: boolean;
     /** This person's own estimate for the task (their staffing hours, or an even split). */
     estimatedHours: number;
     /** Hours this person has logged against the task in the timesheet ledger. */
@@ -161,11 +171,20 @@ export class CapacityService {
    * Team availability across ALL projects: for each person, how much of each working
    * day is already committed, and therefore when they are free to take more work.
    *
-   * Load model — an OPEN task occupies its assignee from its start (or today, if it has
-   * already begun) through its INTERNAL deadline, consuming its remaining effort spread
-   * evenly across the working days in that span:
-   *     remaining = (estimatedHours ?? DEFAULT) × (1 − completion%)
-   * Closed tasks consume nothing. An overdue task's remaining effort lands on today —
+   * Load model — two of them, because a deadline and a plan are different facts.
+   *
+   *   PLACED (the seat names its own startDate). The work goes where the person said: fill
+   *   forward from that day, taking up to their daily ceiling (or the whole day, if none was
+   *   set) until the hours are used up. Seven hours starting on day 8 land ON day 8 — not
+   *   0.7h a day for ten days, which is what the deadline alone could ever have implied.
+   *
+   *   SPREAD (no startDate). The older model, kept exactly: the task occupies its assignee
+   *   from its start — or today, if it has already begun — through its INTERNAL deadline,
+   *   spread evenly over the working days in that span. Every task that existed before
+   *   scheduling did has no seat start, so nothing about it moves until somebody sets one.
+   *
+   * In both, remaining = (estimatedHours ?? DEFAULT) × (1 − completion%), floored by the
+   * ledger. Closed tasks consume nothing. An overdue task's remaining effort lands on today —
    * it still has to be done, and it is blocking the person now.
    *
    * Non-working days are excluded properly: weekends, company holidays, and each
@@ -219,7 +238,7 @@ export class CapacityService {
           estimatedHours: true, completionPercentage: true,
           // Per-person estimated hours (role-based staffing). When present, each person's own
           // hours drive their capacity — NOT an even split of the task total.
-          assignees: { select: { userId: true, estimatedHours: true, dueDate: true } },
+          assignees: { select: { userId: true, estimatedHours: true, dueDate: true, startDate: true, hoursPerDay: true } },
           projectTasks: {
             // A PID can hold several projects, so the title alone no longer identifies the work —
             // the code + round do.
@@ -296,6 +315,13 @@ export class CapacityService {
     // Keyed by taskId per user: two assignee rows (two roles) are one task for one person.
     const openByUser = new Map<string, Map<string, CapacityRow['openTasks'][number]>>();
 
+    // Work is gathered here and laid onto days AFTER every task has been read, because placed
+    // work competes for the same day and the winner cannot be decided one task at a time.
+    const scheduled: ScheduledSeat[] = [];
+    const unscheduled: {
+      userId: string; taskId: string; remaining: number; taskStart: Date | null; personDue: Date | null;
+    }[] = [];
+
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
       const team = task.teamTasks[0]?.team;
@@ -313,10 +339,26 @@ export class CapacityService {
       // A person's OWN deadline on the task (their seat's date), when one was set for them —
       // "give Anant until Friday" moves Anant's plan and nobody else's. Two roles: the later one.
       const ownDueByUser = new Map<string, Date | null>();
+      // A person's OWN start on the task — when THEY mean to begin. Two roles: the EARLIER one,
+      // because that is when this person first picks the task up. (The deadline takes the later
+      // of the two for the mirror-image reason: that is when they finally put it down.)
+      const ownStartByUser = new Map<string, Date | null>();
+      // Their daily ceiling. A seat with no ceiling means "as much of the day as is free", so one
+      // uncapped seat leaves the person uncapped on this task; two capped seats add up.
+      const capByUser = new Map<string, number | null>();
       for (const a of task.assignees) {
         estimateByUser.set(a.userId, (estimateByUser.get(a.userId) ?? 0) + (a.estimatedHours != null ? a.estimatedHours : evenSplit));
         const prev = ownDueByUser.get(a.userId) ?? null;
         ownDueByUser.set(a.userId, a.dueDate && (!prev || a.dueDate > prev) ? a.dueDate : prev);
+        const prevStart = ownStartByUser.get(a.userId) ?? null;
+        ownStartByUser.set(a.userId, a.startDate && (!prevStart || a.startDate < prevStart) ? a.startDate : prevStart);
+        const seatCap = a.hoursPerDay != null && a.hoursPerDay > 0 ? a.hoursPerDay : null;
+        if (capByUser.has(a.userId)) {
+          const prevCap = capByUser.get(a.userId)!;
+          capByUser.set(a.userId, prevCap === null || seatCap === null ? null : prevCap + seatCap);
+        } else {
+          capByUser.set(a.userId, seatCap);
+        }
       }
 
       for (const [userId, personEstimate] of estimateByUser) {
@@ -331,6 +373,8 @@ export class CapacityService {
         const remaining = byLedger > 0 ? Math.min(byProgress, byLedger) : byProgress;
         const ownDue = ownDueByUser.get(userId) ?? null;
         const personDue = ownDue ?? task.dueDate;
+        const ownStart = ownStartByUser.get(userId) ?? null;
+        const personStart = ownStart ?? task.startDate ?? null;
         const overdue = !!personDue && startOfUtcDay(personDue) < today;
         const mine = openByUser.get(userId) ?? new Map<string, CapacityRow['openTasks'][number]>();
         mine.set(task.id, {
@@ -343,10 +387,13 @@ export class CapacityService {
           projectPid: project?.code ?? null,
           projectRound: project?.roundSeq,
           isTeamWork: !project && !!team,
-          startDate: task.startDate ? dayKey(task.startDate) : null,
+          startDate: personStart ? dayKey(personStart) : null,
           dueDate: personDue ? dayKey(personDue) : null,
           taskDueDate: task.dueDate ? dayKey(task.dueDate) : null,
           ownDeadline: !!ownDue && (!task.dueDate || dayKey(ownDue) !== dayKey(task.dueDate)),
+          // True when this person's work is PLACED rather than spread — they named their own
+          // start, so the board is showing intent rather than a guess.
+          scheduled: !!ownStart,
           priority: task.priority,
           projectPriority: project?.priority ?? undefined,
           projectDueDate: project?.dueDate ? dayKey(project.dueDate) : null,
@@ -360,40 +407,87 @@ export class CapacityService {
         openByUser.set(userId, mine);
 
         if (remaining <= 0) continue;
-        const workable = workingDaysFor(userId);
-        if (!workable.length) continue;
+        if (!workingDaysFor(userId).length) continue;
 
-        // A task that only STARTS after this window contributes nothing to it — its work is
-        // in the future. (Previously it fell through to the day-1 fallback below and dumped
-        // its whole load onto today, making people look busy for work that hasn't begun.)
-        if (task.startDate && startOfUtcDay(task.startDate) >= to) continue;
-
-        // The span this task occupies: from its start (never before today) to its internal
-        // deadline. No deadline → spread over the window ahead. Overdue, or a deadline that
-        // has already passed within the window → it lands on the first workable day: it is
-        // blocking them right now.
-        const startsAt = task.startDate && startOfUtcDay(task.startDate) > today ? startOfUtcDay(task.startDate) : today;
-        const endsAt = personDue ? startOfUtcDay(personDue) : addDays(today, horizon - 1);
-        let span = workable.filter(d => d >= startsAt && d <= endsAt);
-        if (!span.length) span = [workable[0]]; // overdue / same-day: put it on the first workable day
-
-        // Denominator = working days over the task's TRUE span, INCLUDING any BEYOND the visible
-        // window — otherwise a task due far in the future compresses its whole effort into the
-        // window and the person reads as fully booked every day.
-        let denom = span.length;
-        if (endsAt >= to) {
-          const cappedEnd = endsAt > addDays(to, 365) ? addDays(to, 365) : endsAt; // guard bad data
-          for (let d = new Date(to); d <= cappedEnd; d = addDays(d, 1)) if (!isWeekend(d)) denom++;
-        }
-        const perDay = remaining / Math.max(1, denom);
-        for (const d of span) {
-          const k = `${userId}|${dayKey(d)}`;
-          loadByUserDay.set(k, (loadByUserDay.get(k) ?? 0) + perDay);
-          const byTask = tasksByUserDay.get(k) ?? new Map<string, number>();
-          byTask.set(task.id, (byTask.get(task.id) ?? 0) + perDay);
-          tasksByUserDay.set(k, byTask);
+        if (ownStart) {
+          // PLACED. This person said when they start, so the work goes there rather than being
+          // smeared to the deadline. A start already past is honoured by planning what is LEFT
+          // from today: work in flight is not work that has not begun.
+          const from = startOfUtcDay(ownStart);
+          if (from >= to) continue; // begins after the visible window — nothing to draw here
+          scheduled.push({
+            userId, taskId: task.id, remaining,
+            startAt: from > today ? from : today,
+            cap: capByUser.get(userId) ?? null,
+            priority: task.priority, due: personDue ?? null,
+          });
+        } else {
+          // UNSCHEDULED. Exactly the behaviour that existed before scheduling did — which is why
+          // every task predating this change keeps working unchanged.
+          if (task.startDate && startOfUtcDay(task.startDate) >= to) continue;
+          unscheduled.push({ userId, taskId: task.id, remaining, taskStart: task.startDate ?? null, personDue: personDue ?? null });
         }
       }
+    }
+
+    /** Add hours to one person's day, keeping the per-task breakdown the board paints from. */
+    const addLoad = (userId: string, d: Date, taskId: string, hours: number) => {
+      const k = `${userId}|${dayKey(d)}`;
+      loadByUserDay.set(k, (loadByUserDay.get(k) ?? 0) + hours);
+      const byTask = tasksByUserDay.get(k) ?? new Map<string, number>();
+      byTask.set(taskId, (byTask.get(taskId) ?? 0) + hours);
+      tasksByUserDay.set(k, byTask);
+    };
+
+    // ── pass 1: place the scheduled work ────────────────────────────────────
+    //
+    // The ordering rule and the fill itself live in ./placement.ts, where they are pure and
+    // tested (tools/capacity-placement.spec.ts) rather than buried inside a database query.
+    scheduled.sort(compareScheduled);
+
+    // What each person's day has already been claimed for BY PLACED WORK. The spread below is a
+    // guess about unscheduled effort, not a claim on a day, so it never blocks a placement.
+    const placedByDay = new Map<string, number>();
+    for (const s of scheduled) {
+      const days = workingDaysFor(s.userId).filter(d => d >= s.startAt);
+      const placements = placeForward({
+        remaining: s.remaining,
+        days,
+        perDayCap: s.cap,
+        dayCapacity: DAILY_CAPACITY_HOURS,
+        usedOn: d => placedByDay.get(`${s.userId}|${dayKey(d)}`) ?? 0,
+      });
+      for (const p of placements) {
+        addLoad(s.userId, p.date, s.taskId, p.hours);
+        const k = `${s.userId}|${dayKey(p.date)}`;
+        placedByDay.set(k, (placedByDay.get(k) ?? 0) + p.hours);
+      }
+    }
+
+    // ── pass 2: spread the unscheduled work, as before ──────────────────────
+    for (const u of unscheduled) {
+      const workable = workingDaysFor(u.userId);
+      if (!workable.length) continue;
+
+      // The span this task occupies: from its start (never before today) to its internal
+      // deadline. No deadline → spread over the window ahead. Overdue, or a deadline that
+      // has already passed within the window → it lands on the first workable day: it is
+      // blocking them right now.
+      const startsAt = u.taskStart && startOfUtcDay(u.taskStart) > today ? startOfUtcDay(u.taskStart) : today;
+      const endsAt = u.personDue ? startOfUtcDay(u.personDue) : addDays(today, horizon - 1);
+      let span = workable.filter(d => d >= startsAt && d <= endsAt);
+      if (!span.length) span = [workable[0]]; // overdue / same-day: put it on the first workable day
+
+      // Denominator = working days over the task's TRUE span, INCLUDING any BEYOND the visible
+      // window — otherwise a task due far in the future compresses its whole effort into the
+      // window and the person reads as fully booked every day.
+      let denom = span.length;
+      if (endsAt >= to) {
+        const cappedEnd = endsAt > addDays(to, 365) ? addDays(to, 365) : endsAt; // guard bad data
+        for (let d = new Date(to); d <= cappedEnd; d = addDays(d, 1)) if (!isWeekend(d)) denom++;
+      }
+      const perDay = u.remaining / Math.max(1, denom);
+      for (const d of span) addLoad(u.userId, d, u.taskId, perDay);
     }
 
     const rows: CapacityRow[] = users.map(u => {
