@@ -110,13 +110,25 @@ if ! command -v caddy >/dev/null; then
     | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
   apt-get update -y && apt-get install -y caddy
 fi
-cat > /etc/caddy/Caddyfile <<EOF
+# Do NOT clobber a Caddyfile that already names a different host.
+#
+# This script is meant to be safe to re-run, and PUBLIC_HOST defaults to the sslip.io name on the
+# bare IP. Once the site has been moved to a real domain with scripts/set-public-domain.sh, an
+# unconditional rewrite here would quietly move it back — the containers would stay up, the health
+# checks would stay green, and the only symptom would be that the company's domain had stopped
+# resolving to anything. So an existing config wins unless PUBLIC_HOST was set explicitly.
+if [ -f /etc/caddy/Caddyfile ] && ! grep -q "^${PUBLIC_HOST}[,[:space:]{]" /etc/caddy/Caddyfile; then
+  echo "    /etc/caddy/Caddyfile already serves: $(grep -oE '^[^#{]+\{' /etc/caddy/Caddyfile | tr -d '{' | tr '\n' ' ')"
+  echo "    keeping it. To change the public hostname:  bash scripts/set-public-domain.sh <domain>"
+else
+  cat > /etc/caddy/Caddyfile <<EOF
 ${PUBLIC_HOST} {
     reverse_proxy 127.0.0.1:3000
 }
 EOF
-systemctl reload caddy 2>/dev/null || systemctl restart caddy || \
-  echo "    WARN: Caddy did not start — ports 80/443 may be taken. Check: ss -tlnp | grep -E ':80|:443'"
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy || \
+    echo "    WARN: Caddy did not start — ports 80/443 may be taken. Check: ss -tlnp | grep -E ':80|:443'"
+fi
 
 # ── [8/8] nightly backup ─────────────────────────────────────────────────────
 echo "==> [8/8] Nightly Postgres backup (02:30, keep 14 days)"

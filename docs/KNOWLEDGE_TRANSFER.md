@@ -19,7 +19,7 @@ performance, discussion, files and a full RBAC admin console.
 | | |
 |---|---|
 | **Repo** | `https://github.com/AnantSQIP/pdash` — ⚠️ **PUBLIC** (see §7) |
-| **Production** | `https://217.76.59.244.sslip.io` (Contabo VPS, Docker + Caddy, SSH on port **2222**) |
+| **Production** | `https://squarkip.io` (Contabo VPS `217.76.59.244`, Docker + Caddy, SSH on port **2222**). The old `https://217.76.59.244.sslip.io` still answers — see [CONTABO_DEPLOY.md](./CONTABO_DEPLOY.md#moving-to-a-real-domain) |
 | **Stack** | TypeScript · NestJS (API) · Next.js 14 App Router (web) · Prisma · PostgreSQL 16 |
 | **Layout** | npm workspaces monorepo: `apps/api`, `apps/web`, `packages/db` (`@pdash/db`) |
 | **Scale** | 71 tables · 7 roles · 85 permission codes |

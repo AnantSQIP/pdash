@@ -27,8 +27,62 @@ bash scripts/contabo-deploy.sh
 The script prompts once for an **initial password** for the seeded users. When it finishes,
 open **https://217.76.59.244.sslip.io** and log in.
 
-> Got a real domain? Point its A record at the VPS and run
-> `PUBLIC_HOST=pdash.yourco.com bash scripts/contabo-deploy.sh` instead — Caddy issues a cert for it.
+> Got a real domain? See [Moving to a real domain](#moving-to-a-real-domain) below.
+
+## Moving to a real domain
+
+The dashboard is served at **https://squarkip.io**. Moving it there was a DNS record plus a Caddy
+vhost — no rebuild, no downtime, nobody logged out — because **nothing in the app knows its own
+public URL**:
+
+| | |
+|---|---|
+| Browser → API | the relative path `/api/v1` (`apps/web/lib/api.ts`), rewritten server-side by Next to `http://api:4000`. The public host is never baked into the web image. |
+| Auth cookies | host-only — `auth.controller.ts` sets no `domain`, so they scope to whatever host was browsed. Sessions on the old URL are untouched. |
+| `CORS_ORIGINS` | not on the critical path: there is no CSRF/Origin check and all traffic is same-origin through the Next proxy. Kept accurate anyway. |
+
+### 1. DNS (at the registrar)
+
+Delete **every** A record on the apex and replace with one pointing at the VPS:
+
+| Type | Name | Value | TTL |
+|---|---|---|---|
+| A | `@` | `217.76.59.244` | 300 |
+| CNAME | `www` | `squarkip.io` | 300 |
+
+Propagation is 5–30 min at TTL 300. Check with `getent ahostsv4 squarkip.io`.
+
+### 2. On the VPS
+
+```bash
+cd /root/pdash && git pull
+bash scripts/set-public-domain.sh squarkip.io
+```
+
+It refuses to touch anything until DNS actually resolves to the box — Let's Encrypt allows only
+**five failed validations per hostname per hour**, so a premature reload locks the name out rather
+than failing cleanly. It backs up the old Caddyfile, validates before reloading, and reloads
+gracefully (no dropped connections).
+
+`www` **redirects** to the apex rather than serving it. With host-only cookies, serving both would
+give one person two unrelated sessions and a logout from one would leave the other signed in.
+
+### 3. Retiring the old URL
+
+`217.76.59.244.sslip.io` keeps serving by default, so DNS propagation cannot strand anyone. Once
+the new name is verified and the team has been told (anyone redirected is signed out, because the
+cookie belongs to the old host):
+
+```bash
+LEGACY_MODE=redirect bash scripts/set-public-domain.sh squarkip.io   # old host → new host
+LEGACY_MODE=drop     bash scripts/set-public-domain.sh squarkip.io   # old host stops answering
+```
+
+Roll back at any point by restoring the backup the script prints:
+`cp -a /etc/caddy/Caddyfile.<timestamp>.bak /etc/caddy/Caddyfile && systemctl reload caddy`.
+
+> `contabo-deploy.sh` will **not** overwrite a Caddyfile that names a different host, so re-running
+> the installer cannot silently drag the site back to the IP-only name.
 
 ## What the script does (idempotent — safe to re-run)
 
