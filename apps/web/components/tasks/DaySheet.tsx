@@ -113,7 +113,14 @@ export function DaySheet({ tasks, onClose, onSaved }: {
       const failedIdx = new Set(res.failed.map(f => f.index));
       setFailures(Object.fromEntries(res.failed.map(f => [f.index, f.message])));
       setLines(usable.filter((_, i) => failedIdx.has(i)));
-      toast(`${res.savedCount} saved, ${res.failedCount} could not be — see the lines below.`, 'error');
+      toast(
+        res.savedCount === 0
+          // Everything bounced — usually the day is already full. "0 saved" is a true sentence
+          // that reads like a bug; say what happened instead.
+          ? `Nothing could be saved — the reason is on ${res.failedCount === 1 ? 'the line' : 'each line'} below.`
+          : `${res.savedCount} saved, ${res.failedCount} could not be — see the lines below.`,
+        'error',
+      );
       onSaved();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not log the day', 'error');

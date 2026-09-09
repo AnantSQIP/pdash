@@ -518,9 +518,19 @@ export class CapacityService {
     const plannedFinish = new Map<string, Date>();
     const overrunDays = new Map<string, number>();
 
-    /** The live cover on this person's part of this task, if somebody is standing in. */
-    const coverFor = (userId: string, taskId: string) =>
-      coverages.find(c => c.fromUserId === userId && c.taskId === taskId);
+    /**
+     * The live cover on this person's part of this task, if somebody is standing in.
+     *
+     * Indexed rather than scanned. This is asked once per seat, and a linear search inside that
+     * loop is seats × covers — invisible at three covers and quadratic at three hundred, which is
+     * the kind of thing that is fine until the week it is not.
+     */
+    const coverIndex = new Map<string, (typeof coverages)[number]>();
+    for (const c of coverages) {
+      const k = `${c.fromUserId}|${c.taskId}`;
+      if (!coverIndex.has(k)) coverIndex.set(k, c); // first live cover wins; overlaps are refused on write
+    }
+    const coverFor = (userId: string, taskId: string) => coverIndex.get(`${userId}|${taskId}`);
 
     /** Lay a set of placements onto a person's days and remember what they claimed. */
     const commit = (userId: string, taskId: string, placements: Placement[]) => {
