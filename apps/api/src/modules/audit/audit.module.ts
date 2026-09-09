@@ -11,7 +11,8 @@ class AuditController {
   ) {}
 
   // Activity feed — used by the project Activity tab and admin views. Org is session-derived;
-  // access is enforced in the service (audit.view = org-wide, else a matter you can access).
+  // access is enforced in the service: audit.view = org-wide, the project's own manager = that
+  // project, everyone else = a single task/issue they can access and no project feed at all.
   @Get('activity')
   async activity(
     @Query('projectId') projectId?: string,

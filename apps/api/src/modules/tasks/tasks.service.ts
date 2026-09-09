@@ -542,6 +542,26 @@ export class TasksService {
       newValue: { status: status.name, type: status.type },
       metadata: { projectId, title: task.title },
     });
+    // The lifecycle act itself, recorded beside the generic status change so "who finished this,
+    // and when" is one row rather than a status-id lookup against a workflow that may since have
+    // been edited. Keyed on the SAME `wasClosed` flag the completedAt write above uses, so the
+    // event and the timestamp cannot disagree — and a move between two closed statuses is
+    // correctly neither a finish nor a reopen.
+    if (status.type === 'CLOSED' && !wasClosed) {
+      await this.events.emit({
+        action: EVENTS.TASK_FINISHED,
+        entityType: 'TASK',
+        entityId: id,
+        metadata: { projectId, title: task.title, status: status.name },
+      });
+    } else if (wasClosed && status.type !== 'CLOSED') {
+      await this.events.emit({
+        action: EVENTS.TASK_REOPENED,
+        entityType: 'TASK',
+        entityId: id,
+        metadata: { projectId, title: task.title, status: status.name },
+      });
+    }
     // `settle` rides along so the screen can say what was filed without a second round trip.
     return Object.assign(updated as object, { settle }) as typeof updated & { settle: typeof settle };
   }

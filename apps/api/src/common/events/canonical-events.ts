@@ -10,6 +10,15 @@ export const EVENTS = {
   TASK_STATUS_CHANGED: 'task.status_changed',
   TASK_DELETED: 'task.deleted',
   TASK_ASSIGNED: 'task.assigned',
+  // The task's own lifecycle, recorded as its own events rather than left to be inferred from
+  // task.status_changed. Who finished a piece of work, who reopened it and who was clocked on
+  // it are questions asked directly — of a person, on a date — and answering them by replaying
+  // every status change and resolving each status id to a type is not an answer that survives a
+  // workflow being edited afterwards. These four name the act itself.
+  TASK_STARTED: 'task.started',
+  TASK_PAUSED: 'task.paused',
+  TASK_FINISHED: 'task.finished',
+  TASK_REOPENED: 'task.reopened',
   SUBTASK_CREATED: 'subtask.created',
   SUBTASK_UPDATED: 'subtask.updated',
   SUBTASK_CLOSED: 'subtask.closed',
