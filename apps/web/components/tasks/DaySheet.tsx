@@ -145,7 +145,9 @@ export function DaySheet({ tasks, onClose, onSaved }: {
           </div>
           {isToday && (
             <div className="min-w-0 flex-1">
-              <div className="mb-1 flex items-baseline justify-between text-xs">
+              {/* Wraps rather than colliding: on a phone the label and the figures have no room
+                  to sit on one line, and "Today11.5h of 8h" is not a sentence. */}
+              <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 text-xs">
                 <span className="font-medium text-gray-600">Today</span>
                 <span className={clsx('tabular-nums', overCap ? 'font-semibold text-red-600' : 'text-gray-500')}>
                   {Math.round(dayTotal * 100) / 100}h of {target}h

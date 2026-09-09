@@ -560,6 +560,10 @@ export class TaskTimeService {
     try {
       await this.timesheets.create({
         taskId, date: day, hoursLogged: topUp, billable: true, notes: 'Tracked on My Tasks',
+        // Said here, where it is known for certain: this row is a clock's share of today, not
+        // something a person typed. Left unset it would be indistinguishable from an hour logged
+        // before provenance was recorded at all.
+        source: TIMESHEET_SOURCE.FINISH_TOPUP,
       } as any, { skipIdenticalCheck: true });
       return {
         timesheetHours: topUp,

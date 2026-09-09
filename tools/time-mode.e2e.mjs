@@ -94,8 +94,10 @@ async function main() {
   // Put the firm back on the stopwatch BEFORE counting, so the suite gives the same answer
   // whether it inherits a database someone left mid-experiment or a fresh one.
   await setMode('TIMER');
-  // Switches accumulate across runs, so what matters is how many THIS run adds.
-  const historyBefore = ((await api(`/organizations/${ORG_ID}/time-mode/history`)).data ?? []).length;
+  // Switches accumulate across runs, and the endpoint returns a capped page of the newest — so
+  // counting rows stops telling you anything once the cap is reached. Remember the newest row
+  // instead, and count how many appear in front of it.
+  const historyTop = ((await api(`/organizations/${ORG_ID}/time-mode/history`)).data ?? [])[0]?.id ?? null;
 
   // ── the stopwatch flow works ──────────────────────────────────────────────
   console.log('\n— the stopwatch flow —');
@@ -229,8 +231,9 @@ async function main() {
   const history = await api(`/organizations/${ORG_ID}/time-mode/history`);
   // Two REAL switches happened (to manual, back to timer). Asking for the mode it is already in
   // is deliberately not a switch and must not leave a row behind.
-  check('both real switches are on the record, and the no-ops are not',
-    (history.data ?? []).length - historyBefore, 2);
+  const rows = history.data ?? [];
+  const addedThisRun = historyTop === null ? rows.length : rows.findIndex(h => h.id === historyTop);
+  check('both real switches are on the record, and the no-ops are not', addedThisRun, 2);
   const leaving = (history.data ?? []).find(h => h.toMode === 'MANUAL');
   checkThat('leaving the stopwatch recorded what it had to stop', (leaving?.timersClosed ?? 0) >= 1,
     JSON.stringify(leaving));
