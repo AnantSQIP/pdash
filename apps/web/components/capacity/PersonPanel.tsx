@@ -286,6 +286,16 @@ export function PersonPanel({
               {t.overEstimate && <span className="text-amber-700"> · over the estimate</span>}
             </p>
           )}
+          {/* Placed work knows the day it will actually finish, so a plan that no longer fits can
+              say so with a number instead of quietly compressing itself into the days that are
+              left. This is what an absence looks like once the work is on the calendar: the days
+              lost to leave push the fill later, and the shortfall shows up here — beside the
+              Extend control, which is the usual answer to it. */}
+          {!!t.overrunDays && t.plannedFinish && (
+            <p className="mt-1 text-[10.5px] font-medium text-amber-700">
+              Plan finishes {formatDate(t.plannedFinish)} — {t.overrunDays} working day{t.overrunDays === 1 ? '' : 's'} past this deadline.
+            </p>
+          )}
         </div>
         {canTask && (
           <div className="shrink-0 opacity-0 transition-opacity group-hover/task:opacity-100 focus-within:opacity-100">

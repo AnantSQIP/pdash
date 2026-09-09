@@ -678,7 +678,12 @@ export class TasksService {
         userId: e.userId, role: e.role,
         estimatedHours: e.estimatedHours ?? 0,
         dueDate: e.dueDate ? new Date(e.dueDate) : null,
-        startDate: e.startDate ? new Date(e.startDate) : null,
+        // Truncated to UTC midnight, the encoding every date-only field in this system uses and
+        // the one the capacity board compares against. A date picker already sends exactly that,
+        // but anything carrying a TIME would not: 2026-09-10T20:00Z is the 11th in IST, and the
+        // board would place the work a day early. Normalising here means the stored value cannot
+        // disagree with the day the person chose.
+        startDate: e.startDate ? startOfUtcDay(new Date(e.startDate)) : null,
         hoursPerDay: e.hoursPerDay != null && e.hoursPerDay > 0 ? e.hoursPerDay : null,
       })), tx);
       // The task's estimate is the sum of the per-person hours (drives the capacity board).
