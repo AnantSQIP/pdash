@@ -151,11 +151,28 @@ async function blobReq(
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * How the firm records time.
+ *   TIMER  — a stopwatch per task: Start, Pause, Resume, and Finish settles the clock.
+ *   MANUAL — no stopwatch: finish or reopen a task, and fill the whole day's hours in once.
+ */
+export type TimeTrackingMode = 'TIMER' | 'MANUAL';
+
 export type OrgSummary = {
   id: string; name: string; code: string; status: string;
   timezone?: string; brandColor?: string;
   /** The firm's logo as an image data URL. Null/absent when none has been set. */
   logo?: string | null;
+  /** Which time-recording flow is in force. Absent on a payload from an older API — treated as
+   *  TIMER, which is what such an API was doing. */
+  timeTrackingMode?: TimeTrackingMode;
+};
+
+/** A record of the firm changing how it records time, and what the change had to tidy up. */
+export type TimeModeChange = {
+  id: string; fromMode: TimeTrackingMode; toMode: TimeTrackingMode;
+  changedBy: string; changedAt: string; note?: string | null;
+  timersClosed: number; minutesClosed: number;
 };
 
 export type UserSummary = {
@@ -1429,6 +1446,15 @@ export const api = {
     // An empty string for `logo` REMOVES it; omitting the key leaves it alone.
     update: (id: string, data: { name?: string; timezone?: string; brandColor?: string; logo?: string }) =>
       req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /**
+     * Switch how the firm records time. Leaving the stopwatch closes every clock still running,
+     * so the reply says how many were stopped and how much they were holding.
+     */
+    setTimeMode: (id: string, mode: TimeTrackingMode, note?: string) =>
+      req<{ from: TimeTrackingMode; to: TimeTrackingMode; changed: boolean; timersClosed: number; minutesClosed: number }>(
+        `/organizations/${id}/time-mode`, { method: 'PATCH', body: JSON.stringify({ mode, note }) }),
+    timeModeHistory: (id: string) =>
+      req<TimeModeChange[]>(`/organizations/${id}/time-mode/history`),
   },
 
   users: {
@@ -1928,6 +1954,17 @@ export const api = {
   },
 
   timesheets: {
+    /**
+     * Fill in a whole day at once — several tasks, their hours, one save.
+     *
+     * Rows go in one at a time behind the scenes, so the reply reports exactly which were saved
+     * and which were not rather than pretending the whole sheet is atomic.
+     */
+    createDay: (date: string, entries: {
+      taskId?: string; projectId?: string; hoursLogged: number;
+      billable?: boolean; notes?: string; category?: string; title?: string;
+    }[]) => req<{ date: string; savedCount: number; failedCount: number; failed: { index: number; message: string }[] }>(
+      '/timesheets/day', { method: 'POST', body: JSON.stringify({ date, entries }) }),
     forProject: (projectId: string) => req<Timesheet[]>(`/timesheets?projectId=${projectId}`),
     forUser: (userId: string) => req<Timesheet[]>(`/timesheets?userId=${userId}`),
     /** Per-day fill calendar for a month (color-coded: complete/incomplete/leave/holiday/weekend/future). */

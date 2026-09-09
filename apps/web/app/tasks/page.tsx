@@ -13,6 +13,7 @@ import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYP
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
 import { RunningTimersBar, TimerButton, FinishButton, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
+import { DaySheet } from '@/components/tasks/DaySheet';
 import { TaskStateMark } from '@/components/tasks/TaskStateMark';
 import { pidLabel } from '@/lib/mock-data';
 import type { RunningTimer, DayStatus } from '@/lib/api';
@@ -80,7 +81,10 @@ function ReopenButton({ task, openStatusId }: { task: ApiTask; openStatusId?: st
 }
 
 export default function TasksPage() {
-  const { currentUser, loading: orgLoading } = useOrg();
+  const { org, currentUser, loading: orgLoading } = useOrg();
+  // Which of the two flows this firm uses. Absent on a payload from an older API means the
+  // stopwatch, because that is what such an API was doing.
+  const timerFlow = org?.timeTrackingMode !== 'MANUAL';
   const qc = useQueryClient();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -88,6 +92,7 @@ export default function TasksPage() {
   const [search, setSearch] = useState('');
   // A row's Log-time dialog; `hours` is pre-filled when it was opened from a stopped timer.
   const [logging, setLogging] = useState<{ task: ApiTask; hours?: number } | null>(null);
+  const [daySheet, setDaySheet] = useState(false);
 
   // Every clock this person has running — several at once is allowed. Polled gently: somebody
   // may start a task on their phone, and a stale bar claiming nothing is running is worse than
@@ -204,7 +209,17 @@ export default function TasksPage() {
           <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
         </div>
         <div className="flex items-center gap-3">
-          {running.length > 0 && <div className="w-[min(24rem,60vw)]"><RunningTimersBar running={running} onPaused={openLogFromTimer} /></div>}
+          {timerFlow && running.length > 0 && <div className="w-[min(24rem,60vw)]"><RunningTimersBar running={running} onPaused={openLogFromTimer} /></div>}
+          {/* The manual flow's ONE Log time. A person remembers their day as a whole, so they
+              fill it in as a whole — rather than visiting five task rows to say one thing. */}
+          {!timerFlow && (
+            <button
+              onClick={() => setDaySheet(true)}
+              className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
+            >
+              <Clock size={14} /> Log time
+            </button>
+          )}
           <Link
             href="/projects"
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
@@ -215,7 +230,9 @@ export default function TasksPage() {
         </div>
       </div>
 
-      {today && <TrackedTodayBar day={today} onFiled={afterTimeLogged} />}
+      {/* Entirely about a stopwatch — what it has recorded and what of that is still unfiled.
+          In the manual flow there is no stopwatch, so there is nothing for it to say. */}
+      {timerFlow && today && <TrackedTodayBar day={today} onFiled={afterTimeLogged} />}
 
       {/* Filters */}
       <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 sm:gap-4 flex-wrap">
@@ -322,6 +339,7 @@ export default function TasksPage() {
                 onStatus={id => changeStatus(task, id)}
                 onProgress={p => changeProgress(task, p)}
                 onLogTime={() => setLogging({ task })}
+                timerFlow={timerFlow}
                 running={running}
                 hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0}
                 onPaused={openLogFromTimer}
@@ -408,8 +426,8 @@ export default function TasksPage() {
                       modules; here they are one. */}
                   <td className="sticky right-0 z-10 bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)] group-hover:bg-gray-50">
                     <div className="flex items-center justify-end gap-1.5">
-                      {!closed && <TimerButton taskId={task.id} running={running} hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0} onPaused={openLogFromTimer} />}
-                      {!closed && (() => {
+                      {!closed && timerFlow && <TimerButton taskId={task.id} running={running} hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0} onPaused={openLogFromTimer} />}
+                      {!closed && timerFlow && (() => {
                         // The ledger refuses time on a completed or closed matter; say so here
                         // rather than after a round trip.
                         const phase = task.projectTasks?.[0]?.project?.projectPhase;
@@ -439,6 +457,14 @@ export default function TasksPage() {
       </div>
 
 
+
+      {daySheet && (
+        <DaySheet
+          tasks={tasks}
+          onClose={() => setDaySheet(false)}
+          onSaved={afterTimeLogged}
+        />
+      )}
 
       {logging && (
         <LogTimeDialog
@@ -492,7 +518,7 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, onLogTime, running, hasTracked, onPaused, onFinished }: {
+function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, onLogTime, timerFlow, running, hasTracked, onPaused, onFinished }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
@@ -503,6 +529,10 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
   onProgress: (p: number) => void;
   /** The phone gets the same in-place timesheet as the table. */
   onLogTime?: () => void;
+  /** Whether this firm uses the stopwatch. The phone must answer this the same way the table
+   *  does — a card that still offers Start and a per-task Log time in the manual flow is the
+   *  same bug twice, and the phone is exactly where nobody would notice it. */
+  timerFlow: boolean;
   /** …and the same clock and Finish. A phone could previously do neither. */
   running: RunningTimer[];
   hasTracked?: boolean;
@@ -552,7 +582,7 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
               )}
               {/* The phone gets the same in-place timesheet as the table — the whole point was
                   not having to go to another screen, and a phone is where that hurts most. */}
-              {!closed && onLogTime && (
+              {!closed && timerFlow && onLogTime && (
                 <button
                   onClick={onLogTime}
                   className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
@@ -561,7 +591,7 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
                   <Clock size={11} /> Log time
                 </button>
               )}
-              {!closed && <TimerButton taskId={task.id} running={running} hasTracked={hasTracked} onPaused={onPaused} />}
+              {!closed && timerFlow && <TimerButton taskId={task.id} running={running} hasTracked={hasTracked} onPaused={onPaused} />}
               {!closed && <FinishButton taskId={task.id} onDone={onFinished} />}
             </div>
             <div className="flex items-center gap-2 shrink-0">

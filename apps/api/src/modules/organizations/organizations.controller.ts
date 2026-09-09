@@ -1,8 +1,10 @@
 import { BadRequestException, Body, Controller, Get, Param, Patch } from '@nestjs/common';
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
+import { ActorContextService } from '../../common/context/actor-context.service';
+import { TimeModeService, TIME_TRACKING_MODES, type TimeTrackingMode } from '../time-mode/time-mode.module';
 
 class UpdateOrgDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(120) name?: string;
@@ -18,13 +20,49 @@ class UpdateOrgDto {
   @IsOptional() @IsString() @MaxLength(900_000) logo?: string;
 }
 
+class SetTimeModeDto {
+  @IsIn(TIME_TRACKING_MODES) mode!: TimeTrackingMode;
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+}
+
 const ORG_SELECT = {
   id: true, name: true, code: true, status: true, timezone: true, brandColor: true, logo: true,
+  // Which of the two time-recording flows this firm uses. Sent with the org on every page load
+  // because it decides what My Tasks even shows — a client that had to ask separately would
+  // render the wrong set of buttons for a moment on every load.
+  timeTrackingMode: true,
 };
 
 @Controller('organizations')
 export class OrganizationsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly timeMode: TimeModeService,
+    private readonly actor: ActorContextService,
+  ) {}
+
+  /**
+   * Switch how the firm records time.
+   *
+   * Its own route rather than a field on the general update, because it is not a field: leaving
+   * the stopwatch has to close every clock still running at that moment, and that settlement must
+   * not be something a caller can skip by PATCHing a column. Gated like every other org-wide
+   * change — the access permission AND the step-up passcode.
+   */
+  @Patch(':id/time-mode')
+  @RequirePermission('user.manage_access')
+  @RequirePasscode()
+  async setTimeMode(@Param('id') id: string, @Body() dto: SetTimeModeDto) {
+    const result = await this.timeMode.switchMode(id, dto.mode, this.actor.requireActorId(), dto.note);
+    return { ...result, organizationId: id };
+  }
+
+  /** Every switch this firm has made — how a report over an older window is read. */
+  @Get(':id/time-mode/history')
+  @RequirePermission('user.manage_access')
+  history(@Param('id') id: string) {
+    return this.timeMode.history(id);
+  }
 
   @Get()
   list() {

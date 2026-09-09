@@ -8,6 +8,7 @@ import { serialize, timerKeyFor } from '../../common/db/serialize';
 import { TimesheetsService } from '../timesheets/timesheets.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
+import { TimeModeService, TIMESHEET_SOURCE } from '../time-mode/time-mode.module';
 import { EVENTS } from '../../common/events/canonical-events';
 
 /**
@@ -45,6 +46,7 @@ export class TaskTimeService {
     private readonly timesheets: TimesheetsService,
     private readonly access: ProjectAccessService,
     private readonly events: EventService,
+    private readonly timeMode: TimeModeService,
   ) {}
 
   private actor(): string {
@@ -197,6 +199,9 @@ export class TaskTimeService {
    */
   async start(taskId: string) {
     const userId = this.actor();
+    // There is no clock to start when the firm fills the day in by hand. Refused here rather than
+    // merely hidden: the button going away is a UI change, and a stale tab is still a real client.
+    await this.timeMode.assertTimerFlow(await this.orgOf(userId));
     await this.assertMine(taskId, userId);
     // A completed or closed matter takes no more work. The ledger would refuse the hours at
     // the end; better to refuse the clock at the start, with the same words the rest of the
@@ -239,6 +244,9 @@ export class TaskTimeService {
    */
   async pause(taskId: string) {
     const userId = this.actor();
+    // Deliberately NOT guarded on the flow. Switching away from the stopwatch closes every
+    // running clock, but a request already in flight when that happened must still be able to
+    // put its own session down rather than be told the feature no longer exists.
     await this.reconcileStale(userId);
     const now = new Date();
     const open = await this.prisma.taskWorkSession.findFirst({
@@ -429,6 +437,7 @@ export class TaskTimeService {
     const { task, assignment, role } = found;
 
     const organizationId = await this.orgOf(userId);
+    const timerFlow = await this.timeMode.isTimer(organizationId);
     const newKey = normaliseTitle(task.title);
     const now = new Date();
     const dayMarker = startOfIstDay(now);
@@ -449,8 +458,26 @@ export class TaskTimeService {
         where: { taskId, userId },
         select: { startedAt: true, endedAt: true, minutes: true },
       });
-      const tracked = sessions.reduce((n, s) => n + sessionMinutes(s, now, MAX_SESSION_MINUTES), 0);
-      const todayMinutes = sessions.reduce((n, s) => n + overlapMinutes(s, dayFrom, dayTo, now, MAX_SESSION_MINUTES), 0);
+      const clocked = sessions.reduce((n, s) => n + sessionMinutes(s, now, MAX_SESSION_MINUTES), 0);
+      const todayMinutes = timerFlow
+        ? sessions.reduce((n, s) => n + overlapMinutes(s, dayFrom, dayTo, now, MAX_SESSION_MINUTES), 0)
+        // Nothing to top up when the day was filled in by hand: the hours are already in the
+        // ledger, and filing them again would book the same work twice.
+        : 0;
+
+      // WHAT WAS MEASURED, whichever flow measured it.
+      //
+      // With a stopwatch that is the clock. Without one it is what this person filed against this
+      // task — the same quantity arrived at a different way, and the only honest one available.
+      // Taking the clock regardless would read zero in the manual flow and quietly stop the firm
+      // learning how long its work takes, which is what feeds every capacity estimate it makes.
+      const filedMinutes = timerFlow ? 0 : Math.round(
+        ((await tx.timesheet.aggregate({
+          where: { taskId, userId, deletedAt: null },
+          _sum: { hoursLogged: true },
+        }))._sum.hoursLogged ?? 0) * 60,
+      );
+      const tracked = timerFlow ? clocked : filedMinutes;
 
       const counts = tracked >= MIN_SAMPLE_MINUTES && newKey.length > 0 && !!organizationId;
       const had = assignment.standardKey !== null && assignment.standardMinutes !== null;
