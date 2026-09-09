@@ -1979,6 +1979,8 @@ export const api = {
       /** Required for CLIENT_CALL — which PID the call was about. */
       projectId?: string;
       title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string;
+      /** Which flow wrote the row. Omitted means a person typed it. */
+      source?: 'TIMER' | 'MANUAL' | 'FINISH_TOPUP';
     }) =>
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { hoursLogged?: number; billable?: boolean; notes?: string }) =>

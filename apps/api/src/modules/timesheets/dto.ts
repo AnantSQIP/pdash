@@ -1,7 +1,19 @@
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
+/** Which flow wrote a row. Validated, so a client cannot invent a provenance nobody can read. */
+export const TIMESHEET_SOURCES = ['TIMER', 'MANUAL', 'FINISH_TOPUP'] as const;
+
 export class CreateTimesheetDto {
+  /**
+   * How this entry came to be. Omitted means a person typed it, which is what MANUAL means —
+   * the timer paths say so explicitly. It is a label, not an authorization: nothing is granted
+   * or refused by it, so taking the client's word costs nothing and mislabelling gains nothing.
+   */
+  @IsOptional()
+  @IsIn(TIMESHEET_SOURCES)
+  source?: string;
+
   // IGNORED by the server — the owner is derived from the authenticated actor.
   // Kept (optional) only so existing clients that still send it don't trip
   // forbidNonWhitelisted validation. Do not rely on it.

@@ -340,7 +340,7 @@ export class TimesheetsService {
           data: {
             userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
             billable: false, category: 'OTHER', title, notes: dto.notes,
-            source: opts.source ?? null,
+            source: opts.source ?? dto.source ?? 'MANUAL',
           },
           include: INCLUDE,
         });
@@ -384,7 +384,7 @@ export class TimesheetsService {
             userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged,
             projectId: project.id, projectType: project.projectType,
             billable, category: 'CLIENT_CALL', title, notes: dto.notes,
-            source: opts.source ?? null,
+            source: opts.source ?? dto.source ?? 'MANUAL',
           },
           include: INCLUDE,
         });
@@ -405,7 +405,7 @@ export class TimesheetsService {
         return tx.timesheet.create({
           data: {
             userId: actorId, date: entryDay, hoursLogged: dto.hoursLogged, billable, notes: dto.notes,
-            source: opts.source ?? null,
+            source: opts.source ?? dto.source ?? 'MANUAL',
           },
           include: INCLUDE,
         });
@@ -456,7 +456,7 @@ export class TimesheetsService {
           projectId,
           teamId,
           projectType,
-          source: opts.source ?? null,
+          source: opts.source ?? dto.source ?? 'MANUAL',
           date: entryDay,
           hoursLogged: dto.hoursLogged,
           // Internal work has no client to bill, so it is non-billable regardless of what was

@@ -23,6 +23,8 @@ export async function fileTrackedTime(day: DayStatus): Promise<{ filed: number; 
     if (t.unfiledHours < 0.25) continue;
     try {
       await api.timesheets.create({
+      // Filing what the stopwatch measured — not something typed from memory.
+      source: 'TIMER',
         taskId: t.taskId, date: day.date, hoursLogged: t.unfiledHours, billable: true,
         notes: 'Tracked on My Tasks',
       });
