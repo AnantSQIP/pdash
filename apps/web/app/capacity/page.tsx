@@ -16,7 +16,7 @@ import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge, X, Search, CalendarPlus,
 } from 'lucide-react';
 
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type TeamHistory, type HistoryRow } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type CoverageRisk, type TeamHistory, type HistoryRow } from '@/lib/api';
 
 /** How often the board re-reads the server while it is on screen. */
 const POLL_MS = 30_000;
@@ -375,19 +375,38 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
     qc.invalidateQueries({ queryKey: ['coverage-risks'] });
   }
 
-  async function reassign(taskId: string, fromUserId: string, toUserId: string) {
-    if (!toUserId) return;
+  /**
+   * Hand the work to somebody else — for the days they are away, or for good.
+   *
+   * This used to call setAssignees, which REPLACES the seats on a task: it wiped the roles and
+   * the per-person hours of everybody on it, and there was no way back when a leave was
+   * cancelled. A cover is a record instead. The staffing is untouched, so withdrawing it puts
+   * the plan back exactly as it was.
+   */
+  async function arrangeCover(taskId: string, risk: CoverageRisk, choice: string) {
+    if (!choice) return;
+    const sep = choice.indexOf(':');
+    const mode = choice.slice(0, sep) as 'COVER' | 'HANDOVER';
+    const toUserId = choice.slice(sep + 1);
     setBusy(taskId);
     try {
-      // Swap only the on-leave person for the chosen teammate — keep any co-assignees.
-      const full = await api.tasks.get(taskId);
-      const current = (full.assignees ?? []).map(a => a.userId);
-      const next = [...new Set([...current.filter(id => id !== fromUserId), toUserId])];
-      await api.tasks.setAssignees(taskId, next);
+      await api.capacity.createCoverage({
+        taskId, fromUserId: risk.userId, toUserId,
+        fromDate: risk.startDate,
+        // A cover ends when they are back; a handover has no end.
+        toDate: mode === 'COVER' ? risk.endDate : null,
+        mode,
+        reason: `${risk.leaveType} leave`,
+      });
       refresh();
-      toast('Task reassigned', 'success');
+      toast(
+        mode === 'COVER'
+          ? `Covered to ${formatDate(risk.endDate)} — it comes back to ${risk.name.split(' ')[0]} after that`
+          : 'Handed over — the rest of this task is theirs now',
+        'success',
+      );
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not reassign the task', 'error');
+      toast(e instanceof Error ? e.message : 'Could not arrange cover', 'error');
     } finally { setBusy(''); }
   }
 
@@ -450,14 +469,24 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
                       <select
                         disabled={busy === t.id}
                         value=""
-                        onChange={e => reassign(t.id, risk.userId, e.target.value)}
-                        className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 max-w-[140px] text-gray-600 disabled:opacity-40"
-                        title="Reassign this task to a free teammate"
+                        onChange={e => arrangeCover(t.id, risk, e.target.value)}
+                        className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 max-w-[170px] text-gray-600 disabled:opacity-40"
+                        title="Give this work to somebody else — while they are away, or for good"
                       >
-                        <option value="">Reassign to…</option>
-                        {data.suggestions.map(s => (
-                          <option key={s.userId} value={s.userId}>{s.name.split(' ')[0]} · {s.freeHours}h free</option>
-                        ))}
+                        <option value="">Give this to…</option>
+                        {/* The two things you can mean by "somebody else does it": only while
+                            they are out, or from now on. They are different decisions and the
+                            old single Reassign could only ever express the second. */}
+                        <optgroup label={`Cover ${formatDate(risk.startDate)}–${formatDate(risk.endDate)}, then back`}>
+                          {data.suggestions.map(s => (
+                            <option key={`c-${s.userId}`} value={`COVER:${s.userId}`}>{s.name.split(' ')[0]} · {s.freeHours}h free</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Hand over for good">
+                          {data.suggestions.map(s => (
+                            <option key={`h-${s.userId}`} value={`HANDOVER:${s.userId}`}>{s.name.split(' ')[0]} · {s.freeHours}h free</option>
+                          ))}
+                        </optgroup>
                       </select>
                     )}
                   </div>

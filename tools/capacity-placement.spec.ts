@@ -19,6 +19,9 @@ process.env.TZ = 'Asia/Kolkata';
 
 import {
   compareScheduled,
+  daysOutsideWindow,
+  hoursInWindow,
+  inCoverageWindow,
   placeForward,
   priorityRank,
   type ScheduledSeat,
@@ -210,6 +213,54 @@ check(
 
 const twice = [seat({ taskId: 'zz', priority: 'HIGH' }), seat({ taskId: 'aa', priority: 'HIGH' })];
 check('sorting is stable across repeated runs', [order(twice), order(twice)], [['aa', 'zz'], ['aa', 'zz']]);
+
+// ── covering an absence ─────────────────────────────────────────────────────
+// The split is measured from the plan the person WOULD have had. Deciding an amount and then
+// subtracting it is how the same hours end up counted on two people at once — nothing would then
+// guarantee the two halves add back up to the work there was to do.
+const plan = placeForward({ remaining: 30, days: days(0, 5), perDayCap: null, capacityOn: FULL_DAY, usedOn: NOTHING_USED });
+check('the plan under test is four full days and a part day', hoursOn(plan), [[0, 8], [1, 8], [2, 8], [3, 6]]);
+
+check(
+  'a cover over days 1-2 takes exactly the hours that fell on those days',
+  hoursInWindow(plan, new Date(d0 + DAY), new Date(d0 + 2 * DAY)),
+  16,
+);
+
+check(
+  'a handover (no end date) takes everything from its start onwards',
+  hoursInWindow(plan, new Date(d0 + 2 * DAY), null),
+  14,
+);
+
+check(
+  'what moves and what stays add back up to the whole job',
+  hoursInWindow(plan, new Date(d0 + DAY), new Date(d0 + 2 * DAY)) +
+    plan.filter(p => !inCoverageWindow(p.date, new Date(d0 + DAY), new Date(d0 + 2 * DAY))).reduce((s, p) => s + p.hours, 0),
+  30,
+);
+
+check(
+  'a cover entirely before the work starts moves nothing',
+  hoursInWindow(plan, new Date(d0 - 5 * DAY), new Date(d0 - 1 * DAY)),
+  0,
+);
+
+check(
+  'the days left to the original person are the ones outside the window',
+  daysOutsideWindow(days(0, 5), new Date(d0 + DAY), new Date(d0 + 2 * DAY)).map(d => Math.round((d.getTime() - d0) / DAY)),
+  [0, 3, 4],
+);
+
+check(
+  'a handover leaves only the days before it',
+  daysOutsideWindow(days(0, 5), new Date(d0 + 2 * DAY), null).map(d => Math.round((d.getTime() - d0) / DAY)),
+  [0, 1],
+);
+
+check('the first day of a cover is inside it', inCoverageWindow(new Date(d0 + DAY), new Date(d0 + DAY), new Date(d0 + 2 * DAY)), true);
+check('the last day of a cover is inside it', inCoverageWindow(new Date(d0 + 2 * DAY), new Date(d0 + DAY), new Date(d0 + 2 * DAY)), true);
+check('the day after a cover is outside it', inCoverageWindow(new Date(d0 + 3 * DAY), new Date(d0 + DAY), new Date(d0 + 2 * DAY)), false);
 
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length) {

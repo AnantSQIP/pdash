@@ -121,3 +121,34 @@ export function placeForward(opts: {
   }
   return out;
 }
+
+/**
+ * Is this day inside a coverage window?
+ *
+ * `to === null` is a HANDOVER — everything from `from` onward belongs to the stand-in, with no
+ * date it comes back.
+ */
+export function inCoverageWindow(d: Date, from: Date, to: Date | null): boolean {
+  if (d < from) return false;
+  return to === null || d <= to;
+}
+
+/**
+ * How many of these hours fall inside a coverage window — i.e. how much of the plan somebody else
+ * is taking on.
+ *
+ * Measured from the plan the person WOULD have had, before the cover is applied. Doing it the
+ * other way round — deciding an amount and then subtracting it — is how the same hours end up
+ * counted on two people at once, because nothing then guarantees the two halves add back up to
+ * what there was to do.
+ */
+export function hoursInWindow(placements: Placement[], from: Date, to: Date | null): number {
+  return placements
+    .filter(p => inCoverageWindow(p.date, from, to))
+    .reduce((sum, p) => sum + p.hours, 0);
+}
+
+/** The days left to the original person once a coverage window is taken out of them. */
+export function daysOutsideWindow(days: Date[], from: Date, to: Date | null): Date[] {
+  return days.filter(d => !inCoverageWindow(d, from, to));
+}
