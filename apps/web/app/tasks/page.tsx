@@ -460,7 +460,6 @@ export default function TasksPage() {
 
       {daySheet && (
         <DaySheet
-          tasks={tasks}
           onClose={() => setDaySheet(false)}
           onSaved={afterTimeLogged}
         />

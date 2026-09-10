@@ -32,7 +32,12 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     enabled: isAuthed,
     staleTime: ORG_STALE,
   });
-  const org = orgs[0] ?? null;
+  // The signed-in user's OWN organisation. It used to be orgs[0], which is right only while
+  // exactly one organisation row exists — and when it is wrong it is wrong everywhere at once:
+  // the firm's name, its branding, and which time-recording flow My Tasks renders. The server
+  // now returns only this user's org, so the find and the fallback agree; the find stays because
+  // a client that depends on server-side ordering for correctness is depending on luck.
+  const org = (user ? orgs.find(o => o.id === user.organizationId) : null) ?? orgs[0] ?? null;
 
   const { data: users = [], isLoading: usersLoading, isError: usersError, error: usersErr } = useQuery({
     queryKey: ['users', org?.id],

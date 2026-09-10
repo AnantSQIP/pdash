@@ -902,6 +902,108 @@ export class CapacityService {
     return { from: dayKey(from), to: dayKey(today), mode: 'history' as const, rows };
   }
 
+  /**
+   * What this person is planned to be doing on a given day, and the day after — the list a day
+   * sheet puts in front of them so nothing has to be hunted for in a dropdown.
+   *
+   * Built from the SAME placement the capacity board draws, scoped to one person, rather than a
+   * second idea of what somebody is working on. Two answers that could disagree about that would
+   * eventually disagree, and the one in the timesheet is the one that becomes the invoice.
+   *
+   * A BACKDATED DAY HAS NO PLAN. The board projects forward from today; it knows nothing about
+   * last Tuesday. Rather than invent a plan for a day that has already happened, every open task
+   * is offered as OTHER and the sheet says so. Filling in a day you have already worked is
+   * remembering, not planning, and pretending otherwise would put a confident heading over a guess.
+   */
+  async myPlan(organizationId: string, userId: string, dateKey: string) {
+    const day = startOfUtcDay(new Date(`${dateKey}T00:00:00.000Z`));
+    if (Number.isNaN(day.getTime())) throw new BadRequestException('A valid date is required.');
+    const today = startOfIstDay(new Date());
+    const next = addDays(day, 1);
+
+    // Enough window to reach the day after the one being filled in, and never less than the
+    // board's own minimum.
+    const spanDays = Math.ceil((next.getTime() - today.getTime()) / 86_400_000) + 2;
+    const board = await this.team(organizationId, Math.max(MIN_DAYS, Math.min(MAX_DAYS, spanDays)), [userId]);
+    const row = board.rows[0];
+
+    const plannedOn = (d: Date): Map<string, number> => {
+      const found = (row?.days ?? []).find(x => x.date === dayKey(d));
+      return new Map((found?.tasks ?? []).map(t => [t.taskId, t.hours]));
+    };
+    const planToday = day >= today ? plannedOn(day) : new Map<string, number>();
+    const planNext = day >= today ? plannedOn(next) : new Map<string, number>();
+
+    // What they have already filed against each task on this exact date — so a sheet reopened
+    // after a save shows what is already there instead of inviting it to be typed twice.
+    const filed = await this.prisma.timesheet.groupBy({
+      by: ['taskId'],
+      where: { userId, date: day, deletedAt: null, taskId: { not: null } },
+      _sum: { hoursLogged: true },
+    });
+    const loggedByTask = new Map(filed.map(f => [f.taskId as string, f._sum.hoursLogged ?? 0]));
+
+    const rows = (row?.openTasks ?? []).map(t => {
+      const plannedHours = r1(planToday.get(t.id) ?? 0);
+      const when: 'TODAY' | 'TOMORROW' | 'OTHER' =
+        plannedHours > 0 ? 'TODAY' : (planNext.get(t.id) ?? 0) > 0 ? 'TOMORROW' : 'OTHER';
+      return {
+        taskId: t.id,
+        title: t.title,
+        projectId: t.projectId ?? null,
+        project: t.project ?? null,
+        projectPid: t.projectPid ?? null,
+        projectRound: t.projectRound,
+        priority: t.priority,
+        dueDate: t.dueDate ?? null,
+        overdue: t.overdue,
+        estimatedHours: t.estimatedHours,
+        remainingHours: t.remainingHours,
+        loggedToday: r1(loggedByTask.get(t.id) ?? 0),
+        plannedHours,
+        // The board only lists OPEN work, so anything here is open by construction. Carried
+        // explicitly so the sheet does not have to infer it.
+        closed: false,
+        when,
+      };
+    });
+
+    // Planned first, then tomorrow's, then the rest — the order somebody fills a day in.
+    const rank = { TODAY: 0, TOMORROW: 1, OTHER: 2 } as const;
+    rows.sort((a, b) =>
+      rank[a.when] - rank[b.when] ||
+      b.plannedHours - a.plannedHours ||
+      (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999') ||
+      a.title.localeCompare(b.title));
+
+    const dayStatus = await this.timesheetDay(userId, day);
+    return {
+      date: dateKey,
+      /** No plan exists for a day already past — the sheet says so rather than implying one. */
+      hasPlan: day >= today,
+      target: dayStatus.target,
+      logged: dayStatus.logged,
+      rows,
+    };
+  }
+
+  /** The day's owed and filled hours, without pulling in the timesheets module. */
+  private async timesheetDay(userId: string, day: Date): Promise<{ target: number; logged: number }> {
+    const agg = await this.prisma.timesheet.aggregate({
+      where: { userId, date: day, deletedAt: null }, _sum: { hoursLogged: true },
+    });
+    const wd = day.getUTCDay();
+    const holiday = await this.prisma.holiday.findFirst({ where: { date: day }, select: { id: true } });
+    const leave = await this.prisma.leaveRequest.findFirst({
+      where: { userId, status: 'APPROVED', startDate: { lte: day }, endDate: { gte: day } },
+      select: { dayType: true },
+    });
+    let target = DAILY_CAPACITY_HOURS;
+    if (wd === 0 || wd === 6 || holiday) target = 0;
+    else if (leave) target = leave.dayType === 'HALF' ? HALF_DAY_CAPACITY_HOURS : 0;
+    return { target, logged: r1(agg._sum.hoursLogged ?? 0) };
+  }
+
   // ── Standing in for somebody ─────────────────────────────────────────────────
 
   /**
@@ -1295,6 +1397,17 @@ class CapacityController {
   @RequirePermission('capacity.view')
   async listCoverage(@Query('taskId') taskId?: string) {
     return this.capacity.listCoverage(await this.actor.requireOrgId(), taskId);
+  }
+
+  /**
+   * What I am planned to be doing on a day — the list the day sheet shows instead of a dropdown.
+   * Always about the CALLER: there is no userId to supply, so it cannot be pointed at anybody else.
+   */
+  @Get('my-plan')
+  @RequirePermission('timesheet.create')
+  async myPlan(@Query('date') date?: string) {
+    if (!date?.trim()) throw new BadRequestException('date is required (YYYY-MM-DD).');
+    return this.capacity.myPlan(await this.actor.requireOrgId(), this.actor.requireActorId(), date.trim());
   }
 
   /** Availability of one project's members — the capacity view opened from a project. */
