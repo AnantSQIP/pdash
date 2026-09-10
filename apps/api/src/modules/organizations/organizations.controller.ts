@@ -64,9 +64,27 @@ export class OrganizationsController {
     return this.timeMode.history(id);
   }
 
+  /**
+   * The caller's OWN organisation, as a one-item list.
+   *
+   * It used to return every organisation in the database to anybody signed in — name, code,
+   * branding, and now how the firm records time. On a single-firm install that leaks little, and
+   * it is still a tenant boundary that was not there: nothing about another firm is any of this
+   * one's business.
+   *
+   * It also quietly broke the client, which took the first row as "my organisation". Any second
+   * organisation row — a smoke test leaves two behind — and the whole app renders against a
+   * stranger's settings: their name, their branding, and their time-recording flow, so people
+   * see buttons their own firm had switched off. Returning one row makes the client's assumption
+   * true by construction instead of by luck.
+   *
+   * Still a LIST rather than an object: the client asks for a list, and changing that shape is a
+   * second, unrelated change to make on a day when nothing else is moving.
+   */
   @Get()
-  list() {
-    return this.prisma.organization.findMany({ select: ORG_SELECT });
+  async list() {
+    const mine = await this.actor.requireOrgId();
+    return this.prisma.organization.findMany({ where: { id: mine }, select: ORG_SELECT });
   }
 
   // Update org general settings. Gated on user.manage_access (org admins / super

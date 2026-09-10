@@ -1245,6 +1245,28 @@ export type CoverageRisk = {
   leaveType: string; startDate: string; endDate: string; noticeDays: number;
   tasks: CoverageRiskTask[];
 };
+/** One line of a day sheet: a task, what the plan had them doing, and what they have filed. */
+export type DayPlanRow = {
+  taskId: string; title: string;
+  projectId: string | null; project: string | null;
+  projectPid: string | null; projectRound?: number;
+  priority: string; dueDate: string | null; overdue: boolean;
+  estimatedHours: number; remainingHours: number;
+  /** Filed against this task on this date already, before anything typed now. */
+  loggedToday: number;
+  /** Hours the plan puts here for the day. 0 = not planned for it. */
+  plannedHours: number;
+  closed: boolean;
+  when: 'TODAY' | 'TOMORROW' | 'OTHER';
+};
+export type DayPlan = {
+  date: string;
+  /** False for a day already past — the board projects forward, so there is no plan to show. */
+  hasPlan: boolean;
+  target: number; logged: number;
+  rows: DayPlanRow[];
+};
+
 /** Somebody standing in for somebody else on a task — for named days, or for good. */
 export type CoverageRecord = {
   id: string; taskId: string;
@@ -2345,6 +2367,8 @@ export const api = {
     /** Retrospective: actual attendance over the past `days` (ending today). */
     history: (days = 30) =>
       req<TeamHistory>(`/capacity/history?days=${days}`),
+    /** What I am planned to be doing on a day — the day sheet's list, instead of a dropdown. */
+    myPlan: (date: string) => req<DayPlan>(`/capacity/my-plan?date=${encodeURIComponent(date)}`),
     /** Live covers — who is standing in for whom, and until when. */
     coverage: (taskId?: string) =>
       req<CoverageRecord[]>(`/capacity/coverage${taskId ? `?taskId=${taskId}` : ''}`),
