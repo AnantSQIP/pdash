@@ -87,17 +87,21 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   const adminMe = (await admin('/auth/me')).data; const ADMIN_ID = adminMe.user?.id ?? adminMe.id;
   const mine = ((await admin(`/tasks?userId=${ADMIN_ID}`)).data ?? []).filter(t => t.currentStatus?.type !== 'CLOSED');
   const A = mine[0];
-  // The duplicate guard refuses the same task, day AND duration — including one this suite left
-  // behind on its last run. Clear them first, so the assertion is about provenance rather than
-  // about whether anybody ran the tests before.
+  // Clear the WHOLE day, not just this suite's own markers. Two things otherwise bite: the
+  // duplicate guard refuses the same task, day and duration, and a day already at the 16h cap
+  // refuses everything — and a create refused by the cap returns no row, so the assertion reads
+  // as "provenance is missing" when the truth is "nothing was written".
   for (const t of ((await admin(`/timesheets?userId=${ADMIN_ID}`)).data ?? [])
-       .filter(t => ['typed', 'clocked', 'race'].includes(t.notes) && String(t.date).slice(0, 10) === today())) {
+       .filter(t => String(t.date).slice(0, 10) === today())) {
     await admin(`/timesheets/${t.id}`, { method: 'DELETE' });
   }
   const typed = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 0.25, notes: 'typed' } });
-  eq('an entry a person typed is MANUAL, not blank', typed.data?.source, 'MANUAL');
+  // Deliberately NULL. Labelling every entry would have meant editing the stopwatch flow, which
+  // the owner asked to be left exactly as it was — so only the day sheet, which is the manual
+  // flow's own screen, stamps what it writes.
+  eq('an entry with nothing said about it stays unlabelled, as it always was', typed.data?.source, null);
   const clocked = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 0.75, notes: 'clocked', source: 'TIMER' } });
-  eq('an entry filed from the stopwatch says so', clocked.data?.source, 'TIMER');
+  eq('but a caller that states its provenance is recorded', clocked.data?.source, 'TIMER');
   const bogus = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 1.75, source: 'NONSENSE' } });
   eq('an invented provenance is refused', bogus.status, 400);
 

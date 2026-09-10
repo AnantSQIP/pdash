@@ -284,8 +284,6 @@ export function LogTimeDialog({
 
   const submit = useMutation({
     mutationFn: () => api.timesheets.create({
-      // Filing what the stopwatch measured — not something typed from memory.
-      source: 'TIMER',
       taskId, date, hoursLogged: n, billable,
       ...(notes.trim() ? { notes: notes.trim() } : {}),
     }),
