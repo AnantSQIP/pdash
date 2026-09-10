@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Clock, Loader, X, AlertTriangle, Check, ChevronDown } from 'lucide-react';
+import { Clock, Loader, X, AlertTriangle, Check } from 'lucide-react';
 import { api, type DayPlan, type DayPlanRow as PlanRow } from '@/lib/api';
 import { warningsForSheet, sheetSummary } from '@/lib/day-plan';
 import { useToast } from '@/components/ui/Toast';
@@ -52,7 +52,6 @@ export function DaySheet({ onClose, onSaved }: {
   const [date, setDate] = useState(today);
   const [hours, setHours] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [showOther, setShowOther] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [failures, setFailures] = useState<Record<string, string>>({});
@@ -69,6 +68,20 @@ export function DaySheet({ onClose, onSaved }: {
     TOMORROW: rows.filter(r => r.when === 'TOMORROW'),
     OTHER: rows.filter(r => r.when === 'OTHER'),
   }), [rows]);
+
+  /** The leftovers, gathered under the project they belong to so the list reads like the work. */
+  const byProject = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; rows: PlanRow[] }>();
+    for (const r of groups.OTHER) {
+      const key = r.projectId ?? '—';
+      const label = r.project
+        ? `${r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}${r.project}`
+        : 'No project';
+      if (!map.has(key)) map.set(key, { key, label, rows: [] });
+      map.get(key)!.rows.push(r);
+    }
+    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [groups.OTHER]);
 
   const hoursByTask = useMemo(() => {
     const out: Record<string, number> = {};
@@ -246,18 +259,24 @@ export function DaySheet({ onClose, onSaved }: {
               <Section label={plan?.hasPlan ? 'Planned for this day' : 'Your open work'} list={groups.TODAY} />
               <Section label="Planned for the next day" list={groups.TOMORROW} />
 
-              {groups.OTHER.length > 0 && (
+              {/* Everything else they hold, by project, and OPEN. It was behind a toggle, which
+                  saved a screenful and cost a click on the one screen whose entire purpose is to
+                  cost as few as possible — somebody filling in a day should never have to go
+                  looking for their own work. Planned work still sits above it, so the shortcut is
+                  there for whoever wants it and the whole list is there for whoever does not. */}
+              {byProject.length > 0 && (
                 <div>
-                  <button
-                    type="button" onClick={() => setShowOther(v => !v)}
-                    className="mb-1.5 inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600"
-                  >
-                    <ChevronDown size={12} className={clsx('transition-transform', !showOther && '-rotate-90')} />
-                    Anything else ({groups.OTHER.length})
-                  </button>
-                  {/* Collapsed on purpose. It is everything else they hold, and an open list of it
-                      buries the two or three lines that are actually today's. */}
-                  {showOther && <div className="space-y-1.5">{groups.OTHER.map(r => <Row key={r.taskId} r={r} />)}</div>}
+                  <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-gray-400">
+                    Everything else you are on
+                  </p>
+                  <div className="space-y-3">
+                    {byProject.map(g => (
+                      <div key={g.key}>
+                        <p className="mb-1 truncate text-[11px] font-medium text-gray-500" title={g.label}>{g.label}</p>
+                        <div className="space-y-1.5">{g.rows.map(r => <Row key={r.taskId} r={r} />)}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 

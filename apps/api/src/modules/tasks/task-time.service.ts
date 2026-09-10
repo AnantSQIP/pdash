@@ -8,7 +8,7 @@ import { serialize, timerKeyFor } from '../../common/db/serialize';
 import { TimesheetsService } from '../timesheets/timesheets.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
-import { TimeModeService, TIMESHEET_SOURCE } from '../time-mode/time-mode.module';
+import { TimeModeService } from '../time-mode/time-mode.module';
 import { EVENTS } from '../../common/events/canonical-events';
 
 /**
@@ -560,10 +560,6 @@ export class TaskTimeService {
     try {
       await this.timesheets.create({
         taskId, date: day, hoursLogged: topUp, billable: true, notes: 'Tracked on My Tasks',
-        // Said here, where it is known for certain: this row is a clock's share of today, not
-        // something a person typed. Left unset it would be indistinguishable from an hour logged
-        // before provenance was recorded at all.
-        source: TIMESHEET_SOURCE.FINISH_TOPUP,
       } as any, { skipIdenticalCheck: true });
       return {
         timesheetHours: topUp,
@@ -604,10 +600,14 @@ export class TaskTimeService {
     // closing dialog — showed a Reopen button that answered "That task is not closed."
     const isClosed = !!task.completedAt || task.currentStatus?.type === 'CLOSED';
     if (!isClosed) throw new BadRequestException('That task is not closed.');
-    // Resolve one when the caller did not name it, exactly as Finish resolves a closed status.
-    // Without this the task came back with no completedAt but still in a CLOSED status, which
-    // every screen reads as closed — so the reopen appeared to do nothing.
-    const landing = openStatusId ?? await this.openStatusFor(taskId);
+    // Resolve one when the caller did not name it, exactly as Finish resolves a closed status —
+    // without it the task comes back with no completedAt but still in a CLOSED status, which every
+    // screen reads as closed, so the reopen appears to do nothing.
+    //
+    // MANUAL FLOW ONLY, at the owner's instruction: the stopwatch flow keeps the behaviour it has
+    // always had. Its own Reopen button passes an explicit status, so it never relied on this;
+    // the manual flow's does not, and there Reopen is one of only two things a person can do.
+    const landing = openStatusId ?? (await this.manualFlow(taskId) ? await this.openStatusFor(taskId) : undefined);
     const updated = await this.prisma.task.update({
       where: { id: taskId },
       data: {
@@ -670,7 +670,7 @@ export class TaskTimeService {
    * that has to be done again belongs.
    */
   async openStatusFor(taskId: string): Promise<string | undefined> {
-    const workflowId = await this.workflowOf(taskId);
+    const workflowId = await this.workflowOf(taskId, await this.manualFlow(taskId));
     if (!workflowId) return undefined;
     const open = await this.prisma.workflowStatus.findFirst({
       where: { workflowId, type: { not: 'CLOSED' } }, orderBy: { sequence: 'asc' }, select: { id: true },
@@ -689,16 +689,32 @@ export class TaskTimeService {
    * the task simply was not pointing at it. That is a dead end in the manual flow, where
    * finishing is one of only two things a person can do to a task.
    */
-  private async workflowOf(taskId: string): Promise<string | undefined> {
+  private async workflowOf(taskId: string, ownColumnToo: boolean): Promise<string | undefined> {
     const t = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { workflowId: true, currentStatus: { select: { workflowId: true } } },
     });
-    return t?.workflowId ?? t?.currentStatus?.workflowId ?? undefined;
+    // `ownColumnToo` exists because the owner asked for the stopwatch flow to be left exactly as
+    // it was. Reading the task's own workflowId is strictly better — it is what lets a task that
+    // has never been given a status be finished at all — but it is a behaviour change, so it is
+    // limited to the flow that needs it. In the manual flow, finishing and reopening are the ONLY
+    // two things a person can do to a task, and a Finish that refuses is the feature failing.
+    return (ownColumnToo ? t?.workflowId ?? undefined : undefined) ?? t?.currentStatus?.workflowId ?? undefined;
+  }
+
+  /** True when this firm fills the day in by hand, so the lifecycle fixes below apply. */
+  private async manualFlow(taskId: string): Promise<boolean> {
+    const t = await this.prisma.task.findFirst({
+      where: { id: taskId },
+      select: { assignees: { select: { user: { select: { organizationId: true } } }, take: 1 } },
+    });
+    const orgId = t?.assignees[0]?.user?.organizationId;
+    if (!orgId) return false;
+    return !(await this.timeMode.isTimer(orgId));
   }
 
   async closedStatusFor(taskId: string): Promise<string | undefined> {
-    const workflowId = await this.workflowOf(taskId);
+    const workflowId = await this.workflowOf(taskId, await this.manualFlow(taskId));
     if (!workflowId) return undefined;
     const closed = await this.prisma.workflowStatus.findFirst({
       where: { workflowId, type: 'CLOSED' }, orderBy: { sequence: 'desc' }, select: { id: true },
