@@ -360,6 +360,68 @@ export type PidRound = {
 /** Every project sharing a PID. `multiRound` is false for a normal single-project PID. */
 export type PidRounds = { pid: string | null; multiRound: boolean; rounds: PidRound[] };
 
+/** Which of the three corrections a PID move is. */
+export type PidMoveMode = 'REASSIGN' | 'SPLIT' | 'MERGE';
+
+/** One round as the move preview lists it, on either side of the move. */
+export type PidMoveRound = {
+  id: string; title: string; roundSeq: number; phase: string;
+  /** The project being moved, so the preview can mark it in both lists. */
+  isThisProject: boolean;
+};
+
+/** A round number changing because of the move — somebody else's project, usually. */
+export type PidMoveRenumber = { id: string; from: number; to: number; title: string };
+
+/**
+ * What a PID move WOULD do. Computed by the server from the same plan the move itself runs, so the
+ * consequence the modal shows and the consequence that happens cannot drift apart.
+ */
+type PidMovePreviewBase = {
+  projectId: string; projectTitle: string;
+  fromPid: string | null; fromRoundSeq: number;
+  sourceRounds: PidMoveRound[];
+  targetRounds: PidMoveRound[];
+  targetPid: string | null;
+  /** The number a mint would issue. Non-binding — a project created first takes it. */
+  mintPreview: string | null;
+};
+/**
+ * A plain union rather than `base & (A | B)`: only a union narrows on `preview.ok`, and the modal
+ * reads every field of the successful half after exactly that check.
+ */
+export type PidMovePreview =
+  | (PidMovePreviewBase & { ok: false; reason: string; message: string })
+  | (PidMovePreviewBase & {
+      ok: true;
+      mode: PidMoveMode;
+      toPid: string | null;
+      mintsNewPid: boolean;
+      newRoundSeq: number;
+      sourceRenumber: PidMoveRenumber[];
+      targetRenumber: PidMoveRenumber[];
+      sourceRemaining: number;
+      targetTotal: number;
+      /** The old number is retired into the ledger — kept forever, never issued again. */
+      retiresFromPid: boolean;
+      affectedCount: number;
+    });
+
+/** An existing PID a project could be merged into, with the work already filed under it. */
+export type PidMoveTarget = {
+  pid: string; fyLabel: string; serial: number;
+  client: string | null;
+  rounds: { id: string; title: string; roundSeq: number; phase: string }[];
+};
+
+/** The result of a completed move. */
+export type PidMoveResult = {
+  projectId: string; mode: PidMoveMode;
+  fromPid: string; toPid: string; roundSeq: number;
+  retiredFromPid: boolean;
+  renumbered: PidMoveRenumber[];
+};
+
 /** A single project under a PID, as the ledger reports it. */
 export type PidLedgerRound = {
   id: string; round: number; title: string; description?: string | null;
@@ -1736,6 +1798,34 @@ export const api = {
      */
     deletePermanent: (id: string, confirmTitle: string) =>
       req<PurgeResult>(`/projects/${id}/permanent?confirm=${encodeURIComponent(confirmTitle)}`, { method: 'DELETE' }),
+    /**
+     * ── Correcting a Project ID ──────────────────────────────────────────────────
+     * Three calls for one idea ("this project's PID is wrong"), kept apart because each rules out
+     * a different mistake server-side: a split refuses a project that is already alone under its
+     * number, a merge refuses a destination that holds no work. All three mint or retire a number
+     * the firm files work under, so all three go through the org step-up passcode (collected by
+     * the interceptor at the top of this file — no extra plumbing needed here).
+     *
+     * `pid` omitted mints a fresh serial in the current financial year; `intoProjectId` names the
+     * project to merge under, and the server reads ITS PID.
+     */
+    pidMovePreview: (id: string, opts: { mode: PidMoveMode; pid?: string; intoProjectId?: string }) => {
+      const params = new URLSearchParams({ mode: opts.mode });
+      if (opts.pid) params.set('pid', opts.pid);
+      if (opts.intoProjectId) params.set('intoProjectId', opts.intoProjectId);
+      return req<PidMovePreview>(`/projects/${id}/pid-move?${params}`);
+    },
+    /** Existing PIDs in the same financial year that still hold live work — the merge picker. */
+    pidMoveTargets: (id: string) => req<PidMoveTarget[]>(`/projects/${id}/pid-move/targets`),
+    /** The number is wrong: move this project to another one, or to a freshly minted one. */
+    reassignPid: (id: string, pid?: string) =>
+      req<PidMoveResult>(`/projects/${id}/pid/reassign`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
+    /** This project is sharing a PID and is really a separate matter: give it its own number. */
+    splitPid: (id: string, pid?: string) =>
+      req<PidMoveResult>(`/projects/${id}/pid/split`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
+    /** Two numbers, one matter: move this project under another's PID as its next round. */
+    mergePid: (id: string, into: { pid?: string; intoProjectId?: string }) =>
+      req<PidMoveResult>(`/projects/${id}/pid/merge`, { method: 'POST', body: JSON.stringify(into) }),
     // The approver is the verified cookie actor server-side; only an optional reason is sent.
     approve: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),

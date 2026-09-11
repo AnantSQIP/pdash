@@ -1,8 +1,19 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, ReviewPidProjectDto, SetProjectClientDto, SetProjectPatentsDto, UpdateProjectDto } from './dto';
+import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, MovePidDto, ReviewPidProjectDto, SetProjectClientDto, SetProjectPatentsDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
+import type { MoveMode } from './pid-move';
+
+/**
+ * The preview's `mode` arrives as a query string, which can be anything. Anything that is not one
+ * of the three is read as a plain reassign — the least surprising of them, and the one whose
+ * refusals are the narrowest, so a garbled value can never widen what a caller is allowed to do.
+ */
+function asMoveMode(raw?: string): MoveMode {
+  return raw === 'SPLIT' || raw === 'MERGE' ? raw : 'REASSIGN';
+}
 
 @Controller('projects')
 export class ProjectsController {
@@ -113,6 +124,34 @@ export class ProjectsController {
     );
   }
 
+  /**
+   * Existing Project IDs this project could be merged into — numbers in the same financial year
+   * that still hold live work. Declared with the other static routes because `@Get(':id')` below
+   * would otherwise swallow the path.
+   */
+  @Get(':id/pid-move/targets') @RequirePermission('project.generate_pid')
+  async pidMoveTargets(@Param('id') id: string) {
+    return this.projects.pidMoveTargets(await this.actor.requireOrgId(), id);
+  }
+
+  /**
+   * What a PID move WOULD do, before anyone commits to it: the number given up, the number taken,
+   * whether the old one is retired, and which OTHER projects it renumbers. Read-only, so it is
+   * permission-gated but deliberately not passcode-gated — asking for the step-up passcode to look
+   * at a preview is how people learn to type it without reading.
+   */
+  @Get(':id/pid-move') @RequirePermission('project.generate_pid')
+  async pidMovePreview(
+    @Param('id') id: string,
+    @Query('mode') mode?: string,
+    @Query('pid') pid?: string,
+    @Query('intoProjectId') intoProjectId?: string,
+  ) {
+    return this.projects.pidMovePreview(await this.actor.requireOrgId(), id, {
+      mode: asMoveMode(mode), pid, intoProjectId,
+    });
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     return this.projects.get(id);
@@ -195,6 +234,42 @@ export class ProjectsController {
     return this.projects.attachPidToProject(
       await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto.pid,
     );
+  }
+
+  /**
+   * ── Correcting a Project ID ────────────────────────────────────────────────────
+   * Three routes for what is mechanically one operation, because they are three different claims
+   * about what went wrong and each rules out a different mistake. Splitting checks that something
+   * is actually sharing the number; merging checks that the destination actually holds work. One
+   * route taking a "mode" would let a caller ask for a split and be given a merge.
+   *
+   * All three mint or retire a number the firm files work under, so all three carry the org
+   * step-up passcode on top of `project.generate_pid` (Admin / Super Admin — a Manager REQUESTS a
+   * PID, they do not issue one, and they certainly do not move one).
+   */
+
+  /** The number on this project is wrong: move it to another one, or to a freshly minted one. */
+  @Post(':id/pid/reassign') @RequirePermission('project.generate_pid') @RequirePasscode()
+  async reassignPid(@Param('id') id: string, @Body() dto: MovePidDto) {
+    return this.projects.movePid(await this.actor.requireOrgId(), this.actor.requireActorId(), id, {
+      mode: 'REASSIGN', pid: dto.pid, intoProjectId: dto.intoProjectId,
+    });
+  }
+
+  /** This project is sharing a PID with others and is really a separate matter: give it its own. */
+  @Post(':id/pid/split') @RequirePermission('project.generate_pid') @RequirePasscode()
+  async splitPid(@Param('id') id: string, @Body() dto: MovePidDto) {
+    return this.projects.movePid(await this.actor.requireOrgId(), this.actor.requireActorId(), id, {
+      mode: 'SPLIT', pid: dto.pid, intoProjectId: dto.intoProjectId,
+    });
+  }
+
+  /** Two numbers, one matter: move this project under another's PID as its next round. */
+  @Post(':id/pid/merge') @RequirePermission('project.generate_pid') @RequirePasscode()
+  async mergePid(@Param('id') id: string, @Body() dto: MovePidDto) {
+    return this.projects.movePid(await this.actor.requireOrgId(), this.actor.requireActorId(), id, {
+      mode: 'MERGE', pid: dto.pid, intoProjectId: dto.intoProjectId,
+    });
   }
 
   @Post(':id/approve') @RequirePermission('project.approve')

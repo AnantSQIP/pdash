@@ -46,6 +46,7 @@ const TYPE_META: Record<string, { Icon: typeof RiNotification3Line; color: strin
   'project.completed': { Icon: RiCheckboxCircleLine, color: 'text-green-600', bg: 'bg-green-50' },
   'project.closed':    { Icon: RiArchiveLine,        color: 'text-slate-600', bg: 'bg-slate-100' },
   'project.reopened':  { Icon: RiRefreshLine,        color: 'text-brand-600', bg: 'bg-brand-50' },
+  'project.pid_moved': { Icon: RiRefreshLine,        color: 'text-amber-600', bg: 'bg-amber-50' },
   'coverage.at_risk':  { Icon: RiAlarmWarningLine,   color: 'text-amber-600', bg: 'bg-amber-50' },
   'expense.submitted': { Icon: RiMoneyDollarCircleLine, color: 'text-amber-600',  bg: 'bg-amber-50' },
   'expense.approved':  { Icon: RiCheckboxCircleLine,    color: 'text-green-600',  bg: 'bg-green-50' },

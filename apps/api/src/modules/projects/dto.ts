@@ -279,6 +279,35 @@ export class AttachPidDto {
   pid?: string;
 }
 
+/**
+ * Where a project's Project ID should move to.
+ *
+ * WHICH of the three corrections this is — reassign, split or merge — comes from the ROUTE, never
+ * from the body: the operation decides which refusals apply ("you cannot split a project that is
+ * already alone under its PID"), and a field the client could set would let a caller ask for one
+ * operation and be given another.
+ *
+ * Both fields are optional and at most one is meaningful:
+ *   · neither — mint a fresh serial in the current financial year (reassign / split).
+ *   · `pid`   — a number typed or picked by hand.
+ *   · `intoProjectId` — the merge picker, which names a PROJECT because that is what the person
+ *     doing this is looking at. The service reads that project's PID.
+ */
+export class MovePidDto {
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(40)
+  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
+  pid?: string;
+
+  /** The project to merge this one under — its PID is the destination. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  intoProjectId?: string;
+}
+
 export class ApprovalDto {
   // Deprecated/ignored — the approver is the verified cookie actor.
   @IsOptional()

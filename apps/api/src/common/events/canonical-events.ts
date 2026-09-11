@@ -34,6 +34,12 @@ export const EVENTS = {
   PROJECT_CLOSED: 'project.closed',
   PROJECT_REOPENED: 'project.reopened',
   PROJECT_DELETED: 'project.deleted',
+  // A project changing its PID — reassigned to another number, split out onto its own, or merged
+  // under another project's. Its own event rather than a project.updated, because the PID is the
+  // identifier the firm files work under: "which number was this matter under in March" is a
+  // question asked of the audit log directly, and it cannot be answered by replaying generic
+  // updates. The metadata carries both numbers and every round the move renumbered.
+  PROJECT_PID_MOVED: 'project.pid_moved',
   // Comments / discussion
   COMMENT_CREATED: 'comment.created',
   COMMENT_DELETED: 'comment.deleted',

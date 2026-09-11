@@ -170,10 +170,20 @@ const PASS = { 'x-org-passcode': PASSCODE };
   step('Staffing: the fields that were being wiped on every save');
 
   // /tasks answers nothing without a scope — it takes projectId or userId, never "everything".
-  const tasksR = await su(`/tasks?projectId=${target.id}`);
-  const tasks = Array.isArray(tasksR.data) ? tasksR.data : (tasksR.data?.items ?? []);
+  //
+  // Look through the projects for one that actually HAS work, rather than taking the first and
+  // hoping. The first project is whichever the list happened to return, and an empty one is
+  // perfectly ordinary — a project created moments ago, or one whose tasks moved elsewhere. This
+  // suite then failed on "a task exists to staff", which reads like the staffing fix broke and is
+  // really the fixture being thin.
+  let tasks = [];
+  for (const p of list) {
+    const r = await su(`/tasks?projectId=${p.id}`);
+    const rows = Array.isArray(r.data) ? r.data : (r.data?.items ?? []);
+    if (rows.length) { tasks = rows; break; }
+  }
   const t = tasks.find(x => (x.assignees ?? []).length > 0) ?? tasks[0];
-  ok('a task exists to staff', !!t?.id, JSON.stringify(tasks).slice(0, 120));
+  ok('a task exists to staff', !!t?.id, `${list.length} projects searched, none had a task`);
 
   const start = '2026-09-14';
   const set = await su(`/tasks/${t.id}/staffing`, {

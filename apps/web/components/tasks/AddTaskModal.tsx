@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Check } from 'lucide-react';
+import { Plus, Check, Search, X as XIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
 import { api, type WorkflowStatus } from '@/lib/api';
@@ -40,6 +40,7 @@ export function AddTaskModal({
   const [dueDate, setDueDate] = useState(initialDueDate ?? '');
   const [estimatedHours, setEstimatedHours] = useState('');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(initialAssigneeIds ?? []);
+  const [memberQuery, setMemberQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -55,6 +56,27 @@ export function AddTaskModal({
     () => statuses.find(s => s.type === OPEN_TYPE)?.id ?? statuses[0]?.id ?? '',
     [statuses],
   );
+
+  /**
+   * The people shown in the picker: everyone matching the search, plus everyone already chosen.
+   *
+   * The second half is the part that matters. Filtering the list plainly would hide a person the
+   * moment their name stopped matching — so somebody who picked three people, then typed a fourth
+   * name, would see "(3)" above a list showing none of them, and would have no way to take one
+   * back off without clearing the box first. A selection has to stay reachable.
+   *
+   * Matching is on the full name and the email, both case-folded, so "ajay", "sharma" and the
+   * first half of a login all find the same person.
+   */
+  const visibleMembers = useMemo(() => {
+    const q = memberQuery.trim().toLowerCase();
+    if (!q) return users;
+    const chosen = new Set(assigneeIds);
+    return users.filter(u =>
+      chosen.has(u.id)
+      || `${u.firstName ?? ''} ${u.lastName ?? ''}`.toLowerCase().includes(q)
+      || (u.email ?? '').toLowerCase().includes(q));
+  }, [users, memberQuery, assigneeIds]);
   useEffect(() => {
     if (!statusId && (initialStatusId || defaultOpenId)) setStatusId(initialStatusId ?? defaultOpenId);
   }, [initialStatusId, defaultOpenId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -207,11 +229,43 @@ export function AddTaskModal({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Assignees {assigneeIds.length > 0 && <span className="text-gray-400 font-normal">({assigneeIds.length})</span>}
+              Team members {assigneeIds.length > 0 && <span className="text-gray-400 font-normal">({assigneeIds.length})</span>}
             </label>
-            <div className="max-h-32 overflow-y-auto border border-gray-300 rounded-lg p-1.5 space-y-0.5">
+            {/* A search box, because the list is the whole firm and finding one person meant
+                scrolling past everybody else. Anyone already chosen stays visible whatever is
+                typed — otherwise a search would hide the selection it was used to make, and the
+                count would say three with nothing on screen to show for it. */}
+            <div className="relative mb-1.5">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                value={memberQuery}
+                onChange={e => setMemberQuery(e.target.value)}
+                // Enter in a text input inside a form submits it. Here that would CREATE THE TASK
+                // in the middle of looking for somebody to put on it — the one keystroke a person
+                // types without thinking, doing the one thing this dialog exists to do. Escape
+                // clears the search rather than closing the whole dialog, for the same reason.
+                onKeyDown={e => {
+                  if (e.key === 'Enter') e.preventDefault();
+                  if (e.key === 'Escape' && memberQuery) { e.preventDefault(); e.stopPropagation(); setMemberQuery(''); }
+                }}
+                placeholder="Search team members…"
+                aria-label="Search team members"
+                className="w-full pl-8 pr-8 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+              />
+              {memberQuery && (
+                <button type="button" onClick={() => setMemberQuery('')} aria-label="Clear the search"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                  <XIcon size={14} />
+                </button>
+              )}
+            </div>
+            <div className="max-h-40 overflow-y-auto border border-gray-300 rounded-lg p-1.5 space-y-0.5">
               {users.length === 0 && <p className="text-xs text-gray-400 px-1.5 py-1">No team members available</p>}
-              {users.map(u => {
+              {users.length > 0 && visibleMembers.length === 0 && (
+                <p className="text-xs text-gray-400 px-1.5 py-1">Nobody matches &ldquo;{memberQuery}&rdquo;.</p>
+              )}
+              {visibleMembers.map(u => {
                 const on = assigneeIds.includes(u.id);
                 return (
                   <button type="button" key={u.id} role="checkbox" aria-checked={on}

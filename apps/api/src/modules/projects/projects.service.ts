@@ -42,6 +42,15 @@ export const PROJECT_SORTS: Record<string, { [k: string]: 'asc' | 'desc' }[]> = 
 export const PROJECT_SORT_VALUES = Object.keys(PROJECT_SORTS);
 import { SequenceService } from '../../common/sequence/sequence.service';
 import { financialYear, formatPid, pidScope } from '../../common/financial-year';
+import {
+  isTerminal,
+  nextSerial as nextSerialFrom,
+  pidFy,
+  planMove,
+  reservationPointer,
+  type MoveMode,
+  type MoveProject,
+} from './pid-move';
 
 /** Hours to one decimal — the precision timesheets are logged at. */
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -794,6 +803,11 @@ export class ProjectsService {
     return { pid: formatPid(orgCode, fyLabel, serial), fyLabel, serial };
   }
 
+  /** parsePid without the exception — for callers that can carry on when a code does not parse. */
+  private tryParsePid(raw: string, orgCode: string): { pid: string; fyLabel: string; serial: number } | null {
+    try { return this.parsePid(raw, orgCode); } catch { return null; }
+  }
+
   /** Serials taken for this org+FY: RESERVED/ATTACHED/DISCONTINUED reservations ∪ live project codes. */
   private async takenSerials(organizationId: string, fyLabel: string, orgCode: string): Promise<Set<number>> {
     const taken = new Set<number>();
@@ -817,7 +831,9 @@ export class ProjectsService {
    *  max up, so a gapped number is never reused. */
   private async nextSerial(organizationId: string, fyLabel: string, orgCode: string): Promise<number> {
     const taken = await this.takenSerials(organizationId, fyLabel, orgCode);
-    return (taken.size ? Math.max(...taken) : 0) + 1;
+    // The arithmetic lives in ./pid-move.ts so that it is the ONE place the "never reissued" rule
+    // is written down, and so that it can be tested against a sequence of moves without a database.
+    return nextSerialFrom(taken);
   }
 
   /** DESTROY reservations generated but not attached within the 5-min window — the row is deleted
@@ -944,6 +960,396 @@ export class ProjectsService {
       metadata: { pidAttached: pid, title: project.title },
     });
     return { pid, projectId };
+  }
+
+  // ── Correcting a Project ID: reassign / split / merge ─────────────────────────────
+  //
+  // A PID is assigned once, at creation, by a person reading a brief — so sometimes it is assigned
+  // wrong, and the mistake surfaces weeks later at invoicing. Three shapes of wrong, in the words
+  // the firm uses for them:
+  //
+  //   "the wrong PID is on this project"          → REASSIGN: move it to a different number.
+  //   "these two were filed under one PID and
+  //    are really separate matters"               → SPLIT: one of them takes a number of its own.
+  //   "these two numbers are one matter"          → MERGE: one project moves under the other's
+  //                                                 number and becomes its next round.
+  //
+  // Mechanically they are one operation: a project's `code` changes and the round numbers on both
+  // sides are re-dealt. The arithmetic and every refusal live in ./pid-move.ts, where they are
+  // tested without a database (tools/pid-move.spec.ts); what is left here is the part that can
+  // only be done against real rows.
+  //
+  // The rules this code is built around, and what each one costs if it is ever dropped:
+  //
+  //  · A SERIAL IS NEVER REISSUED. Every new number comes from ensureReservation — the same
+  //    allocator every other PID in the system comes from — so there is exactly one place where
+  //    "is this number free" is decided. A PID left holding nothing is marked DISCONTINUED, which
+  //    keeps it in takenSerials forever. Nothing here deletes a reservation to make a number
+  //    available again, because that would put two unrelated matters under one number on two
+  //    different invoices with nothing in the system saying which was which.
+  //  · ROUND NUMBERS STAY 1..N. "Project 2 of 3" is only true while they do.
+  //  · NOTHING BUT THE NUMBER MOVES. Only `code` and `roundSeq` are written. Tasks, timesheets,
+  //    members, files and patents hang off the project id, and the project id does not change.
+  //  · THE LEDGER STAYS TRUE ON BOTH SIDES. Its badge is derived from the projects actually
+  //    carrying a code, so both reservations are repointed as part of the same transaction.
+
+  /** What a caller asks for. Which correction it is comes from the ROUTE; the rest is a destination. */
+  private async resolveMove(
+    organizationId: string,
+    projectId: string,
+    opts: { mode: MoveMode; pid?: string; intoProjectId?: string },
+  ) {
+    const orgCode = await this.orgCodeOf(organizationId);
+    const shape = {
+      id: true, code: true, roundSeq: true, projectPhase: true, deletedAt: true, title: true, clientId: true,
+    } as const;
+
+    const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
+    if (!project) throw new NotFoundException('Project not found.');
+    await this.assertProjectInOrg(organizationId, projectId);
+
+    // Resolve the destination. Naming it as a PROJECT is how the merge picker works — the person
+    // doing this thinks in matters, not serials — and naming it as a PID is how a typed correction
+    // works. Both end up as one PID string, canonicalised through the same parser that mints them
+    // so "SQ_26_27_1" and "SQ_26_27_001" cannot be treated as two different numbers.
+    let targetPid: string | null = null;
+    if (opts.intoProjectId) {
+      const into = await this.prisma.project.findFirst({
+        where: { id: opts.intoProjectId }, select: { id: true, code: true, deletedAt: true, title: true },
+      });
+      if (!into) throw new NotFoundException('The project to merge into was not found.');
+      await this.assertProjectInOrg(organizationId, into.id);
+      if (into.deletedAt) throw new BadRequestException('The project to merge into is in the bin.');
+      if (!into.code) throw new BadRequestException(`"${into.title}" has no Project ID of its own to merge into.`);
+      targetPid = into.code;
+    } else if (opts.pid?.trim()) {
+      targetPid = this.parsePid(opts.pid, orgCode).pid;
+    }
+
+    const toRef = (p: { id: string; code: string | null; roundSeq: number; projectPhase: string; title: string }): MoveProject =>
+      ({ id: p.id, code: p.code, roundSeq: p.roundSeq, phase: p.projectPhase, title: p.title });
+
+    // Live rounds only, on both sides: a soft-deleted round is not work the firm is doing, so it
+    // neither holds a round number nor keeps a number from being vacated.
+    const groupShape = { id: true, code: true, roundSeq: true, projectPhase: true, title: true } as const;
+    const sourceGroup = project.code
+      ? (await this.prisma.project.findMany({
+          where: { code: project.code, deletedAt: null }, orderBy: { roundSeq: 'asc' }, select: groupShape,
+        })).map(toRef)
+      : [];
+    const targetGroup = targetPid
+      ? (await this.prisma.project.findMany({
+          where: { code: targetPid, deletedAt: null }, orderBy: { roundSeq: 'asc' }, select: groupShape,
+        })).map(toRef)
+      : [];
+
+    const decision = planMove({
+      project: { ...toRef(project), deleted: !!project.deletedAt },
+      sourceGroup, targetPid, targetGroup,
+      targetProjectId: opts.intoProjectId,
+      declaredMode: opts.mode,
+    });
+    return { project, orgCode, sourceGroup, targetGroup, targetPid, decision };
+  }
+
+  /**
+   * A project's org, asserted rather than assumed. `Project` has no organization column, so a
+   * lookup by id alone is org-blind — without this an oversight actor in one tenant could move a
+   * PID belonging to another. A project with no resolvable active member is not over-blocked
+   * (there is nothing to compare against), matching ProjectAccessService.
+   */
+  private async assertProjectInOrg(organizationId: string, projectId: string): Promise<void> {
+    const owner = await this.orgOfProject(projectId);
+    if (owner && owner !== organizationId) throw new NotFoundException('Project not found.');
+  }
+
+  /**
+   * What a move WOULD do, before anyone commits to it. Changes an identifier the firm files work
+   * under, so the modal shows the consequence rather than a confirmation — including the rounds
+   * belonging to other people that this renumbers.
+   *
+   * Deliberately NOT passcode-gated: looking is not a change, and asking for the step-up passcode
+   * to read a preview trains people to type it without reading what they are agreeing to.
+   *
+   * A refusal comes back as a refusal rather than an exception, because the modal is meant to say
+   * "this move is not allowed, here is why" while the person is still choosing.
+   */
+  async pidMovePreview(organizationId: string, projectId: string, opts: { mode: MoveMode; pid?: string; intoProjectId?: string }) {
+    const { project, orgCode, sourceGroup, targetGroup, targetPid, decision } =
+      await this.resolveMove(organizationId, projectId, opts);
+
+    const rounds = (list: MoveProject[]) =>
+      list.map(p => ({ id: p.id, title: p.title ?? '', roundSeq: p.roundSeq, phase: p.phase, isThisProject: p.id === projectId }));
+
+    // For a mint, show the number that would be issued. Non-binding, exactly like /next-pid: a
+    // project created between this preview and the move consumes the serial first.
+    const fy = financialYear(new Date());
+    const mintPreview = !targetPid
+      ? formatPid(orgCode, fy.label, await this.nextSerial(organizationId, fy.label, orgCode))
+      : null;
+
+    const base = {
+      projectId, projectTitle: project.title,
+      fromPid: project.code, fromRoundSeq: project.roundSeq,
+      sourceRounds: rounds(sourceGroup),
+      targetRounds: rounds(targetGroup),
+      targetPid, mintPreview,
+    };
+    if (!decision.ok) return { ...base, ok: false as const, reason: decision.reason, message: decision.message };
+
+    const plan = decision.plan;
+    const titleOf = new Map([...sourceGroup, ...targetGroup].map(p => [p.id, p.title ?? '']));
+    const named = (cs: { id: string; from: number; to: number }[]) =>
+      cs.map(c => ({ ...c, title: titleOf.get(c.id) ?? '' }));
+    return {
+      ...base,
+      ok: true as const,
+      mode: plan.mode,
+      toPid: plan.toPid ?? mintPreview,
+      /** True when the number does not exist yet — the preview above is a prediction, not a promise. */
+      mintsNewPid: !plan.toPid,
+      newRoundSeq: plan.newRoundSeq,
+      sourceRenumber: named(plan.sourceRenumber),
+      targetRenumber: named(plan.targetRenumber),
+      sourceRemaining: plan.sourceRemaining,
+      targetTotal: plan.targetTotal,
+      /** The old number is retired into the ledger — kept forever, never issued again. */
+      retiresFromPid: plan.vacatesSource,
+      affectedCount: plan.affected.length,
+    };
+  }
+
+  /**
+   * Existing PIDs a project could be merged into: every number in this org that still holds live
+   * work, in the same financial year, excluding the project's own.
+   *
+   * Scoped through the reservations rather than the projects because `Project` carries no org
+   * column — the ledger is the only place that knows which numbers belong to which tenant.
+   */
+  async pidMoveTargets(organizationId: string, projectId: string) {
+    await this.assertProjectInOrg(organizationId, projectId);
+    const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: { code: true } });
+    const fy = pidFy(project?.code ?? null);
+
+    const reservations = await this.prisma.pidReservation.findMany({
+      where: { organizationId, status: { in: ['ATTACHED', 'DISCONTINUED'] }, ...(fy ? { fyLabel: fy } : {}) },
+      orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
+      select: { pid: true, fyLabel: true, serial: true },
+      take: 500,
+    });
+    const pids = reservations.map(r => r.pid).filter(p => p !== project?.code);
+    if (!pids.length) return [];
+
+    const projects = await this.prisma.project.findMany({
+      where: { code: { in: pids }, deletedAt: null },
+      orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, code: true, roundSeq: true, title: true, projectPhase: true, client: { select: { name: true, code: true } } },
+    });
+    const byPid = new Map<string, typeof projects>();
+    for (const p of projects) {
+      if (!p.code) continue;
+      const list = byPid.get(p.code) ?? [];
+      list.push(p);
+      byPid.set(p.code, list);
+    }
+    // A number holding nothing is not a merge destination — it is a retired serial, and moving
+    // work onto it would resurrect a number the ledger has already written off.
+    return reservations
+      .filter(r => (byPid.get(r.pid) ?? []).length > 0)
+      .map(r => {
+        const rounds = byPid.get(r.pid)!;
+        return {
+          pid: r.pid, fyLabel: r.fyLabel, serial: r.serial,
+          client: rounds.find(p => p.client)?.client?.name ?? rounds.find(p => p.client)?.client?.code ?? null,
+          rounds: rounds.map(p => ({ id: p.id, title: p.title, roundSeq: p.roundSeq, phase: p.projectPhase })),
+        };
+      });
+  }
+
+  /**
+   * Perform the move. One transaction: either the project has its new number, both sides are
+   * renumbered and both reservations tell the truth, or nothing happened at all.
+   */
+  async movePid(
+    organizationId: string,
+    userId: string,
+    projectId: string,
+    opts: { mode: MoveMode; pid?: string; intoProjectId?: string },
+  ) {
+    const { project, orgCode, sourceGroup, targetGroup, decision } =
+      await this.resolveMove(organizationId, projectId, opts);
+    if (!decision.ok) throw new BadRequestException(decision.message);
+    const plan = decision.plan;
+
+    // One PID is one client's matter. A merge is the only operation here that can put two clients
+    // under one number, so it goes through the same check that stops a round being re-tagged.
+    if (plan.mode === 'MERGE') {
+      await this.assertPidClientConsistent(projectId, plan.toPid, project.clientId);
+    }
+
+    // The destination number. A merge joins a PID that already exists; a reassign or a split takes
+    // one through ensureReservation — the allocator that knows which serials are spoken for,
+    // including the discontinued ones that must never come back. Reserving happens BEFORE the
+    // transaction, as it does everywhere else in this file: the allocator must not hold its row
+    // lock across an interactive transaction.
+    let reservationId: string | null = null;
+    let toPid: string;
+    if (plan.mode === 'MERGE') {
+      // planMove only reports a MERGE when the destination already holds rounds, which it can only
+      // know from a PID it was given — so this is never null. Checked rather than asserted because
+      // a null slipping through would write `code: null` onto a live project.
+      if (!plan.toPid) throw new BadRequestException('No Project ID was given to merge into.');
+      toPid = plan.toPid;
+    } else {
+      const reserved = await this.ensureReservation(organizationId, userId, plan.toPid ?? undefined);
+      toPid = reserved.pid;
+      reservationId = reserved.reservationId;
+    }
+
+    const now = new Date();
+    // Where each reservation's single projectId should point afterwards — arithmetic, so it is done
+    // here rather than as another round-trip inside the transaction.
+    const moved: MoveProject = { id: project.id, code: toPid, roundSeq: plan.newRoundSeq, phase: project.projectPhase, title: project.title };
+    const destAfter = [...targetGroup, moved];
+    const sourceAfter = sourceGroup.filter(p => p.id !== projectId);
+    const destPointer = reservationPointer(destAfter);
+    const sourcePointer = reservationPointer(sourceAfter);
+    const destHasLiveWork = destAfter.some(p => !isTerminal(p.phase));
+    // Parsed LENIENTLY: these are only needed to write a ledger row for a PID that never had one,
+    // and a legacy code from before an org-code change would otherwise throw and block a
+    // correction outright. A number that cannot be parsed simply gets no back-filled row — the
+    // move still happens, which is the thing the person actually asked for.
+    const toParsed = this.tryParsePid(toPid, orgCode);
+    const fromParsed = this.tryParsePid(plan.fromPid, orgCode);
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // The move itself. These two columns are the ONLY thing a PID correction writes on a
+        // project: everything the project owns is keyed by its id, and its id does not change.
+        await tx.project.update({ where: { id: projectId }, data: { code: toPid, roundSeq: plan.newRoundSeq } });
+        for (const c of plan.targetRenumber) await tx.project.update({ where: { id: c.id }, data: { roundSeq: c.to } });
+        for (const c of plan.sourceRenumber) await tx.project.update({ where: { id: c.id }, data: { roundSeq: c.to } });
+
+        // ── the number being taken ──
+        // A freshly reserved row MUST leave RESERVED here. sweepExpired DESTROYS an un-attached
+        // reservation after five minutes, and a destroyed row whose number a project is already
+        // carrying is the single outcome that could get the serial handed out twice.
+        const destTouched = await tx.pidReservation.updateMany({
+          where: { organizationId, pid: toPid },
+          data: {
+            projectId: destPointer, resolvedAt: now,
+            ...(destHasLiveWork || reservationId ? { status: 'ATTACHED' as const } : {}),
+          },
+        });
+        if (destTouched.count === 0 && toParsed) {
+          // A PID carried by a project but absent from the ledger — legacy codes backfilled onto
+          // projects before reservations existed. Writing the row now is what keeps the ledger
+          // able to say this number is spoken for; without it the serial reads as free.
+          await tx.pidReservation.create({
+            data: {
+              organizationId, fyLabel: toParsed.fyLabel, serial: toParsed.serial, pid: toPid,
+              generatedById: userId, status: 'ATTACHED', projectId: destPointer,
+              expiresAt: now, resolvedAt: now,
+            },
+          });
+        }
+
+        // ── the number being left ──
+        if (plan.vacatesSource) {
+          // RETIRED, not released. DISCONTINUED keeps the serial inside takenSerials forever, so
+          // it can never be issued to different work. The pointer is cleared because no project
+          // carries this code any more — and a pointer at the project that just LEFT would be read
+          // by close()/reopen() as evidence that this number is still that project's.
+          const srcTouched = await tx.pidReservation.updateMany({
+            where: { organizationId, pid: plan.fromPid },
+            data: { status: 'DISCONTINUED', projectId: null, resolvedAt: now },
+          });
+          if (srcTouched.count === 0 && fromParsed) {
+            // The dangerous half of the legacy case: a vacated code with no ledger row and now no
+            // project either would vanish from takenSerials entirely and be handed out again.
+            await tx.pidReservation.create({
+              data: {
+                organizationId, fyLabel: fromParsed.fyLabel, serial: fromParsed.serial, pid: plan.fromPid,
+                generatedById: userId, status: 'DISCONTINUED', projectId: null,
+                expiresAt: now, resolvedAt: now,
+              },
+            });
+          }
+        } else {
+          // Work remains under it, so only the pointer moves. The STATUS is left exactly as it was:
+          // if those rounds are all closed the reservation is discontinued and should stay so, and
+          // if any is live it is already attached.
+          await tx.pidReservation.updateMany({
+            where: { organizationId, pid: plan.fromPid },
+            data: { projectId: sourcePointer },
+          });
+        }
+
+        // A FULFILLED PID request records which number an authority handed this project, and the
+        // request queue is where anyone looks to find out who assigned it. Left alone it would go
+        // on naming the old one. A PENDING request is untouched — it belongs to a project that has
+        // no PID at all, and such a project is refused by planMove before it reaches here.
+        await tx.pidRequest.updateMany({ where: { projectId, status: 'FULFILLED' }, data: { pid: toPid } });
+      });
+    } catch (e: unknown) {
+      // The transaction rolled back, so a serial reserved for it is held by nobody and attached to
+      // nothing. Destroying the row rewinds the series exactly as an expired reservation does;
+      // leaving it would also block this actor's next "Generate PID" for five minutes over a move
+      // that never happened.
+      if (reservationId) {
+        await this.prisma.pidReservation.deleteMany({ where: { id: reservationId, status: 'RESERVED' } });
+      }
+      throw e;
+    }
+
+    await this.events.emit({
+      action: EVENTS.PROJECT_PID_MOVED,
+      entityType: 'PROJECT',
+      entityId: projectId,
+      organizationId,
+      actorId: userId,
+      oldValue: { pid: plan.fromPid, roundSeq: plan.oldRoundSeq },
+      newValue: { pid: toPid, roundSeq: plan.newRoundSeq },
+      // Enough for somebody reading the ledger a year later to reconstruct the move without the
+      // projects in front of them: what moved, from which number to which, what it did to the
+      // rounds on either side, and whether a number was retired by it.
+      metadata: {
+        projectId, title: project.title, mode: plan.mode,
+        fromPid: plan.fromPid, toPid,
+        fromRoundSeq: plan.oldRoundSeq, toRoundSeq: plan.newRoundSeq,
+        retiredFromPid: plan.vacatesSource,
+        sourceRenumbered: plan.sourceRenumber,
+        targetRenumbered: plan.targetRenumber,
+        affectedProjectIds: plan.affected,
+      },
+    });
+
+    // The number is what the team quotes on everything they send out, so the people staffed on the
+    // project are told it changed. Best-effort: a notification failure must not undo a correction.
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId, isActive: true }, select: { userId: true },
+    });
+    const recipients = members.map(m => m.userId).filter(uid => uid !== userId);
+    if (recipients.length) {
+      await this.notifications.notify(recipients, {
+        type: 'project.pid_moved',
+        title: 'Project ID changed',
+        message: `"${project.title}" moved from ${plan.fromPid} to ${toPid}`
+          + (plan.mode === 'MERGE' ? ` (project ${plan.newRoundSeq} under ${toPid}).` : '.'),
+        link: `/projects/${projectId}`,
+      });
+    }
+
+    return {
+      projectId,
+      mode: plan.mode,
+      fromPid: plan.fromPid,
+      toPid,
+      roundSeq: plan.newRoundSeq,
+      /** True when the old number was left holding nothing and has been retired into the ledger. */
+      retiredFromPid: plan.vacatesSource,
+      renumbered: [...plan.sourceRenumber, ...plan.targetRenumber],
+    };
   }
 
   /** Admin/Super-Admin PID ledger: every reservation with its status + project + person. */

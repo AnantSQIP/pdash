@@ -1,13 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock, Trash2,
+  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock, Trash2, ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -25,6 +25,7 @@ import { RoundCard } from '@/components/projects/RoundCard';
 import { RoundTabContent } from '@/components/projects/RoundTabContent';
 import { TaskGroups } from '@/components/projects/TaskGroups';
 import { AddRoundModal } from '@/components/projects/AddRoundModal';
+import { PidMoveModal } from '@/components/projects/PidMoveModal';
 import { PatentTagsEditor } from '@/components/projects/PatentTagsEditor';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
@@ -68,8 +69,35 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [completing, setCompleting] = useState(false); // the completion form (delivery + hours)
   const [addingRound, setAddingRound] = useState(false); // "new project under this PID"
+  const [movingPid, setMovingPid] = useState(false); // "this project's PID is wrong" — reassign/split/merge
   // Which project a task came from, so the detail panel edits the right one on a multi-project PID.
   const [taskProjectId, setTaskProjectId] = useState(projectId);
+
+  /**
+   * Whether the project header is folded away.
+   *
+   * Expanded it carries the description, the client and patent lines and a row of statistics, and
+   * on a laptop that is most of the window before a single task is visible — which is what people
+   * actually came to look at. Folding it keeps the title, the phase, the actions and the tabs, and
+   * gives the list back the screen.
+   *
+   * The choice is remembered per browser, because it is a working preference rather than a
+   * property of the project: somebody who wants the detail out of the way wants it out of the way
+   * on the next project too. It is read in an effect rather than during render — reading
+   * localStorage while rendering makes the server and the client disagree, and React replaces the
+   * markup wholesale when they do. Every access is guarded: a private window throws here.
+   */
+  const [headerCollapsed, setHeaderCollapsed] = useState(false);
+  useEffect(() => {
+    try { setHeaderCollapsed(localStorage.getItem('pdash.projectHeaderCollapsed') === '1'); } catch { /* storage blocked */ }
+  }, []);
+  function toggleHeader() {
+    setHeaderCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem('pdash.projectHeaderCollapsed', next ? '1' : '0'); } catch { /* storage blocked */ }
+      return next;
+    });
+  }
 
   // Lifecycle: Complete → Close → Reopen. Completing goes through its own form (it has to capture
   // the client delivery date and the hours), so it is NOT a plain confirm like the others.
@@ -336,9 +364,25 @@ export function ProjectDetailClient({ projectId }: Props) {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 shrink-0">
         <div className="px-4 sm:px-6 py-4">
-          <Link href="/projects" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3 w-fit">
-            <ArrowLeft size={14} /> All Projects
-          </Link>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <Link href="/projects" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 w-fit">
+              <ArrowLeft size={14} /> All Projects
+            </Link>
+            {/* Sits on the back-link row rather than among the actions: it changes what you can
+                SEE, not what happens to the project, and putting it beside Delete would make a
+                view control look like one more thing that alters the work. */}
+            <button
+              onClick={toggleHeader}
+              aria-expanded={!headerCollapsed}
+              title={headerCollapsed
+                ? 'Show the description, client, patents and statistics'
+                : 'Fold these details away and give the screen to the work'}
+              className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 text-xs font-medium text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-700 transition-colors"
+            >
+              {headerCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
+              {headerCollapsed ? 'Show details' : 'Hide details'}
+            </button>
+          </div>
 
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -383,10 +427,10 @@ export function ProjectDetailClient({ projectId }: Props) {
                 <span className={clsx('text-xs font-semibold', priority.color)}>{priority.label} Priority</span>
               </div>
               <h1 title={project.title} className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{project.title}</h1>
-              {project.description && (
+              {!headerCollapsed && project.description && (
                 <p className="text-sm text-gray-500 mt-1 max-w-xl line-clamp-2">{project.description}</p>
               )}
-              <PatentTagsEditor project={project} />
+              {!headerCollapsed && <PatentTagsEditor project={project} />}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {/* A returning client keeps this PID; their next piece of work becomes another
@@ -449,6 +493,21 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <Pencil size={14} /> Edit
                 </button>
               )}
+              {/* Correcting the Project ID is a rare, deliberate act — and one only an Admin or
+                  Super Admin may perform, since it mints or retires a number the firm files work
+                  under. It sits with Edit rather than near the primary action for the same reason
+                  Delete does: nothing here should be reachable by muscle memory. Offered only once
+                  the project actually HAS a number; before that the job is "Attach PID", which
+                  already has its own button beside the pending badge above. */}
+              {can('project.generate_pid') && project.code && (
+                <button
+                  onClick={() => setMovingPid(true)}
+                  title={`Change this project's Project ID — currently ${project.code}`}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <KeyRound size={14} /> Change PID
+                </button>
+              )}
               {/* Sits AFTER Edit and before the primary action, so the destructive button is never
                   the one next to "Add task" — the two get clicked from muscle memory. */}
               {can('project.delete') && (
@@ -477,8 +536,8 @@ export function ProjectDetailClient({ projectId }: Props) {
             </div>
           </div>
 
-          {/* Stats row */}
-          <div className="flex items-center flex-wrap gap-x-6 gap-y-2 mt-4 text-sm">
+          {/* Stats row — the bulk of the header's height, and the first thing to go when it is folded. */}
+          <div className={clsx('flex items-center flex-wrap gap-x-6 gap-y-2 mt-4 text-sm', headerCollapsed && 'hidden')}>
             <div className="flex items-center gap-1.5 text-gray-500">
               <CheckSquare size={14} />
               <span><span className="font-medium text-gray-900">{project._count?.projectTasks ?? tasks.length}</span> tasks</span>
@@ -664,6 +723,21 @@ export function ProjectDetailClient({ projectId }: Props) {
           onClose={() => setAddingRound(false)}
           onCreated={() => {
             setAddingRound(false);
+            qc.invalidateQueries({ queryKey: ['project-rounds', projectId] });
+          }}
+        />
+      )}
+
+      {/* Reassign / split / merge the Project ID. One modal, because to the person opening it they
+          are one thought: this project's PID is wrong. */}
+      {movingPid && project.code && (
+        <PidMoveModal
+          projectId={projectId}
+          projectTitle={project.title}
+          currentPid={project.code}
+          onClose={() => setMovingPid(false)}
+          onMoved={() => {
+            qc.invalidateQueries({ queryKey: ['project', projectId] });
             qc.invalidateQueries({ queryKey: ['project-rounds', projectId] });
           }}
         />
