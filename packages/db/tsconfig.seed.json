@@ -28,6 +28,7 @@
     "prisma/opaque-client-codes.ts",
     "prisma/seed-policies-2026-08.ts",
     "prisma/offboard-report.ts",
-    "prisma/offboard-remove.ts"
+    "prisma/offboard-remove.ts",
+    "prisma/demo-access-2026-09.ts"
   ]
 }
