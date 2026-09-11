@@ -8,7 +8,7 @@ import {
   LayoutDashboard, FolderKanban, ListTodo, FileBarChart, CalendarDays, Fingerprint,
   Users, Gauge, Settings, LineChart, Receipt,
   ShieldCheck, History, PanelLeftClose, PanelLeftOpen, X, Search, Megaphone, Star, Timer, FileLock2, KeyRound, ClipboardList, BookOpen, Users2, TrendingUp, type LucideIcon, MessageSquareHeart, ScanSearch,
- UserCog,} from 'lucide-react';
+ UserCog, SlidersHorizontal, Archive,} from 'lucide-react';
 import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
 import { useOrg } from '@/lib/org-context';
@@ -62,6 +62,10 @@ const ADMIN_NAV: NavItem[] = [
   // "Admin" = RBAC/system administration (roles, groups, permission matrix) — gated on
   // RBAC perms, NOT user.create (HR has user.create for people-ops but isn't an RBAC admin).
   { href: '/admin',       icon: ShieldCheck,    label: 'Admin',     perm: ['permission.view', 'role.view', 'group.view'] },
+  // The role × permission grid. Super-Admin only by the owner's instruction — what a role may do
+  // is the firm's standing definition of a job, and the server refuses the write for anyone else
+  // (RbacService.setRolePermissions), so this flag and that check must stay in step.
+  { href: '/admin/access', icon: SlidersHorizontal, label: 'Access Control', superAdminOnly: true },
   // The digest aggregates the WHOLE organisation — every project, every person's hours, every
   // deadline — so it is Super-Admin only, matching the server-side gate in daily-digest.module.
   { href: '/digest',      icon: ClipboardList,  label: 'Daily Digest', superAdminOnly: true },
@@ -70,6 +74,10 @@ const ADMIN_NAV: NavItem[] = [
   // Super-Admin-only fact), but a separate destination — it never reveals a patent number.
   { href: '/client-ledger', icon: BookOpen,     label: 'Client Ledger', perm: 'patent.manage' },
   { href: '/admin/audit', icon: History,        label: 'Audit Log', perm: ['audit.view'] },
+  // The bin: restore something deleted by mistake, or destroy it for good. Super-Admin-only
+  // rather than permission-gated, because both permanent-delete codes live in
+  // SUPER_ADMIN_ONLY_CODES and a permanent delete is the one action in the product with no undo.
+  { href: '/admin/data',  icon: Archive,        label: 'Deleted Data', superAdminOnly: true },
 ];
 
 const STORAGE_KEY = 'sidebar-collapsed';

@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { PermissionService } from '../permissions/permission.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { getActorId } from '../../common/context/request-context';
 import {
   CreateTeamDto, UpdateTeamDto, TeamMemberDto, CreateTeamListDto, UpdateTeamListDto, CreateTeamTaskDto, UpdateTeamTaskDto,
@@ -28,6 +29,7 @@ export class TeamsService {
     private readonly events: EventService,
     private readonly permissions: PermissionService,
     private readonly notifications: NotificationsService,
+    private readonly deadlineChanges: DeadlineChangeService,
   ) {}
 
   // ── Access ────────────────────────────────────────────────────────────────
@@ -492,6 +494,14 @@ export class TeamsService {
       }
     }
 
+    // Read the deadline BEFORE the write, so the shift can be recorded against what it actually
+    // was. A team task is still a Task row, so its deadline moving is the same event as a project
+    // task's — the difference is only that it rolls up to no project (DeadlineChange.projectId
+    // stays null), which is why the ledger records entityType as well as projectId.
+    const beforeDue = dto.dueDate === undefined
+      ? undefined
+      : (await this.prisma.task.findUnique({ where: { id: taskId }, select: { dueDate: true } }))?.dueDate ?? null;
+
     await this.prisma.$transaction(async (tx) => {
       await tx.task.update({
         where: { id: taskId },
@@ -519,6 +529,13 @@ export class TeamsService {
             skipDuplicates: true,
           });
         }
+      }
+      if (dto.dueDate !== undefined) {
+        await this.deadlineChanges.record({
+          entityType: 'TASK', entityId: taskId,
+          previous: beforeDue, next: dto.dueDate ? new Date(dto.dueDate) : null,
+          changedById: actorId, tx,
+        });
       }
     });
     await this.events.emit({

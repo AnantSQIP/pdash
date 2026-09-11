@@ -85,3 +85,52 @@ export function nextUpFirst(a: ApiTask, b: ApiTask): number {
 
   return (a.title ?? '').localeCompare(b.title ?? '');
 }
+
+/**
+ * A PROJECT's task list, in the order the work should be read.
+ *
+ * `nextUpFirst` above answers "what do I do next", so it floats overdue work to the top —
+ * right for a personal list, wrong for a project, where a plan that reorders itself every
+ * time a date slips stops being a plan.
+ *
+ * The review asked one specific question of this order: when two tasks carry the SAME
+ * priority, which is higher? The answer given was the one whose deadline is nearest. That is
+ * rule 3 below, and it is the reason this comparator exists rather than the list rendering in
+ * whatever order the API returned — which was creation order, so two equal-priority tasks sat
+ * in the order somebody happened to type them.
+ *
+ *   1. open before closed — finished work is not the plan
+ *   2. priority, highest first
+ *   3. SAME PRIORITY → the nearest deadline is the higher priority
+ *   4. a task with no deadline sorts after every dated one — no date is not "due today"
+ *   5. title, so the order is total and never shuffles between renders
+ */
+export function byPriorityThenDeadline(a: ApiTask, b: ApiTask): number {
+  const closed = (t: ApiTask) => (isTaskClosed(t) ? 1 : 0);
+  if (closed(a) !== closed(b)) return closed(a) - closed(b);
+
+  const rank = (t: ApiTask) => PRIORITY_RANK[t.priority ?? 'MEDIUM'] ?? 2;
+  if (rank(a) !== rank(b)) return rank(a) - rank(b);
+
+  const due = (t: ApiTask) => (t.dueDate ? new Date(t.dueDate).getTime() : Number.POSITIVE_INFINITY);
+  if (due(a) !== due(b)) return due(a) - due(b);
+
+  return (a.title ?? '').localeCompare(b.title ?? '');
+}
+
+/**
+ * True when this task outranks the one above it ONLY because its deadline is nearer — same
+ * priority, earlier date.
+ *
+ * The rule is invisible otherwise: two MEDIUM tasks in a list look arbitrarily ordered, which
+ * is exactly the confusion the review raised. The list uses this to explain itself on the one
+ * row where the explanation is needed, instead of annotating every row with a rule that
+ * usually did not apply.
+ */
+export function orderedByDeadline(task: ApiTask, previous: ApiTask | undefined): boolean {
+  if (!previous) return false;
+  if (isTaskClosed(task) !== isTaskClosed(previous)) return false;
+  const rank = (t: ApiTask) => PRIORITY_RANK[t.priority ?? 'MEDIUM'] ?? 2;
+  if (rank(task) !== rank(previous)) return false;
+  return !!previous.dueDate && !!task.dueDate;
+}

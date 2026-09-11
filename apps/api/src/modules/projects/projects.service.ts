@@ -14,6 +14,7 @@ import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto, A
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { resolveDate } from '../../common/dates';
 import { PROJECT_TYPES, templateFor } from './project-templates';
 import { TECHNOLOGY_DOMAINS, builtInDomain, slugifyDomain, domainLabel } from './technology-domains';
@@ -63,6 +64,7 @@ export class ProjectsService {
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
+    private readonly deadlineChanges: DeadlineChangeService,
     private readonly access: ProjectAccessService,
     private readonly sequence: SequenceService,
   ) {}
@@ -1174,16 +1176,29 @@ export class ProjectsService {
       if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
     }
 
-    const updated = await this.prisma.project.update({
-      where: { id: req.projectId },
-      data: {
-        title: dto.title,
-        description: dto.description,
-        priority: dto.priority,
-        ...(dto.projectType === undefined ? {} : { projectType: dto.projectType || null }),
-        ...(startDate === undefined ? {} : { startDate }),
-        ...(dueDate === undefined ? {} : { dueDate }),
-      },
+    const updated = await this.prisma.$transaction(async tx => {
+      const p = await tx.project.update({
+        where: { id: req.projectId },
+        data: {
+          title: dto.title,
+          description: dto.description,
+          priority: dto.priority,
+          ...(dto.projectType === undefined ? {} : { projectType: dto.projectType || null }),
+          ...(startDate === undefined ? {} : { startDate }),
+          ...(dueDate === undefined ? {} : { dueDate }),
+        },
+      });
+      // The PID reviewer can move the deadline while verifying the project, and that is a real
+      // shift like any other. Left unrecorded it would be the one route through which a date
+      // could change without the ledger noticing — which is how a shift count silently
+      // under-reports: not by being wrong, but by having a path nobody wired up.
+      if (dueDate !== undefined) {
+        await this.deadlineChanges.record({
+          entityType: 'PROJECT', entityId: req.projectId, projectId: req.projectId,
+          previous: before.dueDate, next: dueDate, organizationId, changedById: userId, tx,
+        });
+      }
+      return p;
     });
 
     // The reviewer may (re)assign the project MANAGER: demote the current one, promote the chosen
@@ -1645,7 +1660,12 @@ export class ProjectsService {
       else lifecycleStamps = { completedAt: null, closedAt: null }; // any non-end-state clears the stamps
     }
 
-    const project = await this.prisma.project.update({
+    // The edit and the record that the deadline moved are ONE transaction. Split them and the
+    // two disagree the first time anything fails in between: either a project quietly carries a
+    // date the shift ledger has never heard of, or Performance reports a slip that was rolled
+    // back. Both show up months later as a number nobody can reconcile.
+    const project = await this.prisma.$transaction(async tx => {
+      const p = await tx.project.update({
       where: { id },
       data: {
         title: dto.title,
@@ -1662,6 +1682,16 @@ export class ProjectsService {
         // — it is the single writer. Ignore any client-supplied value to avoid the two
         // writers clobbering each other.
       },
+      });
+      // This is the path the capacity board's "extend deadline" (scope: project) lands on, as
+      // well as the ordinary project edit form — so it is where most recorded shifts come from.
+      if (dto.dueDate !== undefined) {
+        await this.deadlineChanges.record({
+          entityType: 'PROJECT', entityId: id, projectId: id,
+          previous: existing.dueDate, next: due, tx,
+        });
+      }
+      return p;
     });
     // M17: project edits now appear in the audit/activity feed.
     await this.events.emit({

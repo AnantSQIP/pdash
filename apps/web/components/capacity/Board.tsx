@@ -16,7 +16,7 @@ import { DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holi
 import { BoardLegend } from './BoardLegend';
 import { HoverCard, type HoverTarget, type HoverIntent } from './HoverCard';
 import { assignProjectHues } from '@/lib/project-colors';
-import { teamTotals, DayTotalCell, RowSummary, loadBand, type Unit } from './totals';
+import { teamTotals, DayTotalCell, RowSummary, loadBand, windowTotal, windowTotalText, windowTotalHint, type Unit } from './totals';
 
 export type BoardGroup = { key: string; label?: string; rows: CapacityRow[] };
 export type Zoom = 'days' | 'weeks';
@@ -121,10 +121,9 @@ export function Board({
 
   // Team totals under the header, over the same columns.
   const totals = useMemo(() => teamTotals(allRows.map(r => ({ ...r, days: viewDays.get(r.userId) ?? r.days }))), [allRows, viewDays]);
-  const windowLoad = useMemo(() => {
-    const load = allRows.reduce((s, r) => s + r.committedHours, 0), cap = allRows.reduce((s, r) => s + r.capacityHours, 0);
-    return { load: Math.round(load), cap: Math.round(cap), pct: cap > 0 ? Math.round((load / cap) * 100) : 0 };
-  }, [allRows]);
+  // Planned vs available across the whole window, and the share one is of the other. Derived in
+  // totals.tsx alongside the day and row totals, so the headline can never drift from the bars.
+  const windowLoad = useMemo(() => windowTotal(allRows), [allRows]);
 
   // The cell width, measured once from the header grid, decides whether labels fit in segments.
   const headerGridRef = useRef<HTMLDivElement | null>(null);
@@ -268,9 +267,12 @@ export function Board({
               <div className="flex-1 grid gap-1 items-center" style={gridStyle}>
                 {totals.map(t => <DayTotalCell key={t.date} t={t} unit={unit} wide={wideCols} />)}
               </div>
-              <div className="w-44 shrink-0 text-right text-[10px] tabular-nums text-gray-500" title={`${windowLoad.load}h planned of ${windowLoad.cap}h available across the team in this window`}>
-                {unit === 'percent' ? `${windowLoad.pct}% of the team's hours` : `${windowLoad.load}h of ${windowLoad.cap}h`}
-                <span className={clsx('ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle', loadBand(windowLoad.load, windowLoad.cap) === 'over' ? 'bg-gray-900' : loadBand(windowLoad.load, windowLoad.cap) === 'at' ? 'bg-amber-400' : 'bg-emerald-400')} />
+              {/* Hours AND share, together and always — not one or the other behind the h/%
+                  toggle. "39h of 800h" is what you act on; "5%" is whether the firm is healthy,
+                  and reading it used to mean doing the division yourself. */}
+              <div className="w-44 shrink-0 text-right text-[10px] tabular-nums text-gray-500" title={windowTotalHint(windowLoad)}>
+                {windowTotalText(windowLoad)}
+                <span className={clsx('ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle', loadBand(windowLoad.load, windowLoad.capacity) === 'over' ? 'bg-gray-900' : loadBand(windowLoad.load, windowLoad.capacity) === 'at' ? 'bg-amber-400' : 'bg-emerald-400')} />
               </div>
             </div>
           </div>

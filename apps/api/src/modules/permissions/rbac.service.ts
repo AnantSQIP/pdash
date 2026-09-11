@@ -32,6 +32,29 @@ export class RbacService {
     return { actorId, perms: await this.permissions.getEffectivePermissions(actorId) };
   }
 
+  /**
+   * The organisation a listing is allowed to cover: always the caller's own.
+   *
+   * `listRoles(organizationId)` and `listGroups(organizationId)` take the id from a query
+   * parameter, and a query parameter can be left off. `where: { organizationId: undefined }` is
+   * not an empty result in Prisma — it is NO FILTER, so omitting it returned every organisation's
+   * roles to anyone holding `role.view`. Nothing in the product asks for another firm's roles, so
+   * the parameter is now advisory: the caller's own organisation decides, and a request naming a
+   * different one is refused rather than quietly answered with the wrong firm's data.
+   *
+   * The same shape has been found and closed once before, on GET /organizations. It is worth
+   * stating the rule rather than the patch: a tenant filter must never be able to evaluate to
+   * `undefined`.
+   */
+  private async actorOrgId(requested?: string): Promise<string> {
+    const { actorId } = await this.actorPerms();
+    const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
+    const mine = me?.organizationId;
+    if (!mine) throw new ForbiddenException('Your account is not attached to an organisation.');
+    if (requested && requested !== mine) throw new ForbiddenException('You can only read your own organisation.');
+    return mine;
+  }
+
   /** A non-Super-Admin may only grant permission codes they themselves hold. */
   private async assertMayGrantPermissionIds(permissionIds: string[]) {
     const { perms } = await this.actorPerms();
@@ -53,6 +76,26 @@ export class RbacService {
     }
     if (nextName === SUPER_ADMIN_ROLE) {
       throw new ForbiddenException('Only a Super Admin may assign the reserved name "Super Admin".');
+    }
+  }
+
+  /**
+   * Rewriting what a ROLE may do is Super-Admin-only, on the owner's explicit instruction
+   * ("role permissions must be editable from an Access screen, and only a Super Admin may change
+   * them" — review of 2026-09).
+   *
+   * role.update alone is not enough, and that is not a formality: the Admin preset is every code
+   * bar four, so an Admin passed the "grant only what you hold" test for almost the whole catalog
+   * and could have handed any role nearly anything. The narrower checks below still run after
+   * this one — this raises the floor, it does not replace them.
+   *
+   * Note this covers the wholesale rewrite only. Renaming a role, or creating a new one, remains
+   * role.update / role.create as before; neither can widen an existing role's authority.
+   */
+  private async assertSuperAdminMayRewriteRole() {
+    const { perms } = await this.actorPerms();
+    if (!perms.isSuperAdmin) {
+      throw new ForbiddenException('Only a Super Admin may change what a role can do.');
     }
   }
 
@@ -94,9 +137,10 @@ export class RbacService {
   }
 
   // ── Roles ──────────────────────────────────────────────────────────────────
-  async listRoles(organizationId: string) {
+  async listRoles(organizationId?: string) {
+    const orgId = await this.actorOrgId(organizationId);
     const roles = await this.prisma.role.findMany({
-      where: { organizationId },
+      where: { organizationId: orgId },
       orderBy: { name: 'asc' },
       include: {
         rolePermissions: { select: { permissionId: true, permission: { select: { code: true } } } },
@@ -145,6 +189,7 @@ export class RbacService {
 
   async setRolePermissions(id: string, dto: SetPermissionsDto) {
     const role = await this.mustRole(id);
+    await this.assertSuperAdminMayRewriteRole();
     await this.assertMayMutateRole(role);
     await this.assertMayGrantPermissionIds(dto.permissionIds);
     await this.prisma.$transaction([
@@ -159,9 +204,10 @@ export class RbacService {
   }
 
   // ── Permission groups ───────────────────────────────────────────────────────
-  async listGroups(organizationId: string) {
+  async listGroups(organizationId?: string) {
+    const orgId = await this.actorOrgId(organizationId);
     const groups = await this.prisma.permissionGroup.findMany({
-      where: { organizationId },
+      where: { organizationId: orgId },
       orderBy: { name: 'asc' },
       include: {
         permissionGroupPermissions: { select: { permissionId: true } },

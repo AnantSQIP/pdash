@@ -21,13 +21,6 @@ import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProjec
 /** How often the board re-reads the server while it is on screen. */
 const POLL_MS = 30_000;
 
-type RangeKey = 'next-7' | 'next-14' | 'next-30' | 'past-30';
-const RANGE_OPTIONS: { value: RangeKey; label: string }[] = [
-  { value: 'next-7',  label: 'Next 7 days' },
-  { value: 'next-14', label: 'Next 14 days' },
-  { value: 'next-30', label: 'Next 30 days' },
-  { value: 'past-30', label: 'Past 30 days' },
-];
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -36,11 +29,58 @@ import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, projectsOf, holidaysOf } from '@/components/capacity/grid';
 import { Board, officeLabel } from '@/components/capacity/Board';
+import { windowTotal, windowTotalText, windowTotalHint } from '@/components/capacity/totals';
 import { LiveStatus } from '@/components/capacity/LiveStatus';
 import { assignProjectHues } from '@/lib/project-colors';
-import { todayIST } from '@/lib/date';
+import { todayIST, plural } from '@/lib/date';
+import {
+  resolveWindow, countWorkingDays, daysOf, weekdayOf, weekdayName, WEEKDAYS_IN_ORDER,
+  type Weekday, type WindowChoice,
+} from '@/lib/work-week';
 import { pidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+
+/**
+ * The window the board plans over.
+ *
+ * It used to be a horizon and nothing else — N days, always beginning today — which is the wrong
+ * shape for a firm that does its allocation on a Friday afternoon. Seven days taken on Friday the
+ * 11th ran to Thursday the 17th and left out Friday the 18th, the one day the meeting was about.
+ * So a window is now a START and a LENGTH: a work week, a rolling horizon, a chosen weekday, or a
+ * date typed in. The arithmetic is in lib/work-week.ts, pure and tested; this file only chooses.
+ */
+type RangeKey = 'work-week' | 'next-work-week' | 'next-7' | 'next-14' | 'next-30' | 'from-weekday' | 'custom' | 'past-30';
+
+/** Lengths the "starting on…" options offer. Five is a work week and the API's own floor. */
+const LENGTH_OPTIONS = [5, 7, 14, 30];
+
+/** Turn the picker's state into the window choice lib/work-week.ts resolves. */
+function choiceFor(range: RangeKey, weekStartsOn: Weekday, start: string, length: number): WindowChoice {
+  switch (range) {
+    case 'work-week': return { mode: 'work-week', weekStartsOn };
+    case 'next-work-week': return { mode: 'next-work-week', weekStartsOn };
+    case 'next-7': return { mode: 'rolling', length: 7 };
+    case 'next-30': return { mode: 'rolling', length: 30 };
+    case 'from-weekday': return { mode: 'from-weekday', weekStartsOn, length };
+    case 'custom': return { mode: 'custom', start, length };
+    // 'past-30' draws the retrospective board instead, but the forward window still has to
+    // resolve to something — the queries that use it are simply disabled.
+    default: return { mode: 'rolling', length: 14 };
+  }
+}
+
+/**
+ * Which window the board opens on.
+ *
+ * The allocation exercise happens on a Friday and is about the week ahead, so from Friday to
+ * Sunday the board opens on NEXT week and the rest of the time on this one. Landing on the window
+ * somebody came to fill is the difference between a tool used in the meeting and one opened,
+ * re-ranged, and then used in the meeting.
+ */
+function defaultRange(today: string): RangeKey {
+  const wd = weekdayOf(today);
+  return wd === 5 || wd === 6 || wd === 0 ? 'next-work-week' : 'work-week';
+}
 
 export default function CapacityPage() {
   const { org } = useOrg();
@@ -48,7 +88,13 @@ export default function CapacityPage() {
   const qc = useQueryClient();
   const allowed = can('capacity.view');
 
-  const [range, setRange] = useState<RangeKey>('next-14');
+  const [range, setRange] = useState<RangeKey>(() => defaultRange(todayIST()));
+  // Which day a week begins on — the work-week modes and "starting on a weekday" both read it.
+  // Monday here; the offices do not all keep the same weekend, and a board that cannot say so is
+  // a board somebody keeps in a spreadsheet instead.
+  const [weekStartsOn, setWeekStartsOn] = useState<Weekday>(1);
+  const [customStart, setCustomStart] = useState('');
+  const [customLength, setCustomLength] = useState(7);
   const [search, setSearch] = useState('');
   const [dept, setDept] = useState('');
   const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
@@ -61,7 +107,14 @@ export default function CapacityPage() {
   const today = todayIST();
 
   const isPast = range === 'past-30';
-  const days = range === 'next-7' ? 7 : range === 'next-30' ? 30 : 14; // forward horizon
+  const win = useMemo(
+    () => resolveWindow(today, choiceFor(range, weekStartsOn, customStart, customLength)),
+    [today, range, weekStartsOn, customStart, customLength],
+  );
+  const days = win.days;
+  // `from` is sent only when the window does NOT start today, so the rolling options make exactly
+  // the request they always made — same URL, same cache entry, same board.
+  const from = win.start === today ? undefined : win.start;
   const histDays = 30;
 
   // Forward projected-capacity board (default). Disabled while viewing the past. When a project
@@ -69,8 +122,8 @@ export default function CapacityPage() {
   // Polled while the tab is visible (plus the app-wide refetch on focus/reconnect), so a task
   // assigned, closed or logged against anywhere shows here within the interval without a reload.
   const { data, isLoading: fwdLoading, dataUpdatedAt, isFetching, refetch } = useQuery<TeamCapacity>({
-    queryKey: ['capacity', org?.id, days, projectId],
-    queryFn: () => projectId ? api.capacity.forProject(projectId, days) : api.capacity.team(days),
+    queryKey: ['capacity', org?.id, win.start, days, projectId],
+    queryFn: () => projectId ? api.capacity.forProject(projectId, days, from) : api.capacity.team(days, from),
     enabled: allowed && !!org?.id && !isPast,
     staleTime: POLL_MS,
     refetchInterval: POLL_MS,
@@ -92,10 +145,14 @@ export default function CapacityPage() {
     staleTime: 60_000,
   });
 
-  // Emergency-leave coverage: short-notice absences over HIGH/CRITICAL work.
+  // Emergency-leave coverage: short-notice absences over HIGH/CRITICAL work. It is about what is
+  // imminent, not about whichever window is on screen, so it keeps a fortnight's look-ahead at the
+  // very least — tying it to the board's length meant that narrowing to a work week in order to
+  // plan it silently hid the absences that make the plan wrong.
+  const coverageDays = Math.max(14, days);
   const { data: coverage } = useQuery<CoverageRisks>({
-    queryKey: ['coverage-risks', org?.id, days],
-    queryFn: () => api.capacity.coverageRisks(days),
+    queryKey: ['coverage-risks', org?.id, coverageDays],
+    queryFn: () => api.capacity.coverageRisks(coverageDays),
     enabled: allowed && !!org?.id && !isPast,
     staleTime: POLL_MS,
     refetchInterval: POLL_MS,
@@ -108,7 +165,13 @@ export default function CapacityPage() {
   const holidays = useMemo(() => holidaysOf(fwdRows), [fwdRows]);
   const selected = useMemo(() => fwdRows.find(r => r.userId === selectedUserId) ?? null, [fwdRows, selectedUserId]);
   // A pinned project belongs to the board it was pinned on.
-  useEffect(() => { setFocusProjectId(null); }, [range, projectId]);
+  useEffect(() => { setFocusProjectId(null); }, [win.start, win.days, projectId]);
+  // What the window actually contains: how many of its days anybody can be given work on, and
+  // how many of the team's hours are already spoken for. Both are read off the same payload the
+  // grid below is drawn from, so the headline and the columns cannot disagree.
+  const workingDays = useMemo(() => countWorkingDays(win, { holidays }), [win, holidays]);
+  const holidaysInWindow = useMemo(() => daysOf(win).filter(d => holidays.has(d)).length, [win, holidays]);
+  const allocation = useMemo(() => windowTotal(fwdRows), [fwdRows]);
   const histRows = history?.rows ?? [];
   const allRows: { name: string; department?: string }[] = isPast ? histRows : fwdRows;
 
@@ -194,6 +257,38 @@ export default function CapacityPage() {
                 </span>
               )}
             </p>
+            {/* What this window IS — said in dates, because a length alone ("next 7 days") is
+                exactly what let a Friday window quietly stop on the Thursday. The share beside it
+                answers the question the two hour figures pose: 39h of 800h is 5%, and reading that
+                off the board is how anybody sees at a glance whether the firm is booked or idle. */}
+            {!isPast && (
+              <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+                <span className="inline-flex items-center gap-1.5 font-medium text-gray-700">
+                  <CalendarRange size={13} className="text-gray-400" />
+                  {formatDate(win.start, { weekday: 'short', day: 'numeric', month: 'short' })}
+                  {' – '}
+                  {formatDate(win.end, { weekday: 'short', day: 'numeric', month: 'short' })}
+                </span>
+                <span className="text-gray-400">
+                  · {plural(workingDays, 'working day')}
+                  {holidaysInWindow > 0 && ` · ${plural(holidaysInWindow, 'holiday')}`}
+                </span>
+                {fwdRows.length > 0 && (
+                  <span
+                    title={windowTotalHint(allocation)}
+                    className={clsx(
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
+                      allocation.pct === null ? 'bg-gray-50 text-gray-500 ring-gray-300/40'
+                        : allocation.pct > 100 ? 'bg-gray-900 text-white ring-gray-900/20'
+                          : allocation.pct >= 75 ? 'bg-amber-50 text-amber-700 ring-amber-600/15'
+                            : 'bg-brand-50 text-brand-700 ring-brand-600/15',
+                    )}
+                  >
+                    <Gauge size={12} /> {windowTotalText(allocation)} allocated
+                  </span>
+                )}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="relative">
@@ -219,12 +314,65 @@ export default function CapacityPage() {
             )}
             <select
               value={range}
-              onChange={e => setRange(e.target.value as RangeKey)}
-              title="Time range"
+              onChange={e => {
+                const next = e.target.value as RangeKey;
+                // A date field that opens blank is a date field nobody can see the window of.
+                if (next === 'custom' && !customStart) setCustomStart(today);
+                setRange(next);
+              }}
+              title="The window the board plans over"
               className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white font-medium text-gray-700"
             >
-              {RANGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              <optgroup label="Work week">
+                <option value="work-week">This work week</option>
+                <option value="next-work-week">Next work week</option>
+              </optgroup>
+              <optgroup label="From today">
+                <option value="next-7">Next 7 days</option>
+                <option value="next-14">Next 14 days</option>
+                <option value="next-30">Next 30 days</option>
+              </optgroup>
+              <optgroup label="Pick the start">
+                <option value="from-weekday">Starting on a weekday…</option>
+                <option value="custom">Starting on a date…</option>
+              </optgroup>
+              <optgroup label="Look back">
+                <option value="past-30">Past 30 days</option>
+              </optgroup>
             </select>
+            {/* Which day the week — or the window — begins on. The work-week options read it as
+                the first working day; "starting on a weekday" reads it as the start itself. */}
+            {(range === 'work-week' || range === 'next-work-week' || range === 'from-weekday') && (
+              <select
+                value={weekStartsOn}
+                onChange={e => setWeekStartsOn(Number(e.target.value) as Weekday)}
+                title={range === 'from-weekday' ? 'Which day the window starts on' : 'Which day the work week starts on'}
+                className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700"
+              >
+                {WEEKDAYS_IN_ORDER.map(w => (
+                  <option key={w} value={w}>
+                    {range === 'from-weekday' ? `From ${weekdayName(w)}` : `Weeks start ${weekdayName(w)}`}
+                  </option>
+                ))}
+              </select>
+            )}
+            {range === 'custom' && (
+              <input
+                type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
+                title="The first day of the window"
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700"
+              />
+            )}
+            {(range === 'from-weekday' || range === 'custom') && (
+              <select
+                value={customLength}
+                onChange={e => setCustomLength(Number(e.target.value))}
+                title="How many days the window covers"
+                className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700"
+              >
+                {LENGTH_OPTIONS.map(n => <option key={n} value={n}>{n} days</option>)}
+              </select>
+            )}
             {!isPast && <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => { refetch(); qc.invalidateQueries({ queryKey: ['coverage-risks'] }); }} intervalMs={POLL_MS} className="ml-1" />}
           </div>
         </div>

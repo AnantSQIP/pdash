@@ -185,7 +185,9 @@ export type AuthUser = {
   designation?: string | null; status: string; organizationId: string; mustResetPassword: boolean;
   /** GURGAON | JAIPUR — defaults the office on a new project. */
   office?: string | null;
-  /** False until they have filled in their joining details — AppShell blocks on this. */
+  /** False until the joining details are filled in. Informational only — it used to gate the
+   *  whole app on first sign-in; that gate was removed in the 2026-09 review and HR now fills
+   *  these in when it creates the account. */
   profileCompleted: boolean;
 };
 
@@ -1160,6 +1162,114 @@ export type OrgBreakdowns = {
   projectProgress: { projectId: string; name: string; completionPercentage: number; phase: string }[];
   capacityVsLogged: { name: string; actual: number; target: number }[];
 };
+// ── The two performance KPIs ────────────────────────────────────────────────────
+// Time spent against time allocated, and the streak of delivering on the day AND on the budget.
+// Every shape below mirrors apps/api/src/modules/performance/kpi.ts, which is where the
+// arithmetic lives and is tested. `null` is used throughout for "no score", never 0 — a person
+// with nothing measurable did not score zero, and the difference decides an appraisal.
+
+/** How many TIMES a limit was crossed, and how many THINGS crossed it. Never one number. */
+export type BreachCount = { times: number; things: number };
+
+export type HoursKpi = {
+  measured: number; within: number; over: number; redFlag: number;
+  /** Had no allocation, so nothing could judge it. Excluded from every rate above. */
+  unmeasured: number;
+  allocatedHours: number; spentHours: number; overHours: number;
+  withinRate: number | null; worstRatio: number | null;
+};
+export type DeadlineKpi = {
+  dated: number; onTime: number; late: number; undated: number;
+  onTimeRate: number | null; lateDays: number; worstLateDays: number | null;
+};
+export type StreakKpi = {
+  current: number; longest: number; judged: number; skipped: number;
+  brokenBy: { taskId: string; title?: string; reason: 'LATE' | 'OVER_HOURS' | 'BOTH'; at: string } | null;
+};
+export type ProjectBreachRow = {
+  projectId: string | null; projectName: string; projectCode: string | null; roundSeq: number | null;
+  deliveries: number; hoursBreaches: BreachCount; deadlineBreaches: BreachCount;
+  allocatedHours: number; spentHours: number; overrun: number | null; unmeasured: number;
+};
+/** The window a KPI response was actually measured over, echoed back as instants. */
+export type KpiWindowIso = { from: string; to: string; prevFrom: string; prevTo: string };
+
+/**
+ * The window ASKED for: four local `YYYY-MM-DD` days, each read by the server as IST midnight.
+ *
+ * Separate from `KpiWindowIso` on purpose. They carry the same four names and are not the same
+ * thing — sending an instant where a day is expected fails the server's format check and silently
+ * falls back to "the last seven days", which is a wrong report rather than an error. Keeping the
+ * request shape distinct from the response shape makes that mistake a type error.
+ *
+ * `to` and `prevTo` are EXCLUSIVE: the day after the last day in the window.
+ */
+export type KpiRange = { from: string; to: string; prevFrom: string; prevTo: string };
+
+function kpiQuery(r: KpiRange): string {
+  return new URLSearchParams({ from: r.from, to: r.to, prevFrom: r.prevFrom, prevTo: r.prevTo }).toString();
+}
+
+export type UserKpis = {
+  userId: string; name: string; designation?: string;
+  window: KpiWindowIso;
+  tasksCompleted: number;
+  /** Work due by the end of the window and still open — the rest of the completed-out-of-total pie. */
+  outstanding: number;
+  hours: HoursKpi; deadlines: DeadlineKpi; streak: StreakKpi;
+  hoursBreaches: BreachCount; deadlineBreaches: BreachCount;
+  byProject: ProjectBreachRow[];
+  previous: {
+    tasksCompleted: number; withinRate: number | null; onTimeRate: number | null;
+    hoursBreaches: BreachCount; deadlineBreaches: BreachCount;
+  };
+};
+
+export type OrgKpiMember = {
+  userId: string; name: string; designation?: string; department?: string;
+  tasksCompleted: number;
+  hoursBreaches: BreachCount; deadlineBreaches: BreachCount;
+  /** Requirement 5: across how many projects this person went over. */
+  projectsBreached: number;
+  overrun: number | null; withinRate: number | null; onTimeRate: number | null;
+  unmeasured: number; allocatedHours: number; spentHours: number; redFlag: number;
+  streak: { current: number; longest: number };
+};
+export type OrgKpis = {
+  window: KpiWindowIso;
+  totals: {
+    members: number; tasksCompleted: number;
+    /** Due by the end of the window and still open — counted over tasks, not assignments. */
+    outstanding: number;
+    hours: HoursKpi; deadlines: DeadlineKpi;
+    hoursBreaches: BreachCount; deadlineBreaches: BreachCount;
+  };
+  previous: { tasksCompleted: number; withinRate: number | null; onTimeRate: number | null };
+  byProject: ProjectBreachRow[];
+  members: OrgKpiMember[];
+};
+
+export type ProjectKpiRow = {
+  projectId: string; name: string; code: string | null; roundSeq: number | null;
+  managerIds: string[];
+  /** Requirement 18. Zero when nothing was recorded — which is also the answer for a project
+   *  older than the deadline ledger, so the panel says "no recorded shifts" rather than erroring. */
+  deadlineShifts: BreachCount;
+  hours: HoursKpi; deadlines: DeadlineKpi;
+  /** Requirement 19: the same over-run arithmetic over the HIGH and CRITICAL tasks only. */
+  importantHours: HoursKpi;
+  overrun: number | null; tasksCompleted: number;
+};
+export type ManagerKpiRow = {
+  userId: string; name: string; designation?: string;
+  projects: number; deadlineShifts: BreachCount;
+  overrun: number | null; importantOverrun: number | null;
+  allocatedHours: number; spentHours: number; tasksCompleted: number;
+  hoursBreaches: BreachCount; deadlineBreaches: BreachCount;
+  onTimeRate: number | null; unmeasured: number;
+};
+export type ProjectKpis = { window: KpiWindowIso; projects: ProjectKpiRow[]; managers: ManagerKpiRow[] };
+
 export type OrgTrendPoint = { date: string; hours: number; billableHours: number; completed: number; activity: number };
 export type OrgTrend = {
   totals: OrgTrendPoint[];
@@ -1356,6 +1466,28 @@ export type AttendanceMonth = {
   days: AttendanceDay[];
   summary: { present: number; absent: number; onLeave: number; holiday: number; weekend: number; workingDays: number; attendanceRate: number; hoursLogged: number };
 };
+// ─── Admin → Data: the bin, and what leaving it costs ─────────────────────────
+// Everything soft-deleted, with what each row would take down with it. The counts are shown
+// BEFORE the permanent delete, because "this destroys 41 timesheet entries" is the fact that
+// decides whether somebody goes through with it.
+export type DeletedProjectRow = {
+  id: string; title: string; code: string | null; projectPhase: string; deletedAt: string;
+  projectType: string | null; technologyDomain: string | null;
+  taskCount: number; memberCount: number; timesheetCount: number;
+};
+export type DeletedTaskRow = {
+  id: string; title: string; priority: string; dueDate: string | null; deletedAt: string;
+  project: { id: string; title: string; code: string | null } | null;
+  subtaskCount: number; timesheetCount: number; assigneeCount: number;
+};
+export type DeletedInventory = { projects: DeletedProjectRow[]; tasks: DeletedTaskRow[] };
+/** What a purge actually destroyed, table by table — echoed back so the toast can be specific. */
+export type PurgeResult = {
+  id: string; title: string; code?: string | null;
+  deleted: Record<string, number>;
+  tasksKept?: number;
+};
+
 export type OrgAttendanceSummary = {
   from: string; to: string;
   rows: { userId: string; name: string; designation?: string; present: number; absent: number; onLeave: number; holiday: number; hoursLogged: number; attendanceRate: number }[];
@@ -1596,6 +1728,14 @@ export const api = {
           & { isSelf: boolean; youAreDefault: boolean })[];
       }>('/projects/eligible-managers'),
     delete: (id: string) => req<void>(`/projects/${id}`, { method: 'DELETE' }),
+    /**
+     * PERMANENT. Destroys the project and every child row; there is no undo and nothing in the
+     * app to restore from. The server refuses unless the project is ALREADY soft-deleted and
+     * `confirmTitle` matches its title exactly — the dialog is the courtesy, these are the gate.
+     * Also triggers the org step-up passcode prompt (handled by the interceptor above).
+     */
+    deletePermanent: (id: string, confirmTitle: string) =>
+      req<PurgeResult>(`/projects/${id}/permanent?confirm=${encodeURIComponent(confirmTitle)}`, { method: 'DELETE' }),
     // The approver is the verified cookie actor server-side; only an optional reason is sent.
     approve: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
@@ -1913,6 +2053,9 @@ export const api = {
     setStaffing: (id: string, assignees: StaffingEntry[]) =>
       req<ApiTask & { scheduleWarnings?: string[] }>(`/tasks/${id}/staffing`, { method: 'PUT', body: JSON.stringify({ assignees }) }),
     delete: (id: string) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),
+    /** PERMANENT — see projects.deletePermanent. Same three gates, same absence of an undo. */
+    deletePermanent: (id: string, confirmTitle: string) =>
+      req<PurgeResult>(`/tasks/${id}/permanent?confirm=${encodeURIComponent(confirmTitle)}`, { method: 'DELETE' }),
     createSubtask: (taskId: string, data: { title: string; priority?: string; dueDate?: string; assigneeIds?: string[] }) =>
       req<Subtask>(`/tasks/${taskId}/subtasks`, { method: 'POST', body: JSON.stringify(data) }),
     listSubtasks: (taskId: string) => req<Subtask[]>(`/tasks/${taskId}/subtasks`),
@@ -2301,6 +2444,19 @@ export const api = {
       req<{ ok: boolean }>(`/permission-groups/${id}/members`, { method: 'PUT', body: JSON.stringify({ userIds }) }),
   },
 
+  /**
+   * Admin → Data. What used to be the owner opening the production database by hand: the list of
+   * everything soft-deleted, and the two things he wants to do with it.
+   */
+  adminData: {
+    deleted: () => req<DeletedInventory>('/admin/data/deleted'),
+    /** Reversible, so no passcode and no typed confirmation — it puts something BACK. */
+    restoreProject: (id: string) =>
+      req<{ id: string; title: string; tasksRestored: number }>(`/admin/data/projects/${id}/restore`, { method: 'POST' }),
+    restoreTask: (id: string) =>
+      req<{ id: string; title: string }>(`/admin/data/tasks/${id}/restore`, { method: 'POST' }),
+  },
+
   auditLogs: {
     list: (params: { organizationId?: string; entityType?: string; action?: string; userId?: string; limit?: number; cursor?: string }) => {
       const p = new URLSearchParams();
@@ -2310,6 +2466,15 @@ export const api = {
   },
 
   performance: {
+    // ── The two KPIs ────────────────────────────────────────────────────────────
+    // Windowed by four explicit calendar dates, not a day count: the day count could only ever
+    // describe a window ending today, which is why the module used to report a half-finished week
+    // as "last week". lib/periods.ts owns the arithmetic that produces them.
+    kpis: (r: KpiRange) => req<UserKpis>(`/performance/kpis/me?${kpiQuery(r)}`),
+    userKpis: (userId: string, r: KpiRange) => req<UserKpis>(`/performance/kpis/users/${userId}?${kpiQuery(r)}`),
+    orgKpis: (r: KpiRange) => req<OrgKpis>(`/performance/kpis/org?${kpiQuery(r)}`),
+    projectKpis: (r: KpiRange) => req<ProjectKpis>(`/performance/kpis/projects?${kpiQuery(r)}`),
+
     me: (days = 30) => req<UserPerformance>(`/performance/me?days=${days}`),
     user: (userId: string, days = 30) => req<UserPerformance>(`/performance/users/${userId}?days=${days}`),
     breakdowns: (userId: string, days = 30) => req<UserBreakdowns>(`/performance/users/${userId}/breakdowns?days=${days}`),
@@ -2354,13 +2519,19 @@ export const api = {
   },
 
   capacity: {
-    /** Who is busy, who is free, and when — across every project. Org from the session. */
-    team: (days = 14) =>
-      req<TeamCapacity>(`/capacity/team?days=${days}`),
+    /**
+     * Who is busy, who is free, and when — across every project. Org from the session.
+     *
+     * `from` (YYYY-MM-DD) is the first day of the window. Omit it and the window starts today,
+     * which is the only thing it could do before a start could be named — so every existing
+     * caller keeps the board it has always had. See lib/work-week.ts for choosing the window.
+     */
+    team: (days = 14, from?: string) =>
+      req<TeamCapacity>(`/capacity/team?days=${days}${from ? `&from=${from}` : ''}`),
     /** Availability of one project's members — the capacity view opened from a project. */
-    forProject: (projectId: string, days = 14) =>
+    forProject: (projectId: string, days = 14, from?: string) =>
       req<TeamCapacity & { project: { id: string; title: string } }>(
-        `/capacity/project/${projectId}?days=${days}`),
+        `/capacity/project/${projectId}?days=${days}${from ? `&from=${from}` : ''}`),
     /** Emergency-leave coverage risks: short-notice absences over HIGH/CRITICAL work. */
     coverageRisks: (days = 14) =>
       req<CoverageRisks>(`/capacity/coverage-risks?days=${days}`),

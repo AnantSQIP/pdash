@@ -7,7 +7,7 @@ import clsx from 'clsx';
 import { RiSearchLine, RiArrowDownSLine, RiCloseLine, RiFilter3Line, RiDownloadLine } from '@remixicon/react';
 import { toCSV, downloadCSV, type CsvColumn } from './tokens';
 import { DateField } from '@/components/ui/DateField';
-import { PERIODS } from '@/lib/periods';
+import { PERIODS, CALENDAR_PERIODS, periodWindow, describeWindow, type CalendarPeriodKey } from '@/lib/periods';
 
 export function FilterBar({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={clsx('flex items-center gap-2 flex-wrap', className)}>{children}</div>;
@@ -38,6 +38,37 @@ export function PeriodPicker({ value, onChange }: {
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * The calendar periods the KPIs are reviewed over.
+ *
+ * Separate from `PeriodPicker` above, which offers ROLLING windows ending today. That is the
+ * distinction the whole rework turns on: a rolling week is always the half-finished one, which is
+ * why "Tasks Completed" reported a partial week and could never be set against the week before.
+ * Each button here names a window with a real start and a real end, and the button's tooltip says
+ * which days it covers so nobody has to work it out.
+ */
+export function CalendarPeriodPicker({ value, onChange }: {
+  value: CalendarPeriodKey; onChange: (k: CalendarPeriodKey) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-1 rounded-lg bg-gray-100/80 p-1 ring-1 ring-inset ring-gray-950/[0.04] flex-wrap">
+      {CALENDAR_PERIODS.map(p => (
+        <button
+          key={p.key}
+          onClick={() => onChange(p.key)}
+          title={describeWindow(periodWindow(p.key))}
+          className={clsx('rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+            value === p.key
+              ? 'bg-white text-gray-900 shadow-[0_1px_2px_0_rgb(16_24_40_/_0.06),0_1px_3px_0_rgb(16_24_40_/_0.04)]'
+              : 'text-gray-500 hover:text-gray-800')}
+        >
+          {p.label}
+        </button>
+      ))}
     </div>
   );
 }

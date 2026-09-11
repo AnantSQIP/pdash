@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Global, Injectable, Module } f
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
 import { getActorId } from '../../common/context/request-context';
+import { DeadlineChangeService } from './deadline-change.service';
 
 /**
  * Governs the CLIENT-facing deadline (`clientDueDate` on Project/Task), which is
@@ -88,7 +89,10 @@ export class DeadlineVisibilityService {
 /** Global so Projects/Tasks (and anything else with deadlines) can inject it directly. */
 @Global()
 @Module({
-  providers: [DeadlineVisibilityService],
-  exports: [DeadlineVisibilityService],
+  // DeadlineChangeService rides in the same global module for the same reason: every module
+  // that can move a deadline — projects, tasks, team spaces — has to be able to record the
+  // move, and a path that cannot inject the recorder is a path that silently under-reports.
+  providers: [DeadlineVisibilityService, DeadlineChangeService],
+  exports: [DeadlineVisibilityService, DeadlineChangeService],
 })
 export class DeadlinesModule {}

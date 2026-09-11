@@ -48,6 +48,32 @@ export function parseHorizon(raw: string | undefined, fallback = DEFAULT_DAYS): 
   return Math.max(MIN_DAYS, Math.min(MAX_DAYS, n));
 }
 
+/** How far either side of today a caller may anchor the window. */
+const MAX_WINDOW_OFFSET_DAYS = 400;
+
+/**
+ * Coerce the `from` query parameter — the first day of the window — to a UTC-midnight date, or
+ * `undefined` to mean "today", which is what the board did before a start could be named.
+ *
+ * The planning meeting happens on a Friday and is about the following week, so the window has to
+ * be able to begin on a day that is not today. Anything unparseable is ignored rather than
+ * rejected: a window is a view, and falling back to today shows the board instead of an error
+ * where the board should be. The offset is bounded because the start seeds several day-by-day
+ * loops — a caller asking to start in the year 3000 would otherwise be asking the server to walk
+ * a million days before it drew anything.
+ */
+export function parseWindowStart(raw: string | undefined, today: Date): Date | undefined {
+  const day = (raw ?? '').trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return undefined;
+  const parsed = new Date(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  // A date that does not exist (2026-02-31) parses to a different day than the one written; taking
+  // it would silently start the window three days after the date the client asked for.
+  if (parsed.toISOString().slice(0, 10) !== day) return undefined;
+  const offset = Math.abs(parsed.getTime() - today.getTime()) / 86_400_000;
+  return offset > MAX_WINDOW_OFFSET_DAYS ? undefined : parsed;
+}
+
 export type DayState =
   // Forward (projected-load) states:
   | 'WEEKEND' | 'HOLIDAY' | 'LEAVE' | 'LEAVE_PENDING' | 'FREE' | 'LIGHT' | 'BUSY'
@@ -177,7 +203,7 @@ export class CapacityService {
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
-  async forProject(projectId: string, days = DEFAULT_DAYS) {
+  async forProject(projectId: string, days = DEFAULT_DAYS, opts?: { from?: Date }) {
     const organizationId = await this.actor.requireOrgId();
     // A project has no organizationId column — its org is reached through its members, the
     // same way ProjectsService.list scopes. Requiring an in-org member makes an id from
@@ -195,7 +221,7 @@ export class CapacityService {
     });
     if (!project) throw new NotFoundException('Project not found');
     const userIds = project.members.map((m: { userId: string }) => m.userId);
-    const board = await this.team(organizationId, days, userIds);
+    const board = await this.team(organizationId, days, userIds, opts);
     return { project: { id: project.id, title: project.title }, ...board };
   }
 
@@ -225,15 +251,33 @@ export class CapacityService {
    * `organizationId` is the CALLER'S org, resolved from the session by the controller —
    * it is never accepted from the client. `onlyUserIds`, when given, restricts the board
    * to those people (used by the per-project view).
+   *
+   * WHERE THE WINDOW STARTS. `opts.from` names the first day; omit it and the window begins
+   * today, which is the only thing it could ever do before. That default is load-bearing —
+   * forProject, myPlan and coverageRisks all call this with a length and nothing else — so the
+   * `days`-only call is byte-for-byte the board it always was. Naming a start is what lets a
+   * manager plan NEXT week on a Friday instead of being shown Friday-to-Thursday, which drops the
+   * one day the Friday meeting exists to fill.
    */
   async team(
     organizationId: string,
     days = DEFAULT_DAYS,
     onlyUserIds?: string[],
+    opts?: { from?: Date },
   ): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[]; generatedAt: string }> {
     const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
-    const to = addDays(today, horizon);
+    // The window is a START and a LENGTH. `today` stays what it has always been — the real day,
+    // which is what "overdue" is measured against — and no longer doubles as the left edge.
+    const windowStart = opts?.from ? startOfUtcDay(opts.from) : today;
+    const to = addDays(windowStart, horizon);
+    /**
+     * The earliest day work may be PLANNED onto. Never before today, however far back the window
+     * is anchored: the past is what happened, not what is about to be arranged, and re-projecting
+     * remaining effort onto days that have already gone would invent a plan nobody can act on.
+     * For every forward window this is the window's own start, so the ordinary board is untouched.
+     */
+    const planFrom = windowStart > today ? windowStart : today;
     const userFilter = onlyUserIds ? { id: { in: onlyUserIds.length ? onlyUserIds : ['__none__'] } } : {};
 
     // An APPROVED optional holiday is a non-working day for ONE person. It therefore belongs with
@@ -249,13 +293,13 @@ export class CapacityService {
         orderBy: [{ firstName: 'asc' }],
       }),
       this.prisma.holiday.findMany({
-        where: { organizationId, date: { gte: today, lt: to } },
+        where: { organizationId, date: { gte: windowStart, lt: to } },
         select: { date: true, name: true },
       }),
       this.prisma.leaveRequest.findMany({
         // Include PENDING (tentative) leave so it is VISIBLE on the board — it is shown
         // distinctly and does NOT reduce capacity until approved.
-        where: { status: { in: ['APPROVED', 'PENDING'] }, startDate: { lt: to }, endDate: { gte: today }, user: { organizationId } },
+        where: { status: { in: ['APPROVED', 'PENDING'] }, startDate: { lt: to }, endDate: { gte: windowStart }, user: { organizationId } },
         select: { userId: true, startDate: true, endDate: true, leaveType: true, status: true, dayType: true },
       }),
       // Every OPEN task assigned to anyone in scope — capacity is cross-project by design.
@@ -288,14 +332,14 @@ export class CapacityService {
           },
         },
       }),
-      this.optionalHolidays.approvedDayKeys(organizationId, today, to),
+      this.optionalHolidays.approvedDayKeys(organizationId, windowStart, to),
       // Live cover: somebody standing in on named days, or for good. A withdrawn record is
       // ignored entirely, which is what makes cancelling a leave restore the original plan.
       this.prisma.taskCoverage.findMany({
         where: {
           revokedAt: null,
           fromUser: { organizationId },
-          OR: [{ toDate: null }, { toDate: { gte: today } }],
+          OR: [{ toDate: null }, { toDate: { gte: windowStart } }],
         },
         select: { taskId: true, fromUserId: true, toUserId: true, fromDate: true, toDate: true, mode: true },
       }),
@@ -324,7 +368,7 @@ export class CapacityService {
       // Clamp the iteration to the visible window BEFORE looping. A leave whose endDate is
       // years out (bad data) would otherwise spin for millions of iterations; the query only
       // guarantees the range OVERLAPS the window, not that it fits inside it.
-      const from = startOfUtcDay(lv.startDate) < today ? today : startOfUtcDay(lv.startDate);
+      const from = startOfUtcDay(lv.startDate) < windowStart ? windowStart : startOfUtcDay(lv.startDate);
       const until = startOfUtcDay(lv.endDate) >= to ? addDays(to, -1) : startOfUtcDay(lv.endDate);
       const half = lv.dayType === 'HALF';
       for (let d = new Date(from); d <= until; d = addDays(d, 1)) {
@@ -336,7 +380,7 @@ export class CapacityService {
 
     // The calendar window (every day; state decides whether it is workable).
     const window: Date[] = [];
-    for (let d = new Date(today); d < to; d = addDays(d, 1)) window.push(new Date(d));
+    for (let d = new Date(windowStart); d < to; d = addDays(d, 1)) window.push(new Date(d));
 
     /**
      * How many hours of a given day this person actually has. THE single answer to that
@@ -363,6 +407,22 @@ export class CapacityService {
       const wd = window.filter(d => capacityOn(userId, d) > 0);
       workingDaysCache.set(userId, wd);
       return wd;
+    };
+
+    /**
+     * The working days work may actually be PUT on — the same list, minus anything before
+     * `planFrom`. For every window that starts today or later this is identical to
+     * workingDaysFor, which is why the ordinary board is unchanged; it only differs when somebody
+     * anchors the window in the past, where filling days that have already happened would draw a
+     * plan for a week nobody can any longer change.
+     */
+    const plannableDaysCache = new Map<string, Date[]>();
+    const plannableDaysFor = (userId: string): Date[] => {
+      const hit = plannableDaysCache.get(userId);
+      if (hit) return hit;
+      const pd = windowStart >= planFrom ? workingDaysFor(userId) : workingDaysFor(userId).filter(d => d >= planFrom);
+      plannableDaysCache.set(userId, pd);
+      return pd;
     };
 
     // Per-user, per-day committed load.
@@ -470,17 +530,18 @@ export class CapacityService {
         if (!anyEntryForTask.has(task.id)) anyEntryForTask.set(task.id, mine.get(task.id)!);
 
         if (remaining <= 0) continue;
-        if (!workingDaysFor(userId).length) continue;
+        if (!plannableDaysFor(userId).length) continue;
 
         if (ownStart) {
           // PLACED. This person said when they start, so the work goes there rather than being
           // smeared to the deadline. A start already past is honoured by planning what is LEFT
-          // from today: work in flight is not work that has not begun.
+          // from the first day still open to planning: work in flight is not work that has not
+          // begun, and on a window opened for next week it picks up on the Monday.
           const from = startOfUtcDay(ownStart);
           if (from >= to) continue; // begins after the visible window — nothing to draw here
           scheduled.push({
             userId, taskId: task.id, remaining,
-            startAt: from > today ? from : today,
+            startAt: from > planFrom ? from : planFrom,
             cap: capByUser.get(userId) ?? null,
             priority: task.priority, due: personDue ?? null,
           });
@@ -547,7 +608,7 @@ export class CapacityService {
     const keptHours = new Map<string, { kept: number; by: string }>();
 
     for (const s of scheduled) {
-      const allDays = workingDaysFor(s.userId).filter(d => d >= s.startAt);
+      const allDays = plannableDaysFor(s.userId).filter(d => d >= s.startAt);
       const place = (remaining: number, days: Date[], userId = s.userId) => placeForward({
         remaining, days, perDayCap: s.cap,
         capacityOn: d => capacityOn(userId, d),
@@ -572,7 +633,7 @@ export class CapacityService {
 
         if (moved > 0) {
           const standIn = cover.toUserId;
-          const theirDays = workingDaysFor(standIn)
+          const theirDays = plannableDaysFor(standIn)
             .filter(d => d >= from && (until === null || d <= until));
           commit(standIn, s.taskId, place(moved, theirDays, standIn));
           const key = `${standIn}|${s.taskId}`;
@@ -598,15 +659,15 @@ export class CapacityService {
 
     // ── pass 2: spread the unscheduled work, as before ──────────────────────
     for (const u of unscheduled) {
-      const workable = workingDaysFor(u.userId);
+      const workable = plannableDaysFor(u.userId);
       if (!workable.length) continue;
 
-      // The span this task occupies: from its start (never before today) to its internal
-      // deadline. No deadline → spread over the window ahead. Overdue, or a deadline that
-      // has already passed within the window → it lands on the first workable day: it is
-      // blocking them right now.
-      const startsAt = u.taskStart && startOfUtcDay(u.taskStart) > today ? startOfUtcDay(u.taskStart) : today;
-      const endsAt = u.personDue ? startOfUtcDay(u.personDue) : addDays(today, horizon - 1);
+      // The span this task occupies: from its start (never before the first day still open to
+      // planning) to its internal deadline. No deadline → spread over the window ahead. Overdue,
+      // or a deadline that has already passed within the window → it lands on the first workable
+      // day: it is blocking them right now.
+      const startsAt = u.taskStart && startOfUtcDay(u.taskStart) > planFrom ? startOfUtcDay(u.taskStart) : planFrom;
+      const endsAt = u.personDue ? startOfUtcDay(u.personDue) : addDays(windowStart, horizon - 1);
       let span = workable.filter(d => d >= startsAt && d <= endsAt);
       if (!span.length) span = [workable[0]]; // overdue / same-day: put it on the first workable day
 
@@ -641,7 +702,7 @@ export class CapacityService {
       }
       if (moved > 0) {
         const standIn = cover.toUserId;
-        const theirDays = workingDaysFor(standIn).filter(d => inCoverageWindow(d, from, until));
+        const theirDays = plannableDaysFor(standIn).filter(d => inCoverageWindow(d, from, until));
         commit(standIn, u.taskId, placeForward({
           remaining: moved, days: theirDays, perDayCap: null,
           capacityOn: d => capacityOn(standIn, d),
@@ -801,7 +862,9 @@ export class CapacityService {
     rows.sort((a, b) => b.freeHours - a.freeHours);
 
     // Stamped so the client can say how fresh the board is, and how long since it last changed.
-    return { from: dayKey(today), to: dayKey(addDays(to, -1)), capacityPerDay: DAILY_CAPACITY_HOURS, rows, generatedAt: new Date().toISOString() };
+    // `from`/`to` are the window's own ends, inclusive — not "today plus a horizon". A client that
+    // asked to start next Monday has to be told the board it got back really does start there.
+    return { from: dayKey(windowStart), to: dayKey(addDays(to, -1)), capacityPerDay: DAILY_CAPACITY_HOURS, rows, generatedAt: new Date().toISOString() };
   }
 
   /**
@@ -1344,12 +1407,18 @@ class CapacityController {
   /**
    * Whole-org availability. The org is taken from the SESSION, not the query — accepting a
    * client-supplied organizationId here was a cross-tenant read (IDOR).
+   *
+   * `from` (YYYY-MM-DD) is the first day of the window; leave it off and the window starts today,
+   * exactly as it always did. It is optional precisely so nothing that calls this endpoint with a
+   * length alone has to change.
    */
   @Get('team')
   @RequirePermission('capacity.view')
-  async team(@Query('days') days?: string) {
+  async team(@Query('days') days?: string, @Query('from') from?: string) {
     const organizationId = await this.actor.requireOrgId();
-    return this.capacity.team(organizationId, parseHorizon(days));
+    return this.capacity.team(organizationId, parseHorizon(days), undefined, {
+      from: parseWindowStart(from, startOfIstDay(new Date())),
+    });
   }
 
   /** Retrospective: actual attendance over the past `days` (ending today). */
@@ -1413,9 +1482,11 @@ class CapacityController {
   /** Availability of one project's members — the capacity view opened from a project. */
   @Get('project/:projectId')
   @RequirePermission('capacity.view')
-  forProject(@Param('projectId') projectId: string, @Query('days') days?: string) {
+  forProject(@Param('projectId') projectId: string, @Query('days') days?: string, @Query('from') from?: string) {
     if (!projectId?.trim()) throw new BadRequestException('projectId is required');
-    return this.capacity.forProject(projectId, parseHorizon(days));
+    return this.capacity.forProject(projectId, parseHorizon(days), {
+      from: parseWindowStart(from, startOfIstDay(new Date())),
+    });
   }
 }
 

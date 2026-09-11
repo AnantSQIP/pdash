@@ -29,12 +29,15 @@ export const ACTION_LABELS: Record<string, string> = {
   'view.client': 'View Client Deadline',
   'view.personal': 'View Personal Details',
   'update.any': 'Edit Anyone\'s',
+  // Removing the row itself, not the `deletedAt` flag every other Delete sets. Super-Admin
+  // only by default (a Super Admin holds every code implicitly); grantable from the matrix.
+  'delete.permanent': 'Delete Permanently',
 };
 
 export const MODULES: ModuleDef[] = [
   { key: 'dashboard',   label: 'Dashboard',    actions: ['view'] },
-  { key: 'project',     label: 'Projects',     actions: ['view', 'create', 'update', 'delete', 'approve', 'generate_pid'] },
-  { key: 'task',        label: 'Tasks',        actions: ['view', 'create', 'update', 'delete', 'assign'] },
+  { key: 'project',     label: 'Projects',     actions: ['view', 'create', 'update', 'delete', 'delete.permanent', 'approve', 'generate_pid'] },
+  { key: 'task',        label: 'Tasks',        actions: ['view', 'create', 'update', 'delete', 'delete.permanent', 'assign'] },
   { key: 'tasklist',    label: 'Task Lists',   actions: ['view', 'create', 'update', 'delete'] },
   { key: 'timesheet',   label: 'Timesheets',   actions: ['view', 'create', 'update', 'delete'] },
   { key: 'issue',       label: 'Issues',       actions: ['view', 'create', 'update', 'delete'] },
@@ -327,7 +330,17 @@ const BUSINESS_DEVELOPMENT_CODES = [
 // gated by patent.manage, which a Super Admin may grant to anyone via the matrix (a
 // passcode-gated RBAC change). Patent HANDLES (the pickable "Patent ID") are broader —
 // patent.view sits in the basics so any project creator can select them.
-const SUPER_ADMIN_ONLY_CODES = [code('patent', 'manage')];
+// Exported so tools/permission-matrix.spec.ts can assert the Admin preset never inherits any of
+// them — the filter below is easy to get right once and easy to break later.
+export const SUPER_ADMIN_ONLY_CODES = [
+  code('patent', 'manage'),
+  // Permanent deletion removes the ROW, not the `deletedAt` flag every other Delete sets —
+  // there is no undo, and nothing left to restore from inside the app. The review asked for
+  // this to be a Super Admin capability, and ADMIN_CODES is a filter over every code, so
+  // leaving it out of this list would have handed it to Admin the moment it was defined.
+  code('project', 'delete.permanent'),
+  code('task', 'delete.permanent'),
+];
 
 // Admin: everything except the most destructive RBAC delete (kept for Super Admin) and the
 // confidential CLIENT surface (patent.manage — Super Admin only).

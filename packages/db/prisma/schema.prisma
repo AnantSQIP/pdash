@@ -3037,3 +3037,40 @@ model CalendarBlock {
   @@index([userId, startsAt])
   @@map("calendar_block")
 }
+
+/// Every time a deadline moved, and who moved it.
+///
+/// The Performance review asked one question the database could not answer: "how many times did
+/// this project's allocated deadline have to be shifted?" A deadline is a single column, so
+/// moving it overwrites the only evidence that it ever said anything else. Counting shifts after
+/// the fact is impossible; the count has to be kept as the shifts happen.
+///
+/// Deliberately NOT related by foreign key, in the same style as AuditLog. Two reasons: the row
+/// is polymorphic (a project deadline and a task deadline are the same event at different
+/// heights), and a record of what happened should not be destroyed by a cascade when the thing
+/// it happened to is removed. The purge routine clears these rows explicitly instead.
+model DeadlineChange {
+  id             String    @id @default(cuid())
+  organizationId String
+  /// 'PROJECT' | 'TASK'
+  entityType     String
+  entityId       String
+  /// The project this change rolls up to — set for a task as well as for a project itself,
+  /// so a project's total shift count is one indexed read rather than a join through tasks.
+  projectId      String?
+  /// NULL when a deadline was set for the first time: that is not a shift, and the
+  /// Performance figures must not count it as one.
+  previousDate   DateTime?
+  newDate        DateTime?
+  /// Working days between the two dates; negative when a deadline was pulled IN.
+  /// Stored rather than computed so a report never has to re-derive a calendar.
+  shiftDays      Int       @default(0)
+  changedById    String
+  reason         String?
+  createdAt      DateTime  @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@index([projectId, createdAt])
+  @@map("deadline_change")
+}

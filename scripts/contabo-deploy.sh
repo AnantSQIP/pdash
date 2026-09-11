@@ -130,21 +130,34 @@ EOF
     echo "    WARN: Caddy did not start — ports 80/443 may be taken. Check: ss -tlnp | grep -E ':80|:443'"
 fi
 
-# ── [8/8] nightly backup ─────────────────────────────────────────────────────
-echo "==> [8/8] Nightly Postgres backup (02:30, keep 14 days)"
-mkdir -p /root/backups
-cat > /root/pdash-backup.sh <<EOF
-#!/usr/bin/env bash
-cd ${REPO_DIR}
-docker compose -f docker-compose.prod.yml --env-file .env.production exec -T postgres \
-  pg_dump -U pdash pdash | gzip > /root/backups/pdash-\$(date +%F).sql.gz
-find /root/backups -name 'pdash-*.sql.gz' -mtime +14 -delete
-EOF
-chmod +x /root/pdash-backup.sh
+# ── [8/8] nightly backup + monthly restore drill ─────────────────────────────
+#
+# This used to write its own three-line dump script into /root/pdash-backup.sh: database only, no
+# documents, no verification, and no relationship to scripts/backup.sh. Two backup regimes on one
+# machine is one too many — the one nobody maintains is the one that is running on the night it
+# matters. The cron below points at the real script, and the legacy entry is removed.
+#
+# The OLD dumps in /root/backups are deliberately left on disk. Deleting a backup is not something
+# a deploy script should do behind your back; scripts/backup-purge.sh does it, deliberately, after
+# showing you the list. See scripts/BACKUPS.md.
+echo "==> [8/8] Nightly backup (02:15) + monthly restore drill"
+chmod +x "${REPO_DIR}/scripts/backup.sh" "${REPO_DIR}/scripts/restore-drill.sh" 2>/dev/null || true
+mkdir -p /var/backups/pdash
 CRON_TMP="$(mktemp)"
-crontab -l 2>/dev/null | grep -v '/root/pdash-backup.sh' > "$CRON_TMP" || true
-echo "30 2 * * * /root/pdash-backup.sh" >> "$CRON_TMP"
+crontab -l 2>/dev/null \
+  | grep -v '/root/pdash-backup.sh' \
+  | grep -v 'scripts/backup.sh' \
+  | grep -v 'scripts/restore-drill.sh' > "$CRON_TMP" || true
+{
+  echo "15 2 * * *  cd ${REPO_DIR} && ./scripts/backup.sh       >> /var/log/pdash-backup.log 2>&1"
+  echo "0  3 1 * *  cd ${REPO_DIR} && ./scripts/restore-drill.sh >> /var/log/pdash-backup.log 2>&1"
+} >> "$CRON_TMP"
 crontab "$CRON_TMP"; rm -f "$CRON_TMP"
+if [ -f /root/pdash-backup.sh ]; then
+  mv /root/pdash-backup.sh /root/pdash-backup.sh.superseded
+  echo "    the old ad-hoc dump script is now /root/pdash-backup.sh.superseded (no longer scheduled)"
+fi
+echo "    backups: /var/backups/pdash/sets   —   off-site copy: scripts/backup-pull.sh, from your machine"
 
 echo
 echo "======================================================================"

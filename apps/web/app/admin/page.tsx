@@ -8,12 +8,15 @@ import {
   Loader, Plus, Shield, X, Check, Trash2, Search, MoreHorizontal, Copy, Pencil,
   Users as UsersIcon, KeyRound, Layers, Grid3x3, ListChecks, Lock, AlertTriangle, Code2,
 } from 'lucide-react';
-import { api, type PermissionDef, type RoleSummary, type GroupSummary, type UserSummary } from '@/lib/api';
+import { api, type PermissionDef, type ProfileInput, type RoleSummary, type GroupSummary, type UserSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { AddPermissionsWizard } from '@/components/admin/AddPermissionsWizard';
+import {
+  PersonalDetailsFields, fieldErrorsFor, hasFormatError, missingRequired,
+} from '@/components/people/PersonalDetailsForm';
 import { relativePast } from '@/lib/date';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
@@ -365,25 +368,64 @@ function EditUserModal({ user, onClose, onDone }: { user: UserSummary; onClose: 
   );
 }
 
+/**
+ * Adding a person, in two steps: the account, then their employee record.
+ *
+ * The second step is new. It used to be the new joiner's problem — they hit a blocking form on
+ * first sign-in and could not reach the app until they had typed their address, date of birth and
+ * emergency contact in. That gate was removed in the 2026-09 review and the work moved here,
+ * where it belongs: HR usually HAS these details already, from the offer paperwork, and typing
+ * them at account creation is one job rather than a chase.
+ *
+ * It is a separate step rather than one long form because it needs the user to exist first —
+ * personal details are written through PUT /profile/:userId, which is the same route (and the
+ * same validation, and the same profile.update.any permission) HR uses to correct them later.
+ * Nothing here is a second schema for the same data.
+ */
 function CreateUserModal({ orgId, roles, onClose, onDone }: { orgId: string; roles: RoleSummary[]; onClose: () => void; onDone: () => void }) {
+  const { can } = usePermissions();
+  // The personal tier is Admin / Super Admin / HR only, and the server agrees — this is the same
+  // code that lets them correct the record afterwards.
+  const mayRecordPersonal = can('profile.update.any');
+
   const [firstName, setFirstName] = useState(''); const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState(''); const [designation, setDesignation] = useState('');
   const [password, setPassword] = useState('');
   const [roleIds, setRoleIds] = useState<string[]>([]); const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null);
+  const [created, setCreated] = useState<{ id: string; email: string; tempPassword: string } | null>(null);
+
+  const [details, setDetails] = useState<ProfileInput>({ permanentSameAsCurrent: true, currentCountry: 'India' });
+  const [detailsBusy, setDetailsBusy] = useState(false);
+  const [detailsErr, setDetailsErr] = useState('');
+  const [detailsSaved, setDetailsSaved] = useState(false);
 
   async function submit() {
     setBusy(true); setErr('');
     try {
       const u = await api.users.create({ organizationId: orgId, firstName, lastName, email, designation, password: password.trim() || undefined, roleIds });
-      setCreated({ email: u.email, tempPassword: u.tempPassword });
+      setCreated({ id: u.id, email: u.email, tempPassword: u.tempPassword });
       setBusy(false);
     } catch (e) { setErr(e instanceof Error ? e.message : 'Failed'); setBusy(false); }
   }
 
+  async function saveDetails() {
+    if (!created) return;
+    // Malformed values are refused; BLANK ones are not. HR may not have the blood group on day
+    // one, and a half-filled record that saves beats a complete one that never gets typed.
+    if (hasFormatError(fieldErrorsFor(details))) { setDetailsErr('Please fix the highlighted fields.'); return; }
+    setDetailsBusy(true); setDetailsErr('');
+    try {
+      await api.profile.update(created.id, details);
+      setDetailsSaved(true);
+    } catch (e) {
+      setDetailsErr(e instanceof Error ? e.message : 'Could not save the details.');
+    } finally { setDetailsBusy(false); }
+  }
+
   if (created) {
+    const stillBlank = missingRequired(details).length;
     return (
-      <Modal title="User created" onClose={onDone}>
+      <Modal title="User created" onClose={onDone} wide={mayRecordPersonal}>
         <div className="space-y-3">
           <p className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
             ✓ <b>{created.email}</b> can now sign in. Share these credentials — they&apos;ll be required to set a new password on first login.
@@ -398,6 +440,34 @@ function CreateUserModal({ orgId, roles, onClose, onDone }: { orgId: string; rol
               </span>
             </div>
           </div>
+
+          {mayRecordPersonal && (
+            <div className="border-t border-gray-100 pt-3">
+              <h4 className="text-sm font-semibold text-gray-900">Employee record</h4>
+              <p className="text-xs text-gray-500 mt-0.5 mb-1">
+                Optional, and you can come back to it from their profile at any time. These fields are
+                private — only HR and administrators ever see them.
+              </p>
+              {detailsSaved ? (
+                <p className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2 mt-2">
+                  ✓ Details saved{stillBlank > 0 ? ` — ${stillBlank} field${stillBlank === 1 ? '' : 's'} left blank` : ''}.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  <PersonalDetailsFields f={details} onChange={setDetails} />
+                  {detailsErr && <p className="text-xs text-red-600">{detailsErr}</p>}
+                  <button
+                    onClick={saveDetails}
+                    disabled={detailsBusy}
+                    className="w-full py-2 border border-brand-200 bg-brand-50 text-brand-700 rounded-lg text-sm font-medium disabled:opacity-50"
+                  >
+                    {detailsBusy ? 'Saving…' : 'Save employee record'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <button onClick={onDone} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium">Done</button>
         </div>
       </Modal>
@@ -429,6 +499,12 @@ function CreateUserModal({ orgId, roles, onClose, onDone }: { orgId: string; rol
           </div>
         </div>
         {err && <p className="text-xs text-red-600">{err}</p>}
+        {mayRecordPersonal && (
+          <p className="text-[11px] text-gray-400">
+            You can record their address, date of birth and emergency contact on the next step — they
+            are no longer asked for it before they can use the app.
+          </p>
+        )}
         <button disabled={busy || !firstName || !email} onClick={submit} className="w-full py-2 bg-brand-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">{busy ? 'Creating…' : 'Create User'}</button>
       </div>
     </Modal>
@@ -626,6 +702,10 @@ function EditNamedModal({ title, initial, onClose, onSave }: { title: string; in
 // ── Permission Matrix ──────────────────────────────────────────────────────────
 function MatrixTab({ orgId }: { orgId: string }) {
   const qc = useQueryClient();
+  // Changing what a ROLE can do became Super-Admin-only in the 2026-09 review, and the server
+  // enforces it (RbacService.setRolePermissions). Groups are unchanged — they are a bundle you
+  // attach to named people, not the firm's standing definition of a job.
+  const { isSuperAdmin } = usePermissions();
   const { data: perms = [] } = useQuery({ queryKey: ['permissions'], queryFn: () => api.permissions.list(), staleTime: 60_000 , refetchOnMount: 'always' });
   const { data: roles = [] } = useQuery({ queryKey: ['roles', orgId], queryFn: () => api.roles.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
   const { data: groups = [] } = useQuery({ queryKey: ['groups', orgId], queryFn: () => api.groups.list(orgId), staleTime: 30_000 , refetchOnMount: 'always' });
@@ -683,6 +763,7 @@ function MatrixTab({ orgId }: { orgId: string }) {
     } finally { setBusy(false); }
   }
   const isSuper = targetObj?.type === 'role' && (targetObj as any).name === 'Super Admin';
+  const roleLocked = targetObj?.type === 'role' && !isSuperAdmin;
   const q = search.toLowerCase();
 
   return (
@@ -701,8 +782,21 @@ function MatrixTab({ orgId }: { orgId: string }) {
           </div>
         )}
         {target && <button onClick={() => setShowJson(v => !v)} className="text-xs flex items-center gap-1 px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-white"><Code2 size={13} /> {showJson ? 'Visual' : 'JSON'}</button>}
-        {dirty && <button disabled={busy} onClick={save} className="ml-auto inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"><Check size={14} /> Save changes</button>}
+        {dirty && <button disabled={busy || roleLocked} onClick={save} className="ml-auto inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg disabled:opacity-50"><Check size={14} /> Save changes</button>}
       </div>
+
+      {isSuperAdmin && (
+        <p className="text-sm text-gray-500 mb-3">
+          Editing one role or group at a time. To compare every role side by side — and to grant a
+          module wholesale — use <a href="/admin/access" className="text-brand-600 hover:underline">Access Control</a>.
+        </p>
+      )}
+      {roleLocked && (
+        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
+          Only a Super Admin may change what a role can do. You can still view it here, and permission
+          groups remain editable.
+        </p>
+      )}
 
       {!target && <p className="text-sm text-gray-400">Pick a role or group to view and edit its permission matrix.</p>}
       {isSuper && <p className="text-sm text-amber-600 mb-3">Super Admin always has all permissions (changes here are cosmetic).</p>}
@@ -729,12 +823,12 @@ function MatrixTab({ orgId }: { orgId: string }) {
               <div key={mod} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-100">
                   <span className="text-sm font-semibold text-gray-700">{titleCase(mod)}</span>
-                  <button onClick={() => toggleModule(ids, !allOn)} className="text-xs text-brand-600 hover:underline">{allOn ? 'Clear all' : 'Select all'}</button>
+                  <button disabled={roleLocked} onClick={() => toggleModule(ids, !allOn)} className="text-xs text-brand-600 hover:underline disabled:text-gray-300 disabled:no-underline">{allOn ? 'Clear all' : 'Select all'}</button>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-4 gap-y-1 p-4">
                   {visible.map(p => (
                     <label key={p.id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                      <input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(p.id)} className="rounded" />
+                      <input type="checkbox" disabled={roleLocked} checked={sel.has(p.id)} onChange={() => toggle(p.id)} className="rounded disabled:opacity-50" />
                       <span className="capitalize">{titleCase(actionOf(p.code))}</span>
                     </label>
                   ))}

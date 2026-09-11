@@ -29,7 +29,7 @@ export class RolesController {
   constructor(private readonly rbac: RbacService) {}
 
   @Get() @RequirePermission('role.view')
-  list(@Query('organizationId') organizationId: string) { return this.rbac.listRoles(organizationId); }
+  list(@Query('organizationId') organizationId?: string) { return this.rbac.listRoles(organizationId); }
 
   @Post() @RequirePermission('role.create') @RequirePasscode()
   create(@Body() dto: CreateRoleDto) { return this.rbac.createRole(dto); }
@@ -49,7 +49,7 @@ export class GroupsController {
   constructor(private readonly rbac: RbacService) {}
 
   @Get() @RequirePermission('group.view')
-  list(@Query('organizationId') organizationId: string) { return this.rbac.listGroups(organizationId); }
+  list(@Query('organizationId') organizationId?: string) { return this.rbac.listGroups(organizationId); }
 
   @Post() @RequirePermission('group.create') @RequirePasscode()
   create(@Body() dto: CreateGroupDto) { return this.rbac.createGroup(dto); }

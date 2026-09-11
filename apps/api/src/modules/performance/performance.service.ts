@@ -2,6 +2,11 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
 import { Prisma } from '@prisma/client';
+import {
+  breachesByProject, computeStreak, countBreaches, deadlineVerdict, breachedHours,
+  isOnTime, rollUpManagers, summariseDeadlines, summariseHours, summariseProject,
+  type Delivery, type ProjectInput,
+} from './kpi';
 
 function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -17,17 +22,10 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 function istDayKey(d: Date): string {
   return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
-/** A task closed on or before its due DATE (both compared as IST calendar days) is on time. */
-/**
- * Delivered on or before the day it was due.
- *
- * Takes the COMPLETION date, not `updatedAt`. It used to take updatedAt, which meant a task
- * delivered on time turned retroactively late the moment anybody edited it afterwards — fixing a
- * typo in a closed task could damage somebody's on-time rate, and that rate feeds their appraisal.
- */
-function isOnTime(completedAt: Date, dueDate: Date): boolean {
-  return istDayKey(completedAt) <= dayKey(dueDate);
-}
+// `isOnTime` now lives in ./kpi alongside the two KPIs it feeds. It was defined twice — here and
+// implicitly in every place that compared a completion instant with a deadline — and the two
+// readings of "on time" have to be one reading, or the on-time rate on a person's page disagrees
+// with the on-time rate on the report their appraisal is run from.
 /**
  * "Every timesheet entry except miscellaneous non-project time" — NULL-safely.
  *
@@ -85,6 +83,102 @@ function isCompletionEvent(payload: unknown): boolean {
   return p.new?.type === 'CLOSED' && p.old?.type !== 'CLOSED';
 }
 
+/**
+ * A window and the window it is compared against, as four instants.
+ *
+ * Four dates rather than a day count because the periods are now CALENDAR periods — last week,
+ * last month, last quarter — and the window before a calendar month is the previous month, not
+ * "thirty days earlier". A day count cannot express that, and a day count can only ever end
+ * today, which is what made every figure in this module report a half-finished week.
+ */
+export interface KpiWindow {
+  from: Date;
+  to: Date;
+  prevFrom: Date;
+  prevTo: Date;
+}
+
+/**
+ * The columns the two KPIs are built from, in one place.
+ *
+ * `Prisma.validator` rather than a plain object so the literal `true`s survive: typed loosely,
+ * the select still runs but every field comes back as possibly-undefined and the arithmetic below
+ * loses the type checking that catches a renamed column.
+ */
+const TASK_KPI_SELECT = Prisma.validator<Prisma.TaskSelect>()({
+  id: true,
+  title: true,
+  priority: true,
+  dueDate: true,
+  completedAt: true,
+  estimatedHours: true,
+  assignees: { select: { userId: true, estimatedHours: true, dueDate: true } },
+  // A task can belong to more than one project (two rounds of one PID share tasks), and `take: 1`
+  // with no ordering picks whichever row the database returned first — so the same task could be
+  // credited to a different project on two consecutive page loads. Ordering by project id makes
+  // the choice arbitrary but STABLE, which is the most that can honestly be claimed here.
+  projectTasks: {
+    select: { project: { select: { id: true, title: true, code: true, roundSeq: true } } },
+    orderBy: { projectId: 'asc' },
+    take: 1,
+  },
+});
+
+type TaskKpiRow = Prisma.TaskGetPayload<{ select: typeof TASK_KPI_SELECT }>;
+
+/**
+ * One task, seen either through one person's seat on it or as the firm's own row.
+ *
+ * `userId` null means the second: the task's whole budget against the task's whole cost, which is
+ * what a project and its manager are judged on.
+ *
+ * The per-person allocation is the seat's own hours, because a task with an analyst and a reviewer
+ * carries one allocation each and judging the analyst against the pair would mark them over budget
+ * for somebody else's review. It falls back to the task's total ONLY when that person is the sole
+ * assignee — then the two numbers are the same thing. A shared task with no seat hours is left
+ * unallocated rather than guessed at: splitting it evenly would invent a number nobody agreed to,
+ * and the module is explicit elsewhere about not scoring what it cannot measure.
+ *
+ * A seat carrying zero is treated as no allocation. Zero is the DEFAULT the staffing form writes
+ * for a reviewer nobody gave hours to, so reading it as a budget of nothing would mark every such
+ * reviewer infinitely over.
+ */
+function toDelivery(t: TaskKpiRow, userId: string | null, spentHours: number | null): Delivery {
+  const project = t.projectTasks[0]?.project ?? null;
+  const seat = userId ? t.assignees.find(a => a.userId === userId) ?? null : null;
+  const seatHours = seat?.estimatedHours ?? null;
+  const allocated = userId
+    ? (seatHours != null && seatHours > 0 ? seatHours : (t.assignees.length <= 1 ? t.estimatedHours : null))
+    : t.estimatedHours;
+
+  return {
+    taskId: t.id,
+    title: t.title,
+    projectId: project?.id ?? null,
+    projectName: project?.title ?? null,
+    projectCode: project?.code ?? null,
+    roundSeq: project?.roundSeq ?? null,
+    priority: (t.priority ?? 'MEDIUM').toUpperCase(),
+    allocatedHours: allocated,
+    spentHours,
+    // Their own deadline when they were given one. A personal extension is a decision somebody
+    // made — "you have until Friday" — and scoring them against the task's original date marks
+    // them late for delivering exactly what was asked of them.
+    dueDate: seat?.dueDate ?? t.dueDate,
+    completedAt: t.completedAt,
+  };
+}
+
+/** The window echoed back, so the page can label exactly what it is showing. */
+function isoWindow(win: KpiWindow) {
+  return {
+    from: win.from.toISOString(),
+    to: win.to.toISOString(),
+    prevFrom: win.prevFrom.toISOString(),
+    prevTo: win.prevTo.toISOString(),
+  };
+}
+
 @Injectable()
 export class PerformanceService {
   constructor(
@@ -92,11 +186,21 @@ export class PerformanceService {
     private readonly permissions: PermissionService,
   ) {}
 
-  /** Self-or-admin guard for viewing another user's performance. */
+  /**
+   * Your own performance is yours; anybody else's needs the organisation code.
+   *
+   * The code checked here used to be `analytics.view.organization`, which is a DIFFERENT
+   * permission held by a DIFFERENT set of roles. The permission matrix has said since 2026-07-28
+   * that a Manager keeps their own performance and no longer sees the firm's — and a Manager
+   * holds analytics.view.organization, so every Manager could in fact open the whole
+   * organisation's performance and drill into any individual's. The gate existed and guarded the
+   * wrong door. `performance.view.organization` is the code the matrix actually grants for this,
+   * and it is now the code the server enforces, on every route rather than only in the UI.
+   */
   async assertCanView(actorId: string | null, targetUserId: string) {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
     if (actorId === targetUserId) return;
-    const ok = await this.permissions.check(actorId, 'analytics.view.organization');
+    const ok = await this.permissions.check(actorId, 'performance.view.organization');
     if (!ok) throw new ForbiddenException('Not allowed to view this user\'s performance.');
   }
 
@@ -108,6 +212,351 @@ export class PerformanceService {
   private async assertUserExists(userId: string): Promise<void> {
     const u = await this.prisma.user.findFirst({ where: { id: userId, deletedAt: null }, select: { id: true } });
     if (!u) throw new NotFoundException(`User ${userId} not found`);
+  }
+
+  // ── The two KPIs ───────────────────────────────────────────────────────────────
+  //
+  // Everything below answers the two questions the module was cut down to: does this person's
+  // work cost what it was supposed to cost, and can we rely on them to deliver on the day and on
+  // the budget, again and again. The arithmetic is in ./kpi and is tested without a database;
+  // these methods only shape rows into `Delivery` and hand them over.
+  //
+  // The window arrives from the caller as four explicit dates rather than a day count. A day
+  // count can only ever describe a window ending TODAY, and a window ending today is exactly the
+  // complaint this rework started from: the week on screen was always the half-finished one.
+
+  /**
+   * The work one person finished inside a window, with what it was supposed to cost and what it
+   * actually cost them.
+   *
+   * The hours are ALL of the hours booked to the task, not only those inside the window. KPI 1
+   * asks what a job cost, and a job started in August and closed in September cost what it cost;
+   * clipping its hours at the window boundary would report a two-week task as a two-day one and
+   * make every long piece of work look under budget.
+   */
+  private async deliveriesForUser(userId: string, from: Date, to: Date): Promise<Delivery[]> {
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        deletedAt: null,
+        assignees: { some: { userId } },
+        currentStatus: { type: 'CLOSED' },
+        completedAt: { gte: from, lt: to },
+      },
+      select: TASK_KPI_SELECT,
+    });
+    if (!tasks.length) return [];
+
+    const spent = await this.prisma.timesheet.groupBy({
+      by: ['taskId'],
+      where: { userId, deletedAt: null, taskId: { in: tasks.map(t => t.id) } },
+      _sum: { hoursLogged: true },
+    });
+    const spentBy = new Map(spent.map(s => [s.taskId ?? '', s._sum.hoursLogged ?? 0]));
+    return tasks.map(t => toDelivery(t, userId, spentBy.get(t.id) ?? null));
+  }
+
+  /**
+   * KPI 1 and KPI 2 for one person, against the window before it.
+   *
+   * Nothing here counts an open task, an issue, a comment or an analytics event. Ongoing and
+   * breaching work already has a home in My Tasks, and repeating it here is what made the two
+   * modules impossible to tell apart.
+   */
+  async getUserKpis(userId: string, win: KpiWindow) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, firstName: true, lastName: true, designation: true },
+    });
+    if (!user) throw new NotFoundException(`User ${userId} not found`);
+
+    const [current, previous, outstanding] = await Promise.all([
+      this.deliveriesForUser(userId, win.from, win.to),
+      this.deliveriesForUser(userId, win.prevFrom, win.prevTo),
+      // Work that was due by the end of the window and is still open — the rest of the pie in
+      // "completed out of total". Counted from the task's own date because a seat date cannot be
+      // filtered on in SQL without loading every assignment in the firm.
+      this.prisma.task.count({
+        where: {
+          deletedAt: null,
+          assignees: { some: { userId } },
+          dueDate: { lt: win.to },
+          OR: [{ currentWorkflowStatusId: null }, { currentStatus: { type: { not: 'CLOSED' } } }],
+        },
+      }),
+    ]);
+
+    const hoursBreachEvents = current.filter(breachedHours).map(d => ({ entityId: d.taskId }));
+    const dateBreachEvents = current.filter(d => deadlineVerdict(d) === 'LATE').map(d => ({ entityId: d.taskId }));
+    const prevHours = summariseHours(previous);
+    const prevDeadlines = summariseDeadlines(previous);
+
+    return {
+      userId: user.id,
+      name: `${user.firstName} ${user.lastName}`.trim(),
+      designation: user.designation ?? undefined,
+      window: isoWindow(win),
+      tasksCompleted: current.length,
+      outstanding,
+      hours: summariseHours(current),
+      deadlines: summariseDeadlines(current),
+      streak: computeStreak(current),
+      hoursBreaches: countBreaches(hoursBreachEvents),
+      deadlineBreaches: countBreaches(dateBreachEvents),
+      byProject: breachesByProject(current),
+      previous: {
+        tasksCompleted: previous.length,
+        withinRate: prevHours.withinRate,
+        onTimeRate: prevDeadlines.onTimeRate,
+        hoursBreaches: countBreaches(previous.filter(breachedHours).map(d => ({ entityId: d.taskId }))),
+        deadlineBreaches: countBreaches(previous.filter(d => deadlineVerdict(d) === 'LATE').map(d => ({ entityId: d.taskId }))),
+      },
+    };
+  }
+
+  /**
+   * Everything the org finished in a window, sliced per person AND once per task.
+   *
+   * Both slices are needed and they are not the same number. A task with three assignees is three
+   * people's delivery — each of them is answerable for their own hours against their own seat —
+   * but it is ONE task for the firm's total. Summing the per-person figures to get the org's is
+   * what makes a headline count drift away from the table under it.
+   */
+  private async orgDeliveries(organizationId: string, from: Date, to: Date) {
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        deletedAt: null,
+        currentStatus: { type: 'CLOSED' },
+        completedAt: { gte: from, lt: to },
+        assignees: { some: { user: { organizationId } } },
+      },
+      select: { ...TASK_KPI_SELECT, actualHours: true },
+    });
+    const ids = tasks.map(t => t.id);
+    const spent = ids.length
+      ? await this.prisma.timesheet.groupBy({
+        by: ['taskId', 'userId'],
+        where: { deletedAt: null, taskId: { in: ids } },
+        _sum: { hoursLogged: true },
+      })
+      : [];
+
+    const perSeat = new Map<string, number>();
+    const perTask = new Map<string, number>();
+    for (const row of spent) {
+      const hours = row._sum.hoursLogged ?? 0;
+      perSeat.set(`${row.taskId}|${row.userId}`, hours);
+      perTask.set(row.taskId ?? '', (perTask.get(row.taskId ?? '') ?? 0) + hours);
+    }
+
+    const perUser = new Map<string, Delivery[]>();
+    for (const t of tasks) {
+      for (const a of t.assignees) {
+        const list = perUser.get(a.userId) ?? [];
+        list.push(toDelivery(t, a.userId, perSeat.get(`${t.id}|${a.userId}`) ?? null));
+        perUser.set(a.userId, list);
+      }
+    }
+    // One row per task, judged on the task's own budget. `actualHours` is the ledger's own sum
+    // and the only column with a single writer, so it is preferred; the timesheet total stands in
+    // for tasks closed before that column was maintained.
+    const distinct = tasks.map(t => toDelivery(t, null, t.actualHours ?? perTask.get(t.id) ?? null));
+    return { perUser, distinct };
+  }
+
+  /** The same two KPIs for every member of the firm, worst first. */
+  async getOrgKpis(organizationId: string, win: KpiWindow) {
+    const users = await this.prisma.user.findMany({
+      where: { organizationId, deletedAt: null, status: 'ACTIVE' },
+      select: {
+        id: true, firstName: true, lastName: true, designation: true,
+        departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
+      },
+    });
+    const [cur, prev, outstanding] = await Promise.all([
+      this.orgDeliveries(organizationId, win.from, win.to),
+      this.orgDeliveries(organizationId, win.prevFrom, win.prevTo),
+      // Work the firm owed by the end of the window and has not closed — the rest of the
+      // completed-out-of-total pie. Counted over TASKS, not assignments, so a task with three
+      // people on it is one outstanding piece of work rather than three.
+      this.prisma.task.count({
+        where: {
+          deletedAt: null,
+          assignees: { some: { user: { organizationId } } },
+          dueDate: { lt: win.to },
+          OR: [{ currentWorkflowStatusId: null }, { currentStatus: { type: { not: 'CLOSED' } } }],
+        },
+      }),
+    ]);
+
+    const rowFor = (u: typeof users[number]) => {
+      const mine = cur.perUser.get(u.id) ?? [];
+      const hours = summariseHours(mine);
+      const deadlines = summariseDeadlines(mine);
+      const breached = mine.filter(d => breachedHours(d) || deadlineVerdict(d) === 'LATE');
+      return {
+        userId: u.id,
+        name: `${u.firstName} ${u.lastName}`.trim(),
+        designation: u.designation ?? undefined,
+        department: u.departmentMemberships[0]?.department?.name ?? undefined,
+        tasksCompleted: mine.length,
+        hoursBreaches: countBreaches(mine.filter(breachedHours).map(d => ({ entityId: d.taskId }))),
+        deadlineBreaches: countBreaches(mine.filter(d => deadlineVerdict(d) === 'LATE').map(d => ({ entityId: d.taskId }))),
+        // Requirement 5, as one number: somebody consistently over across ten projects is a
+        // different problem from somebody who had one bad matter, and the table has to say which
+        // before anyone opens a row.
+        projectsBreached: new Set(breached.map(d => d.projectId ?? '')).size,
+        overrun: hours.allocatedHours > 0 ? Math.round((hours.spentHours / hours.allocatedHours) * 100) / 100 : null,
+        withinRate: hours.withinRate,
+        onTimeRate: deadlines.onTimeRate,
+        unmeasured: hours.unmeasured,
+        allocatedHours: hours.allocatedHours,
+        spentHours: hours.spentHours,
+        redFlag: hours.redFlag,
+        streak: (({ current, longest }) => ({ current, longest }))(computeStreak(mine)),
+      };
+    };
+
+    const members = users.map(rowFor).sort((a, b) =>
+      (b.hoursBreaches.times + b.deadlineBreaches.times) - (a.hoursBreaches.times + a.deadlineBreaches.times) ||
+      (b.overrun ?? 0) - (a.overrun ?? 0) ||
+      a.name.localeCompare(b.name));
+
+    const hours = summariseHours(cur.distinct);
+    const deadlines = summariseDeadlines(cur.distinct);
+    const prevHours = summariseHours(prev.distinct);
+    const prevDeadlines = summariseDeadlines(prev.distinct);
+    return {
+      window: isoWindow(win),
+      totals: {
+        members: users.length,
+        tasksCompleted: cur.distinct.length,
+        outstanding,
+        hours,
+        deadlines,
+        hoursBreaches: countBreaches(cur.distinct.filter(breachedHours).map(d => ({ entityId: d.taskId }))),
+        deadlineBreaches: countBreaches(cur.distinct.filter(d => deadlineVerdict(d) === 'LATE').map(d => ({ entityId: d.taskId }))),
+      },
+      previous: {
+        tasksCompleted: prev.distinct.length,
+        withinRate: prevHours.withinRate,
+        onTimeRate: prevDeadlines.onTimeRate,
+      },
+      byProject: breachesByProject(cur.distinct),
+      members,
+    };
+  }
+
+  /**
+   * Projects, and the managers who answer for them.
+   *
+   * Requirement 18 is the deadline ledger: how many times a project's date had to be moved.
+   * Requirement 19 is the same over-run arithmetic restricted to the HIGH and CRITICAL work.
+   * Requirement 20 says the aggregate of the two IS the project manager's performance, so the
+   * managers roll up out of the projects rather than being computed separately — one number
+   * cannot disagree with the other if there is only one number.
+   *
+   * The ledger is young: most projects have no recorded shift, and a project that predates it can
+   * never have one. A missing row therefore reports ZERO shifts and renders normally. It must
+   * never render as an error or an empty panel, which is what an inner join would have produced.
+   */
+  async getProjectKpis(organizationId: string, win: KpiWindow) {
+    const [tasks, shifts] = await Promise.all([
+      this.prisma.task.findMany({
+        where: {
+          deletedAt: null,
+          currentStatus: { type: 'CLOSED' },
+          completedAt: { gte: win.from, lt: win.to },
+          projectTasks: { some: { project: { deletedAt: null, members: { some: { user: { organizationId } } } } } },
+        },
+        select: { ...TASK_KPI_SELECT, actualHours: true },
+      }),
+      this.prisma.deadlineChange.groupBy({
+        by: ['projectId', 'entityType'],
+        where: { organizationId, createdAt: { gte: win.from, lt: win.to }, projectId: { not: null } },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const projectShifts = new Map<string, { project: number; task: number }>();
+    for (const row of shifts) {
+      if (!row.projectId) continue;
+      const cur = projectShifts.get(row.projectId) ?? { project: 0, task: 0 };
+      if (row.entityType === 'PROJECT') cur.project += row._count._all;
+      else cur.task += row._count._all;
+      projectShifts.set(row.projectId, cur);
+    }
+
+    // `actualHours` is the ledger's own sum and has a single writer, so it is preferred; the
+    // timesheet total stands in for tasks closed before that column was maintained. Without the
+    // fallback an old task reads as costing nothing, which scores its project as comfortably
+    // inside a budget it may well have blown.
+    const missingActuals = tasks.filter(t => t.actualHours == null).map(t => t.id);
+    const loggedFor = missingActuals.length
+      ? new Map((await this.prisma.timesheet.groupBy({
+        by: ['taskId'],
+        where: { deletedAt: null, taskId: { in: missingActuals } },
+        _sum: { hoursLogged: true },
+      })).map(r => [r.taskId ?? '', r._sum.hoursLogged ?? 0]))
+      : new Map<string, number>();
+
+    const byProject = new Map<string, Delivery[]>();
+    for (const t of tasks) {
+      const projectId = t.projectTasks[0]?.project?.id;
+      if (!projectId) continue;
+      const list = byProject.get(projectId) ?? [];
+      list.push(toDelivery(t, null, t.actualHours ?? loggedFor.get(t.id) ?? null));
+      byProject.set(projectId, list);
+    }
+
+    // A project that only SHIFTED still belongs on this panel — a deadline pushed four times with
+    // nothing delivered is the clearest signal there is, and keying the panel off completed work
+    // alone would hide exactly that project.
+    const projectIds = [...new Set([...byProject.keys(), ...projectShifts.keys()])];
+    if (!projectIds.length) return { window: isoWindow(win), projects: [], managers: [] };
+
+    const meta = await this.prisma.project.findMany({
+      where: { id: { in: projectIds }, deletedAt: null, members: { some: { user: { organizationId } } } },
+      select: {
+        id: true, title: true, code: true, roundSeq: true,
+        members: {
+          // 'PM' is the older spelling of the same seat and still exists on projects created
+          // before it was renamed; reading only 'MANAGER' silently leaves those unowned.
+          where: { projectRole: { in: ['MANAGER', 'PM'] }, isActive: true },
+          select: { userId: true },
+        },
+      },
+    });
+
+    const inputs: ProjectInput[] = meta.map(p => ({
+      projectId: p.id,
+      name: p.title,
+      code: p.code,
+      roundSeq: p.roundSeq,
+      managerIds: p.members.map(m => m.userId),
+      projectShifts: projectShifts.get(p.id)?.project ?? 0,
+      taskShifts: projectShifts.get(p.id)?.task ?? 0,
+      tasks: byProject.get(p.id) ?? [],
+    }));
+
+    const projects = inputs.map(summariseProject).sort((a, b) =>
+      (b.overrun ?? 0) - (a.overrun ?? 0) ||
+      b.deadlineShifts.times - a.deadlineShifts.times ||
+      a.name.localeCompare(b.name));
+
+    const managerRows = rollUpManagers(projects);
+    const managerUsers = managerRows.length
+      ? await this.prisma.user.findMany({
+        where: { id: { in: managerRows.map(m => m.userId) } },
+        select: { id: true, firstName: true, lastName: true, designation: true },
+      })
+      : [];
+    const nameOf = new Map(managerUsers.map(u => [u.id, { name: `${u.firstName} ${u.lastName}`.trim(), designation: u.designation ?? undefined }]));
+
+    return {
+      window: isoWindow(win),
+      projects,
+      managers: managerRows.map(m => ({ ...m, ...(nameOf.get(m.userId) ?? { name: 'Unknown', designation: undefined }) })),
+    };
   }
 
   async getUserPerformance(userId: string, days = 30) {
