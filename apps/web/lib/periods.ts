@@ -73,7 +73,7 @@ export function periodLabel(days: number): string {
 
 // ── Calendar periods ─────────────────────────────────────────────────────────────
 
-export type CalendarPeriodKey = 'last-week' | 'last-5-weeks' | 'last-month' | 'current-month' | 'last-quarter';
+export type CalendarPeriodKey = 'last-week' | 'last-month' | 'quarterly' | 'annually';
 
 /**
  * A window and the window it should be compared against.
@@ -90,27 +90,32 @@ export interface PeriodWindow {
   prevFrom: Date;
   prevTo: Date;
   /**
-   * True when the window has not finished yet — month-to-date is the only one.
+   * True when the window has not finished yet.
    *
-   * The page must say so. A partial window under-reports every count in it by construction, and
-   * a reader who does not know that reads a short month as a bad one.
+   * Every period offered today is a finished one, so this is always false — but the field stays,
+   * and the page still honours it. A partial window under-reports every count in it by
+   * construction, and a reader who does not know that reads a short month as a bad one. Keeping
+   * the flag means a running period can be offered again later without the page quietly
+   * reporting it as complete.
    */
   partial: boolean;
 }
 
 /**
- * The periods offered, in the order the picker shows them.
+ * The periods offered, in the order the picker shows them: shortest first, so the four read as
+ * one scale from a week to a year.
  *
- * Finished windows first and the running one last: the review conversation is about what has
- * already happened, and putting month-to-date at the front is how the module ended up reporting
- * half a week as though it were a week.
+ * Every one of them is a window that has ENDED. That is the rule the module is built on — a
+ * running period under-reports every count in it, which is how "tasks completed" came to show a
+ * fifth of the truth each Monday. Month-to-date and the five-week window were dropped from this
+ * list on the owner's instruction (11 Sep 2026); the machinery for a running window is still
+ * here, so one can be added back without the page reporting it as finished.
  */
 export const CALENDAR_PERIODS: { key: CalendarPeriodKey; label: string }[] = [
-  { key: 'last-week',     label: 'Last week' },
-  { key: 'last-5-weeks',  label: 'Last 5 weeks' },
-  { key: 'last-month',    label: 'Last month' },
-  { key: 'last-quarter',  label: 'Last quarter' },
-  { key: 'current-month', label: 'This month' },
+  { key: 'last-week',  label: 'Last week' },
+  { key: 'last-month', label: 'Last month' },
+  { key: 'quarterly',  label: 'Quarterly' },
+  { key: 'annually',   label: 'Annually' },
 ];
 
 export const DEFAULT_PERIOD: CalendarPeriodKey = 'last-week';
@@ -131,11 +136,6 @@ function startOfMonth(year: number, monthIndex0: number): Date {
   // previous year is month -1 and needs no special case. Every year-boundary case in this file
   // rests on that, which is why none of them is written out by hand.
   return new Date(year, monthIndex0, 1, 0, 0, 0, 0);
-}
-
-/** Whole days between two local midnights. */
-function daysBetween(from: Date, to: Date): number {
-  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
 }
 
 /**
@@ -163,40 +163,39 @@ export function periodWindow(key: CalendarPeriodKey, today: Date = new Date()): 
       const from = addDays(thisMonday, -7);
       return { key, label, from, to: thisMonday, prevFrom: addDays(from, -7), prevTo: from, partial: false };
     }
-    case 'last-5-weeks': {
-      // The five FINISHED weeks — the current part-week is excluded for the same reason.
-      const thisMonday = startOfWeekMonday(day);
-      const from = addDays(thisMonday, -35);
-      return { key, label, from, to: thisMonday, prevFrom: addDays(from, -35), prevTo: from, partial: false };
-    }
     case 'last-month': {
       const firstOfThis = startOfMonth(day.getFullYear(), day.getMonth());
       const from = startOfMonth(day.getFullYear(), day.getMonth() - 1);
       const prevFrom = startOfMonth(day.getFullYear(), day.getMonth() - 2);
       return { key, label, from, to: firstOfThis, prevFrom, prevTo: from, partial: false };
     }
-    case 'last-quarter': {
-      // Calendar quarters: Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec.
+    case 'quarterly': {
+      // The last FINISHED calendar quarter: Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec. Asked in
+      // September, that is April to June — not the quarter still being worked.
       const thisQuarterStartMonth = Math.floor(day.getMonth() / 3) * 3;
       const to = startOfMonth(day.getFullYear(), thisQuarterStartMonth);
       const from = startOfMonth(day.getFullYear(), thisQuarterStartMonth - 3);
       const prevFrom = startOfMonth(day.getFullYear(), thisQuarterStartMonth - 6);
       return { key, label, from, to, prevFrom, prevTo: from, partial: false };
     }
-    case 'current-month':
+    case 'annually':
     default: {
-      const from = startOfMonth(day.getFullYear(), day.getMonth());
-      const to = addDays(day, 1); // today counts; the window ends at tomorrow's midnight
-      // Compared against the SAME NUMBER OF DAYS at the start of the previous month, not against
-      // the whole of it. Eleven days of this month set beside thirty of last is not a comparison,
-      // it is an arithmetic trick that makes every month look catastrophic until the 28th.
+      // The last twelve FINISHED months, ending at the start of this one — not the last finished
+      // calendar year.
       //
-      // Clamped to the end of that month, because on the 31st there is no 31st of the month
-      // before to reach — running past it would count days of THIS month twice.
-      const prevFrom = startOfMonth(day.getFullYear(), day.getMonth() - 1);
-      const wanted = addDays(prevFrom, daysBetween(from, to));
-      const prevTo = wanted > from ? from : wanted;
-      return { key: 'current-month', label, from, to, prevFrom, prevTo, partial: true };
+      // Both readings are defensible and they give very different answers. Asked in September,
+      // the calendar-year reading shows January to December of the year before: eight months
+      // stale, and useless at the appraisal it exists for. This reading always ends last month,
+      // so an annual figure is never more than a few weeks behind the person it describes, and it
+      // is still a whole number of finished months rather than a part-year.
+      //
+      // Note it is NOT the Indian financial year (April–March) that the appraisal module uses.
+      // If the firm wants performance cut that way too, that is a fifth period, not a change to
+      // this one — the two answer different questions and both are worth having.
+      const firstOfThis = startOfMonth(day.getFullYear(), day.getMonth());
+      const from = startOfMonth(day.getFullYear(), day.getMonth() - 12);
+      const prevFrom = startOfMonth(day.getFullYear(), day.getMonth() - 24);
+      return { key: 'annually', label, from, to: firstOfThis, prevFrom, prevTo: from, partial: false };
     }
   }
 }
@@ -236,6 +235,23 @@ export function describeWindow(w: PeriodWindow): string {
 
   const whole = w.from.getDate() === 1 && sameMonth && addDays(last, 1).getDate() === 1;
   if (whole) return `${month(w.from)} ${year(w.from)}`;
+
+  // A run of whole months a year or longer is named by its months and YEARS, not by its days.
+  //
+  // The annual window forced this. It begins on the 1st and ends on the last day of a month, so
+  // the day-range form rendered it "1 Sep – 31 Aug" — which reads as a backwards five-day range
+  // and omits the only thing a reader needs from a twelve-month window: which September. The
+  // calendar-year case was worse still, coming out as "1 Jan – 31 Dec" with no year at all on a
+  // figure whose entire purpose is to say which year.
+  //
+  // The threshold is the span, not whether it crosses a year boundary — "1 Jan – 31 Dec" needs
+  // the year quite as much as "1 Sep – 31 Aug" does. Twelve months is where days stop carrying
+  // information; a quarter is still read as dates, and keeps its day ends.
+  const wholeMonths = w.from.getDate() === 1 && addDays(last, 1).getDate() === 1;
+  const monthsSpanned = (last.getFullYear() - w.from.getFullYear()) * 12 + (last.getMonth() - w.from.getMonth()) + 1;
+  if (wholeMonths && monthsSpanned >= 12) {
+    return `${month(w.from)} ${year(w.from)} – ${month(last)} ${year(last)}`;
+  }
 
   // The opening month is dropped when both ends share one — "1 – 7 Sep" rather than the
   // "1 Sep – 7 Sep" that makes a single week look like a range across two.
