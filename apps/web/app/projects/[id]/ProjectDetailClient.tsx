@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock,
+  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock, Trash2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -55,6 +56,7 @@ interface Props { projectId: string }
 export function ProjectDetailClient({ projectId }: Props) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const router = useRouter();
   const { can } = usePermissions();
   const { currentUser } = useOrg();
   const [activeTab, setActiveTab] = useState<Tab>('Task List');
@@ -94,6 +96,39 @@ export function ProjectDetailClient({ projectId }: Props) {
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
     } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  /**
+   * Delete the project — the reversible kind.
+   *
+   * This is the ONLY way a project reaches Administration → Deleted Data, where a Super Admin can
+   * destroy it for good. Without it the permanent delete had no entry point at all: the screen
+   * listed soft-deleted projects and nothing in the app could put one there, so the feature read
+   * as built and was unreachable. Tasks had this already, on the task panel; projects did not.
+   *
+   * Deliberately NOT the same thing as Close. Closing is a lifecycle state a finished matter ends
+   * in, and it keeps the project in every list and report. This removes it from them, and is for
+   * a project that should not have existed — a duplicate, a typo, a test.
+   */
+  async function deleteProject() {
+    if (lifecycleBusy) return;
+    if (!await confirmDialog({
+      title: 'Delete this project?',
+      body: 'It stops appearing in projects, reports and the capacity board. Nothing is destroyed — '
+        + 'a Super Admin can restore it, or remove it for good, from Administration → Deleted Data.',
+      danger: true,
+      confirmLabel: 'Delete',
+    })) return;
+    setLifecycleBusy(true);
+    try {
+      await api.projects.delete(projectId);
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast('Project deleted — restore it from Administration → Deleted Data', 'success');
+      router.push('/projects');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not delete the project', 'error');
       setLifecycleBusy(false);
     }
   }
@@ -412,6 +447,18 @@ export function ProjectDetailClient({ projectId }: Props) {
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   <Pencil size={14} /> Edit
+                </button>
+              )}
+              {/* Sits AFTER Edit and before the primary action, so the destructive button is never
+                  the one next to "Add task" — the two get clicked from muscle memory. */}
+              {can('project.delete') && (
+                <button
+                  onClick={deleteProject}
+                  disabled={lifecycleBusy}
+                  title="Delete this project — it can be restored, or destroyed for good, from Administration → Deleted Data"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 size={14} /> Delete
                 </button>
               )}
               {(() => {
