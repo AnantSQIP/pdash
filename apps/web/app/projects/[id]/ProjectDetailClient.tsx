@@ -363,30 +363,26 @@ export function ProjectDetailClient({ projectId }: Props) {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 shrink-0">
-        <div className="px-4 sm:px-6 py-4">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <Link href="/projects" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 w-fit">
-              <ArrowLeft size={14} /> All Projects
-            </Link>
-            {/* Sits on the back-link row rather than among the actions: it changes what you can
-                SEE, not what happens to the project, and putting it beside Delete would make a
-                view control look like one more thing that alters the work. */}
-            <button
-              onClick={toggleHeader}
-              aria-expanded={!headerCollapsed}
-              title={headerCollapsed
-                ? 'Show the description, client, patents and statistics'
-                : 'Fold these details away and give the screen to the work'}
-              className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 text-xs font-medium text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-700 transition-colors"
+        {/* The vertical budget of this header is the whole point of its layout.
+            Measured at 1440x732 it stood at 290px expanded — two fifths of the window spent before
+            a single task appeared. Three things bought that back without dropping anything:
+            the back link and the fold control moved ONTO the badge row (a 42px row gone),
+            the block padding came down from 16px to 10px (12px), and the gaps between rows
+            tightened (14px). What is left is the same information in about 200px. */}
+        <div className="px-4 sm:px-6 py-2.5">
+          {/* Row one: where you came from, what this project IS, and the fold control. All three
+              are labels rather than actions, which is why they share a line and why the fold
+              control is here and not beside Delete. */}
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+            <Link
+              href="/projects"
+              title="Back to all projects"
+              className="flex items-center gap-1 -ml-1 pr-1 text-xs text-gray-500 hover:text-gray-700 shrink-0"
             >
-              {headerCollapsed ? <ChevronsUpDown size={13} /> : <ChevronsDownUp size={13} />}
-              {headerCollapsed ? 'Show details' : 'Hide details'}
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <ArrowLeft size={13} /> <span className="hidden sm:inline">All Projects</span>
+            </Link>
+            <span className="w-px h-3.5 bg-gray-200 shrink-0" aria-hidden />
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
                 {project.code ? (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
                     {project.code}
@@ -425,10 +421,26 @@ export function ProjectDetailClient({ projectId }: Props) {
                   {phase.label}
                 </span>
                 <span className={clsx('text-xs font-semibold', priority.color)}>{priority.label} Priority</span>
-              </div>
-              <h1 title={project.title} className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{project.title}</h1>
+            </div>
+            <button
+              onClick={toggleHeader}
+              aria-expanded={!headerCollapsed}
+              title={headerCollapsed
+                ? 'Show the description, client, patents and statistics'
+                : 'Fold these details away and give the screen to the work'}
+              className="flex items-center gap-1 ml-auto shrink-0 px-2 py-1 text-xs font-medium text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 hover:text-gray-700 transition-colors"
+            >
+              {headerCollapsed ? <ChevronsUpDown size={12} /> : <ChevronsDownUp size={12} />}
+              {headerCollapsed ? 'Show details' : 'Hide details'}
+            </button>
+          </div>
+
+          {/* Row two: the title and everything you can DO, side by side. */}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h1 title={project.title} className="text-lg sm:text-xl font-bold text-gray-900 truncate leading-snug">{project.title}</h1>
               {!headerCollapsed && project.description && (
-                <p className="text-sm text-gray-500 mt-1 max-w-xl line-clamp-2">{project.description}</p>
+                <p className="text-[13px] leading-snug text-gray-500 mt-0.5 max-w-2xl line-clamp-2">{project.description}</p>
               )}
               {!headerCollapsed && <PatentTagsEditor project={project} />}
             </div>
@@ -537,7 +549,7 @@ export function ProjectDetailClient({ projectId }: Props) {
           </div>
 
           {/* Stats row — the bulk of the header's height, and the first thing to go when it is folded. */}
-          <div className={clsx('flex items-center flex-wrap gap-x-6 gap-y-2 mt-4 text-sm', headerCollapsed && 'hidden')}>
+          <div className={clsx('flex items-center flex-wrap gap-x-5 gap-y-1.5 mt-2 text-[13px]', headerCollapsed && 'hidden')}>
             <div className="flex items-center gap-1.5 text-gray-500">
               <CheckSquare size={14} />
               <span><span className="font-medium text-gray-900">{project._count?.projectTasks ?? tasks.length}</span> tasks</span>
@@ -601,7 +613,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={clsx(
-                'px-4 py-2.5 text-sm font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors',
+                'px-3.5 py-2 text-[13px] font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors',
                 activeTab === tab
                   ? 'border-brand-600 text-brand-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700',
@@ -643,7 +655,7 @@ export function ProjectDetailClient({ projectId }: Props) {
           ))}
         </div>
       ) : (
-      <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-4' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-4 sm:p-6')}>
+      <div className={clsx('flex-1 overflow-hidden', activeTab === 'Board' ? 'p-3' : activeTab === 'Gantt' ? '' : 'overflow-y-auto p-3 sm:p-4')}>
         {activeTab === 'Task List' && (
           /* Grouped: "General" is a placeholder nobody chose, so groups can be renamed and added. */
           <TaskGroups
