@@ -54,6 +54,7 @@ import { DealsModule } from './modules/deals/deals.module';
 import { OptionalHolidaysModule } from './modules/optional-holidays/optional-holidays.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
+import { AdminDataModule } from './modules/admin-data/admin-data.module';
 
 @Module({
   imports: [
@@ -71,6 +72,10 @@ import { LifecycleModule } from './modules/lifecycle/lifecycle.module';
     HealthModule,
     // Org
     OrganizationsModule,
+    // Admin → Data: restore a soft-deleted project/task, or destroy one permanently. Registered
+    // BEFORE ProjectsModule so its DELETE /projects/:id/permanent route is matched before the
+    // soft-delete DELETE /projects/:id ever sees it.
+    AdminDataModule,
     // Core project management
     ProjectsModule,
     TaskListsModule,

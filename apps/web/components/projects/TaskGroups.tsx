@@ -8,6 +8,7 @@ import { api, type ApiTask, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { TaskListView } from './views';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { byPriorityThenDeadline } from '@/lib/tasks';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type Group = { id: string; name: string; isDefault: boolean; sequence: number };
@@ -67,7 +68,16 @@ export function TaskGroups({ projectId, tasks, loading, statuses, canEdit, onTas
     onError: (e) => toast(e instanceof Error ? e.message : 'Could not delete the group', 'error'),
   });
 
-  /** Tasks bucketed by group. Anything whose group was deleted falls into "Ungrouped". */
+  /**
+   * Tasks bucketed by group. Anything whose group was deleted falls into "Ungrouped".
+   *
+   * Each bucket is then ORDERED. It used to render in whatever order the API returned, which
+   * is creation order — so two tasks of the same priority sat in the sequence somebody happened
+   * to type them in, and the list said nothing about which to pick up first. The review asked
+   * that question directly and answered it: at equal priority, the nearer deadline is the higher
+   * priority. That rule lives in lib/tasks.ts so the sort is the same wherever a task list is
+   * drawn, and so it can be tested without a browser.
+   */
   const byGroup = useMemo(() => {
     const m = new Map<string, ApiTask[]>();
     const known = new Set(groups.map(g => g.id));
@@ -76,6 +86,7 @@ export function TaskGroups({ projectId, tasks, loading, statuses, canEdit, onTas
       const key = link?.taskListId && known.has(link.taskListId) ? link.taskListId : '__ungrouped__';
       (m.get(key) ?? m.set(key, []).get(key)!).push(t);
     }
+    for (const list of m.values()) list.sort(byPriorityThenDeadline);
     return m;
   }, [tasks, groups, projectId]);
 

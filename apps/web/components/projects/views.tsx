@@ -9,7 +9,7 @@ import { useToast } from '@/components/ui/Toast';
 import { formatDate } from '@/lib/date';
 import { Avatar } from '@/components/Avatar';
 import { AvatarStack } from '@/components/ui/AvatarStack';
-import { isTaskClosed, taskAssigneeUsers } from '@/lib/tasks';
+import { isTaskClosed, taskAssigneeUsers, orderedByDeadline } from '@/lib/tasks';
 import { TaskStateMark } from '@/components/tasks/TaskStateMark';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
@@ -131,7 +131,18 @@ export function TaskListView({
               />
             </div>
 
-            <span className="hidden lg:block w-24 shrink-0 text-right text-xs text-gray-500">
+            {/* The deadline is ordinarily just a date. On the one row where the deadline is the
+                ONLY reason this task sits below the one above it — same priority, later date —
+                it is also the explanation for the order, so it says so. Marking every row would
+                teach people to stop reading it; marking the row where the rule actually bit is
+                what makes the order legible. See lib/tasks.ts. */}
+            <span
+              className={clsx('hidden lg:block w-24 shrink-0 text-right text-xs',
+                orderedByDeadline(task, tasks[i - 1]) ? 'text-gray-600 font-medium' : 'text-gray-500')}
+              title={orderedByDeadline(task, tasks[i - 1])
+                ? 'Same priority as the task above — the nearer deadline is ordered first'
+                : undefined}
+            >
               {formatDate(task.dueDate)}
             </span>
           </div>

@@ -7,6 +7,7 @@ import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetSt
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { startOfUtcDay, resolveDate } from '../../common/dates';
 import { TaskTimeService } from './task-time.service';
@@ -19,6 +20,7 @@ export class TasksService {
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
     private readonly deadlines: DeadlineVisibilityService,
+    private readonly deadlineChanges: DeadlineChangeService,
     private readonly access: ProjectAccessService,
     private readonly time: TaskTimeService,
   ) {}
@@ -434,6 +436,18 @@ export class TasksService {
       include: this.taskInclude(),
       });
       if (dto.completionPercentage !== undefined) await this.recomputeForTask(id, tx);
+      // Inside the same transaction as the edit: a task whose deadline moved but whose shift
+      // was never recorded is indistinguishable, afterwards, from one that never moved.
+      // This is also where the capacity board's "extend deadline" (scope: task) arrives.
+      // projectId is deliberately NOT supplied from `before.projectTasks[0]` — that array comes
+      // back in whatever order Postgres chose. The service resolves the oldest link itself, so
+      // a shared task's shifts always roll up to the same project.
+      if (dto.dueDate !== undefined) {
+        await this.deadlineChanges.record({
+          entityType: 'TASK', entityId: id,
+          previous: before.dueDate, next: internalDue, tx,
+        });
+      }
       return u;
     });
     // M17: task edits now appear in the audit/activity/analytics feed.
@@ -764,6 +778,14 @@ export class TasksService {
    * deadline and everyone else's untouched. The capacity board plans each person to their own
    * deadline when they have one, so this is how "give Anant until Friday" is said without giving
    * it to the whole team. `null` clears it; they then fall back to the task's deadline.
+   *
+   * DELIBERATELY NOT a DeadlineChange. This is the third scope of the capacity board's "extend
+   * deadline" menu (project / task / person), and the other two ARE recorded — so the omission
+   * has to be a decision rather than a gap. A seat deadline is one person's private working
+   * date; the task's own commitment has not moved, and nobody downstream is late because of it.
+   * Recording it would also make the count depend on team size: extending a three-person task
+   * would read as that task having slipped three times, which is the sort of arithmetic that
+   * turns a performance figure into an argument. The per-seat move is still fully audited below.
    */
   async setAssigneeDeadline(taskId: string, userId: string, dueDate: string | null) {
     await this.access.assertTaskAccess(getActorId(), taskId);
@@ -939,7 +961,12 @@ export class TasksService {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
-        select: { userId: true, role: true, estimatedHours: true, dueDate: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
+        // startDate and hoursPerDay travel with the seat. Leaving them out of the select did not
+        // merely hide them: every editor re-sends the whole staffing list, so a seat that came
+        // back without its start and its daily ceiling was saved back WITHOUT them. Setting
+        // "2h a day from Monday" on the capacity board survived only until the next person was
+        // added to the task, and the board quietly went back to smearing the work to the deadline.
+        select: { userId: true, role: true, estimatedHours: true, dueDate: true, startDate: true, hoursPerDay: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },
@@ -959,7 +986,12 @@ export class TasksService {
       currentStatus: { select: { id: true, name: true, colorHex: true, type: true } },
       assignedBy: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } },
       assignees: {
-        select: { userId: true, role: true, estimatedHours: true, dueDate: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
+        // startDate and hoursPerDay travel with the seat. Leaving them out of the select did not
+        // merely hide them: every editor re-sends the whole staffing list, so a seat that came
+        // back without its start and its daily ceiling was saved back WITHOUT them. Setting
+        // "2h a day from Monday" on the capacity board survived only until the next person was
+        // added to the task, and the board quietly went back to smearing the work to the deadline.
+        select: { userId: true, role: true, estimatedHours: true, dueDate: true, startDate: true, hoursPerDay: true, user: { select: { id: true, firstName: true, lastName: true, profilePhoto: true } } },
       },
       subtasks: {
         where: { deletedAt: null },

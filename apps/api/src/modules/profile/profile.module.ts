@@ -140,10 +140,18 @@ export class ProfileService {
       data.weddingAnniversary = dto.weddingAnniversary ? new Date(dto.weddingAnniversary) : null;
     }
 
-    // ── Gate enforcement (root fix) ──────────────────────────────────────────
-    // The first-login gate must clear ONLY when the required joining details are all present
-    // and valid. A field the DTO leaves undefined keeps its stored value, so an HR correction
-    // that touches one field never wipes the gate. This is server-side; the client checks too.
+    // ── Completeness, no longer a gate ───────────────────────────────────────
+    // These fields used to be a wall: a new joiner could not reach the app until every one of
+    // them was filled in, and a partial self-submit was REJECTED so the wall could not be
+    // slipped. The wall came down on the owner's instruction (review of 2026-09) — the record is
+    // HR's to keep, and HR now fills it in when it creates the account.
+    //
+    // The arithmetic stays, because `profileCompletedAt` is still worth knowing: it is what HR's
+    // "hasn't completed their profile yet" badge reads. It is now a FLAG that gets stamped when
+    // the record happens to be complete, never a condition on saving.
+    //
+    // A field the DTO leaves undefined keeps its stored value, so a one-field correction never
+    // un-stamps anything.
     const existing = user.profile;
     const merged = {
       phone: dto.phone !== undefined ? dto.phone : user.phone,
@@ -183,12 +191,13 @@ export class ProfileService {
     }
 
     const isComplete = missing.length === 0;
-    // First-login self-completion must actually be complete — never let a partial submit slip
-    // the gate open with an empty record.
-    if (scope.self && !user.profileCompletedAt && !isComplete) {
-      throw new BadRequestException(`Please fill in every required field: ${missing.join(', ')}.`);
-    }
-    // Stamp the gate only when complete; never un-complete an already-completed profile.
+    // A partial save is now allowed for everyone, including the person themselves on their first
+    // day. What it must NOT do is claim to be complete, so the stamp below is still conditional.
+    //
+    // NOTHING about the personal-data boundary is relaxed here: who may write this record is
+    // still decided by scopeFor() above (yourself, or profile.update.any), and who may READ it is
+    // still decided by profile.view.personal in get(), which deletes the keys outright.
+    // Stamp the completeness flag only when complete; never un-complete an already-complete one.
     const profileCompletedAt = isComplete ? (user.profileCompletedAt ?? new Date()) : user.profileCompletedAt;
 
     await this.prisma.$transaction(async (tx) => {

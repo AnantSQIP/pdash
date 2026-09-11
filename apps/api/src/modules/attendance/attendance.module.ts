@@ -191,16 +191,22 @@ export class AttendanceService {
     if (!u) throw new NotFoundException(`User ${userId} not found`);
   }
 
-  // Attendance regularisations are routed to HR (people-ops) + Yash (escalation owner)
-  // ONLY — deliberately NOT to managers or other admins. Yash is matched by his login
-  // account; HR by role, so a change of who holds HR is picked up automatically.
+  // Attendance regularisations are routed to whoever may actually decide them — holders of
+  // attendance.manage (HR today) — plus Yash (escalation owner), who is matched by his login
+  // account. Deliberately NOT every manager or admin: the point is that it reaches the people
+  // who review it, and that list follows the permission rather than a hard-coded role name.
   private async regularizationApproverIds(organizationId: string | null): Promise<string[]> {
     if (!organizationId) return [];
     const rows = await this.prisma.user.findMany({
       where: {
         organizationId, deletedAt: null, status: 'ACTIVE',
         OR: [
-          { userRoles: { some: { role: { name: 'HR' } } } },
+          // Whoever holds attendance.manage — the same permission the approve/reject routes
+          // require. This was `role.name === 'HR'`, which was true of the only role that held it
+          // at the time. It is no longer safe to assume: a Super Admin can now grant the
+          // attendance permissions to a Manager or a Senior Research Associate from the Access
+          // screen, and a reviewer who can act but is never told is not really a reviewer.
+          { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'attendance.manage' } } } } } } },
           // Admins / Super Admins (user.manage_access) are always notified too.
           { userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'user.manage_access' } } } } } } },
           // Skipped entirely when unset — an empty string here would be a filter that matches

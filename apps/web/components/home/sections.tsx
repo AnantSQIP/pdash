@@ -416,11 +416,14 @@ export function MyExpensesCard() {
   );
 }
 
-// ── Org/team performance snapshot (analytics.view.organization) ──────────────
+// ── Org/team performance snapshot (performance.view.organization) ──────────────
+// The code checked here has to be the one the endpoint enforces. It used to be
+// analytics.view.organization, which a Manager holds and the performance routes do not accept —
+// so the card would render for them and then fail its own request.
 export function OrgPerformanceCard() {
   const { org } = useOrg();
   const { can } = usePermissions();
-  const allowed = can('analytics.view.organization');
+  const allowed = can('performance.view.organization');
   const { data, isLoading, isError, refetch } = useQuery<OrgPerformance>({
     queryKey: homeKeys.perfOrg(org?.id),
     queryFn: () => api.performance.org(org!.id),

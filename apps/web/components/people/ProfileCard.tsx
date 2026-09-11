@@ -1,10 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Lock, Loader, Pencil, MapPin, Phone, HeartPulse, Briefcase, ShieldAlert } from 'lucide-react';
 import { api, BLOOD_GROUPS, GENDERS, MARITAL_STATUSES, type UserProfile, type ProfileInput } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 import { Avatar } from '@/components/Avatar';
 import { useToast } from '@/components/ui/Toast';
 import { formatDate } from '@/lib/date';
@@ -50,6 +52,9 @@ function addressOf(p: UserProfile, kind: 'current' | 'permanent') {
 export function ProfileCard({ userId }: { userId: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
+  // Whose card this is decides whether the "not completed" badge is an invitation or a fact:
+  // your own is the only one you can go and fill in from the guided form.
+  const { user: me } = useAuth();
   const [editing, setEditing] = useState(false);
   const [f, setF] = useState<ProfileInput>({});
   const [busy, setBusy] = useState(false);
@@ -120,8 +125,15 @@ export function ProfileCard({ userId }: { userId: string }) {
             <h3 className="text-lg font-bold text-gray-900">{p.firstName} {p.lastName}</h3>
             <p className="text-sm text-gray-500">{p.designation ?? '—'}{p.department ? ` · ${p.department.name}` : ''}</p>
             {!p.profileCompleted && (
-              <span className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-                Has not completed their profile yet
+              <span className="inline-flex items-center gap-2 mt-1">
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                  {me?.id === userId ? 'Your employee record is incomplete' : 'Has not completed their profile yet'}
+                </span>
+                {me?.id === userId && (
+                  <Link href="/profile/complete" className="text-[11px] text-brand-600 hover:underline">
+                    Fill it in →
+                  </Link>
+                )}
               </span>
             )}
           </div>

@@ -1,19 +1,26 @@
 // Reset the workspace to a clean slate WITHOUT losing people.
 //
-// KEEPS: the organization, every user + their login credentials, all RBAC (roles,
-// permissions, grants, groups, overrides), org structure (departments, teams, reporting
-// lines) and configuration (workflows, leave types, holidays, tags, custom-field defs,
-// integrations, dashboards, notification prefs).
+// KEEPS: the organization, every user + their login credentials AND THEIR LIVE SESSIONS, all
+// RBAC (roles, permissions, grants, groups, overrides), org structure (departments, teams,
+// reporting lines) and configuration (workflows, leave types, holidays, optional-holiday
+// definitions, tags, custom-field defs, project templates + task standards, technology domains,
+// appraisal parameters, integrations, dashboards, automation rules, notification prefs).
 //
-// DELETES: every piece of operational / activity content — projects, tasks, subtasks,
-// patents, clients, PID requests, timesheets, attendance, leave/comp-off/expense,
-// notifications, discussions, calendar, approvals, comments, issues, announcements,
-// policies, appraisals, rewards, analytics/audit/activity, documents — and RESETS every
-// user's profile (clears PII + re-arms the first-login profile gate) and the PID / patent
-// serial counters.
+// DELETES: every piece of operational / activity content — projects, tasks, subtasks, task work
+// sessions + coverage, patents, clients + ledger overrides, PID requests + reservations,
+// timesheets (and backdate requests), attendance, leave/comp-off/expense/WFH requests, deadline
+// changes, notifications, discussions, calendar events + personal blocks, approvals, comments,
+// issues, announcements, policies, appraisals + scores, rewards, feedback, BD deals,
+// analytics/audit/activity, documents — and CLEARS every user's profile (the collected PII) and
+// the PID / patent serial counters.
+//
+// EVERY model in schema.prisma is classified as one or the other, and tools/reset-coverage.spec.ts
+// fails the build if a new model is neither. That test is the reason this script does not go
+// stale: it had drifted to 66 of the schema's 117 models because nothing ever forced the
+// question when a table was added.
 //
 // SAFETY: refuses to run without `--yes`, and additionally requires ALLOW_PROD_RESET=true
-// when NODE_ENV=production. Idempotent — safe to run more than once.
+// when the database is not local. Idempotent — safe to run more than once.
 //
 //   Local :  DATABASE_URL=... npx ts-node packages/db/prisma/reset-operational-data.ts --yes
 //   Prod  :  NODE_ENV=production ALLOW_PROD_RESET=true \
@@ -56,13 +63,25 @@ async function main() {
     ['notification', () => prisma.notification.deleteMany()],
     ['presence', () => prisma.presence.deleteMany()],
     ['auditLog', () => prisma.auditLog.deleteMany()],
+    // Every deadline this firm ever moved. Operational history, and the Performance module counts
+    // it — leaving it behind would open the new workspace with a slipped-deadline record.
+    ['deadlineChange', () => prisma.deadlineChange.deleteMany()],
+    // The log of TIMER↔MANUAL switches. The CURRENT mode is Organization.timeTrackingMode, which
+    // is configuration and stays; this is only the history of getting there.
+    ['timeTrackingModeChange', () => prisma.timeTrackingModeChange.deleteMany()],
     // attendance / leave / expense / time
+    ['taskWorkSession', () => prisma.taskWorkSession.deleteMany()],
     ['timesheet', () => prisma.timesheet.deleteMany()],
+    ['timesheetBackdateRequest', () => prisma.timesheetBackdateRequest.deleteMany()],
     ['regularizationRequest', () => prisma.regularizationRequest.deleteMany()],
     ['attendance', () => prisma.attendance.deleteMany()],
     ['expense', () => prisma.expense.deleteMany()],
     ['compOffRequest', () => prisma.compOffRequest.deleteMany()],
     ['leaveRequest', () => prisma.leaveRequest.deleteMany()],
+    ['wfhRequest', () => prisma.wfhRequest.deleteMany()],
+    // A person's claim on an optional holiday is a request. The OptionalHoliday it points at is
+    // the company calendar and stays.
+    ['optionalHolidayElection', () => prisma.optionalHolidayElection.deleteMany()],
     // discuss / calendar / comms
     ['messageReaction', () => prisma.messageReaction.deleteMany()],
     ['messageMention', () => prisma.messageMention.deleteMany()],
@@ -79,6 +98,8 @@ async function main() {
     ['mentionTag', () => prisma.mentionTag.deleteMany()],
     ['calendarEventAttendee', () => prisma.calendarEventAttendee.deleteMany()],
     ['calendarEvent', () => prisma.calendarEvent.deleteMany()],
+    // Personal "do not book me" blocks — one person's diary, not the company's configuration.
+    ['calendarBlock', () => prisma.calendarBlock.deleteMany()],
     // approvals / comments
     ['approvalAction', () => prisma.approvalAction.deleteMany()],
     ['approval', () => prisma.approval.deleteMany()],
@@ -88,9 +109,14 @@ async function main() {
     ['policyAcknowledgement', () => prisma.policyAcknowledgement.deleteMany()],
     ['announcement', () => prisma.announcement.deleteMany()],
     ['appraisalGoal', () => prisma.appraisalGoal.deleteMany()],
+    // Scores go, the PARAMETERS they score against stay: the parameter list is HR configuration
+    // (name, weight, which designations it applies to), exactly like a custom-field definition.
+    ['appraisalScore', () => prisma.appraisalScore.deleteMany()],
     ['appraisal', () => prisma.appraisal.deleteMany()],
     ['appraisalCycle', () => prisma.appraisalCycle.deleteMany()],
     ['reward', () => prisma.reward.deleteMany()],
+    // Things people said about each other. Operational, and the most personal content here.
+    ['feedback', () => prisma.feedback.deleteMany()],
     ['policy', () => prisma.policy.deleteMany()],
     // custom-field values (definitions kept)
     ['customFieldValue', () => prisma.customFieldValue.deleteMany()],
@@ -103,18 +129,33 @@ async function main() {
     ['subtaskAssignee', () => prisma.subtaskAssignee.deleteMany()],
     ['subtask', () => prisma.subtask.deleteMany()],
     ['taskAssignee', () => prisma.taskAssignee.deleteMany()],
+    // Who stood in for whom while they were away — a record of work, not of structure.
+    ['taskCoverage', () => prisma.taskCoverage.deleteMany()],
+    // The team↔task join. The TEAM stays; which tasks it happened to hold does not.
+    ['teamTask', () => prisma.teamTask.deleteMany()],
     ['projectTask', () => prisma.projectTask.deleteMany()],
     ['task', () => prisma.task.deleteMany()],
     ['taskList', () => prisma.taskList.deleteMany()],
     // project / client / patent / PID
     ['pidRequest', () => prisma.pidRequest.deleteMany()],
+    // PIDs minted but not yet spent. Leaving these behind would make the new workspace's first
+    // project collide with a reservation from the demo era.
+    ['pidReservation', () => prisma.pidReservation.deleteMany()],
     ['projectPatent', () => prisma.projectPatent.deleteMany()],
     ['projectDocument', () => prisma.projectDocument.deleteMany()],
     ['projectMember', () => prisma.projectMember.deleteMany()],
     ['projectDepartment', () => prisma.projectDepartment.deleteMany()],
     ['projectTeam', () => prisma.projectTeam.deleteMany()],
     ['project', () => prisma.project.deleteMany()],
+    // Demo patents (packages/db/prisma/seed-patents-demo.ts writes these, with their demo clients)
+    // go with everything else: the patent register starts empty.
     ['patent', () => prisma.patent.deleteMany()],
+    // BD pipeline. Deleted BEFORE clients — a deal points at the client it became.
+    ['dealActivity', () => prisma.dealActivity.deleteMany()],
+    ['deal', () => prisma.deal.deleteMany()],
+    // A hand-stated billable figure for a client. It only means anything beside the client and
+    // the hours it overrides, both of which are going.
+    ['clientLedgerOverride', () => prisma.clientLedgerOverride.deleteMany()],
     ['client', () => prisma.client.deleteMany()],
     ['sequenceCounter', () => prisma.sequenceCounter.deleteMany()],
     // documents
@@ -129,11 +170,23 @@ async function main() {
     if (count) console.log(`  deleted ${count} ${name}`);
   }
 
-  // Reset every profile: remove the collected PII and re-arm the first-login profile gate
-  // (AppShell blocks the app until profileCompletedAt is set again).
+  // Clear every profile: the collected PII (address, date of birth, next of kin) is operational
+  // content and a fresh workspace should not open holding it.
+  //
+  // It does NOT touch User.profileCompletedAt. This used to set it back to null to "re-arm the
+  // first-login profile gate" — the screen that blocked the app until a person filled their
+  // details in. That gate no longer exists, so re-arming it would set a flag nothing reads, and
+  // the only thing that could come of that is a future reader believing there is still a gate.
   const profiles = await prisma.userProfile.deleteMany();
-  const rearmed = await prisma.user.updateMany({ data: { profileCompletedAt: null } });
-  console.log(`  cleared ${profiles.count} user profiles; re-armed the profile gate for ${rearmed.count} users`);
+  console.log(`  cleared ${profiles.count} user profiles`);
+
+  // DELIBERATELY NOT CLEARED: AuthToken and RefreshToken.
+  //
+  // Clearing them signs every single person out, mid-sentence, at whatever moment this runs. The
+  // rule on this system is that a deploy must not cause a logout blip, and a workspace reset is
+  // not a security event — the people are the one thing being kept. Their credentials, roles and
+  // sessions all survive; only what they did does not. (If this is ever run BECAUSE of a
+  // compromise, revoke sessions explicitly, separately, and on purpose.)
 
   const usersAfter = await prisma.user.count();
   const projectsAfter = await prisma.project.count();

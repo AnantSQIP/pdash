@@ -7,7 +7,6 @@ import { Loader, Menu } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { Sidebar } from './Sidebar';
 import { ForcePasswordReset } from './ForcePasswordReset';
-import { CompleteProfile } from './CompleteProfile';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { NotificationToaster } from '@/components/layout/NotificationToaster';
 import { TopBar } from './TopBar';
@@ -70,13 +69,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     return <ForcePasswordReset />;
   }
 
-  // ...and then tell us who they are. Order matters: the password first (so the account is
-  // theirs alone before any personal data is typed into it), then the joining details.
-  // Existing staff were grandfathered by the migration, so this only fires for someone
-  // signing in for the very first time.
-  if (user && !user.profileCompleted) {
-    return <CompleteProfile />;
-  }
+  // There used to be a second gate here: a new joiner could not reach the app until they had
+  // typed their address, date of birth and emergency contact into a form. It was removed on the
+  // owner's instruction (review of 2026-09) — the details are HR's record, not the new joiner's
+  // toll gate, and HR now fills them in when the account is created (Admin → Add User) or
+  // afterwards from the person's profile. The form itself still exists, voluntarily, at
+  // /profile/complete, so nobody lost the ability to fill their own details in.
 
   // Authenticated app shell. On lg+ the sidebar is static; below lg it becomes an
   // off-canvas drawer and a mobile top bar (with a hamburger) appears.

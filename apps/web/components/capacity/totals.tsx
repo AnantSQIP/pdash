@@ -62,6 +62,50 @@ export function teamTotals(rows: CapacityRow[]): DayTotal[] {
 
 function pct(load: number, capacity: number) { return capacity > 0 ? Math.round((load / capacity) * 100) : 0; }
 
+/**
+ * The whole window, across everybody on the board: hours planned, hours available, and the share
+ * one is of the other.
+ *
+ * "39h allocated out of 800" is two numbers a reader has to divide in their head, and the answer —
+ * 5% — is the thing being asked. It lives here, beside the per-day and per-person totals, so it is
+ * derived from exactly the same capacity figure those are; computed a second time somewhere else
+ * it would eventually disagree with the bars underneath it, and then neither number is believed.
+ */
+export type WindowTotal = {
+  load: number;
+  capacity: number;
+  /**
+   * The share of capacity planned, 0–100+, or NULL when there is no capacity to be a share of.
+   * A percentage of nothing is undefined, not zero: a week that is entirely holiday has no hours
+   * to allocate, and printing "0%" there would report a fully idle organisation when in fact
+   * nobody was due in at all. The UI shows a dash. (Printing it as a number at all would have to
+   * be NaN or Infinity, which is how a division like this usually reaches a screen.)
+   */
+  pct: number | null;
+};
+
+export function windowTotal(rows: CapacityRow[]): WindowTotal {
+  let load = 0, capacity = 0;
+  for (const r of rows) { load += r.committedHours; capacity += r.capacityHours; }
+  return {
+    load: Math.round(load),
+    capacity: Math.round(capacity),
+    pct: capacity > 0 ? Math.round((load / capacity) * 100) : null,
+  };
+}
+
+/** "39h of 800h · 5%" — both, always: the hours are what you act on, the share is the health. */
+export function windowTotalText(t: WindowTotal): string {
+  return `${t.load}h of ${t.capacity}h · ${t.pct === null ? '—' : `${t.pct}%`}`;
+}
+
+/** The words under the number, saying what the share is of. */
+export function windowTotalHint(t: WindowTotal): string {
+  return t.pct === null
+    ? 'No working hours in this window — nobody is due in, so there is no share to report'
+    : `${t.pct}% of the team's available hours in this window are allocated — ${t.load}h planned of ${t.capacity}h`;
+}
+
 /** One day's team total: a fill bar in the band's colour, the number beneath when the column is wide enough. */
 export function DayTotalCell({ t, unit, wide }: { t: DayTotal; unit: Unit; wide: boolean }) {
   const band = loadBand(t.load, t.capacity);
