@@ -59,14 +59,6 @@ check('last week may span two months',
 check('last week may span two years',
   w('last-week', on(2027, 1, 1)), ['2026-12-21', '2026-12-28', '2026-12-14', '2026-12-21']);
 
-// ── last five weeks ─────────────────────────────────────────────────────────
-check('last five weeks are the five FINISHED weeks',
-  w('last-5-weeks', on(2026, 9, 16)), ['2026-08-10', '2026-09-14', '2026-07-06', '2026-08-10']);
-check('and the comparison before it is another five',
-  (periodWindow('last-5-weeks', on(2026, 9, 16)).prevTo.getTime() - periodWindow('last-5-weeks', on(2026, 9, 16)).prevFrom.getTime()) / 86400000, 35);
-check('the five-week window ends where the last-week window ends',
-  isoDay(periodWindow('last-5-weeks', on(2026, 9, 16)).to), isoDay(periodWindow('last-week', on(2026, 9, 16)).to));
-
 // ── last month ──────────────────────────────────────────────────────────────
 check('last month is the previous whole calendar month',
   w('last-month', on(2026, 9, 16)), ['2026-08-01', '2026-09-01', '2026-07-01', '2026-08-01']);
@@ -77,28 +69,48 @@ check('in JANUARY last month is December of the year before',
 check('in February the comparison reaches back to December',
   w('last-month', on(2027, 2, 3)), ['2027-01-01', '2027-02-01', '2026-12-01', '2027-01-01']);
 
-// ── last quarter ────────────────────────────────────────────────────────────
+// ── quarterly ───────────────────────────────────────────────────────────────
 check('in Q3 the last quarter is Apr–Jun',
-  w('last-quarter', on(2026, 9, 16)), ['2026-04-01', '2026-07-01', '2026-01-01', '2026-04-01']);
+  w('quarterly', on(2026, 9, 16)), ['2026-04-01', '2026-07-01', '2026-01-01', '2026-04-01']);
 check('in Q1 the last quarter is Oct–Dec of the year before',
-  w('last-quarter', on(2027, 2, 20)), ['2026-10-01', '2027-01-01', '2026-07-01', '2026-10-01']);
+  w('quarterly', on(2027, 2, 20)), ['2026-10-01', '2027-01-01', '2026-07-01', '2026-10-01']);
 check('on the first day of a quarter the quarter just ended is the one reported',
-  w('last-quarter', on(2026, 10, 1)), ['2026-07-01', '2026-10-01', '2026-04-01', '2026-07-01']);
+  w('quarterly', on(2026, 10, 1)), ['2026-07-01', '2026-10-01', '2026-04-01', '2026-07-01']);
 
-// ── this month, the only window that is still running ───────────────────────
-check('month-to-date runs from the 1st to the end of today',
-  w('current-month', on(2026, 9, 11)), ['2026-09-01', '2026-09-12', '2026-08-01', '2026-08-12']);
-check('and says that it is not finished', periodWindow('current-month', on(2026, 9, 11)).partial, true);
-check('it is compared with the SAME span of the month before, not the whole of it',
-  (periodWindow('current-month', on(2026, 9, 11)).prevTo.getTime() - periodWindow('current-month', on(2026, 9, 11)).prevFrom.getTime()) / 86400000, 11);
-check('on the 1st the window is exactly one day',
-  w('current-month', on(2026, 9, 1)), ['2026-09-01', '2026-09-02', '2026-08-01', '2026-08-02']);
-// 31 March against February: there is no 31st to reach, and running past it would count days of
-// March twice on both sides of the comparison.
-check('on the 31st the comparison is clamped to the end of the shorter month',
-  w('current-month', on(2027, 3, 31)), ['2027-03-01', '2027-04-01', '2027-02-01', '2027-03-01']);
-check('in January the comparison is the previous December',
-  w('current-month', on(2027, 1, 5)), ['2027-01-01', '2027-01-06', '2026-12-01', '2026-12-06']);
+// ── annually ────────────────────────────────────────────────────────────────
+// Twelve FINISHED months ending at the start of this one, not the last finished calendar year.
+// Asked in September, the calendar-year reading would show January to December of the year
+// before — eight months stale at the appraisal it exists for.
+check('a year is the twelve whole months ending last month-end',
+  w('annually', on(2026, 9, 16)), ['2025-09-01', '2026-09-01', '2024-09-01', '2025-09-01']);
+check('and it is compared with the twelve months before those',
+  w('annually', on(2026, 9, 16))[2], '2024-09-01');
+check('asked on the 1st, the window still ends at the start of this month',
+  w('annually', on(2026, 9, 1)), ['2025-09-01', '2026-09-01', '2024-09-01', '2025-09-01']);
+check('asked on the last day of a month, it has not yet swallowed that month',
+  w('annually', on(2026, 9, 30)), ['2025-09-01', '2026-09-01', '2024-09-01', '2025-09-01']);
+check('in January the window is the whole of the year just gone',
+  w('annually', on(2027, 1, 8)), ['2026-01-01', '2027-01-01', '2025-01-01', '2026-01-01']);
+check('the window is never partial — it always ends on a month boundary',
+  periodWindow('annually', on(2026, 9, 16)).partial, false);
+check('a leap year does not shift the boundaries, which are months not days',
+  w('annually', on(2028, 3, 15)), ['2027-03-01', '2028-03-01', '2026-03-01', '2027-03-01']);
+
+// ── the picker offers exactly the four periods asked for ────────────────────
+check('the picker offers four periods, shortest to longest',
+  CALENDAR_PERIODS.map(p => p.key), ['last-week', 'last-month', 'quarterly', 'annually']);
+check('and labels them the way the owner named them',
+  CALENDAR_PERIODS.map(p => p.label), ['Last week', 'Last month', 'Quarterly', 'Annually']);
+check('every one of them has finished — none is still running',
+  CALENDAR_PERIODS.every(p => !periodWindow(p.key, on(2026, 9, 16)).partial), true);
+check('and they run shortest to longest, so the picker reads as one scale',
+  (() => {
+    const spans = CALENDAR_PERIODS.map(p => {
+      const win = periodWindow(p.key, on(2026, 9, 16));
+      return win.to.getTime() - win.from.getTime();
+    });
+    return spans.every((x, i) => i === 0 || spans[i - 1] < x);
+  })(), true);
 
 // ── every window is well-formed ─────────────────────────────────────────────
 for (const p of CALENDAR_PERIODS) {
@@ -121,11 +133,19 @@ check('a week inside one month drops the repeated month',
 check('a whole month is named, not spelled out',
   describeWindow(periodWindow('last-month', on(2026, 9, 16))), 'Aug 2026');
 check('a quarter shows both ends',
-  describeWindow(periodWindow('last-quarter', on(2026, 9, 16))), '1 Apr – 30 Jun');
-check('a running month says that it is running',
-  describeWindow(periodWindow('current-month', on(2026, 9, 11))), '1 – 11 Sep (so far)');
-check('a five-week window shows both ends',
-  describeWindow(periodWindow('last-5-weeks', on(2026, 9, 16))), '10 Aug – 13 Sep');
+  describeWindow(periodWindow('quarterly', on(2026, 9, 16))), '1 Apr – 30 Jun');
+check('a year spanning two years names both',
+  describeWindow(periodWindow('annually', on(2026, 9, 16))), 'Sep 2025 – Aug 2026');
+// A year that happens to sit inside ONE calendar year is still a run of whole months, but the
+// years add nothing there — it collapses to the same day-range form everything else uses.
+check('a year that IS a calendar year is named as one',
+  describeWindow(periodWindow('annually', on(2027, 1, 8))), 'Jan 2026 – Dec 2026');
+check('a quarter keeps its day ends — the year rule must not swallow it',
+  describeWindow(periodWindow('quarterly', on(2026, 9, 16))), '1 Apr – 30 Jun');
+check('a quarter that crosses a year boundary is still read as dates',
+  describeWindow(periodWindow('quarterly', on(2027, 2, 20))), '1 Oct – 31 Dec');
+check('a week crossing a year boundary still drops the repeated month',
+  describeWindow(periodWindow('last-week', on(2027, 1, 1))), '21 – 27 Dec');
 
 // ── the rolling windows still work, untouched ───────────────────────────────
 // The heatmap and the daily trend lines are genuinely rolling and still import these.

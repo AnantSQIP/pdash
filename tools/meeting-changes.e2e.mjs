@@ -54,6 +54,25 @@ const PASS = { 'x-org-passcode': PASSCODE };
   const meSu = (await su('/auth/me')).data; const SUID = (meSu.user ?? meSu).id;
   const meMgr = (await mgr('/auth/me')).data; const MGRID = (meMgr.user ?? meMgr).id;
 
+  // One assertion below needs somebody who genuinely holds the Admin role: the point of it is that
+  // an ADMIN is refused, and an Employee would be refused one step earlier for lacking role.update
+  // at all — which looks like a pass and proves nothing about the guard being tested.
+  //
+  // The suite arranges that itself rather than depending on demo-access-2026-09.ts having been run
+  // first. A test whose meaning depends on an unrelated script is a test that will one day report
+  // the wrong thing to somebody who has no idea why.
+  const allRoles = (await su('/roles')).data ?? [];
+  const adminRole = (Array.isArray(allRoles) ? allRoles : allRoles.items ?? []).find(r => r.name === 'Admin');
+  const elevated = ((await su('/users')).data ?? []).find(u => u.email === ELEVATED);
+  if (adminRole && elevated) {
+    const held = ((await su(`/users/${elevated.id}`)).data?.roles ?? []).map(r => r.id ?? r);
+    await su(`/users/${elevated.id}/roles`, {
+      method: 'PUT', headers: PASS,
+      body: { roleIds: [...new Set([...held, adminRole.id])] },
+    });
+    await adm('/auth/login', { method: 'POST', body: { email: ELEVATED, password: PW } });
+  }
+
   // ══ Requirements 1–20: Performance is only about KPIs ═════════════════════
   step('Performance: the two KPIs, and who may see whose');
 
