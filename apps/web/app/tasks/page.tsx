@@ -486,7 +486,7 @@ export default function TasksPage() {
 
 // Shared table chrome so the loading, populated and (implicitly) empty states line up.
 function TableShell({ children }: { children: React.ReactNode }) {
-  const headers = ['Task', 'Project', 'Priority', 'Status', 'Assignees', 'Due', 'Progress', 'Work'];
+  const headers = ['Task', 'Project', 'Priority', 'Status', 'Team members', 'Due', 'Progress', 'Work'];
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">

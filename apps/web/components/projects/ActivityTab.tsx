@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Plus, MessageCircle, RefreshCw, Flag, CheckCircle, Trash2, FolderKanban, Clock, Download, Activity as ActivityIcon,
-  Play, Pause, RotateCcw,
+  Play, Pause, RotateCcw, Hash,
 } from 'lucide-react';
 import { api, type ActivityItem } from '@/lib/api';
 import { fullName } from '@/lib/avatar';
@@ -28,6 +28,7 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'issue.resolved':       { verb: 'resolved issue',        cat: 'Issues',   icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
   'project.created':      { verb: 'created the project',   cat: 'Projects', icon: <FolderKanban className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
   'project.approved':     { verb: 'approved the project',  cat: 'Projects', icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'project.pid_moved':    { verb: 'changed the Project ID of', cat: 'Projects', icon: <Hash className="w-3.5 h-3.5" />, color: 'bg-amber-100 text-amber-600' },
   'project.rejected':     { verb: 'rejected the project',  cat: 'Projects', icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
   'timesheet.logged':     { verb: 'logged time',           cat: 'Tasks',    icon: <Clock className="w-3.5 h-3.5" />,       color: 'bg-teal-100 text-teal-600' },
   'document.uploaded':    { verb: 'uploaded a file',       cat: 'Files',    icon: <Download className="w-3.5 h-3.5" />,    color: 'bg-sky-100 text-sky-600' },

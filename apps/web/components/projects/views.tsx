@@ -65,7 +65,7 @@ export function TaskListView({
         <span className="flex-1">Task</span>
         <span className="w-32 hidden sm:block">Status</span>
         <span className="w-20 hidden lg:block">Priority</span>
-        <span className="w-20 hidden sm:block">Assignees</span>
+        <span className="w-20 hidden sm:block">Team members</span>
         <span className="w-24 hidden lg:block text-right">Due Date</span>
       </div>
 
