@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge, X, Search, CalendarPlus,
+  ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 
 import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type CoverageRisk, type TeamHistory, type HistoryRow } from '@/lib/api';
@@ -96,6 +97,34 @@ export default function CapacityPage() {
   const [customStart, setCustomStart] = useState('');
   const [customLength, setCustomLength] = useState(7);
   const [search, setSearch] = useState('');
+
+  /**
+   * Whether the sentence explaining the board is folded away.
+   *
+   * The board is the page; the header is the label on it. Explaining how to read a board is worth
+   * a line the first few times somebody opens it and worth nothing on the hundredth, and this is a
+   * screen the firm sits in front of every Friday. Folding it is remembered per browser for that
+   * reason — it is a working preference, not a property of the data.
+   *
+   * The window dates and the allocation share are deliberately NOT folded. Which days you are
+   * looking at is not a detail; every hour figure on the board is measured over it, and a board
+   * that did not say so is exactly how the Friday window came to stop on a Thursday unnoticed.
+   *
+   * Read in an effect rather than during render: reading localStorage while rendering makes the
+   * server and client disagree and React throws the markup away. Guarded, because a private window
+   * throws on access.
+   */
+  const [capacityHeaderCollapsed, setCapacityHeaderCollapsed] = useState(false);
+  useEffect(() => {
+    try { setCapacityHeaderCollapsed(localStorage.getItem('pdash.capacityHeaderCollapsed') === '1'); } catch { /* storage blocked */ }
+  }, []);
+  function toggleCapacityHeader() {
+    setCapacityHeaderCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem('pdash.capacityHeaderCollapsed', next ? '1' : '0'); } catch { /* storage blocked */ }
+      return next;
+    });
+  }
   const [dept, setDept] = useState('');
   const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
   // The selected PERSON, not a snapshot of their row: the panel then re-reads the row from the
@@ -243,26 +272,40 @@ export default function CapacityPage() {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 shrink-0">
+      {/* This header's height is a budget, and the board below is what it is taken from.
+          Measured at 1440x732 it stood at 154px, with the first person's row at 313px — 43% of the
+          window gone before one of 25 people was visible. The title, the window it covers and the
+          allocation share now share ONE line instead of three stacked ones; the sentence explaining
+          the board folds away; and the block padding came down from 16px to 10px. Nothing was
+          dropped — the sentence is one click away and everything else is still on screen. */}
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-2.5 shrink-0">
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Gauge size={20} className="text-brand-600" /> Team Capacity
-            </h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Who is on what, when, and how much — across every project. Hover a day for what fills it; click a name for the whole plan.
+          <div className="min-w-0">
+            {/* One line: what this is, what it covers, and how full it is. Three facts that are
+                read together and were previously stacked, costing two rows to say. */}
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <h1 className="text-base font-bold text-gray-900 flex items-center gap-1.5 shrink-0">
+                <Gauge size={17} className="text-brand-600" /> Team Capacity
+              </h1>
               {!isPast && fwdRows.length > 0 && (
-                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/15">
                   {stats.freeNow} of {fwdRows.length} available now
                 </span>
               )}
-            </p>
+            </div>
+            {!capacityHeaderCollapsed && (
+              <p className="text-[13px] leading-snug text-gray-500 mt-0.5 max-w-3xl">
+                Who is on what, when, and how much — across every project. Hover a day for what fills it; click a name for the whole plan.
+              </p>
+            )}
             {/* What this window IS — said in dates, because a length alone ("next 7 days") is
                 exactly what let a Friday window quietly stop on the Thursday. The share beside it
                 answers the question the two hour figures pose: 39h of 800h is 5%, and reading that
-                off the board is how anybody sees at a glance whether the firm is booked or idle. */}
+                off the board is how anybody sees at a glance whether the firm is booked or idle.
+                It stays visible when the header is folded: which days you are looking at is not a
+                detail, it is the thing every figure on the board is measured over. */}
             {!isPast && (
-              <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+              <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
                 <span className="inline-flex items-center gap-1.5 font-medium text-gray-700">
                   <CalendarRange size={13} className="text-gray-400" />
                   {formatDate(win.start, { weekday: 'short', day: 'numeric', month: 'short' })}
@@ -374,6 +417,19 @@ export default function CapacityPage() {
               </select>
             )}
             {!isPast && <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => { refetch(); qc.invalidateQueries({ queryKey: ['coverage-risks'] }); }} intervalMs={POLL_MS} className="ml-1" />}
+            {/* Last in the control row, and visually quieter than the filters: it changes how much
+                of the header you see, not what the board is showing. */}
+            <button
+              onClick={toggleCapacityHeader}
+              aria-expanded={!capacityHeaderCollapsed}
+              title={capacityHeaderCollapsed
+                ? 'Show the line explaining how to read this board'
+                : 'Fold that line away and give the rows the space'}
+              className="flex items-center gap-1 shrink-0 px-2 py-1.5 text-xs font-medium text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 hover:text-gray-700 transition-colors"
+            >
+              {capacityHeaderCollapsed ? <ChevronsUpDown size={12} /> : <ChevronsDownUp size={12} />}
+              <span className="hidden sm:inline">{capacityHeaderCollapsed ? 'Show' : 'Hide'}</span>
+            </button>
           </div>
         </div>
 
@@ -391,7 +447,7 @@ export default function CapacityPage() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col p-4 sm:p-6 gap-4">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col p-3 sm:p-4 gap-3">
         {coverage && coverage.risks.length > 0 && (
           <CoveragePanel data={coverage} />
         )}
