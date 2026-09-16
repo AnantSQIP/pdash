@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { TaskTimeService } from '../tasks/task-time.service';
 import { getActorId } from '../../common/context/request-context';
+import { documentStorage } from '../documents/document-storage';
 import {
   PROJECT_PURGE_ORDER, TASK_PURGE_ORDER,
   type ProjectPurgeModel, type TaskPurgeModel,
@@ -187,8 +188,12 @@ export class PurgeService {
     // ordinary case — softDelete withdrew it) is a no-op rather than a double subtraction.
     await this.time.withdraw(id);
 
+    const files = await this.doomedDocuments(null, [id], new Set<string>());
+
     const counts = await this.prisma.$transaction(async tx => {
+      await this.assertStillDeleted(tx, 'task', id, 'task');
       const c = await this.deleteTaskRows(tx, [id]);
+      this.mergeCounts(c, await this.destroyDocuments(tx, files));
       await this.writeTombstone(tx, 'TASK', id, {
         title: task.title,
         project: task.projectTasks[0]?.project ?? null,
@@ -198,6 +203,7 @@ export class PurgeService {
       }, c);
       return c;
     }, PURGE_TX);
+    await this.freeBytes(files);
     return { id, title: task.title, deleted: counts };
   }
 
@@ -239,12 +245,18 @@ export class PurgeService {
     // withdraw, so for these this is usually the first and only chance to do it.
     for (const taskId of doomed) await this.time.withdraw(taskId);
 
+    // Resolved before the transaction: it is several reads, and it must see the links as they
+    // stand BEFORE the purge removes them.
+    const files = await this.doomedDocuments(id, taskIds, keep);
+
     const counts = await this.prisma.$transaction(async tx => {
+      await this.assertStillDeleted(tx, 'project', id, 'project');
       // Every doomed task in ONE pass per table rather than a full pass per task. A project with
       // forty tasks is otherwise ~900 round trips inside a transaction, which is how a purge
       // starts timing out on the matters big enough that somebody wants them gone.
       const c: PurgeCounts = doomed.length ? await this.deleteTaskRows(tx, doomed) : {};
       this.mergeCounts(c, await this.deleteProjectRows(tx, id));
+      this.mergeCounts(c, await this.destroyDocuments(tx, files));
       await this.writeTombstone(tx, 'PROJECT', id, {
         title: project.title, code: project.code, roundSeq: project.roundSeq, office: project.office,
         projectPhase: project.projectPhase, projectType: project.projectType,
@@ -256,6 +268,7 @@ export class PurgeService {
       }, c);
       return c;
     }, PURGE_TX);
+    await this.freeBytes(files);
     return { id, title: project.title, code: project.code, deleted: counts, tasksKept: keep.size };
   }
 
@@ -265,6 +278,113 @@ export class PurgeService {
    * The two gates, together, because they answer the same question: is it safe to run this at
    * all? Kept on the server rather than in the dialog — see the class comment.
    */
+  /**
+   * Take the row's own lock and re-read whether it is still deleted, INSIDE the purge transaction.
+   *
+   * The check at the top of a purge reads a snapshot. Between that read and the destructive
+   * transaction there are two more standalone queries and a withdraw() per task, each its own
+   * transaction — and on a big matter, which is exactly the kind somebody wants gone, that window
+   * is wide. A Restore landing in it was honoured, reported success, and the purge then destroyed
+   * the project anyway. Restore and Delete Permanently sit in the same row of the same table on
+   * Admin → Data, so the two clicks that collide are inches apart.
+   *
+   * `FOR UPDATE` rather than a plain re-read: under READ COMMITTED a restore that commits after
+   * this statement would still be invisible here and clobbered a moment later. The lock makes the
+   * two operations take turns — whichever arrives second sees what the first did.
+   */
+  /**
+   * The files that die with this matter, and the ones that only lose a link.
+   *
+   * The purge removes `projectDocument` and `taskDocument` — the LINK rows — and used to stop
+   * there, so every uploaded file survived: the Document row, its blob and the bytes on the
+   * docdata volume, all still readable by whoever uploaded them, while the audit tombstone
+   * reported the matter destroyed. For a patent firm the file IS the confidential artefact, and
+   * its filename can itself be a real patent number, so "the matter was destroyed" has to include
+   * it.
+   *
+   * A document is doomed only when NOTHING else holds it up. The same file can be attached to a
+   * second live project, to a task this purge is keeping, to a channel message, to a comment on
+   * something else, to a leave request, to an expense claim, to a published policy, or to a
+   * patent — and any one of those is a reason it must survive with only its link gone. This asks
+   * that question directly rather than assuming the matter was its only home.
+   */
+  private async doomedDocuments(projectId: string | null, taskIds: string[], keptTaskIds: Set<string>) {
+    const linked = await this.prisma.document.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          ...(projectId ? [{ projectDocuments: { some: { projectId } } }] : []),
+          ...(taskIds.length ? [{ taskDocuments: { some: { taskId: { in: taskIds } } } }] : []),
+        ],
+      },
+      select: {
+        id: true, storagePath: true,
+        projectDocuments: { select: { projectId: true } },
+        taskDocuments: { select: { taskId: true } },
+        messageAttachments: { select: { id: true }, take: 1 },
+        commentAttachments: { select: { id: true }, take: 1 },
+        leaveRequests: { select: { id: true }, take: 1 },
+        expenses: { select: { id: true }, take: 1 },
+        policies: { select: { id: true }, take: 1 },
+      },
+    });
+    if (!linked.length) return [];
+    const doomedTasks = new Set(taskIds.filter(t => !keptTaskIds.has(t)));
+    const patentHeld = new Set((await this.prisma.patent.findMany({
+      where: { documentId: { in: linked.map(d => d.id) } }, select: { documentId: true },
+    })).map(p => p.documentId).filter((x): x is string => !!x));
+
+    return linked.filter(d => {
+      if (patentHeld.has(d.id)) return false;            // the confidential portal owns these
+      if (d.messageAttachments.length || d.commentAttachments.length) return false;
+      if (d.leaveRequests.length || d.expenses.length || d.policies.length) return false;
+      const elsewhere = d.projectDocuments.some(pd => pd.projectId !== projectId);
+      const onKeptTask = d.taskDocuments.some(td => !doomedTasks.has(td.taskId));
+      return !elsewhere && !onKeptTask;
+    });
+  }
+
+  /**
+   * Remove the doomed documents' rows inside the purge transaction. The BYTES are freed after it
+   * commits, by the caller — deleting a file from disk or S3 cannot be rolled back, so doing it
+   * inside would leave the bytes gone and the rows intact if anything later in the transaction
+   * threw. Rows first, bytes second, is the only order that fails safely.
+   */
+  private async destroyDocuments(tx: Prisma.TransactionClient, files: { id: string }[]): Promise<PurgeCounts> {
+    if (!files.length) return {};
+    const ids = files.map(f => f.id);
+    const blob = await tx.documentBlob.deleteMany({ where: { documentId: { in: ids } } });
+    const doc = await tx.document.deleteMany({ where: { id: { in: ids } } });
+    const out: PurgeCounts = {};
+    if (blob.count) out.documentBlob = blob.count;
+    if (doc.count) out.document = doc.count;
+    return out;
+  }
+
+  /** Free the stored bytes. Failures are swallowed per file: a missing object must not strip a
+   *  completed purge of its tombstone, and the rows are already gone either way. */
+  private async freeBytes(files: { storagePath: string | null }[]) {
+    for (const f of files) {
+      if (!f.storagePath) continue;
+      try { await documentStorage.delete(f.storagePath); } catch { /* already gone */ }
+    }
+  }
+
+  private async assertStillDeleted(
+    tx: Prisma.TransactionClient, table: 'project' | 'task', id: string, kind: 'project' | 'task',
+  ) {
+    const rows = table === 'project'
+      ? await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "project" WHERE id = ${id} FOR UPDATE`
+      : await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "task" WHERE id = ${id} FOR UPDATE`;
+    if (!rows.length) throw new NotFoundException(`${kind === 'project' ? 'Project' : 'Task'} not found.`);
+    if (!rows[0].deletedAt) {
+      throw new BadRequestException(
+        `This ${kind} was restored while the deletion was running, so nothing was destroyed. `
+        + 'Delete it again if you still want it gone.',
+      );
+    }
+  }
+
   private assertPurgeable(kind: 'project' | 'task', title: string, deletedAt: Date | null, confirmTitle: string) {
     if (!deletedAt) {
       throw new BadRequestException(

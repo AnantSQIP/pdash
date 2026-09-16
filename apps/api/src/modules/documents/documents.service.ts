@@ -205,7 +205,16 @@ export class DocumentsService {
     return { doc: meta, data };
   }
 
-  /** Authorize a document read via any of its links; deny if none grant access. */
+  /**
+   * Authorize a document via its links; deny if none grant access.
+   *
+   * `intent` exists because READING and DESTROYING are not the same question, and answering them
+   * with the same rule is what let any employee delete any file. Two arms below say "yes" to the
+   * whole firm — a published HR policy is meant to be read by everyone, and an unattached file
+   * falls back to its uploader — and neither of those is a reason to let somebody destroy it.
+   * Every other arm (project, task, comment, channel, expense) is a genuine claim on the thing the
+   * file is attached to and holds for both intents.
+   */
   private async assertMayRead(
     actorId: string,
     documentId: string,
@@ -217,6 +226,7 @@ export class DocumentsService {
       taskDocuments: { taskId: string }[];
       policies: { id: string }[];
     },
+    intent: 'read' | 'delete' = 'read',
   ): Promise<void> {
     // Patent documents are the crown jewels — the generic route never serves them; they must
     // go through the passcode-gated /patents/:id/document/content. Match the patent link
@@ -253,10 +263,19 @@ export class DocumentsService {
     // Expense receipt → an org expense reviewer (the claimant is covered by the uploader check).
     const receipt = await this.prisma.expense.findFirst({ where: { receiptDocumentId: documentId }, select: { id: true } });
     if (receipt && (await this.permissions.check(actorId, 'expense.view.organization'))) return;
-    // Published HR policy attachment → readable by everyone in the org.
-    if (doc.policies.length) return;
+    // Published HR policy attachment → readable by everyone in the org. NOT deletable by them:
+    // the policy list hands every signed-in user the document id of every attachment, so a
+    // read-shaped rule here meant one request per policy would strip the firm's entire handbook.
+    if (doc.policies.length) {
+      if (intent === 'read') return;
+      if (await this.permissions.check(actorId, 'policy.manage')) return;
+      throw new ForbiddenException('Only whoever maintains HR policies can remove a policy attachment.');
+    }
 
-    throw new ForbiddenException('You do not have access to this document.');
+    throw new ForbiddenException(
+      intent === 'delete'
+        ? 'You can only delete files you can reach.'
+        : 'You do not have access to this document.');
   }
 
   /**
@@ -322,13 +341,39 @@ export class DocumentsService {
    * Soft-delete a document. Allowed for the uploader, or anyone holding
    * document.delete. The metadata row stays (audit/history); the blob is freed.
    */
+  /**
+   * Destroy a file: the row is soft-deleted, the blob row and the stored bytes are removed for good.
+   *
+   * Two gates, and it used to have only the first. `document.delete` is held by EVERY role — the
+   * permission matrix grants it so that "everyone may remove a file they attached" — but this
+   * method read it as "may remove anything". An employee staffed on no matter could destroy a
+   * confidential deliverable, a patent document or an HR policy attachment: refused when they tried
+   * to open the project, refused when they tried to read the file, and allowed to delete it. The
+   * bytes go, and nothing in the product brings them back.
+   *
+   * So the permission now says what KIND of act you may perform, and `assertMayRead(…, 'delete')`
+   * says whether this particular file is one you can reach at all. Holding the permission is not a
+   * claim on somebody else's matter.
+   */
   async softDelete(id: string) {
     const actorId = this.actor();
-    const doc = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
+    const doc = await this.prisma.document.findFirst({
+      where: { id, deletedAt: null },
+      select: {
+        id: true, uploadedBy: true, storagePath: true, name: true,
+        messageAttachments: { select: { message: { select: { channelId: true } } } },
+        commentAttachments: { select: { comment: { select: { entityType: true, entityId: true } } } },
+        projectDocuments: { select: { projectId: true } },
+        taskDocuments: { select: { taskId: true } },
+        policies: { select: { id: true }, take: 1 },
+      },
+    });
     if (!doc) throw new NotFoundException(`Document ${id} not found`);
     if (doc.uploadedBy !== actorId) {
       const allowed = await this.permissions.check(actorId, 'document.delete');
       if (!allowed) throw new ForbiddenException('You can only delete files you uploaded.');
+      // Holding the permission is not the same as being able to reach this file.
+      await this.assertMayRead(actorId, id, doc, 'delete');
     }
     await this.prisma.$transaction([
       this.prisma.document.update({ where: { id }, data: { deletedAt: new Date() } }),
