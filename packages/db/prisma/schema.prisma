@@ -446,9 +446,11 @@ model TeamTask {
   taskListId String?
   sequence   Int     @default(0)
 
-  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  taskList TaskList? @relation(fields: [taskListId], references: [id], onDelete: SetNull)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  // The mirror of ProjectTask.taskList — see the note there. A team task may only sit in a list
+  // belonging to its own team space.
+  taskList TaskList? @relation(fields: [taskListId, teamId], references: [id, teamId], onDelete: SetNull, onUpdate: Cascade, map: "team_task_list_belongs_to_team")
 
   @@unique([teamId, taskId])
   @@index([teamId])
@@ -1124,9 +1126,15 @@ model ProjectTask {
   taskListId String?
   sequence   Int     @default(0)
 
-  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  task     Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  taskList TaskList? @relation(fields: [taskListId], references: [id], onDelete: SetNull)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task    Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  // COMPOSITE on purpose: a task may only be filed into a list belonging to ITS OWN project.
+  // Pointing at task_list(id) alone let a project task be filed into a team space's column,
+  // putting it on that space's board and within reach of people never granted the project. The
+  // database has enforced the pair since 20260920090000_team_spaces; declaring it here is what
+  // stops the next generated migration quietly dropping the constraint again.
+  // MATCH SIMPLE: with taskListId NULL the constraint does not apply, which is "in no list".
+  taskList TaskList? @relation(fields: [taskListId, projectId], references: [id, projectId], onDelete: SetNull, onUpdate: Cascade, map: "project_task_list_belongs_to_project")
 
   @@unique([projectId, taskId])
   @@index([projectId])
@@ -1347,6 +1355,11 @@ model TaskList {
   projectTasks ProjectTask[]
   teamTasks    TeamTask[]
 
+  // The compound uniques the two composite foreign keys above reference. They exist only to make
+  // (id, projectId) and (id, teamId) referenceable — `id` is already the primary key, so neither
+  // constrains anything new.
+  @@unique([id, projectId], map: "task_list_id_projectId_key")
+  @@unique([id, teamId], map: "task_list_id_teamId_key")
   @@index([projectId])
   @@index([teamId])
   @@map("task_list")

@@ -320,6 +320,11 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                   <label className="block text-xs font-medium text-gray-600 mb-1">New type name <span className="text-red-500">*</span></label>
                   <input
                     value={customLabel} onChange={e => setCustomLabel(e.target.value)}
+                    // Naming the new type is the FIRST half of defining it — its tasks are typed
+                    // in the box below. Enter here used to submit the outer form and create the
+                    // project with a type that had no tasks in it, which is the one thing
+                    // choosing a type is for.
+                    onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
                     placeholder="e.g. Standard Essentiality Study"
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white"
                   />
@@ -406,7 +411,17 @@ export function NewProjectModal({ onClose, onSuccess, createdBy = 'system' }: Ne
                     <input
                       value={patentSearch}
                       onChange={e => setPatentSearch(e.target.value)}
+                      // Enter in a text input inside a form submits it. Here that would CREATE THE
+                      // PROJECT mid-search — minting or requesting a PID, notifying an authority,
+                      // and needing an admin to undo — off the one keystroke a person types after
+                      // an ID without thinking. Escape clears the search rather than closing the
+                      // whole dialog, for the same reason.
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') e.preventDefault();
+                        if (e.key === 'Escape' && patentSearch) { e.preventDefault(); e.stopPropagation(); setPatentSearch(''); }
+                      }}
                       placeholder="Search patent ID…"
+                      aria-label="Search patent IDs"
                       className="w-full pl-8 pr-3 py-2 text-sm focus:outline-none"
                     />
                   </div>

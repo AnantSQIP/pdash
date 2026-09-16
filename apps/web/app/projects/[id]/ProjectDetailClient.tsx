@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
@@ -197,6 +197,27 @@ export function ProjectDetailClient({ projectId }: Props) {
   });
   const multiRound = !!roundsData?.multiRound && (roundsData?.rounds?.length ?? 0) > 0;
   const rounds = roundsData?.rounds ?? [];
+
+  /**
+   * The cards, with the project the URL actually names pulled to the front.
+   *
+   * A PID that a returning client keeps coming back to holds several rounds, and every card
+   * draws the SAME tab — so a stack of them is a stack of identically-shaped task lists for
+   * different matters. The header says which project you opened; the cards did not, and the
+   * first one you met was simply whichever round sorted earliest and happened to be live.
+   * People logged time and moved statuses on the wrong client's work and had no way to tell.
+   *
+   * `index` is captured BEFORE the sort so the card still says "Project 2 of 3" — the round
+   * number is a fact about the matter's history, not about where the card landed on screen.
+   */
+  const roundCards = useMemo(
+    () => rounds
+      .map((round, index) => ({ round, index, isThisProject: round.id === projectId }))
+      .sort((a, b) => Number(b.isThisProject) - Number(a.isThisProject)),
+    [rounds, projectId],
+  );
+  // Where the OTHER rounds begin, so the divider that introduces them is drawn exactly once.
+  const firstOtherRound = roundCards.findIndex(c => !c.isThisProject);
 
   // Workflow statuses power the Kanban columns
   const { data: statuses = [] } = useQuery({
@@ -632,26 +653,46 @@ export function ProjectDetailClient({ projectId }: Props) {
           the original rendering below, byte for byte. */}
       {multiRound ? (
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-          {rounds.map((r, i) => (
-            <RoundCard
-              key={r.id}
-              round={r}
-              index={i}
-              total={rounds.length}
-              canEdit={can('project.update')}
-              // Finished work starts collapsed; the live round (and the one you navigated to) is open.
-              defaultOpen={r.id === projectId || !['COMPLETED', 'CLOSED'].includes(r.projectPhase)}
-            >
-              <RoundTabContent
-                round={r}
-                tab={activeTab}
-                statuses={statuses}
-                onTaskClick={(t, pid) => { setTaskProjectId(pid); setSelectedTask(t); }}
-                canEdit={can('task.create')}
-                onAddTask={(pid, statusId) => openAddTask(statusId, pid)}
-                onAddTaskToGroup={(pid, listId) => openAddTask(undefined, pid, listId)}
-              />
-            </RoundCard>
+          {roundCards.map(({ round: r, index, isThisProject }, position) => (
+            <div key={r.id}>
+              {/* Name the card you asked for, and put a line before the ones you didn't. Two
+                  open task lists that look alike is how the wrong client's work gets touched. */}
+              {isThisProject && (
+                <p className="flex items-center gap-1.5 mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-brand-700">
+                  <CheckSquare size={12} /> The project you opened
+                </p>
+              )}
+              {position === firstOtherRound && (
+                <p className="flex items-center gap-2 mb-1.5 mt-5 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                  <span className="h-px flex-1 bg-gray-200" aria-hidden />
+                  Also under {project.code ?? 'this Project ID'}
+                  <span className="h-px flex-1 bg-gray-200" aria-hidden />
+                </p>
+              )}
+              <div className={clsx(isThisProject && 'rounded-xl ring-2 ring-brand-500 shadow-sm')}>
+                <RoundCard
+                  round={r}
+                  index={index}
+                  total={rounds.length}
+                  canEdit={can('project.update')}
+                  // Only the project you opened is expanded. The earlier rule — every live round
+                  // open — meant that on a PID whose rounds are all ACTIVE the clause never
+                  // singled anything out, and the first task list on screen was somebody else's.
+                  // The rest stay one click away: their bar still carries title, phase and dates.
+                  defaultOpen={isThisProject}
+                >
+                  <RoundTabContent
+                    round={r}
+                    tab={activeTab}
+                    statuses={statuses}
+                    onTaskClick={(t, pid) => { setTaskProjectId(pid); setSelectedTask(t); }}
+                    canEdit={can('task.create')}
+                    onAddTask={(pid, statusId) => openAddTask(statusId, pid)}
+                    onAddTaskToGroup={(pid, listId) => openAddTask(undefined, pid, listId)}
+                  />
+                </RoundCard>
+              </div>
+            </div>
           ))}
         </div>
       ) : (

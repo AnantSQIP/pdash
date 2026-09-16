@@ -12,7 +12,8 @@ import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
 import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
-import { todayIST, shiftDay } from '@/lib/date';
+import { todayIST } from '@/lib/date';
+import { monthStartDay, weekStartDay } from '@/lib/timesheet-window';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 /** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
@@ -32,9 +33,11 @@ function fmtHours(h: number): string {
 const dayOf = (e: Timesheet) => String(e.date).slice(0, 10);
 const prettyDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-function Tile({ label, value, tint, Icon }: { label: string; value: string; tint: string; Icon: LucideIcon }) {
+function Tile({ label, value, tint, Icon, hint }: { label: string; value: string; tint: string; Icon: LucideIcon; hint?: string }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-start gap-3">
+    // `hint` names the period the number covers. "This week" is a judgement about a span of days,
+    // and a tile that will not say which days it counted is a number you cannot check.
+    <div title={hint} className="bg-white rounded-xl border border-gray-200 p-4 flex items-start gap-3">
       <div className={clsx('w-9 h-9 rounded-lg flex items-center justify-center shrink-0', tint)}>
         <Icon size={18} />
       </div>
@@ -75,12 +78,15 @@ export default function TimesheetsPage() {
   }
 
   const todayKey = todayIST();
-  const weekAgo = shiftDay(todayKey, -6);
-  const monthStart = `${todayKey.slice(0, 7)}-01`;
+  // Both tiles now measure a CALENDAR period. "This week" was a rolling seven days ending today,
+  // which on a Wednesday counted Thursday and Friday of the week before — 47h30m shown against a
+  // Monday-to-Wednesday reality of 33.5h, next to a "This month" that meant the real month.
+  const weekStart = weekStartDay(todayKey);
+  const monthStart = monthStartDay(todayKey);
 
   const totalHours = entries.reduce((s, e) => s + e.hoursLogged, 0);
   const billableHours = entries.filter(e => e.billable).reduce((s, e) => s + e.hoursLogged, 0);
-  const weekHours = entries.filter(e => dayOf(e) >= weekAgo).reduce((s, e) => s + e.hoursLogged, 0);
+  const weekHours = entries.filter(e => dayOf(e) >= weekStart).reduce((s, e) => s + e.hoursLogged, 0);
   const monthHours = entries.filter(e => dayOf(e) >= monthStart).reduce((s, e) => s + e.hoursLogged, 0);
 
   // Entries logged on the selected calendar day (the integrated "logs", replacing the old table).
@@ -107,8 +113,8 @@ export default function TimesheetsPage() {
       <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5">
         {/* Summary */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <Tile label="This week"      value={fmtHours(weekHours)}     tint="bg-brand-50 text-brand-600"   Icon={Clock} />
-          <Tile label="This month"     value={fmtHours(monthHours)}    tint="bg-indigo-50 text-indigo-600" Icon={CalendarDays} />
+          <Tile label="This week"      value={fmtHours(weekHours)}     tint="bg-brand-50 text-brand-600"   Icon={Clock}        hint={`The calendar week from ${prettyDate(weekStart)}`} />
+          <Tile label="This month"     value={fmtHours(monthHours)}    tint="bg-indigo-50 text-indigo-600" Icon={CalendarDays} hint={`From ${prettyDate(monthStart)}`} />
           <Tile label="Billable (all)" value={fmtHours(billableHours)} tint="bg-green-50 text-green-600"   Icon={DollarSign} />
           <Tile label="Total logged"   value={fmtHours(totalHours)}    tint="bg-amber-50 text-amber-600"   Icon={Timer} />
         </div>

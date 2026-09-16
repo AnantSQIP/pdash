@@ -212,6 +212,9 @@ export function AddTaskModal({
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Estimated Hours</label>
               <input type="number" min="0" step="0.5" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)}
+                // The deadline and the people come AFTER this box, so Enter here created the task
+                // with neither — the same mistake as the member search below, one field earlier.
+                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
                 placeholder="e.g. 4"
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
               />

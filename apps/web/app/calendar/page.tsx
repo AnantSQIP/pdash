@@ -266,7 +266,11 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Location</label>
+              {/* Enter here used to submit the form — creating the event and mailing the invites
+                  with Repeat and Until still unanswered below. Recalling an invitation is a lot
+                  more work than pressing the button. Same for the video link. */}
               <input value={location} onChange={e => setLocation(e.target.value)} placeholder="Room / place"
+                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
             </div>
             <div>
@@ -283,6 +287,7 @@ function AddEventModal({ onClose, onSuccess, defaultDate }: AddEventModalProps) 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Video link {isMeeting && <span className="text-gray-400 font-normal">(Meet / Zoom / Teams)</span>}</label>
             <input value={joinUrl} onChange={e => setJoinUrl(e.target.value)} placeholder="https://…"
+              onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
           </div>
 

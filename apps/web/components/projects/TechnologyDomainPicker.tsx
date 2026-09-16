@@ -78,6 +78,11 @@ export function TechnologyDomainPicker({
             <input
               value={customLabel}
               onChange={e => onCustomLabel(e.target.value)}
+              // This picker is dropped INSIDE the New Project form, where Enter in a text input
+              // submits it and creates the project — halfway through naming the domain that
+              // project was supposed to be filed under. Harmless in the callers that render the
+              // picker outside a form; the keystroke does nothing there either way.
+              onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
               placeholder="e.g. Artificial Intelligence"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500 bg-white"
             />
