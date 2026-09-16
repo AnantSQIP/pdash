@@ -3,6 +3,8 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { ProjectAccessService } from '../../common/access/project-access.module';
+import { getActorId } from '../../common/context/request-context';
 
 class CreateTaskListDto {
   @IsString()
@@ -25,11 +27,27 @@ class UpdateTaskListDto {
   sequence?: number;
 }
 
+/**
+ * A PROJECT's task lists (the board's groups). Team-space columns are also TaskList rows, but
+ * they are reached through /teams/:id/lists in the Teams module — nothing here touches them.
+ *
+ * Every method walls on ProjectAccessService first. A task list names the shape of a matter —
+ * "Claim chart round 2", "Opposition response" — and its counts say how much of it is left, so
+ * reading one is reading the matter. The delivery domain already refuses a non-member on
+ * /projects/:id, /tasks, /comments, /timesheets and /projects/:id/documents; these routes went
+ * straight to Prisma on a bare projectId, so the same person got 403 on the project and 200 on
+ * its board, and a Consultant could file a list into a matter they had never been staffed on.
+ * Same service, same wording as its neighbours, so the wall reads as one wall.
+ */
 @Injectable()
 export class TaskListsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly access: ProjectAccessService,
+  ) {}
 
   async create(projectId: string, dto: CreateTaskListDto) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null } });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
@@ -43,7 +61,8 @@ export class TaskListsService {
     });
   }
 
-  list(projectId: string) {
+  async list(projectId: string) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
     return this.prisma.taskList.findMany({
       where: { projectId, deletedAt: null },
       orderBy: { sequence: 'asc' },
@@ -52,6 +71,16 @@ export class TaskListsService {
   }
 
   async get(projectId: string, id: string) {
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    return this.find(projectId, id);
+  }
+
+  /**
+   * The unguarded lookup, for callers that have ALREADY asserted access. Split out so a mutation
+   * does not pay for the membership query twice — the assert stays at the entry point, where it
+   * cannot be skipped by a future caller who only wanted the row.
+   */
+  private async find(projectId: string, id: string) {
     const list = await this.prisma.taskList.findFirst({
       where: { id, projectId, deletedAt: null },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
@@ -61,7 +90,8 @@ export class TaskListsService {
   }
 
   async update(projectId: string, id: string, dto: UpdateTaskListDto) {
-    await this.get(projectId, id);
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    await this.find(projectId, id);
     // The DEFAULT group may be renamed. "General" is a placeholder nobody chose, and on a project
     // running several pieces of work it has to be able to say what it actually is ("Prior-art
     // search", "Round 2"). What must not change is its ROLE: isDefault is untouched here, so it
@@ -74,7 +104,8 @@ export class TaskListsService {
   }
 
   async remove(projectId: string, id: string) {
-    const list = await this.get(projectId, id);
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    const list = await this.find(projectId, id);
     if (list.isDefault) {
       throw new BadRequestException('The default "General" task list cannot be deleted.');
     }
@@ -98,12 +129,17 @@ class TaskListsController {
     return this.service.create(projectId, dto);
   }
 
-  @Get()
+  // The reads carry `tasklist.view` like every other read in the catalog. PermissionGuard is
+  // opt-in — a route with no decorator is a route with no RBAC at all — so leaving these bare
+  // meant HR, who holds no tasklist permission of any kind, was answered 200. The decorator says
+  // WHAT you may do; the service's project wall says WHICH matters you may do it to, and both
+  // have to be there.
+  @Get() @RequirePermission('tasklist.view')
   list(@Param('projectId') projectId: string) {
     return this.service.list(projectId);
   }
 
-  @Get(':id')
+  @Get(':id') @RequirePermission('tasklist.view')
   get(@Param('projectId') projectId: string, @Param('id') id: string) {
     return this.service.get(projectId, id);
   }

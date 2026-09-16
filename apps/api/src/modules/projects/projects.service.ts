@@ -13,7 +13,7 @@ import { EVENTS } from '../../common/events/canonical-events';
 import { CreateProjectDto, UpdateProjectDto, ApprovalDto, ReviewPidProjectDto, AddProjectRoundDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
-import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
+import { DeadlineScope, DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { resolveDate } from '../../common/dates';
 import { PROJECT_TYPES, templateFor } from './project-templates';
@@ -77,6 +77,74 @@ export class ProjectsService {
     private readonly access: ProjectAccessService,
     private readonly sequence: SequenceService,
   ) {}
+
+  // ── The client fact ───────────────────────────────────────────────────────────────
+  //
+  // For an IP firm the confidential thing about a matter is WHICH CLIENT it belongs to.
+  // Everything else — the PID, the title, the phase, the hours — is org-readable by design;
+  // knowing that SQ_26_27_004 is Mailike's is precisely what a conflict wall exists to stop,
+  // which is why naming a client requires `patent.manage` (Super Admin) rather than any of
+  // the delivery permissions.
+  //
+  // `get()` has always enforced that, with a `delete` of its own. Every other route reading
+  // the same rows — full-report, the PID ledger, the rounds stack, the PID-merge picker, and
+  // the project row every mutation hands back — did not, so the name a Consultant is refused
+  // on the project page still arrived in their reports export, and HR, who is 403 on the
+  // patent portal, read it out of the ledger. One rule kept in five places is a rule that
+  // disagrees with itself; it lives here now, and everything that carries the fact goes
+  // through it.
+  //
+  // Deliberately NOT folded into `deadlines.redactProjects`. That redactor answers a
+  // different, per-PROJECT question ("do you manage this matter") over a shape it owns, and
+  // is shared with analytics; this one is per-ACTOR and the fact turns up in several shapes —
+  // a string on the report and the ledger, an object plus `clientId` on a project and its
+  // rounds, a bare `clientId` column on a freshly written row — at more than one depth. Two
+  // passes that each do one job stay readable; one pass doing both would have to know all of it.
+
+  /** May the CURRENT actor be told which client a matter belongs to? Super Admin only. */
+  private async canViewClient(): Promise<boolean> {
+    const actorId = getActorId();
+    return actorId ? this.permissions.check(actorId, 'patent.manage') : false;
+  }
+
+  /**
+   * Strip the client fact out of a response unless the actor is cleared for it.
+   *
+   * Walks the payload rather than naming fields per route, because the ledger nests its rounds
+   * a level below the row the caller sees — a per-route `delete` is exactly what let three of
+   * these through in the first place. Only the exact keys `client` and `clientId` go:
+   * `clientDueDate` and `clientDeliveryDate` are DATES under the looser deadline rule, not the
+   * identity. Anything that is not a plain object (Date, Decimal, Buffer) is passed straight
+   * through, so the walk cannot quietly flatten a value on its way out.
+   */
+  private redactClient<T>(payload: T, canView: boolean): T {
+    if (canView) return payload;
+    const walk = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(walk);
+      if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return value;
+      const out: Record<string, unknown> = {};
+      for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+        if (key === 'client' || key === 'clientId') continue;
+        out[key] = walk(v);
+      }
+      return out;
+    };
+    return walk(payload) as T;
+  }
+
+  /**
+   * The tail every SINGLE-project response shares: the client date rule, then the client
+   * identity rule.
+   *
+   * A raw Prisma project row carries the `clientId` column, so create / update / complete /
+   * close / reopen / add-round all handed one back — the correlation `get()` goes out of its
+   * way to withhold (S2), one id short of a name, and enough on its own to tell a Manager that
+   * two matters are the same party's. Pass `scope` when the caller already resolved one.
+   */
+  private async redactProjectOut<T extends { id: string }>(project: T, scope?: DeadlineScope): Promise<T> {
+    const redacted = this.deadlines.redactProject(project as never, scope ?? await this.deadlines.scope());
+    return this.redactClient(redacted as T, await this.canViewClient());
+  }
 
   /**
    * The pool of people a requester may nominate as their project's MANAGER: anyone of
@@ -465,7 +533,7 @@ export class ProjectsService {
         link: `/projects/${created.id}`,
       });
     }
-    return this.deadlines.redactProject(created, await this.deadlines.scope());
+    return this.redactProjectOut(created);
   }
 
   /**
@@ -482,6 +550,9 @@ export class ProjectsService {
     if (!self) throw new NotFoundException(`Project ${projectId} not found`);
 
     const scope = await this.deadlines.scope();
+    // Two independent rules over the same rows: the deadline scope decides the client DATE,
+    // this decides the client's IDENTITY. Both resolved once here and reused for every round.
+    const canViewClient = await this.canViewClient();
     const shape = {
       id: true, code: true, roundSeq: true, office: true, title: true, description: true,
       projectType: true, projectPhase: true, priority: true, completionPercentage: true,
@@ -504,7 +575,7 @@ export class ProjectsService {
       const one = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
       return {
         pid: self.code, multiRound: false,
-        rounds: this.deadlines.redactProjects([one] as never, scope),
+        rounds: this.redactClient(this.deadlines.redactProjects([one] as never, scope), canViewClient),
       };
     }
     const rounds = await this.prisma.project.findMany({
@@ -512,7 +583,10 @@ export class ProjectsService {
       orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: shape,
     });
-    return { pid: self.code, multiRound: true, rounds: this.deadlines.redactProjects(rounds as never, scope) };
+    return {
+      pid: self.code, multiRound: true,
+      rounds: this.redactClient(this.deadlines.redactProjects(rounds as never, scope), canViewClient),
+    };
   }
 
   async create(dto: CreateProjectDto) {
@@ -765,7 +839,7 @@ export class ProjectsService {
 
     // Projects are billable by default; billability is decided per time entry by each
     // logger, so there is no admin billable-review step on creation any more.
-    return this.deadlines.redactProject(project as any, scope);
+    return this.redactProjectOut(project as any, scope);
   }
 
   // ── PID lifecycle: generate → (attach | expire) → discontinue ─────────────────────
@@ -1154,7 +1228,7 @@ export class ProjectsService {
     }
     // A number holding nothing is not a merge destination — it is a retired serial, and moving
     // work onto it would resurrect a number the ledger has already written off.
-    return reservations
+    const targets = reservations
       .filter(r => (byPid.get(r.pid) ?? []).length > 0)
       .map(r => {
         const rounds = byPid.get(r.pid)!;
@@ -1164,6 +1238,11 @@ export class ProjectsService {
           rounds: rounds.map(p => ({ id: p.id, title: p.title, roundSeq: p.roundSeq, phase: p.projectPhase })),
         };
       });
+    // `project.generate_pid` is Admin + Super Admin, so this picker was a fourth way to read the
+    // client off a matter — narrower than the report, the ledger and the rounds stack, but the
+    // same fact under the same rule. The PID, the year and the rounds it holds still identify a
+    // merge target without it.
+    return this.redactClient(targets, await this.canViewClient());
   }
 
   /**
@@ -1475,7 +1554,13 @@ export class ProjectsService {
       })),
     });
 
-    return rows.map(r => {
+    // The ledger is gated on `user.manage_access`, which HR holds — and HR is refused the patent
+    // portal outright. So the row goes out in full (the PID, its rounds, the hours, who is
+    // staffed: the things the ledger is FOR) with the client's identity taken out of it for
+    // anyone without patent.manage. The pass runs over the whole response because the client
+    // sits on each nested round, not on the row the caller reads.
+    const canViewClient = await this.canViewClient();
+    const ledger = rows.map(r => {
       const rounds = byPid.get(r.pid) ?? [];
       // The PID's headline state comes from its LATEST round: that is the live piece of work.
       // An earlier completed round must not make a PID with active work read as "Completed".
@@ -1496,6 +1581,7 @@ export class ProjectsService {
         createdAt: r.createdAt, expiresAt: r.expiresAt, resolvedAt: r.resolvedAt,
       };
     });
+    return this.redactClient(ledger, canViewClient);
   }
 
   /** Members who may assign a PID (hold project.generate_pid) — the request dropdown. */
@@ -1915,8 +2001,14 @@ export class ProjectsService {
         })),
       };
     });
-    // Redact the client deadline exactly as the list does — same rule, same scope.
-    return this.deadlines.redactProjects(shaped as never, await this.deadlines.scope());
+    // Redact the client deadline exactly as the list does — same rule, same scope — and then the
+    // client's IDENTITY, which is a stricter rule this route never applied. `report.view` is held
+    // by nearly every role, so without the second pass the report was the way round the wall that
+    // the project page puts up: same rows, same client, no patent.manage anywhere in sight.
+    return this.redactClient(
+      this.deadlines.redactProjects(shaped as never, await this.deadlines.scope()),
+      await this.canViewClient(),
+    );
   }
 
   /**
@@ -2003,29 +2095,29 @@ export class ProjectsService {
     // Patent HANDLES are visible to patent.view holders (any project creator); CLIENT details
     // are stricter — patent.manage (Super Admin) only. The PID stays visible to everyone.
     const canViewPatents = actorId ? await this.permissions.check(actorId, 'patent.view') : false;
-    const canViewClient = actorId ? await this.permissions.check(actorId, 'patent.manage') : false;
+    const canViewClient = await this.canViewClient();
     if (!canViewPatents) delete redacted.patents;
-    if (!canViewClient) {
-      delete redacted.client;
-      delete redacted.clientId;
-    } else {
-      // #C: while the project HAS patents they decide the client, recomputed here so it can
-      // never go stale if they change. With NO patents there is nothing to derive from, and the
-      // stored column is the answer — that is a client someone named directly, and returning
-      // null for it (as this used to) made the whole case invisible.
-      const pids = (redacted.patents ?? []).map((x: any) => x.patent?.id).filter(Boolean);
-      if (pids.length) {
-        const rows = await this.prisma.patent.findMany({
-          where: { id: { in: pids }, deletedAt: null },
-          select: { client: { select: { id: true, name: true, code: true } } },
-        });
-        const uniq = [...new Map(rows.map(r => [r.client.id, r.client])).values()];
-        redacted.client = uniq.length === 1 ? uniq[0] : null;
-      }
-      redacted.clientId = (redacted.client as any)?.id ?? null;
-      // Tells the UI whether the client is locked to the patents or editable on its own.
-      redacted.clientFromPatents = pids.length > 0;
+    // Same pass the report, the ledger and the rounds stack use. This route's own `delete` was
+    // the rule the other three were meant to be copying, and keeping four copies of it is how
+    // they came to disagree in the first place.
+    if (!canViewClient) return this.redactClient(redacted, false);
+
+    // #C: while the project HAS patents they decide the client, recomputed here so it can
+    // never go stale if they change. With NO patents there is nothing to derive from, and the
+    // stored column is the answer — that is a client someone named directly, and returning
+    // null for it (as this used to) made the whole case invisible.
+    const pids = (redacted.patents ?? []).map((x: any) => x.patent?.id).filter(Boolean);
+    if (pids.length) {
+      const rows = await this.prisma.patent.findMany({
+        where: { id: { in: pids }, deletedAt: null },
+        select: { client: { select: { id: true, name: true, code: true } } },
+      });
+      const uniq = [...new Map(rows.map(r => [r.client.id, r.client])).values()];
+      redacted.client = uniq.length === 1 ? uniq[0] : null;
     }
+    redacted.clientId = (redacted.client as any)?.id ?? null;
+    // Tells the UI whether the client is locked to the patents or editable on its own.
+    redacted.clientFromPatents = pids.length > 0;
     return redacted;
   }
 
@@ -2106,7 +2198,7 @@ export class ProjectsService {
       entityId: id,
       metadata: { projectId: id, title: project.title },
     });
-    return this.deadlines.redactProject(project, scope);
+    return this.redactProjectOut(project, scope);
   }
 
   /**
@@ -2270,7 +2362,7 @@ export class ProjectsService {
       type: 'project.completed', title: 'Project completed',
       message: `"${project.title}" was marked complete — delivered ${delivery.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}${actualHours != null ? `, ${actualHours}h actual` : ''}.`,
     });
-    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+    return this.redactProjectOut(updated);
   }
 
   /** COMPLETED (or active) → CLOSED. Archived to the Closed section; still reopenable. */
@@ -2334,7 +2426,7 @@ export class ProjectsService {
       type: 'project.closed', title: 'Project closed',
       message: `"${project.title}" was closed and moved to the Closed section.`,
     });
-    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+    return this.redactProjectOut(updated);
   }
 
   /** COMPLETED/CLOSED → ACTIVE. Clears the end-state timestamps. */
@@ -2367,7 +2459,7 @@ export class ProjectsService {
       type: 'project.reopened', title: 'Project reopened',
       message: `"${project.title}" was reopened — same Project ID, back to Working.`,
     });
-    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+    return this.redactProjectOut(updated);
   }
 
   /**
@@ -2407,7 +2499,7 @@ export class ProjectsService {
       type: 'project.reopened', title: 'Project re-initialized',
       message: `"${project.title}" was re-initialized for a returning client — same Project ID, existing data reused.`,
     });
-    return this.deadlines.redactProject(updated, await this.deadlines.scope());
+    return this.redactProjectOut(updated);
   }
 
   // ── Members (#11: staffing a project — add / remove teammates) ────────────────
