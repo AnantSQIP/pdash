@@ -56,15 +56,37 @@ function endOfIstDay(d: Date): Date {
   return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), 23, 59, 0) - IST_OFFSET_MS);
 }
 /**
- * Parse a manual check-in/out timestamp unambiguously. An offset-less string
- * (e.g. a datetime-local input "2026-07-09T09:00") is interpreted as UTC rather
- * than the server's local timezone, so stored regularized times don't shift by
- * the host's offset. Strings that already carry Z or an offset are used as-is.
+ * Parse a manual check-in/out timestamp unambiguously.
+ *
+ * A string with no offset ("2026-09-14T10:00:00" — what a date field and a time input compose
+ * between them) is a WALL CLOCK, and the only clock anybody in this firm reads is IST. Treating
+ * it as UTC was independent of the host's timezone, which is why it looked safe, and stored every
+ * regularised time five and a half hours late: "I worked 10:00 to 19:00 on the 14th" was written
+ * as 10:00Z–19:00Z and rendered — by every screen in the app, all of which format with
+ * Asia/Kolkata — as 15:30 on the 14th to 00:30 on the 15th, the check-out on the wrong day. A
+ * punched row stores a true instant, so the two kinds of row in one table were on two clocks.
+ *
+ * Strings that already carry Z or an offset are used as-is: those name an instant, not a clock,
+ * and an API client that has done the arithmetic must not have it done again.
  */
-function parseInstant(s?: string | null): Date | null {
+export function parseInstant(s?: string | null): Date | null {
   if (!s) return null;
-  const hasTz = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s.trim());
-  return new Date(hasTz ? s : `${s}Z`);
+  const raw = s.trim();
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(raw)) return new Date(raw);
+  // Read the clock as if it were UTC, then step back by the office's offset: 10:00 IST is 04:30Z.
+  // Done this way rather than by appending "+05:30" so the set of strings accepted here is
+  // exactly the set that was accepted before — only their meaning changes.
+  const asUtc = new Date(`${raw}Z`);
+  return isNaN(asUtc.getTime()) ? asUtc : new Date(asUtc.getTime() - IST_OFFSET_MS);
+}
+
+/**
+ * Whether a manual check-in/out instant falls on the calendar day it is claimed for — asked on
+ * the IST calendar, because that is the calendar the person typed it on. Answered in UTC days, a
+ * shift beginning before 05:30 IST belongs to the previous day and would be refused.
+ */
+export function fallsOnDay(instant: Date, date: Date): boolean {
+  return dayKey(istDay(instant)) === dayKey(date);
 }
 
 /**
@@ -490,8 +512,12 @@ export class AttendanceService {
     const checkOut = parseInstant(data.checkOut);
     // Times MUST fall on the day being regularised. Otherwise an unrelated-date check-out
     // produced a multi-day span that approval wrote as an absurd single-day total (441h).
-    if (checkIn && dayKey(utcDay(checkIn)) !== dayKey(date)) throw new BadRequestException('Check-in time must fall on the day being regularised.');
-    if (checkOut && dayKey(utcDay(checkOut)) !== dayKey(date)) throw new BadRequestException('Check-out time must fall on the day being regularised.');
+    //
+    // On the IST calendar (see fallsOnDay). Kept in UTC days once parseInstant began reading the
+    // times as IST, the first five and a half hours of every day belong to the previous UTC date
+    // — so "I came in at 00:30" would have been refused as being on the wrong day.
+    if (checkIn && !fallsOnDay(checkIn, date)) throw new BadRequestException('Check-in time must fall on the day being regularised.');
+    if (checkOut && !fallsOnDay(checkOut, date)) throw new BadRequestException('Check-out time must fall on the day being regularised.');
     if (checkIn && checkOut && checkOut <= checkIn) throw new BadRequestException('Check-out must be after check-in.');
 
     // One open request per day — a second would let two approvals fight over the same row.
@@ -975,6 +1001,64 @@ export class AttendanceService {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
+/**
+ * Whether a leave may still be cancelled, and the day a refund would run from.
+ *
+ * Cancelling refunds by construction: a balance is the sum of the PENDING and APPROVED requests
+ * in the year, so moving one to CANCELLED gives its days back whether or not they were taken.
+ * That is the whole point for a leave nobody has started, and a way of minting paid leave out of
+ * nothing for one somebody has — a sick leave taken in June and cancelled in September put two
+ * days back on the balance, from the ordinary Leaves screen, as often as you liked.
+ *
+ * "Already started" is measured in whole days on the org's calendar, and a leave whose first day
+ * is TODAY counts as not started. Thursday morning, deciding to come in after all, is the case
+ * this feature exists for; the same is true of the morning half of a half day, which is a single
+ * date and so is judged by that date alone. From the day after the first day onwards the leave
+ * has been taken and it stands.
+ *
+ * `refundFrom` is where a PARTIAL refund would begin, if the firm ever wants one — cancel the
+ * days still to come of a leave somebody came back early from. Nothing reads it yet: what is
+ * built here is all-or-nothing, and a leave in progress refunds nothing at all. It is returned
+ * because it is the one value that version turns on, and computing it here is where the decision
+ * about "which days are still the employee's to give back" belongs.
+ */
+export function leaveCancelDecision(startDate: Date, today: Date): { allowed: boolean; refundFrom: Date } {
+  const start = utcDay(startDate);
+  const day = utcDay(today);
+  return start >= day ? { allowed: true, refundFrom: start } : { allowed: false, refundFrom: day };
+}
+
+/**
+ * Whether an attendance row is one an approved leave WROTE, rather than the person's own record
+ * of what they did that day.
+ *
+ * It matters because a day has exactly one attendance row — `@@unique([userId, date])` — and a
+ * half-day leave and a punch of under four hours both mark it HALF_DAY. Cancelling used to delete
+ * by person + marker + date range, which on a half day deleted the PUNCH: check-in, check-out,
+ * measured hours, location, the regularisation an approver had signed. Approving a leave is
+ * careful about precisely this row (createMany ... skipDuplicates leaves a punched day alone);
+ * cancelling then threw it away, unrecoverably.
+ *
+ * Nothing on the row names the leave that made it and the schema is not ours to widen, so the
+ * test is the evidence the row carries. The approval writes a status, a note, and — for a half
+ * day — the four hours the person is still expected to work; it never writes a punch and never
+ * sets isRegularized. A check-in, a check-out, hours it did not write, or a regularisation on the
+ * row all mean somebody's day is recorded there, and cancelling a leave is not a reason to
+ * destroy it. The cost of being wrong in this direction is a stale row an admin can re-mark; the
+ * cost of being wrong in the other direction is a day of somebody's working life, gone.
+ */
+export function isLeaveWrittenRow(
+  row: { checkIn: Date | null; checkOut: Date | null; totalHours: number | null; isRegularized: boolean },
+  isHalf: boolean,
+): boolean {
+  if (row.checkIn || row.checkOut) return false;
+  if (row.isRegularized) return false;
+  // Hours on a day nobody punched and nobody regularised can only be the half-day allowance the
+  // approval writes itself. Any other figure is measured time from somewhere this test cannot
+  // see, and measured time is not ours to delete.
+  return row.totalHours == null || (isHalf && row.totalHours === HALF_DAY_HOURS);
+}
+
 @Injectable()
 export class LeaveService {
   constructor(
@@ -1356,18 +1440,43 @@ export class LeaveService {
     // A DRAFT belongs to its author alone — an approver has no business deleting a plan
     // that was never submitted to them.
     if (req.status === 'DRAFT' && !isOwner) throw new ForbiddenException('That leave plan has not been submitted yet.');
-    // A plan was never submitted to anybody, so dropping it should leave no trace.
+    // A plan was never submitted to anybody, so dropping it should leave no trace. A plan is also
+    // outside the rule below: it reserves nothing, appears in no balance and was approved by
+    // nobody, so there is nothing for its author to gain by dropping one whose dates went by —
+    // and being unable to clear an old plan off the screen would be a bug of its own.
     if (req.status === 'DRAFT') {
       await this.prisma.leaveRequest.delete({ where: { id } });
       return { ...req, status: 'CANCELLED' };
+    }
+    // Leave that has already begun cannot be cancelled. This applies to EVERYBODY: an approver
+    // cancelling on somebody's behalf refunds the days exactly as the employee's own click does,
+    // so exempting them would leave the door open and merely move it. Correcting a record that is
+    // genuinely wrong is a different job from cancelling a leave, and it stays with HR.
+    const decision = leaveCancelDecision(req.startDate, istDay(new Date()));
+    if (!decision.allowed) {
+      throw new BadRequestException(
+        `That leave started on ${dayKey(utcDay(req.startDate))} and can no longer be cancelled — cancelling puts the days back on the balance, and days already begun have been taken. `
+        + (req.status === 'PENDING'
+          ? 'An approver can still reject it.'
+          : 'Ask HR to correct the record if it is wrong.'),
+      );
     }
     // Remove the generated attendance + the shared-calendar event if it was approved, so the
     // person no longer shows as on-leave anywhere after cancelling. A HALF-day leave writes a
     // HALF_DAY row rather than ON_LEAVE, so matching only ON_LEAVE used to strand it — the day
     // stayed marked as a half-day of leave that no longer existed.
     if (req.status === 'APPROVED') {
-      const wrote = (req as { dayType?: string }).dayType === 'HALF' ? 'HALF_DAY' : 'ON_LEAVE';
-      await this.prisma.attendance.deleteMany({ where: { userId: req.userId, status: wrote, date: { gte: utcDay(req.startDate), lte: utcDay(req.endDate) } } });
+      const isHalf = (req as { dayType?: string }).dayType === 'HALF';
+      const wrote = isHalf ? 'HALF_DAY' : 'ON_LEAVE';
+      // Read the days, then delete by id — not one deleteMany over the range. What has to be
+      // decided is whether each row is the leave's own or the person's, and a where-clause on
+      // person + marker + date has no way to tell: on a half day it matched the punch.
+      const onThoseDays = await this.prisma.attendance.findMany({
+        where: { userId: req.userId, status: wrote, date: { gte: utcDay(req.startDate), lte: utcDay(req.endDate) } },
+        select: { id: true, checkIn: true, checkOut: true, totalHours: true, isRegularized: true },
+      });
+      const leaveWrote = onThoseDays.filter(r => isLeaveWrittenRow(r, isHalf)).map(r => r.id);
+      if (leaveWrote.length) await this.prisma.attendance.deleteMany({ where: { id: { in: leaveWrote } } });
       if (req.organizationId) {
         await this.prisma.calendarEvent.deleteMany({
           where: { organizationId: req.organizationId, type: 'LEAVE', createdBy: req.userId, startDate: req.startDate, endDate: req.endDate },

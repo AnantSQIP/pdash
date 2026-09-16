@@ -102,6 +102,90 @@ export interface CapacityDay {
   tasks?: { taskId: string; hours: number }[];
 }
 
+/**
+ * The part of a window that is still ahead — today and the days after it.
+ *
+ * Every figure a row reports ABOUT A PERSON — hours free, available now, the day they next come
+ * free — is an answer to "what can I still give them?", and only the days that have not happened
+ * yet can answer it. That used to be the whole window, because the window always began today.
+ * Since it can be anchored in the past, elapsed days sat in the totals carrying no load at all —
+ * placement never puts work behind `planFrom` — so each one read as eight free hours. On a
+ * Wednesday, the board opened on its default Monday-start work week and reported all 26 people
+ * available, a person 11.6h overloaded among them with 32 free hours to spare.
+ *
+ * The days themselves are still returned and still drawn: what happened is worth looking at. It
+ * is only the arithmetic about availability that stops counting it.
+ *
+ * Both are plain ISO day keys, so the comparison is a string comparison — total and cheap.
+ */
+export function daysStillAhead(days: CapacityDay[], planFromKey: string): CapacityDay[] {
+  return days.filter(d => d.date >= planFromKey);
+}
+
+/** Everything a row says about how busy somebody is, all of it measured over the days ahead. */
+export interface CapacityTotals {
+  capacityHours: number;
+  committedHours: number;
+  freeHours: number;
+  /** Hours committed BEYOND capacity, which `freeHours` (floored at 0 per day) cannot show. */
+  overCommittedHours: number;
+  /** Percent of the remaining capacity already spoken for; 0 when there is no capacity left. */
+  utilization: number;
+  /** Free on the next workable day — today on a weekday, Monday if the board is open on Sunday. */
+  availableNow: boolean;
+  /** The first day with real room, and how many workable days the run lasts. */
+  nextFreeDate: string | null;
+  freeRunDays: number;
+}
+
+/**
+ * Add up a person's window, counting only the days still to come.
+ *
+ * Pulled out of the board so the arithmetic can be tested against the days that make it subtle: a
+ * window anchored before today, a window entirely in the past, a half day, a weekend. All of it
+ * answers "what can this person still take on?", which is why nothing before `planFromKey`
+ * counts — see daysStillAhead.
+ */
+export function summariseAhead(days: CapacityDay[], planFromKey: string): CapacityTotals {
+  const ahead = daysStillAhead(days, planFromKey);
+  const workDays = ahead.filter(d => d.capacity > 0);
+  // Summed, not counted × 8: a half day contributes four hours, and counting days would put
+  // the other four back into the totals the day rows had already given up.
+  const capacityHours = workDays.reduce((s, d) => s + d.capacity, 0);
+  const committedHours = workDays.reduce((s, d) => s + d.load, 0);
+  const freeHours = workDays.reduce((s, d) => s + d.free, 0);
+  // Hours committed BEYOND capacity on overloaded days. freeHours floors per-day free at
+  // 0, so committed+free stops reconciling with capacity exactly when someone is
+  // overloaded — this surfaces that overload instead of letting the window-average
+  // utilization dilute (and hide) it.
+  const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - d.capacity), 0);
+
+  // "When is this person free?" — the first workable day with real room, and how many consecutive
+  // free days follow (a 2-day gap is a genuine assignment window). A weekend or a holiday inside
+  // the run does not break it; a busy day does.
+  const firstFreeIdx = ahead.findIndex(d => d.capacity > 0 && d.utilization <= FREE_THRESHOLD);
+  let freeRunDays = 0;
+  if (firstFreeIdx >= 0) {
+    for (let i = firstFreeIdx; i < ahead.length; i++) {
+      const d = ahead[i];
+      if (d.capacity === 0) continue;
+      if (d.utilization > FREE_THRESHOLD) break;
+      freeRunDays++;
+    }
+  }
+  const firstWorkIdx = ahead.findIndex(d => d.capacity > 0);
+  return {
+    capacityHours: r1(capacityHours),
+    committedHours: r1(committedHours),
+    freeHours: r1(freeHours),
+    overCommittedHours: r1(overCommittedHours),
+    utilization: capacityHours > 0 ? Math.round((committedHours / capacityHours) * 100) : 0,
+    availableNow: firstWorkIdx >= 0 && ahead[firstWorkIdx].utilization <= FREE_THRESHOLD,
+    nextFreeDate: firstFreeIdx >= 0 ? ahead[firstFreeIdx].date : null,
+    freeRunDays,
+  };
+}
+
 export interface CapacityRow {
   userId: string;
   name: string;
@@ -807,35 +891,11 @@ export class CapacityService {
         };
       });
 
-      const workDays = days.filter(d => d.capacity > 0);
-      // Summed, not counted × 8: a half day contributes four hours, and counting days would put
-      // the other four back into the totals the day rows had already given up.
-      const capacityHours = workDays.reduce((s, d) => s + d.capacity, 0);
-      const committedHours = workDays.reduce((s, d) => s + d.load, 0);
-      const freeHours = workDays.reduce((s, d) => s + d.free, 0);
-      // Hours committed BEYOND capacity on overloaded days. freeHours floors per-day free at
-      // 0, so committed+free stops reconciling with capacity exactly when someone is
-      // overloaded — this surfaces that overload instead of letting the window-average
-      // utilization dilute (and hide) it.
-      const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - d.capacity), 0);
-
-      // "When is this person free?" — the first workable day with real room, and how
-      // many consecutive free days follow (a 2-day gap is a genuine assignment window).
-      const firstFreeIdx = days.findIndex(d => d.capacity > 0 && d.utilization <= FREE_THRESHOLD);
-      let freeRunDays = 0;
-      if (firstFreeIdx >= 0) {
-        for (let i = firstFreeIdx; i < days.length; i++) {
-          const d = days[i];
-          if (d.capacity === 0) continue;                 // weekend/holiday/leave doesn't break the run
-          if (d.utilization > FREE_THRESHOLD) break;
-          freeRunDays++;
-        }
-      }
+      // Measured from `planFrom` — the same boundary work is placed from, and for any window
+      // starting today or later it is the whole window, so the ordinary board is unchanged.
+      // See summariseAhead for what counting the elapsed days did to a Monday-start week.
+      const totals = summariseAhead(days, dayKey(planFrom));
       const openTasks = [...(openByUser.get(u.id)?.values() ?? [])].sort((a, b) => (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999'));
-      // "Available now" = free on the next WORKABLE day (today on a weekday; Monday if
-      // the board is opened on a weekend) — otherwise the answer is uselessly "nobody".
-      const firstWorkIdx = days.findIndex(d => d.capacity > 0);
-      const availableNow = firstWorkIdx >= 0 && days[firstWorkIdx].utilization <= FREE_THRESHOLD;
 
       return {
         userId: u.id,
@@ -846,14 +906,7 @@ export class CapacityService {
         profilePhoto: u.profilePhoto,
         days,
         openTasks,
-        freeHours: r1(freeHours),
-        committedHours: r1(committedHours),
-        overCommittedHours: r1(overCommittedHours),
-        capacityHours: r1(capacityHours),
-        utilization: capacityHours > 0 ? Math.round((committedHours / capacityHours) * 100) : 0,
-        nextFreeDate: firstFreeIdx >= 0 ? days[firstFreeIdx].date : null,
-        freeRunDays,
-        availableNow,
+        ...totals,
         overdueCount: openTasks.filter(t => t.overdue).length,
       };
     });
