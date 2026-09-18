@@ -1,11 +1,11 @@
 'use client';
 
-// The board's key: which colour is which project, what the four depths mean, what the rails
+// The board's key: which colour is which client, what the four depths mean, what the rails
 // mean, and the day states that are not drawn as segments.
 //
-// The project chips are the one interactive thing here. Hovering one previews that project
-// alone (every other project's segments fade); clicking pins it; Escape or a second click
-// clears. With more than seven projects on a board two of them share a hue, and this is how the
+// The client chips are the one interactive thing here. Hovering one previews that client
+// alone (every other client's segments fade); clicking pins it; Escape or a second click
+// clears. With more than seven clients on a board two of them share a hue, and this is how the
 // reader tells them apart in one gesture.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -29,7 +29,7 @@ export function BoardLegend({
 }) {
   const [pinned, setPinned] = useState<string | null>(defaultPinned);
 
-  // Every project with at least one open task on the board, by PID.
+  // Every client with at least one open task on the board, by PID.
   const projects = useMemo(() => {
     const m = new Map<string, { id: string; pid: string | null; round?: number; title: string }>();
     for (const r of rows) for (const t of r.openTasks) {
@@ -72,7 +72,7 @@ export function BoardLegend({
   return (
     <div className="shrink-0 border-t border-gray-100 bg-gray-50 px-4 py-2.5 text-[11px] text-gray-600 rounded-b-xl">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        {/* Projects */}
+        {/* Clients */}
         {projects.length > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
             {projects.map(p => {
@@ -98,7 +98,7 @@ export function BoardLegend({
               );
             })}
             {hasTeamWork && (
-              <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-gray-600" title="Work in a team space — no client matter, no PID">
+              <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-gray-600" title="Work in a team space — no client, no PID">
                 <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: NO_PROJECT_HUE.medium }} />Team space
               </span>
             )}
@@ -108,7 +108,7 @@ export function BoardLegend({
         <span className="hidden h-4 w-px bg-gray-200 sm:block" />
 
         {/* Priority depth */}
-        <div className="inline-flex items-center gap-1.5" title="Within a project's colour, darker means more urgent">
+        <div className="inline-flex items-center gap-1.5" title="Within a client's colour, darker means more urgent">
           {RAMP.map((c, i) => (
             <span key={c} className="inline-flex items-center gap-1">
               <span className="h-2.5 w-3.5 rounded-sm" style={{ backgroundColor: c }} />

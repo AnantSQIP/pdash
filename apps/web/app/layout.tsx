@@ -20,7 +20,7 @@ const geistSans = localFont({
 
 export const metadata: Metadata = {
   title: 'Squark Dashboard',
-  description: 'Squark Dashboard — project, people & performance management',
+  description: 'Squark Dashboard — client, people & performance management',
   // public/fav.png has been sitting there unreferenced: with no icon declared, every page load
   // asked for /favicon.ico, got a 404, and the browser tab showed a blank sheet of paper instead
   // of the Squark mark. Declared here rather than added as app/favicon.ico so there is one file

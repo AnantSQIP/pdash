@@ -668,7 +668,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
           {isClaim && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className={label}>Project ID (PID) <span className="text-red-500">*</span></label>
+                <label className={label}>PID <span className="text-red-500">*</span></label>
                 <input value={f.projectRef} onChange={e => setF(v => ({ ...v, projectRef: e.target.value }))}
                   placeholder="e.g. SQ_26_27_001" className={input} />
               </div>

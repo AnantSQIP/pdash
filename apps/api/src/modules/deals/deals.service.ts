@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
@@ -210,7 +211,8 @@ export class DealsService {
         .reduce((n, d) => n + (assessDeal(d as never).some(f => f.severity === 'urgent') ? 1 : 0), 0),
 
       /** Won, but nobody has created the client record — the handover to delivery, unfinished. */
-      awaitingClientRecord: deals.filter(d => d.stage === 'WON' && !d.clientId).length,
+      // CLIENTS-FLOW: commented out while client codes are switched off (always 0).
+      awaitingClientRecord: PATENTS_AND_CLIENT_CODES ? deals.filter(d => d.stage === 'WON' && !d.clientId).length : 0,
       // Currency is per-deal, so a pipeline mixing them cannot be summed honestly. Say so rather
       // than adding rupees to dollars and presenting the result as a forecast.
       currencies: [...new Set(deals.map(d => d.currency))],
@@ -404,7 +406,9 @@ export class DealsService {
     // Winning may tie the deal to a client, either an existing one or a newly minted code. That
     // link is what lets the work show up in the client ledger later.
     let clientId = deal.clientId;
-    if (to === 'WON') clientId = await this.resolveWonClient(organizationId, actorId, deal.company, dto) ?? clientId;
+    // CLIENTS-FLOW: commented out — a won deal no longer mints or links a client code; the client
+    // is created in the Clients module instead. The deal simply records that it was won.
+    if (to === 'WON' && PATENTS_AND_CLIENT_CODES) clientId = await this.resolveWonClient(organizationId, actorId, deal.company, dto) ?? clientId;
 
     await this.prisma.$transaction([
       this.prisma.deal.update({

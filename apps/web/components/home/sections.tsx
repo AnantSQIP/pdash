@@ -101,7 +101,7 @@ export function WorkspaceErrorBanner() {
   );
 }
 
-// ── Org project stats row (project.view) ────────────────────────────────────
+// ── Org client stats row (project.view) ─────────────────────────────────────
 export function OrgStatsRow() {
   const { org } = useOrg();
   const { can } = usePermissions();
@@ -114,8 +114,8 @@ export function OrgStatsRow() {
   if (!allowed) return null;
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 px-4 sm:px-6 pt-4 sm:pt-6">
-      <StatTile label="Total projects"  value={fmtNum(stats?.totalProjects)} Icon={FolderKanban} loading={isLoading} error={isError} />
-      <StatTile label="Active projects" value={fmtNum(stats?.activeProjects)} Icon={Activity} loading={isLoading} error={isError} />
+      <StatTile label="Total clients"   value={fmtNum(stats?.totalProjects)} Icon={FolderKanban} loading={isLoading} error={isError} />
+      <StatTile label="Active clients"  value={fmtNum(stats?.activeProjects)} Icon={Activity} loading={isLoading} error={isError} />
       <StatTile label="Avg completion"  value={fmtPct(stats?.avgCompletion)}  Icon={TrendingUp} loading={isLoading} error={isError} />
       <StatTile label="Total tasks"     value={fmtNum(stats?.totalTasks)}     Icon={CheckSquare} loading={isLoading} error={isError} />
     </div>
@@ -226,6 +226,9 @@ export function MyTasksCard() {
           const overdue = task.currentStatus?.type !== 'CLOSED' && isPastDue(task.dueDate);
           const done = task.currentStatus?.type === 'CLOSED';
           const project = (task as any).projectTasks?.[0]?.project;
+          // CLIENTS-FLOW: the task group inside the client, when it has not been deleted.
+          const tl = task.projectTasks?.[0]?.taskList;
+          const group = tl && !tl.deletedAt ? tl.name : null;
           return (
             <div key={task.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
               {done
@@ -233,8 +236,9 @@ export function MyTasksCard() {
                 : <span className={clsx('w-2 h-2 rounded-full shrink-0', priorityDotClass(task.priority))} title={`${task.priority} priority`} />}
               <span className={clsx('text-sm flex-1 truncate', done ? 'text-gray-400 line-through' : 'text-gray-800')}>{task.title}</span>
               {project && (
-                <Link href={`/projects/${project.id}`} className="hidden sm:block text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full shrink-0 hover:bg-gray-200 truncate max-w-[120px]">
-                  {project.title}
+                <Link href={`/projects/${project.id}`} title={group ? `${project.title} · ${group}` : project.title}
+                  className="hidden sm:block text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full shrink-0 hover:bg-gray-200 truncate max-w-[160px]">
+                  {project.title}{group && <span className="text-gray-400"> · {group}</span>}
                 </Link>
               )}
               {task.dueDate && (
@@ -261,7 +265,7 @@ export function MyTasksCard() {
   );
 }
 
-// ── Projects (project.view) ─────────────────────────────────────────────────
+// ── Clients (project.view) ──────────────────────────────────────────────────
 export function MyProjectsCard() {
   const { org } = useOrg();
   const { can } = usePermissions();
@@ -276,13 +280,13 @@ export function MyProjectsCard() {
   const top = projects.slice(0, 5);
   return (
     <Card>
-      <CardHeader title="Projects" icon={FolderKanban} href="/projects" linkLabel="View all" />
+      <CardHeader title="Clients" icon={FolderKanban} href="/projects" linkLabel="View all" />
       {isError ? (
         <ErrorState onRetry={() => refetch()} />
       ) : loading ? (
         <SkeletonRows />
       ) : top.length === 0 ? (
-        <EmptyHint>No projects yet.</EmptyHint>
+        <EmptyHint>No clients yet.</EmptyHint>
       ) : (
         top.map(project => {
           const phase = phaseChip(project.projectPhase);
@@ -291,7 +295,7 @@ export function MyProjectsCard() {
           return (
             /* The name is the row, and it was the only thing being squeezed: every trailing item
                is shrink-0, so in a third-of-the-page card the title rendered as "Pat…" / "Trad…",
-               which tells you nothing and makes two different patent projects look identical.
+               which tells you nothing and makes two different clients look identical.
                The PID badge went because it read "PID pending" on every row here — furniture
                carrying no information, at the cost of the one thing that identifies the row.
                overflow-hidden is the backstop: the fixed items must never push the percentage
@@ -314,7 +318,7 @@ export function MyProjectsCard() {
   );
 }
 
-// ── Project status summary (project.view, side) ─────────────────────────────
+// ── Client status summary (project.view, side) ──────────────────────────────
 const PHASE_ORDER = ['ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED', 'ARCHIVED'];
 export function ProjectStatusCard() {
   const { org } = useOrg();
@@ -327,7 +331,7 @@ export function ProjectStatusCard() {
   });
   if (!allowed) return null;
   const loading = isLoading || !org;
-  // Count EVERY phase present so the rows reconcile with the "Total projects" tile.
+  // Count EVERY phase present so the rows reconcile with the "Total clients" tile.
   const counts = new Map<string, number>();
   for (const p of projects) counts.set(p.projectPhase, (counts.get(p.projectPhase) ?? 0) + 1);
   const phases = [
@@ -336,13 +340,13 @@ export function ProjectStatusCard() {
   ];
   return (
     <Card>
-      <CardHeader title="Project Status" icon={Activity} href="/projects" linkLabel="View all" />
+      <CardHeader title="Client Status" icon={Activity} href="/projects" linkLabel="View all" />
       {isError ? (
         <ErrorState onRetry={() => refetch()} />
       ) : loading ? (
         <SkeletonRows n={4} />
       ) : projects.length === 0 ? (
-        <EmptyHint>No projects yet.</EmptyHint>
+        <EmptyHint>No clients yet.</EmptyHint>
       ) : (
         <div className="divide-y divide-gray-100">
           {phases.map(phase => {
@@ -377,7 +381,7 @@ export function QuickStatsCard() {
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Tasks due today', value: fmtNum(stats?.tasksDueToday), badge: BADGE.warn },
         { label: 'Overdue',         value: fmtNum(stats?.overdueCount),  badge: BADGE.danger },
-        { label: 'Active projects', value: fmtNum(stats?.activeProjects), badge: BADGE.good },
+        { label: 'Active clients',  value: fmtNum(stats?.activeProjects), badge: BADGE.good },
         { label: 'Hours this week', value: fmtHours(stats?.hoursLoggedThisWeek), badge: BADGE.info },
       ]} />
     </Card>
@@ -441,7 +445,7 @@ export function OrgPerformanceCard() {
         { label: 'Tasks completed', value: fmtNum(t?.tasksCompleted) },
         { label: 'Hours logged',    value: fmtHours(t?.hoursLogged) },
         { label: 'On-time rate',    value: t?.avgOnTimeRate == null ? 'n/a' : fmtPct(t.avgOnTimeRate) },
-        { label: 'Active projects', value: fmtNum(t?.activeProjects) },
+        { label: 'Active clients',  value: fmtNum(t?.activeProjects) },
       ]} />
       {leaders.length > 0 && (
         <div className="px-5 py-3 border-t border-gray-100">
@@ -716,7 +720,7 @@ export function AdminShortcutsCard() {
 }
 
 // ── Incoming PID requests awaiting me (project.generate_pid) ─────────────────
-// Replaces the old (dead) project-approval card: project approval was removed, but
+// Replaces the old (dead) client-approval card: client approval was removed, but
 // juniors still RAISE PID requests that an authority mints & assigns here.
 export function PidRequestsCard() {
   const { org } = useOrg();
@@ -742,7 +746,7 @@ export function PidRequestsCard() {
   const pendingId = fulfill.isPending ? fulfill.variables : null;
   return (
     <Card>
-      <CardHeader title="PID Requests" icon={Hash} badge={<CountBadge n={pending.length} />} href="/projects" linkLabel="All projects" />
+      <CardHeader title="PID Requests" icon={Hash} badge={<CountBadge n={pending.length} />} href="/projects" linkLabel="All clients" />
       {isError ? (
         <ErrorState onRetry={() => refetch()} />
       ) : isLoading ? (
@@ -817,7 +821,7 @@ export function QuickAccessCard() {
   const { can } = usePermissions();
   const LINKS: { href: string; label: string; Icon: typeof CheckSquare; color: string; perm?: string | string[] }[] = [
     { href: '/tasks',      label: 'My Tasks',   Icon: CheckSquare,   color: 'text-brand-600',  perm: 'task.view' },
-    { href: '/projects',   label: 'Projects',   Icon: FolderKanban,  color: 'text-green-600',  perm: 'project.view' },
+    { href: '/projects',   label: 'Clients',    Icon: FolderKanban,  color: 'text-green-600',  perm: 'project.view' },
     { href: '/calendar',   label: 'Calendar',   Icon: CalendarDays,  color: 'text-orange-600', perm: 'calendar.view' },
     { href: '/timesheets', label: 'Timesheets', Icon: Timer,         color: 'text-brand-600',  perm: ['timesheet.view', 'timesheet.create'] },
     { href: '/reports',    label: 'Reports',    Icon: FileText,      color: 'text-amber-600',  perm: ['report.view', 'report.export'] },

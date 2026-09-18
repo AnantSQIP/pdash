@@ -181,7 +181,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
 
       {/* Project Manager — one */}
       <section>
-        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-2"><UserCog size={15} className="text-brand-600" /> Project Manager</h3>
+        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-2"><UserCog size={15} className="text-brand-600" /> Manager</h3>
         <PersonRow row={pm} onChange={setPm} onRemove={pm.userId ? () => setPm({ ...EMPTY_ROW }) : undefined} />
       </section>
 

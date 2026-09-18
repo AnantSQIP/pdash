@@ -8,7 +8,7 @@
  * that also stops the legitimate case is a different bug, not a fix.
  *
  * Roles used (the seeded roster): mohit = Super Admin (mints PIDs), ankit.verma = Manager
- * (runs clients, assigns), basant.goyal = Senior Research Associate (makes groups, cannot assign),
+ * (runs clients, assigns), ketan.dagar = Senior Research Associate (makes groups, cannot assign),
  * meetu.singh = Consultant (never put on the fixture client), ajay.sharma = Employee (cannot make
  * groups), hr = HR (no delivery access at all).
  */
@@ -42,13 +42,27 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   const su = sess(), mgr = sess(), sra = sess(), con = sess(), emp = sess(), hr = sess();
   const who = {};
   for (const [s, email, key] of [
-    [su, 'mohit@squarkip.com', 'su'], [mgr, 'ankit.verma@squarkip.com', 'mgr'], [sra, 'basant.goyal@squarkip.com', 'sra'],
+    [su, 'mohit@squarkip.com', 'su'], [mgr, 'ankit.verma@squarkip.com', 'mgr'], [sra, 'ketan.dagar@squarkip.com', 'sra'],
     [con, 'meetu.singh@squarkip.com', 'con'], [emp, 'ajay.sharma@squarkip.com', 'emp'], [hr, 'hr@squarkip.com', 'hr'],
   ]) {
     const r = await s('/auth/login', { method: 'POST', body: { email, password: PW } });
     who[key] = r.data?.user?.id;
     if (!who[key]) { console.log(`cannot log in as ${email}: ${brief(r)}`); process.exit(2); }
   }
+
+  // The suite leans on each person's ROLE. Other suites elevate people mid-run (meeting-changes
+  // makes basant.goyal an Admin, and leaves it if it fails), so check the fixture rather than
+  // report a wall that "broke" when it was really the seed that moved.
+  const codesOf = async s => {
+    const r = await s('/me/effective-permissions');
+    return new Set((r.data?.permissions ?? r.data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+  };
+  const sraCodes = await codesOf(sra), empCodes = await codesOf(emp), mgrCodes = await codesOf(mgr);
+  const drift = [];
+  if (sraCodes.has('task.assign') || !sraCodes.has('tasklist.create')) drift.push('the SRA should make groups but not assign');
+  if (empCodes.has('tasklist.create')) drift.push('the Employee should not make groups');
+  if (!mgrCodes.has('task.assign') || !mgrCodes.has('project.approve')) drift.push('the Manager should assign and approve');
+  if (drift.length) { console.log('FIXTURE DRIFT — reseed the scratch database: ' + drift.join('; ')); process.exit(2); }
 
   const statuses = (await su('/workflows/default/statuses')).data ?? [];
   const CLOSED = statuses.find(s => s.type === 'CLOSED')?.id;
@@ -249,6 +263,24 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   } else {
     ok('the client could be completed for this check', false, brief(comp));
   }
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────
+  step('patents, patent IDs and client codes are switched off');
+  for (const path of ['/patents', '/patents/options', '/clients', '/client-ledger', `/projects/${client.id}/patent-numbers`]) {
+    const r = await su(path);
+    ok(`${path} is gone (404), even for a Super Admin`, r.status === 404, brief(r));
+  }
+  ok('tagging patents on a client is gone', (await su(`/projects/${client.id}/patents`, { method: 'PUT', body: { patentIds: [] } })).status === 404);
+  ok('naming a client code on a client is gone', (await su(`/projects/${client.id}/client`, { method: 'PUT', body: { clientId: null } })).status === 404);
+  const withPatents = await su('/projects', { method: 'POST', body: { title: `Patents ${RUN}`, patentIds: ['x'] } });
+  ok('creating with patent IDs is refused in words', withPatents.status === 400 && /switched off/i.test(withPatents.data?.message ?? ''), brief(withPatents));
+  const withCode = await su('/projects', { method: 'POST', body: { title: `Code ${RUN}`, clientId: 'x' } });
+  ok('creating with a client code is refused in words', withCode.status === 400 && /switched off/i.test(withCode.data?.message ?? ''), brief(withCode));
+  const suView = (await su(`/projects/${client.id}`)).data ?? {};
+  ok('a client carries no patents and no client code, even for a Super Admin', !('patents' in suView) && !('client' in suView) && !('clientId' in suView),
+    Object.keys(suView).filter(k => /client|patent/i.test(k)).join(','));
+  const ledger = await su('/projects/pid-ledger');
+  ok('the PID ledger carries no client code or patents', ledger.status === 200 && !/"client"|"patents"/.test(JSON.stringify(ledger.data)), brief(ledger));
 
   console.log(`\n${passed} passed, ${fails.length} failed`);
   if (fails.length) { console.log('\nFailures:\n  ' + fails.join('\n  ')); process.exit(1); }

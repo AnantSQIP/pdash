@@ -16,11 +16,11 @@ import { todayIST } from '@/lib/date';
 import { monthStartDay, weekStartDay } from '@/lib/timesheet-window';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
-/** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
+/** "Other" = miscellaneous non-client time — never a buffer to assign a PID to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
 /** A client call: booked to a PID but to no task, so it is not a buffer awaiting one either. */
 const isCall = (e: Timesheet) => e.category === 'CLIENT_CALL';
-/** A buffer entry (logged without a PID) — no task/issue/project, and not "Other". */
+/** A buffer entry (logged without a PID) — no task/issue/client, and not "Other". */
 const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e) && !isCall(e);
 const bufferDaysLeft = (e: Timesheet): number | null =>
   e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
@@ -58,7 +58,7 @@ export default function TimesheetsPage() {
   const [selectedDate, setSelectedDate] = useState(todayIST());
   const [showBackfill, setShowBackfill] = useState(false);
 
-  // MY own entries across every project (the API scopes ?userId to self).
+  // MY own entries across every client (the API scopes ?userId to self).
   const { data: entries = [], isLoading, isError } = useQuery<Timesheet[]>({
     queryKey: ['timesheets-mine', currentUser?.id],
     queryFn: () => api.timesheets.forUser(currentUser!.id),
@@ -175,7 +175,7 @@ export default function TimesheetsPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
                       {entry.task?.title ?? entry.issue?.title
-                        ?? (isOther(entry) ? (entry.title ?? 'Non-project time')
+                        ?? (isOther(entry) ? (entry.title ?? 'Non-client time')
                           : isCall(entry) ? (entry.title ?? 'Client call')
                             : 'Unassigned time')}
                       {entry.issue && <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}

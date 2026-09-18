@@ -1,18 +1,18 @@
 'use client';
 
-// Per-project availability — the Team Capacity board, scoped to this project's members.
+// Per-client availability — the Team Capacity board, scoped to this client's members.
 //
 // The same board, the same colours, the same hover and panel as the full page (it is the same
-// component), with two things only a project can add: its own work is pinned so everyone else's
+// component), with two things only a client can add: its own work is pinned so everyone else's
 // reads as context, and a summary that answers the question the deadline poses — does what is
-// left on this project fit into the hours these people have before it is due?
+// left on this client fit into the hours these people have before it is due?
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Users, Loader, ArrowRight, CalendarRange, Flag, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { api, type CapacityRow } from '@/lib/api';
+import { api, type CapacityRow, type TaskGroup } from '@/lib/api';
 import { Board } from '@/components/capacity/Board';
 import { LiveStatus } from '@/components/capacity/LiveStatus';
 import { PersonPanel } from '@/components/capacity/PersonPanel';
@@ -21,6 +21,7 @@ import { assignProjectHues, deadlineState } from '@/lib/project-colors';
 import { formatDate, todayIST } from '@/lib/date';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { useToast } from '@/components/ui/Toast';
 
 const RANGES = [7, 14, 30] as const;
 const POLL_MS = 30_000;
@@ -41,11 +42,12 @@ function workingDaysBetween(from: string, to: string, holidays: ReadonlySet<stri
 
 export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [days, setDays] = useState<number>(14);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   // Adding work: the add-task flow, pre-assigned to that person on that day.
   const [assign, setAssign] = useState<{ userId: string; date: string } | null>(null);
-  // This project starts pinned: its segments at full strength, everything else faded to context.
+  // This client starts pinned: its segments at full strength, everything else faded to context.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(projectId);
   const [focusDate, setFocusDate] = useState<string | undefined>();
   const today = todayIST();
@@ -62,12 +64,34 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
     staleTime: 60_000,
   });
   const defaultTaskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
+  // CLIENTS-FLOW: new work goes into a task group that is still open — the default one when it
+  // is, otherwise the first open one. `undefined` = not loaded yet (fall back to the default
+  // list, as before); `null` = loaded, and the client has no open group to file work in.
+  const { data: groups } = useQuery<TaskGroup[]>({
+    queryKey: ['task-groups', projectId],
+    queryFn: () => api.taskLists.list(projectId),
+    staleTime: 60_000,
+  });
+  const openGroup = useMemo(() => {
+    if (!groups) return undefined;
+    const active = groups.filter(g => g.status === 'ACTIVE').sort((a, b) => a.sequence - b.sequence);
+    return active.find(g => g.isDefault) ?? active[0] ?? null;
+  }, [groups]);
+  const targetListId = openGroup === undefined ? defaultTaskList?.id : openGroup?.id;
+  /** Open the add-task flow for that person and day — or say why there is nowhere to put it. */
+  function startAssign(userId: string, date: string) {
+    if (openGroup === null) {
+      toast('This client has no open task group — create or reopen one in the task list first.', 'error');
+      return;
+    }
+    setAssign({ userId, date });
+  }
   const rows: CapacityRow[] = useMemo(() => data?.rows ?? [], [data]);
   const hues = useMemo(() => assignProjectHues(projectsOf(rows)), [rows]);
   const holidays = useMemo(() => holidaysOf(rows), [rows]);
   const selected = useMemo(() => rows.find(r => r.userId === selectedUserId) ?? null, [rows, selectedUserId]);
 
-  // Does what is left on this project fit before its deadline, in the hours these people have?
+  // Does what is left on this client fit before its deadline, in the hours these people have?
   const summary = useMemo(() => {
     const due = project?.dueDate ? project.dueDate.slice(0, 10) : null;
     const windowEnd = rows[0]?.days[rows[0].days.length - 1]?.date ?? today;
@@ -117,7 +141,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const verdict = !summary.due
     ? null
     : summary.remaining === 0
-      ? { tone: 'ok' as const, text: 'Nothing left on this project.' }
+      ? { tone: 'ok' as const, text: 'Nothing left on this client.' }
       : summary.state === 'overdue'
         ? { tone: 'bad' as const, text: `${summary.remaining}h still left after the deadline — extend it, or add people.` }
         : summary.beyondWindow
@@ -130,8 +154,8 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-gray-500">
-          When each member of this project is free — across <span className="font-medium text-gray-700">all</span> their projects,
-          so you can see who has real room for more of this one. This project&apos;s work is pinned; the rest is faded.
+          When each member of this client is free — across <span className="font-medium text-gray-700">all</span> their clients,
+          so you can see who has real room for more of this one. This client&apos;s work is pinned; the rest is faded.
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} intervalMs={POLL_MS} />
@@ -161,7 +185,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
               <Flag size={14} /> {dueWords}
               {summary.workdays != null && summary.state !== 'overdue' && <span className="font-normal text-gray-500"> · {summary.workdays} working {summary.workdays === 1 ? 'day' : 'days'} left</span>}
             </span>
-            <span className="text-gray-700 tabular-nums"><span className="font-semibold text-gray-900">{summary.remaining}h</span> left on this project across {summary.people} {summary.people === 1 ? 'person' : 'people'}</span>
+            <span className="text-gray-700 tabular-nums"><span className="font-semibold text-gray-900">{summary.remaining}h</span> left on this client across {summary.people} {summary.people === 1 ? 'person' : 'people'}</span>
             {summary.due && summary.remaining > 0 && summary.perDay != null && (
               <span className="text-gray-700 tabular-nums"><span className="font-semibold text-gray-900">{summary.perDay}h</span> a day needed to finish in time</span>
             )}
@@ -184,7 +208,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
       {rows.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-14 text-center text-gray-400">
           <CalendarRange size={30} className="mb-2" />
-          This project has no active members yet.
+          This client has no active members yet.
         </div>
       ) : (
         <Board
@@ -196,8 +220,8 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
           defaultPinnedProjectId={projectId}
           highlightProjectId={projectId}
           onSelectPerson={(userId, date) => { setFocusDate(date); setSelectedUserId(userId); }}
-          onAssign={row => setAssign({ userId: row.userId, date: row.nextFreeDate ?? today })}
-          emptyText="This project has no active members yet."
+          onAssign={row => startAssign(row.userId, row.nextFreeDate ?? today)}
+          emptyText="This client has no active members yet."
           hoverSuppressed={!!selected || !!assign}
         />
       )}
@@ -207,21 +231,21 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
         <PersonPanel
           row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
           onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
-          onAssign={() => { const r = selected; setSelectedUserId(null); setFocusDate(undefined); setAssign({ userId: r.userId, date: focusDate ?? r.nextFreeDate ?? today }); }}
+          onAssign={() => { const r = selected; setSelectedUserId(null); setFocusDate(undefined); startAssign(r.userId, focusDate ?? r.nextFreeDate ?? today); }}
         />
       )}
 
-      {/* Add a task into THIS project, pre-assigned to that person + day. */}
-      {assign && defaultTaskList && (
+      {/* Add a task into THIS client (its open task group), pre-assigned to that person + day. */}
+      {assign && targetListId && (
         <AddTaskModal
           projectId={projectId}
-          taskListId={defaultTaskList.id}
+          taskListId={targetListId}
           workflowId={project?.workflowId}
           initialAssigneeIds={[assign.userId]}
           initialStartDate={assign.date}
           initialDueDate={assign.date}
           onClose={() => setAssign(null)}
-          // A new task moves this board, the full board, the task lists and the project's progress.
+          // A new task moves this board, the full board, the task lists and the client's progress.
           onSuccess={() => { setAssign(null); invalidateTaskCaches(qc); }}
         />
       )}

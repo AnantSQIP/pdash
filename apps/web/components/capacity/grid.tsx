@@ -1,11 +1,11 @@
 'use client';
 
 // Shared visual language for capacity grids, used by both the full Team Capacity board and the
-// per-project availability tab so the two never drift apart.
+// per-client availability tab so the two never drift apart.
 //
 // A working day is the owner's "green box". Work is drawn INTO it as segments — one per task,
 // width proportional to the hours that task puts on the day — so the green left showing is
-// literally the free hours. Each segment is its project's hue at its priority's depth, with a
+// literally the free hours. Each segment is its client's hue at its priority's depth, with a
 // rail along the bottom when its deadline is close. See lib/project-colors.ts for the rules.
 
 import clsx from 'clsx';
@@ -53,7 +53,7 @@ export function segmentLabel(task: CapacityOpenTask): string | null {
     const serial = task.projectPid.split(/[_\-/]/).pop() ?? task.projectPid;
     return task.projectRound && task.projectRound > 1 ? `${serial}·P${task.projectRound}` : serial;
   }
-  // No PID yet (a project still waiting for one): the initials of its title's first words.
+  // No PID yet (a client still waiting for one): the initials of its title's first words.
   const words = (task.project ?? '').split(/[^A-Za-z0-9]+/).filter(w => w.length > 2);
   return words.length ? words.slice(0, 3).map(w => w[0].toUpperCase()).join('') : null;
 }
@@ -79,7 +79,7 @@ export function holidaysOf(rows: { days: CapacityDay[] }[]): Set<string> {
   return out;
 }
 
-/** Every project a board's rows mention, for hue assignment. */
+/** Every client a board's rows mention, for hue assignment. */
 export function projectsOf(rows: { openTasks: CapacityOpenTask[] }[]): { id: string; pid: string | null }[] {
   const m = new Map<string, { id: string; pid: string | null }>();
   for (const r of rows) for (const t of r.openTasks) {
@@ -119,7 +119,7 @@ export function DayCell({
   day: CapacityDay;
   /** null = no itemisation in the payload → plain fill; [] = a genuinely free day. */
   segments: Segment[] | null;
-  /** When set, segments of every OTHER project fade — the legend's hover/pin. */
+  /** When set, segments of every OTHER client fade — the legend's hover/pin. */
   focusProjectId?: string | null;
   /** The person panel's own strip: shorter cells. */
   compact?: boolean;

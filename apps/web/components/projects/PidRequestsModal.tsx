@@ -147,7 +147,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
                 ))}
               </select>
             </Field>
-            <Field label="Project Manager">
+            <Field label="Client manager">
               <select value={managerId} onChange={e => setManagerId(e.target.value)} className={`${inputCls} bg-white`}>
                 <option value="">Unassigned</option>
                 {sortedUsers.map(u => (

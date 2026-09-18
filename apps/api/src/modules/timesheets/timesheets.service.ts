@@ -376,7 +376,7 @@ export class TimesheetsService {
         },
         select: { id: true, projectType: true },
       });
-      if (!project) throw new NotFoundException('That project could not be found.');
+      if (!project) throw new NotFoundException('That client could not be found.');
       const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
         await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
         return tx.timesheet.create({

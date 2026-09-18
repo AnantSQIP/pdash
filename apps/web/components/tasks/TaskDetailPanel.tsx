@@ -847,7 +847,7 @@ function TaskDetailPanelInner({
               </div>
             ) : (
               <p className="text-xs text-gray-400 italic">
-                {readOnly ? 'This project is completed or closed — assignees can’t be changed.' : 'You don’t have permission to change assignees.'}
+                {readOnly ? 'This client is completed or closed — assignees can’t be changed.' : 'You don’t have permission to change assignees.'}
               </p>
             )}
           </div>
@@ -1049,7 +1049,7 @@ function TaskDetailPanelInner({
         <button
           onClick={toggleComplete}
           disabled={readOnly}
-          title={readOnly ? 'This project is completed or closed — reopen it to make changes' : closed ? 'Click to reopen' : 'Mark this task complete'}
+          title={readOnly ? 'This client is completed or closed — reopen it to make changes' : closed ? 'Click to reopen' : 'Mark this task complete'}
           className={clsx(
             'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
             closed

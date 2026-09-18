@@ -1,5 +1,6 @@
 'use client';
 
+import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -83,7 +84,8 @@ export function DealPanel({ dealId, stages, onClose, onChanged, onDeleted }: {
                   {deal.value == null ? <span className="text-gray-300 text-sm font-normal">no value set</span> : formatMoney(deal.value, deal.currency)}
                 </span>
                 <StageBadge stage={deal.stage} stages={stages} />
-                {deal.client && (
+                {/* CLIENTS-FLOW: commented out — client codes are switched off. */}
+                {PATENTS_AND_CLIENT_CODES && deal.client && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-purple-50 text-purple-700 ring-1 ring-purple-100">
                     {deal.client.code}
                   </span>
@@ -231,7 +233,9 @@ function CloseDealForm({ kind, company, pending, onCancel, onSubmit }: {
   const [clientId, setClientId] = useState('');
   const [newCode, setNewCode] = useState('');
 
-  const mayCreateClient = can('patent.manage');
+  // CLIENTS-FLOW: commented out — a won deal no longer mints or links a client code. The dialog
+  // simply marks the deal won; the client itself is created in Clients.
+  const mayCreateClient = PATENTS_AND_CLIENT_CODES && can('patent.manage');
   const { data: clients = [] } = useQuery<ClientSummary[]>({
     queryKey: ['clients'], queryFn: () => api.clients.list(),
     enabled: kind === 'WON' && mayCreateClient,
@@ -269,9 +273,13 @@ function CloseDealForm({ kind, company, pending, onCancel, onSubmit }: {
   return (
     <div className="bg-white rounded-xl border border-green-200 p-3 space-y-2.5">
       <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
-        <Trophy size={14} className="text-green-600" /> Won — which client is this?
+        <Trophy size={14} className="text-green-600" /> {PATENTS_AND_CLIENT_CODES ? 'Won — which client is this?' : 'Mark this deal won?'}
       </h3>
-      {!mayCreateClient ? (
+      {!PATENTS_AND_CLIENT_CODES ? (
+        <p className="text-[11px] text-gray-500">
+          The deal will be marked won. Set the client up under Clients, where its work and its team live.
+        </p>
+      ) : !mayCreateClient ? (
         <p className="text-[11px] text-gray-500">
           The deal will be marked won. Linking it to a client code needs the confidential client
           permission — ask a Super Admin to connect it so its work reaches the client ledger.

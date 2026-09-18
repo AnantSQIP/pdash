@@ -1,8 +1,8 @@
 'use client';
 
 // The per-person capacity drill-down drawer — shows what someone is working on and lets
-// you extend a task's or project's deadline to relieve their load. Shared by the full
-// Team Capacity board and the per-project Capacity tab so the two never drift apart.
+// you extend a task's or client's deadline to relieve their load. Shared by the full
+// Team Capacity board and the per-client Capacity tab so the two never drift apart.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -75,12 +75,12 @@ export function ExtendMenu({ task, person, canProject, disabled, onExtend }: {
               <div className="flex gap-0.5 mb-2 bg-gray-100 rounded-md p-0.5 text-[11px] font-medium">
                 {person && <button onClick={() => setScope('person')} className={clsx('flex-1 py-1 rounded', scope === 'person' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Only {first}</button>}
                 <button onClick={() => setScope('task')} className={clsx('flex-1 py-1 rounded', scope === 'task' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Whole task</button>
-                {canProject && task.projectId && <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Project</button>}
+                {canProject && task.projectId && <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Client</button>}
               </div>
             )}
             <p className="text-[11px] text-gray-400 mb-1.5">
               {scope === 'person' ? `Give ${first} more time on this task — nobody else's deadline moves`
-                : scope === 'project' ? 'Push the project deadline'
+                : scope === 'project' ? 'Push the client’s overall deadline'
                   : 'Push this task’s deadline for everyone on it'}
             </p>
             <div className="flex gap-1 mb-2">
@@ -121,7 +121,7 @@ function rangeText(f: Footprint | undefined): string {
  * Everything one person is on, in the colours the board uses.
  *
  * The person's own day strip sits at the top so the colour scheme is read in context; the
- * tasks below are grouped by project under the same swatch, each with its allocated range,
+ * tasks below are grouped by client under the same swatch, each with its task group, allocated range,
  * hours per day, hours left and deadline. The three summary tiles, the availability pill and the
  * completion percentage that used to be here all restated things the strip now shows.
  */
@@ -181,7 +181,7 @@ export function PersonPanel({
     return m;
   }, [row.days]);
 
-  // Tasks grouped by project, most hours in the window first; within a group, most urgent first.
+  // Tasks grouped by client, most hours in the window first; within a group, most urgent first.
   const groups = useMemo(() => {
     type Group = { key: string; id?: string; pid: string | null; round?: number; title: string; isTeam: boolean;
       projectDueDate?: string | null; projectPriority?: string; hue: ProjectHue; hours: number; tasks: CapacityOpenTask[] };
@@ -190,7 +190,7 @@ export function PersonPanel({
       const key = t.projectId ?? '__none';
       const g = m.get(key) ?? {
         key, id: t.projectId, pid: t.isTeamWork ? null : (t.projectPid ?? null), round: t.projectRound,
-        title: t.project ?? (t.isTeamWork ? 'Team space' : 'No project'), isTeam: !!t.isTeamWork,
+        title: t.project ?? (t.isTeamWork ? 'Team space' : 'No client'), isTeam: !!t.isTeamWork,
         projectDueDate: t.projectDueDate, projectPriority: t.projectPriority,
         hue: (t.projectId && !t.isTeamWork && hues.get(t.projectId)) || NO_PROJECT_HUE, hours: 0, tasks: [],
       };
@@ -238,7 +238,7 @@ export function PersonPanel({
     setBusyTaskId(task.id);
     try {
       if (scope === 'project') {
-        if (!task.projectId) throw new Error('This task has no project.');
+        if (!task.projectId) throw new Error('This task has no client.');
         await api.projects.update(task.projectId, { dueDate: iso });
       } else if (scope === 'task') {
         await api.tasks.update(task.id, { dueDate: iso });
@@ -259,7 +259,8 @@ export function PersonPanel({
   const over = row.overCommittedHours > 0.05;
   let firstFocusAssigned = false;
 
-  const taskRow = (t: CapacityOpenTask, hue: ProjectHue, scheduled: boolean) => {
+  /** `withClient`: the row sits outside its client's section, so it names the client too. */
+  const taskRow = (t: CapacityOpenTask, hue: ProjectHue, scheduled: boolean, withClient = false) => {
     const fill = segmentFill(hue, t.priority);
     const deadline = deadlineState(t.dueDate, today, holidays);
     const rail = railStyle(deadline);
@@ -281,6 +282,17 @@ export function PersonPanel({
             <p className="min-w-0 truncate text-[13px] font-medium text-gray-900" title={t.title}>{t.title}</p>
             <span className="shrink-0 text-[11px] tabular-nums text-gray-500">{t.remainingHours}h left</span>
           </div>
+          {(t.taskGroup || (withClient && t.project)) && (
+            <p className="truncate text-[10.5px] text-gray-400" title={t.taskGroup ? 'Task group' : undefined}>
+              {withClient && t.project && (
+                <span className="text-gray-500">
+                  {t.projectPid && !t.isTeamWork ? `${pidLabel(t.projectPid, t.projectRound)} · ` : ''}{t.project}
+                  {t.taskGroup ? ' · ' : ''}
+                </span>
+              )}
+              {t.taskGroup}
+            </p>
+          )}
           <p className="mt-0.5 text-[11px] text-gray-500">
             <span className="text-gray-600">{priorityWord(t.priority)}</span>
             {' · '}<span className={due.cls}>{due.text}</span>
@@ -380,7 +392,7 @@ export function PersonPanel({
         </div>
 
         {/* When each task lands: one block per day it puts hours on, in its own colour — the plan
-            as a timeline, across every project at once. */}
+            as a timeline, across every client at once. */}
         {timeline.length > 0 && (
           <div className="border-b border-gray-100 px-5 py-2">
             <button onClick={() => setShowTimeline(v => !v)}
@@ -440,7 +452,7 @@ export function PersonPanel({
                   </div>
                   {(g.projectDueDate || g.projectPriority) && (
                     <p className="px-1 pt-1 text-[10.5px] text-gray-400">
-                      {g.projectDueDate && <>Project due {formatDate(g.projectDueDate)}</>}
+                      {g.projectDueDate && <>Overall due {formatDate(g.projectDueDate)}</>}
                       {g.projectDueDate && g.projectPriority && ' · '}
                       {g.projectPriority && <>{priorityWord(g.projectPriority)} priority</>}
                     </p>
@@ -460,7 +472,7 @@ export function PersonPanel({
                   </button>
                   {showUnscheduled && (
                     <div className="divide-y divide-gray-100">
-                      {unscheduled.map(t => taskRow(t, (t.projectId && !t.isTeamWork && hues.get(t.projectId)) || NO_PROJECT_HUE, false))}
+                      {unscheduled.map(t => taskRow(t, (t.projectId && !t.isTeamWork && hues.get(t.projectId)) || NO_PROJECT_HUE, false, true))}
                     </div>
                   )}
                 </section>

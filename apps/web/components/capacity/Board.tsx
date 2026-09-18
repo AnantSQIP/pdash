@@ -1,7 +1,7 @@
 'use client';
 
 // The capacity board itself — people × days, work drawn into each day — shared by the full Team
-// Capacity page and the per-project Capacity tab so the two can never drift apart. The page and
+// Capacity page and the per-client Capacity tab so the two can never drift apart. The page and
 // the tab own their filters, their data fetching and their panels; this owns everything inside
 // the card: the day header with the team's load under each column, the rows with a total at the
 // end of each, the legend, the hover card, the keyboard, and the "by week" roll-up.
@@ -82,7 +82,7 @@ export function Board({
   focusProjectId: string | null;
   onFocus: (id: string | null) => void;
   defaultPinnedProjectId?: string | null;
-  /** The project this board is scoped to: its share is marked inside each person's bar. */
+  /** The client this board is scoped to: its share is marked inside each person's bar. */
   highlightProjectId?: string;
   onSelectPerson: (userId: string, focusDate?: string) => void;
   onAssign?: (row: CapacityRow) => void;
@@ -340,7 +340,7 @@ export function Board({
                             )}
                             {' · '}{row.freeHours}h free
                             {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-gray-900">· {row.overCommittedHours}h over</span>}
-                            {mine != null && <span className="block text-gray-500">{mine}h on this project</span>}
+                            {mine != null && <span className="block text-gray-500">{mine}h on this client</span>}
                           </p>
                         </div>
                         {onAssign && (

@@ -132,7 +132,7 @@ export function DayTotalCell({ t, unit, wide }: { t: DayTotal; unit: Unit; wide:
 export function RowSummary({ row, unit, highlightHours }: {
   row: CapacityRow;
   unit: Unit;
-  /** Hours of the window that belong to one project (the project tab) — drawn as a darker band inside the bar. */
+  /** Hours of the window that belong to one client (the client's Capacity tab) — drawn as a darker band inside the bar. */
   highlightHours?: number;
 }) {
   const band = loadBand(row.committedHours, row.capacityHours);
@@ -148,7 +148,7 @@ export function RowSummary({ row, unit, highlightHours }: {
       <div className="flex items-baseline justify-end gap-1.5">
         <span className={clsx('text-[11px] font-medium tabular-nums', band === 'over' ? 'text-gray-900' : band === 'at' ? 'text-amber-700' : 'text-gray-600')}>{words}</span>
       </div>
-      <div className="mt-1 flex h-1.5 w-full items-stretch overflow-hidden rounded-full bg-gray-200/80" title={`${row.committedHours}h planned of ${row.capacityHours}h · ${row.freeHours}h free${row.overCommittedHours > 0.05 ? ` · ${row.overCommittedHours}h over on some days` : ''}${highlightHours != null ? ` · ${Math.round(highlightHours * 10) / 10}h on this project` : ''}`}>
+      <div className="mt-1 flex h-1.5 w-full items-stretch overflow-hidden rounded-full bg-gray-200/80" title={`${row.committedHours}h planned of ${row.capacityHours}h · ${row.freeHours}h free${row.overCommittedHours > 0.05 ? ` · ${row.overCommittedHours}h over on some days` : ''}${highlightHours != null ? ` · ${Math.round(highlightHours * 10) / 10}h on this client` : ''}`}>
         <div className="relative h-full rounded-full" style={{ width: `${shown * 100}%`, backgroundColor: BAND_FILL[band] }}>
           {hi > 0 && <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(hi / shown) * 100}%`, backgroundColor: 'rgba(17,24,39,0.45)' }} />}
         </div>

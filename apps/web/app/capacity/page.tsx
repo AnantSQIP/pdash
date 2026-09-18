@@ -2,8 +2,8 @@
 
 // Team Capacity — "who is busy, who is free, and when".
 //
-// Every person × every day across ALL projects. A working day is a green box; the work in it
-// is drawn as segments — one per task, width = hours, hue = project, depth = priority, a rail
+// Every person × every day across ALL clients. A working day is a green box; the work in it
+// is drawn as segments — one per task, width = hours, hue = client, depth = priority, a rail
 // when the deadline is close — so the green left showing is the free hours. Hover a day for
 // what fills it; click a name (or a day) for the whole plan. The most available people sort
 // to the top, and assigning into a free window is one click from the panel.
@@ -17,7 +17,7 @@ import {
   ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type CoverageRisk, type TeamHistory, type HistoryRow } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type TaskGroup, type CoverageRisks, type CoverageRisk, type TeamHistory, type HistoryRow } from '@/lib/api';
 
 /** How often the board re-reads the server while it is on screen. */
 const POLL_MS = 30_000;
@@ -126,7 +126,7 @@ export default function CapacityPage() {
     });
   }
   const [dept, setDept] = useState('');
-  const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
+  const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a client's team
   // The selected PERSON, not a snapshot of their row: the panel then re-reads the row from the
   // latest payload, so an Extend done inside it is reflected without closing and reopening.
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -166,7 +166,7 @@ export default function CapacityPage() {
     staleTime: 60_000,
   });
 
-  // Projects the manager can assign INTO (approved/active work).
+  // Clients the manager can assign INTO (approved/active work).
   const { data: projects = [] } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
@@ -193,7 +193,7 @@ export default function CapacityPage() {
   const hues = useMemo(() => assignProjectHues(projectsOf(fwdRows)), [fwdRows]);
   const holidays = useMemo(() => holidaysOf(fwdRows), [fwdRows]);
   const selected = useMemo(() => fwdRows.find(r => r.userId === selectedUserId) ?? null, [fwdRows, selectedUserId]);
-  // A pinned project belongs to the board it was pinned on.
+  // A pinned client belongs to the board it was pinned on.
   useEffect(() => { setFocusProjectId(null); }, [win.start, win.days, projectId]);
   // What the window actually contains: how many of its days anybody can be given work on, and
   // how many of the team's hours are already spoken for. Both are read off the same payload the
@@ -295,7 +295,7 @@ export default function CapacityPage() {
             </div>
             {!capacityHeaderCollapsed && (
               <p className="text-[13px] leading-snug text-gray-500 mt-0.5 max-w-3xl">
-                Who is on what, when, and how much — across every project. Hover a day for what fills it; click a name for the whole plan.
+                Who is on what, when, and how much — across every client. Hover a day for what fills it; click a name for the whole plan.
               </p>
             )}
             {/* What this window IS — said in dates, because a length alone ("next 7 days") is
@@ -341,11 +341,11 @@ export default function CapacityPage() {
                 className="pl-8 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400 w-40"
               />
             </div>
-            {/* Project filter — scope the board to one project's team (forward view only). */}
+            {/* Client filter — scope the board to one client's team (forward view only). */}
             <select value={projectId} onChange={e => setProjectId(e.target.value)} disabled={isPast}
-              title={isPast ? 'Project filter applies to the forward view' : 'Filter by project team'}
+              title={isPast ? 'Client filter applies to the forward view' : 'Filter by client team'}
               className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white disabled:opacity-50 max-w-[180px]">
-              <option value="">All projects</option>
+              <option value="">All clients</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}</option>)}
             </select>
             {departments.length > 0 && (
@@ -618,7 +618,7 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
     setBusy(task.id);
     try {
       if (scope === 'project') {
-        if (!task.projectId) throw new Error('This task has no project.');
+        if (!task.projectId) throw new Error('This task has no client.');
         await api.projects.update(task.projectId, { dueDate: iso });
       } else if (scope === 'task') {
         await api.tasks.update(task.id, { dueDate: iso });
@@ -732,15 +732,38 @@ function HistoryRowView({ row }: { row: HistoryRow }) {
 
 
 /**
- * Assigning from the board: pick which project the work belongs to, then reuse the
- * normal AddTaskModal with the person and their free window pre-filled.
+ * A client's tasks under the task group each sits in, in the groups' own order, for a select
+ * built from <optgroup>s. Two groups made from the same template carry tasks with the same
+ * titles, so a flat list could not tell them apart. A task with no group belongs to the default
+ * one (that is what "no list" has always meant); one whose group is not in the list goes last,
+ * under "Other".
  */
+function tasksByGroup(tasks: ApiTask[], projectId: string, groups: TaskGroup[]) {
+  const known = new Map(groups.map(g => [g.id, g]));
+  const fallback = groups.find(g => g.isDefault) ?? null;
+  const buckets = new Map<string, ApiTask[]>();
+  for (const t of tasks) {
+    const listId = t.projectTasks?.find(pt => pt.projectId === projectId)?.taskListId ?? null;
+    const g = listId ? known.get(listId) ?? null : fallback;
+    const key = g ? g.id : '__other';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(t);
+  }
+  const out = [...groups]
+    .sort((a, b) => a.sequence - b.sequence)
+    .filter(g => buckets.has(g.id))
+    .map(g => ({ key: g.id, label: g.status === 'COMPLETED' ? `${g.name} (completed)` : g.name, tasks: buckets.get(g.id)! }));
+  if (buckets.has('__other')) out.push({ key: '__other', label: 'Other', tasks: buckets.get('__other')! });
+  return out;
+}
+
 /**
  * Single-person task allocation from the capacity board. You clicked ONE person, so this window
  * allocates a role on a task to THAT person only — there is no org-wide assignee picker. Flow:
- * pick a project → pick an existing task under it (or "＋ New task") → role + hours + deadline.
+ * pick a client → a task group → an existing task under the client (or "＋ New task", filed in
+ * the chosen group) → role + hours + deadline.
  * Existing task: the person is added to their role via setStaffing, preserving everyone else.
- * New task: a task is created and the person is placed in the role.
+ * New task: a task is created in the chosen task group and the person is placed in the role.
  */
 function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: {
   row: CapacityRow; projects: ApiProject[]; startDate?: string; dueDate?: string;
@@ -762,12 +785,29 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
   const [saving, setSaving] = useState(false);
 
   const assignable = projects.filter(p => !['ARCHIVED', 'CANCELLED'].includes(p.projectPhase));
-  const { data: project } = useQuery<ApiProject>({ queryKey: ['project', projectId], queryFn: () => api.projects.get(projectId), enabled: !!projectId });
   const { data: tasks = [], isLoading: tasksLoading } = useQuery<ApiTask[]>({ queryKey: ['project-tasks', projectId], queryFn: () => api.tasks.list(projectId), enabled: !!projectId });
-  const taskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
+  // The client's task groups. A new task goes into one that is still open — a completed group is
+  // finished work, so nothing new is filed there.
+  const { data: groups, isLoading: groupsLoading } = useQuery<TaskGroup[]>({
+    queryKey: ['task-groups', projectId],
+    queryFn: () => api.taskLists.list(projectId),
+    enabled: !!projectId,
+    staleTime: 60_000,
+  });
+  const activeGroups = useMemo(
+    () => (groups ?? []).filter(g => g.status === 'ACTIVE').sort((a, b) => a.sequence - b.sequence),
+    [groups],
+  );
+  const [groupId, setGroupId] = useState('');
+  // Until somebody picks one: the default group when it is open, otherwise the first open one.
+  const taskGroup = activeGroups.find(g => g.id === groupId)
+    ?? activeGroups.find(g => g.isDefault) ?? activeGroups[0] ?? null;
+  const noOpenGroup = !!projectId && !groupsLoading && !!groups && activeGroups.length === 0;
+  const taskOptions = useMemo(() => (groups ? tasksByGroup(tasks, projectId, groups) : null), [tasks, projectId, groups]);
 
-  const roleLabel = role === 'PM' ? 'Project Manager' : role === 'REVIEWER' ? 'Reviewer' : 'Analyst';
-  const canSubmit = !!projectId && (taskId === NEW ? !!newTitle.trim() && !!taskList : !!taskId) && !saving;
+  // The task-level lead. "Client manager" is the person who runs the whole client — a different seat.
+  const roleLabel = role === 'PM' ? 'Manager' : role === 'REVIEWER' ? 'Reviewer' : 'Analyst';
+  const canSubmit = !!projectId && (taskId === NEW ? !!newTitle.trim() && !!taskGroup : !!taskId) && !saving;
 
   async function submit() {
     if (!canSubmit) return;
@@ -782,7 +822,7 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
       };
       if (taskId === NEW) {
         const created = await api.tasks.create({
-          title: newTitle.trim(), projectId, taskListId: taskList!.id,
+          title: newTitle.trim(), projectId, taskListId: taskGroup!.id,
           createdBy: row.userId, startDate: start || undefined, dueDate: due || undefined,
         });
         await api.tasks.setStaffing(created.id, [entry]);
@@ -818,20 +858,39 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
             <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={36} />
             <div>
               <h2 className="text-base font-semibold text-gray-900">Assign a task to {row.name.split(' ')[0]}</h2>
-              <p className="text-xs text-gray-500">{startDate ? `From ${formatDate(startDate)}` : 'Pick a project and task'}</p>
+              <p className="text-xs text-gray-500">{startDate ? `From ${formatDate(startDate)}` : 'Pick a client and task'}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
         </div>
         <div className="px-6 py-5 space-y-3.5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
-            <select autoFocus value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); }}
+            <label className="block text-sm font-medium text-gray-700 mb-1">Client</label>
+            <select autoFocus value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); setGroupId(''); }}
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
-              <option value="">Select a project…</option>
+              <option value="">Select a client…</option>
               {assignable.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} · ` : ''}{p.title}</option>)}
             </select>
           </div>
+
+          {projectId && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Task group <span className="font-normal text-gray-400">· where a new task is filed</span>
+              </label>
+              {noOpenGroup ? (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  This client has no open task group — create one on the client&apos;s page.
+                </p>
+              ) : (
+                <select value={taskGroup?.id ?? ''} onChange={e => setGroupId(e.target.value)} disabled={groupsLoading || !groups}
+                  className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500 disabled:opacity-60">
+                  {!taskGroup && <option value="">{groupsLoading ? 'Loading task groups…' : '—'}</option>}
+                  {activeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              )}
+            </div>
+          )}
 
           {projectId && (
             <div>
@@ -839,8 +898,16 @@ function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: 
               <select value={taskId} onChange={e => setTaskId(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
                 <option value="">{tasksLoading ? 'Loading tasks…' : 'Select a task…'}</option>
-                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
-                <option value={NEW}>＋ New task…</option>
+                {taskOptions
+                  ? taskOptions.map(g => (
+                      <optgroup key={g.key} label={g.label}>
+                        {g.tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                      </optgroup>
+                    ))
+                  : tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                <option value={NEW} disabled={!taskGroup}>
+                  {taskGroup ? `＋ New task in ${taskGroup.name}…` : '＋ New task… (needs an open task group)'}
+                </option>
               </select>
             </div>
           )}

@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import {
   BadRequestException, Body, Controller, Get, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit, Patch, Post, Query,
 } from '@nestjs/common';
@@ -276,7 +277,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       return {
         id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, title: p.title, type: p.projectType ?? null,
         phase: p.projectPhase, priority: p.priority,
-        client: p.client?.name ?? p.client?.code ?? null,
+        // CLIENTS-FLOW: commented out — client codes are switched off.
+        client: PATENTS_AND_CLIENT_CODES ? (p.client?.name ?? p.client?.code ?? null) : null,
         startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
         clientDeliveryDate: p.clientDeliveryDate ?? null,
         workingHours: p.workingHours ?? null, actualHours: p.actualHours ?? null,

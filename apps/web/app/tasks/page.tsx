@@ -45,6 +45,11 @@ function statusCategory(t: ApiTask): 'Open' | 'In Progress' | 'Closed' {
 const myDue = (t: ApiTask, uid?: string | null): string | null | undefined =>
   (uid && t.assignees?.find(a => a.userId === uid && a.dueDate)?.dueDate) || t.dueDate;
 const isOverdue = (t: ApiTask, uid?: string | null) => isPastDue(myDue(t, uid)) && !isTaskClosed(t);
+/** CLIENTS-FLOW: the task group the task sits in inside its client — none once it is deleted. */
+const taskGroupOf = (t: ApiTask): string | null => {
+  const tl = t.projectTasks?.[0]?.taskList;
+  return tl && !tl.deletedAt ? tl.name : null;
+};
 
 /**
  * Reopen a closed task.
@@ -206,7 +211,7 @@ export default function TasksPage() {
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">My Tasks</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
+          <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all clients</p>
         </div>
         <div className="flex items-center gap-3">
           {timerFlow && running.length > 0 && <div className="w-[min(24rem,60vw)]"><RunningTimersBar running={running} onPaused={openLogFromTimer} /></div>}
@@ -225,7 +230,7 @@ export default function TasksPage() {
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
           >
             <Plus size={14} />
-            Add in Project
+            Add in Client
           </Link>
         </div>
       </div>
@@ -358,6 +363,7 @@ export default function TasksPage() {
               const ownDue = !!due && due !== task.dueDate;
               const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
               const project = task.projectTasks?.[0]?.project;
+              const group = taskGroupOf(task);
               return (
                 <tr key={task.id} className="group hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 w-8">
@@ -370,9 +376,12 @@ export default function TasksPage() {
                   </td>
                   <td className="px-4 py-3">
                     {project ? (
-                      <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline">
-                        {project.title}
-                      </Link>
+                      <span className="text-xs text-gray-500">
+                        <Link href={`/projects/${project.id}`} className="hover:text-brand-600 hover:underline">
+                          {project.title}
+                        </Link>
+                        {group && <span className="text-gray-400" title="Task group"> · {group}</span>}
+                      </span>
                     ) : <span className="text-xs text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3">
@@ -437,7 +446,7 @@ export default function TasksPage() {
                             onClick={() => setLogging({ task })}
                             disabled={matterClosed}
                             className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
-                            title={matterClosed ? 'This project is completed or closed — reopen it to log time' : 'Log time on this task without leaving the page'}
+                            title={matterClosed ? 'This client is completed or closed — reopen it to log time' : 'Log time on this task without leaving the page'}
                           >
                             <Clock size={12} /> Log time
                           </button>
@@ -473,7 +482,9 @@ export default function TasksPage() {
           projectLabel={(() => {
             const p = logging.task.projectTasks?.[0]?.project;
             if (!p) return undefined;
-            return p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.title}` : p.title;
+            const client = p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.title}` : p.title;
+            const group = taskGroupOf(logging.task);
+            return group ? `${client} · ${group}` : client;
           })()}
           defaultHours={logging.hours}
           onClose={() => setLogging(null)}
@@ -486,7 +497,7 @@ export default function TasksPage() {
 
 // Shared table chrome so the loading, populated and (implicitly) empty states line up.
 function TableShell({ children }: { children: React.ReactNode }) {
-  const headers = ['Task', 'Project', 'Priority', 'Status', 'Team members', 'Due', 'Progress', 'Work'];
+  const headers = ['Task', 'Client', 'Priority', 'Status', 'Team members', 'Due', 'Progress', 'Work'];
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">
@@ -540,6 +551,7 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
 }) {
   const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
   const project = task.projectTasks?.[0]?.project;
+  const group = taskGroupOf(task);
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-3.5">
       <div className="flex items-start gap-3">
@@ -551,9 +563,12 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
             {task.title}
           </p>
           {project && (
-            <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline block mt-0.5 truncate">
-              {project.title}
-            </Link>
+            <p className="text-xs text-gray-500 mt-0.5 truncate">
+              <Link href={`/projects/${project.id}`} className="hover:text-brand-600 hover:underline">
+                {project.title}
+              </Link>
+              {group && <span className="text-gray-400"> · {group}</span>}
+            </p>
           )}
 
           <div className="flex flex-wrap items-center gap-2 mt-2.5">

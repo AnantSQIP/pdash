@@ -167,20 +167,22 @@ export class ProjectsController {
    * per the Phase 2 decision, tagging follows who may EDIT THE PROJECT, not who may see the
    * confidential patent portal.
    */
-  @Put(':id/patents') @RequirePermission('project.update')
-  setPatents(@Param('id') id: string, @Body() dto: SetProjectPatentsDto) {
-    return this.projects.setPatents(id, dto.patentIds ?? []);
-  }
+  // CLIENTS-FLOW: commented out — patent IDs are switched off (common/features.ts).
+  // @Put(':id/patents') @RequirePermission('project.update')
+  // setPatents(@Param('id') id: string, @Body() dto: SetProjectPatentsDto) {
+  //   return this.projects.setPatents(id, dto.patentIds ?? []);
+  // }
 
   /**
    * Name the project's client directly. Only possible while the project has NO tagged patents —
    * when it has them, they decide. The service additionally requires `patent.manage`, because a
    * client's identity is confidential in a way a patent handle is not.
    */
-  @Put(':id/client') @RequirePermission('project.update')
-  setClient(@Param('id') id: string, @Body() dto: SetProjectClientDto) {
-    return this.projects.setClient(id, dto.clientId ?? null);
-  }
+  // CLIENTS-FLOW: commented out — client IDs are switched off (common/features.ts).
+  // @Put(':id/client') @RequirePermission('project.update')
+  // setClient(@Param('id') id: string, @Body() dto: SetProjectClientDto) {
+  //   return this.projects.setClient(id, dto.clientId ?? null);
+  // }
 
   @Post(':id/members') @RequirePermission('project.update')
   addMember(@Param('id') id: string, @Body() body: { userId: string; projectRole?: string }) {

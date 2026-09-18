@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Clock, Loader, X, AlertTriangle, Check } from 'lucide-react';
-import { api, type DayPlan, type DayPlanRow as PlanRow } from '@/lib/api';
+import { api, type DayPlan, type DayPlanRow } from '@/lib/api';
 import { warningsForSheet, sheetSummary } from '@/lib/day-plan';
 import { useToast } from '@/components/ui/Toast';
 import { todayIST, formatDate } from '@/lib/date';
@@ -15,6 +15,9 @@ const MAX_HOURS_PER_DAY = 16;
 
 const num = (s: string) => { const n = parseFloat(s); return Number.isFinite(n) && n > 0 ? n : 0; };
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** CLIENTS-FLOW: a my-plan row also carries the name of the task group the task sits in. */
+type PlanRow = DayPlanRow & { taskGroup?: string | null };
 
 /**
  * Fill in a day.
@@ -62,21 +65,21 @@ export function DaySheet({ onClose, onSaved }: {
     staleTime: 30_000,
   });
 
-  const rows = useMemo(() => plan?.rows ?? [], [plan]);
+  const rows = useMemo<PlanRow[]>(() => plan?.rows ?? [], [plan]);
   const groups = useMemo(() => ({
     TODAY: rows.filter(r => r.when === 'TODAY'),
     TOMORROW: rows.filter(r => r.when === 'TOMORROW'),
     OTHER: rows.filter(r => r.when === 'OTHER'),
   }), [rows]);
 
-  /** The leftovers, gathered under the project they belong to so the list reads like the work. */
+  /** The leftovers, gathered under the client they belong to so the list reads like the work. */
   const byProject = useMemo(() => {
     const map = new Map<string, { key: string; label: string; rows: PlanRow[] }>();
     for (const r of groups.OTHER) {
       const key = r.projectId ?? '—';
       const label = r.project
         ? `${r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}${r.project}`
-        : 'No project';
+        : 'No client';
       if (!map.has(key)) map.set(key, { key, label, rows: [] });
       map.get(key)!.rows.push(r);
     }
@@ -158,7 +161,8 @@ export function DaySheet({ onClose, onSaved }: {
           <div className="min-w-0 flex-1">
             <p className="truncate text-[13.5px] font-medium text-gray-900" title={r.title}>{r.title}</p>
             <p className="mt-0.5 truncate text-[11px] text-gray-500">
-              {r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}{r.project ?? 'No project'}
+              {r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}{r.project ?? 'No client'}
+              {r.taskGroup && <span className="text-gray-400"> · {r.taskGroup}</span>}
               {r.plannedHours > 0 && <span className="text-gray-400"> · planned {r.plannedHours}h</span>}
               {r.loggedToday > 0 && <span className="text-gray-400"> · {r.loggedToday}h already logged</span>}
               {r.dueDate && <span className={r.overdue ? 'text-red-500' : 'text-gray-400'}> · {r.overdue ? 'overdue' : 'due'} {formatDate(r.dueDate)}</span>}
@@ -259,7 +263,7 @@ export function DaySheet({ onClose, onSaved }: {
               <Section label={plan?.hasPlan ? 'Planned for this day' : 'Your open work'} list={groups.TODAY} />
               <Section label="Planned for the next day" list={groups.TOMORROW} />
 
-              {/* Everything else they hold, by project, and OPEN. It was behind a toggle, which
+              {/* Everything else they hold, by client, and OPEN. It was behind a toggle, which
                   saved a screenful and cost a click on the one screen whose entire purpose is to
                   cost as few as possible — somebody filling in a day should never have to go
                   looking for their own work. Planned work still sits above it, so the shortcut is
@@ -282,7 +286,7 @@ export function DaySheet({ onClose, onSaved }: {
 
               {rows.length === 0 && (
                 <p className="rounded-lg bg-gray-50 px-3 py-2.5 text-[12.5px] text-gray-500">
-                  You have no open work on a live project, so there is nothing to log against yet.
+                  You have no open work on a live client, so there is nothing to log against yet.
                 </p>
               )}
             </>

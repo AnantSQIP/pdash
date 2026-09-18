@@ -183,7 +183,7 @@ export class TasksService {
 
     const actorId = getActorId();
     if (!actorId || !(await this.access.hasOversight(actorId))) {
-      throw new BadRequestException('You can only assign people who are members of the project. Ask a manager to add them first.');
+      throw new BadRequestException('You can only assign people who are on this client. Ask a manager to add them first.');
     }
 
     // Add the outsiders to the primary project — validate they are active, same-org users.
@@ -218,8 +218,8 @@ export class TasksService {
     });
     await this.notifications.notify(outsiders, {
       type: 'project.member_added',
-      title: 'Added to a project',
-      message: `You were added to "${project?.title ?? 'a project'}" because you were assigned work on it.`,
+      title: 'Added to a client',
+      message: `You were added to the client "${project?.title ?? 'a client'}" because you were assigned work on it.`,
       link: `/projects/${primary}`,
     });
   }
@@ -745,7 +745,7 @@ export class TasksService {
       if (e.hoursPerDay != null && e.hoursPerDay < 0) throw new BadRequestException('Hours per day cannot be negative.');
     }
     if (entries.filter(e => e.role === 'PM').length > 1) {
-      throw new BadRequestException('A task can have only one Project Manager.');
+      throw new BadRequestException('A task can have only one manager.');
     }
 
     await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), [...new Set(entries.map(e => e.userId))]);

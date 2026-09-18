@@ -241,6 +241,8 @@ export type ApiTask = {
   subtasks?: Subtask[];
   /** Which project(s) and task GROUP this task sits in — drives the grouped task list. */
   projectTasks?: { projectId: string; taskListId?: string | null; sequence: number;
+    /** CLIENTS-FLOW: the task group, on the My Tasks projection. */
+    taskList?: { id: string; name: string; deletedAt?: string | null } | null;
     project?: { id: string; title: string; code?: string | null; roundSeq?: number; projectType?: string | null; projectPhase?: string | null } }[];
   _count?: { subtasks: number; checklists?: number };
 };
@@ -478,6 +480,49 @@ export type PidRequestItem = {
   requestedBy: string; note: string | null; createdAt: string;
 };
 
+/**
+ * CLIENTS-FLOW: a task group — one piece of work for a client. Stored as a project's TaskList.
+ * `groupType` is a project-type value whose standard tasks were created with the group.
+ */
+export type TaskGroup = {
+  id: string; name: string; isDefault: boolean; sequence: number;
+  description?: string | null;
+  groupType?: string | null;
+  technologyDomain?: string | null;
+  startDate?: string | null;
+  dueDate?: string | null;
+  status: 'ACTIVE' | 'COMPLETED';
+  completedAt?: string | null;
+  createdBy?: string | null;
+  createdAt?: string;
+  _count?: { projectTasks: number };
+  /** Tasks in the group that are not closed. */
+  openTaskCount?: number;
+};
+
+/** CLIENTS-FLOW: a named, optional grouping of clients. */
+export type ClientGroup = {
+  id: string; name: string; description?: string | null; sequence: number;
+  archivedAt?: string | null; createdAt?: string;
+  /** Clients in the group that the READER can see — never more. */
+  clientCount: number;
+};
+
+/** CLIENTS-FLOW: what creating a task group (or a client's first one) sends. */
+export type TaskGroupInput = {
+  name: string;
+  description?: string;
+  groupType?: string;
+  customType?: { label: string; tasks: string[]; save?: boolean };
+  technologyDomain?: string;
+  customDomain?: { label: string; save?: boolean };
+  startDate?: string;
+  dueDate?: string;
+  /** Who does the group's standard tasks (needs task.assign). */
+  assigneeId?: string;
+  hoursPerTask?: number;
+};
+
 export type ApiProject = {
   id: string; title: string; description?: string; projectPhase: string;
   /** The kind of patent-analysis matter (HML, CC_NEW, FTO, …); null for a general project. */
@@ -517,8 +562,14 @@ export type ApiProject = {
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
   members?: { userId: string; projectRole?: string; isActive: boolean; user: UserSummary }[];
-  taskLists?: { id: string; name: string; isDefault: boolean; sequence: number }[];
+  taskLists?: (Pick<TaskGroup, 'id' | 'name' | 'isDefault'> & Partial<TaskGroup>)[];
   _count?: { members: number; projectTasks: number };
+  /** CLIENTS-FLOW: the client group this client is filed under (null = ungrouped). */
+  clientGroupId?: string | null;
+  clientGroup?: { id: string; name: string; sequence?: number } | null;
+  /** CLIENTS-FLOW: on the list projection — tasks still open, and those past their deadline. */
+  openTaskCount?: number;
+  overdueTaskCount?: number;
 };
 
 // ─── Patent-analysis client codes + confidential coded patents ────────────────
@@ -1361,6 +1412,8 @@ export type CapacityDay = {
 };
 export type CapacityOpenTask = {
   id: string; title: string; projectId?: string; project?: string;
+  /** CLIENTS-FLOW: the task group inside the client (null for team-space work). */
+  taskGroupId?: string | null; taskGroup?: string | null;
   /** The project's PID and which round it is — two rounds of one PID share a code. */
   projectPid?: string | null; projectRound?: number;
   /** Team-space work: no PID, labelled by the space. */
@@ -1730,6 +1783,10 @@ export const api = {
       technologyDomain?: string;
       /** A domain somebody typed; `save` adds it to the org's list for next time. */
       customDomain?: { label: string; save?: boolean };
+      /** CLIENTS-FLOW: file the client under a group. */
+      clientGroupId?: string;
+      /** CLIENTS-FLOW: the client's first task group, created in the same transaction. */
+      taskGroup?: TaskGroupInput;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
     /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
     generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string }>('/projects/generate-pid', { method: 'POST' }),
@@ -1769,7 +1826,7 @@ export const api = {
     fulfillPidRequest: (id: string, pid: string) =>
       req<{ pid: string; projectId: string }>(`/projects/pid-requests/${id}/fulfill`,
         { method: 'POST', body: JSON.stringify({ pid }) }),
-    update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage'>>) =>
+    update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage' | 'clientGroupId'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Project requests routed to me as their manager (or, for admins, any pending). Org is
      *  taken from the session server-side. */
@@ -2099,15 +2156,39 @@ export const api = {
   },
 
   taskLists: {
-    list: (projectId: string) => req<any[]>(`/projects/${projectId}/tasklists`),
-    create: (projectId: string, data: { name: string }) =>
-      req<any>(`/projects/${projectId}/tasklists`, { method: 'POST', body: JSON.stringify(data) }),
-    /** Rename a task group (the "General" tag on a card). */
-    update: (projectId: string, id: string, data: { name?: string; sequence?: number }) =>
-      req<{ id: string; name: string; isDefault: boolean; sequence: number }>(
-        `/projects/${projectId}/tasklists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** CLIENTS-FLOW: a client's task groups, in order, with task and open-task counts. */
+    list: (projectId: string) => req<TaskGroup[]>(`/projects/${projectId}/tasklists`),
+    /** CLIENTS-FLOW: a task group — its type's standard tasks, and optionally who does them. */
+    create: (projectId: string, data: TaskGroupInput) =>
+      req<TaskGroup & { createdTaskCount: number; assigned: number; assignmentWarning: string | null }>(
+        `/projects/${projectId}/tasklists`, { method: 'POST', body: JSON.stringify(data) }),
+    /** Rename / re-date / re-describe a group. `null` clears a field. */
+    update: (projectId: string, id: string, data: {
+      name?: string; sequence?: number; description?: string | null; groupType?: string | null;
+      technologyDomain?: string | null; customDomain?: { label: string; save?: boolean };
+      startDate?: string | null; dueDate?: string | null;
+    }) => req<TaskGroup>(`/projects/${projectId}/tasklists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    /** Mark complete — refused while any task in the group is open. */
+    complete: (projectId: string, id: string) =>
+      req<TaskGroup>(`/projects/${projectId}/tasklists/${id}/complete`, { method: 'POST' }),
+    reopen: (projectId: string, id: string) =>
+      req<TaskGroup>(`/projects/${projectId}/tasklists/${id}/reopen`, { method: 'POST' }),
+    /** Delete a group. Its tasks move to the client's default group; nothing is lost. */
     remove: (projectId: string, id: string) =>
-      req<void>(`/projects/${projectId}/tasklists/${id}`, { method: 'DELETE' }),
+      req<{ movedTasks: number; movedTo: { id: string; name: string } | null }>(
+        `/projects/${projectId}/tasklists/${id}`, { method: 'DELETE' }),
+  },
+
+  /** CLIENTS-FLOW: groups of clients. */
+  clientGroups: {
+    list: (opts?: { includeArchived?: boolean }) =>
+      req<ClientGroup[]>(`/client-groups${opts?.includeArchived ? '?includeArchived=true' : ''}`),
+    create: (data: { name: string; description?: string }) =>
+      req<ClientGroup>('/client-groups', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { name?: string; description?: string; sequence?: number }) =>
+      req<ClientGroup>(`/client-groups/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    archive: (id: string) => req<ClientGroup & { movedClients: number }>(`/client-groups/${id}/archive`, { method: 'POST' }),
+    restore: (id: string) => req<ClientGroup>(`/client-groups/${id}/restore`, { method: 'POST' }),
   },
 
 
@@ -2140,6 +2221,9 @@ export const api = {
       req<{ taskId: string; userId: string; dueDate: string | null }>(`/tasks/${id}/assignees/${userId}/deadline`, { method: 'PATCH', body: JSON.stringify({ dueDate }) }),
     /** Saves the staffing and returns the task, plus anything questionable about the schedule
      *  that is worth saying but not worth refusing (e.g. starting before a predecessor is due). */
+    /** CLIENTS-FLOW: move a task into another task group of the same client. */
+    moveToGroup: (id: string, projectId: string, taskListId: string) =>
+      req<ApiTask>(`/tasks/${id}/task-group`, { method: 'PUT', body: JSON.stringify({ projectId, taskListId }) }),
     setStaffing: (id: string, assignees: StaffingEntry[]) =>
       req<ApiTask & { scheduleWarnings?: string[] }>(`/tasks/${id}/staffing`, { method: 'PUT', body: JSON.stringify({ assignees }) }),
     delete: (id: string) => req<void>(`/tasks/${id}`, { method: 'DELETE' }),

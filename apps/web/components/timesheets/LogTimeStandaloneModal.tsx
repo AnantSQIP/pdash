@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { api, type ApiTask, type ApiProject, type TeamSpace, type TeamTask } from '@/lib/api';
+import { api, type ApiTask, type ApiProject, type TaskGroup, type TeamSpace, type TeamTask } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { pidLabel } from '@/lib/mock-data';
 import { DateField } from '@/components/ui/DateField';
@@ -12,17 +12,43 @@ import { todayIST } from '@/lib/date';
 
 /**
  * Log time from the standalone Timesheets module. Two options:
- *  • Project task — always pick the project (by TITLE) and the TASK, so every entry records
- *    what it was for. The PID auto-fills from the project and is mandatory — UNLESS you turn
- *    on "Assign PID later" (the project's PID isn't minted yet), which just hides the PID
- *    field; the project + task are still chosen. The PID appears in the list once it exists.
- *  • Other — miscellaneous NON-PROJECT time (admin, meetings, training): a titled entry,
- *    always non-billable, never tied to a project/task.
+ *  • Client task — always pick the client (by TITLE) and the TASK, so every entry records
+ *    what it was for. The PID auto-fills from the client and is mandatory — UNLESS you turn
+ *    on "Assign PID later" (the client's PID isn't minted yet), which just hides the PID
+ *    field; the client + task are still chosen. The PID appears in the list once it exists.
+ *    The client's tasks are listed under their task groups.
+ *  • Other — miscellaneous NON-CLIENT time (admin, meetings, training): a titled entry,
+ *    always non-billable, never tied to a client/task.
  */
 type LogMode = 'task' | 'call' | 'other';
 
+/**
+ * A client's tasks under the task group each sits in, in the groups' own order. Two groups made
+ * from the same template hold tasks with the same titles, so a flat list could not tell them
+ * apart. A task with no group belongs to the default one; one whose group is not listed goes
+ * last, under "Other".
+ */
+function tasksByGroup<T extends Pick<ApiTask, 'projectTasks'>>(tasks: T[], projectId: string, groups: TaskGroup[]) {
+  const known = new Map(groups.map(g => [g.id, g]));
+  const fallback = groups.find(g => g.isDefault) ?? null;
+  const buckets = new Map<string, T[]>();
+  for (const t of tasks) {
+    const listId = t.projectTasks?.find(pt => pt.projectId === projectId)?.taskListId ?? null;
+    const g = listId ? known.get(listId) ?? null : fallback;
+    const key = g ? g.id : '__other';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(t);
+  }
+  const out = [...groups]
+    .sort((a, b) => a.sequence - b.sequence)
+    .filter(g => buckets.has(g.id))
+    .map(g => ({ key: g.id, label: g.status === 'COMPLETED' ? `${g.name} (completed)` : g.name, tasks: buckets.get(g.id)! }));
+  if (buckets.has('__other')) out.push({ key: '__other', label: 'Other', tasks: buckets.get('__other')! });
+  return out;
+}
+
 const MODES: { key: LogMode; label: string }[] = [
-  { key: 'task', label: 'Project task' },
+  { key: 'task', label: 'Client task' },
   { key: 'call', label: 'Client call' },
   { key: 'other', label: 'Other' },
 ];
@@ -37,7 +63,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
   const [hours, setHours] = useState('');
   const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
-  // The project's PID isn't ready yet: hide the PID field + drop its requirement. The project
+  // The client's PID isn't ready yet: hide the PID field + drop its requirement. The client
   // and task are STILL selected, so the entry still records what it's for.
   const [assignLater, setAssignLater] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -50,7 +76,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
   // that closed last month, and that time still has to go somewhere.
   const isCall = mode === 'call';
 
-  // Projects the actor may see (the API already scopes to their memberships).
+  // Clients the actor may see (the API already scopes to their memberships).
   const { data: projects = [], isLoading: loadingProjects } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
@@ -64,10 +90,10 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
     queryKey: ['teams'], queryFn: () => api.teams.list(),
     enabled: isTask, staleTime: 30_000,
   });
-  // The picker holds either a project id or a team id; this is which kind was chosen.
+  // The picker holds either a client id or a team id; this is which kind was chosen.
   const pickedTeam = teamSpaces.find(t => t.id === projectId);
 
-  // Tasks of the chosen project — fetched only once a project is picked.
+  // Tasks of the chosen client — fetched only once a client is picked.
   const { data: allTasks = [], isLoading: loadingTasks } = useQuery<ApiTask[]>({
     queryKey: ['tasks', projectId],
     queryFn: () => api.tasks.list(projectId),
@@ -79,26 +105,39 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
     enabled: isTask && !!pickedTeam,
   });
   // You can only log time on tasks you're ASSIGNED to (the server enforces this) — so only
-  // offer your own tasks, not every task in the project.
+  // offer your own tasks, not every task in the client.
   const tasks = pickedTeam
     ? teamTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id))
         .map(t => ({ id: t.id, title: t.title })) as { id: string; title: string }[]
     : allTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id))
         .map(t => ({ id: t.id, title: t.title }));
+  // The client's task groups, so those tasks can be listed under the group each belongs to.
+  const { data: groups } = useQuery<TaskGroup[]>({
+    queryKey: ['task-groups', projectId],
+    queryFn: () => api.taskLists.list(projectId),
+    enabled: isTask && !!projectId && !pickedTeam,
+    staleTime: 60_000,
+  });
+  // null = a flat list (a team space, or the groups have not loaded).
+  const groupedTasks = useMemo(() => {
+    if (pickedTeam || !groups) return null;
+    const mine = allTasks.filter(t => t.assignees?.some(a => a.userId === currentUser?.id));
+    return tasksByGroup(mine, projectId, groups);
+  }, [pickedTeam, groups, allTasks, currentUser?.id, projectId]);
 
   const selectedProject = projects.find(p => p.id === projectId);
-  const pid = selectedProject?.code ?? '';       // the PID auto-fills from the chosen project
+  const pid = selectedProject?.code ?? '';       // the PID auto-fills from the chosen client
   const hasPid = !!pid;
   // Internal work has no PID to require — asking for one would make it unloggable.
   const needPid = isTask && !assignLater && !pickedTeam;
 
   function pickProject(id: string) {
     setProjectId(id);
-    setTaskId(''); // reset the task when the project changes
+    setTaskId(''); // reset the task when the client changes
   }
 
   const canSubmit = !!hours
-    && (!isTask || (!!projectId && !!taskId && (!needPid || hasPid)))  // project + task always; PID unless buffer
+    && (!isTask || (!!projectId && !!taskId && (!needPid || hasPid)))  // client + task always; PID unless buffer
     && (!isCall || (!!projectId && !!title.trim()))                    // a call needs its PID and a subject
     && (!isOther || !!title.trim())
     && !loading;
@@ -108,7 +147,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
     if (!currentUser || !hours || loading) return;
     if (isTask) {
       if (!projectId || !taskId) return;
-      if (needPid && !hasPid) { setError('This project has no PID yet — turn on “Assign PID later” to log without one.'); return; }
+      if (needPid && !hasPid) { setError('This client has no PID yet — turn on “Assign PID later” to log without one.'); return; }
     }
     if (isCall && !projectId) { setError('Choose the PID this call was about.'); return; }
     if ((isOther || isCall) && !title.trim()) { setError('Please give this time a title.'); return; }
@@ -121,7 +160,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
     setError('');
     try {
       await api.timesheets.create({
-        taskId: isTask ? taskId : undefined,        // the task records the project (+ PID when it exists)
+        taskId: isTask ? taskId : undefined,        // the task records the client (+ PID when it exists)
         category: isOther ? 'OTHER' : isCall ? 'CLIENT_CALL' : undefined,
         projectId: isCall ? projectId : undefined,  // a call books straight to the PID
         title: isOther || isCall ? title.trim() : undefined,
@@ -142,7 +181,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
   return (
     <Modal
       title="Log Time"
-      subtitle="Record hours against a task, a client call, or other (non-project) time"
+      subtitle="Record hours against a task, a client call, or other (non-client) time"
       size="md"
       onClose={onClose}
       footer={
@@ -164,7 +203,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
       }
     >
       <form id="log-time-standalone-form" onSubmit={handleSubmit} className="space-y-4">
-        {/* Three options: a task, a client call booked to a PID, or other non-project time. */}
+        {/* Three options: a task, a client call booked to a PID, or other non-client time. */}
         <div className="grid grid-cols-3 gap-2">
           {MODES.map(m => (
             <button
@@ -178,14 +217,14 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
           ))}
         </div>
 
-        {/* ── PROJECT TASK ────────────────────────────────────────── */}
+        {/* ── CLIENT TASK ─────────────────────────────────────────── */}
         {isTask && (
           <>
-            {/* Assign PID later — hides only the PID field; project + task stay selectable. */}
+            {/* Assign PID later — hides only the PID field; client + task stay selectable. */}
             <label className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 px-3.5 py-2.5 cursor-pointer">
               <span className="min-w-0 mr-3">
                 <span className="text-sm font-medium text-amber-800">Assign PID later</span>
-                <span className="block text-[11px] text-amber-600">The project’s PID isn’t ready yet — still pick the project &amp; task; the PID attaches once it’s minted.</span>
+                <span className="block text-[11px] text-amber-600">The client’s PID isn’t ready yet — still pick the client &amp; task; the PID attaches once it’s minted.</span>
               </span>
               <button
                 type="button" role="switch" aria-checked={assignLater} aria-label="Assign PID later"
@@ -196,17 +235,17 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
               </button>
             </label>
 
-            {/* Project title — always shown. */}
+            {/* Client — always shown. */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Project title <span className="text-red-500">*</span></label>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Client <span className="text-red-500">*</span></label>
               <select
                 required value={projectId} onChange={e => pickProject(e.target.value)}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white"
               >
-                <option value="">{loadingProjects ? 'Loading projects…' : (projects.length === 0 && teamSpaces.length === 0) ? 'You are not on any projects' : 'Select a project'}</option>
-                {/* A PID can hold several projects for a returning client, so the round has to be
+                <option value="">{loadingProjects ? 'Loading clients…' : (projects.length === 0 && teamSpaces.length === 0) ? 'You are not on any clients' : 'Select a client'}</option>
+                {/* A PID can hold several rounds for a returning client, so the round has to be
                     on the option — otherwise two entries look identical and time lands on the wrong one. */}
-                <optgroup label="Client projects">
+                <optgroup label="Clients">
                   {projects.map(p => (
                     <option key={p.id} value={p.id}>
                       {p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}
@@ -225,19 +264,19 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
               </select>
             </div>
 
-            {/* PID — auto-fills from the project; hidden while "Assign PID later" is on, and
+            {/* PID — auto-fills from the client; hidden while "Assign PID later" is on, and
                 absent entirely for internal work, which has no PID by design. */}
             {!assignLater && !pickedTeam && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">PID <span className="text-red-500">*</span></label>
                 <input
                   type="text" readOnly value={pid}
-                  placeholder={!projectId ? 'Select a project first' : 'This project has no PID yet — use “Assign PID later”'}
+                  placeholder={!projectId ? 'Select a client first' : 'This client has no PID yet — use “Assign PID later”'}
                   className="w-full px-3.5 py-2.5 text-sm font-mono border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed focus:outline-none"
                 />
                 {selectedProject?.projectType && (
                   <p className="text-[11px] text-gray-500 mt-1">
-                    Project type: <span className="font-medium text-gray-700">{selectedProject.projectType}</span>
+                    Type: <span className="font-medium text-gray-700">{selectedProject.projectType}</span>
                   </p>
                 )}
               </div>
@@ -257,8 +296,14 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
                 required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition bg-white disabled:bg-gray-50 disabled:text-gray-400"
               >
-                <option value="">{!projectId ? 'Pick a project first' : (loadingTasks || loadingTeamTasks) ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
-                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                <option value="">{!projectId ? 'Pick a client first' : (loadingTasks || loadingTeamTasks) ? 'Loading tasks…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
+                {groupedTasks
+                  ? groupedTasks.map(g => (
+                      <optgroup key={g.key} label={g.label}>
+                        {g.tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                      </optgroup>
+                    ))
+                  : tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
               </select>
             </div>
           </>
@@ -296,7 +341,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
           </>
         )}
 
-        {/* ── OTHER (non-project) ─────────────────────────────────── */}
+        {/* ── OTHER (non-client) ──────────────────────────────────── */}
         {isOther && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Title <span className="text-red-500">*</span></label>
@@ -305,7 +350,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
               placeholder="e.g. Team meeting, Training, Admin"
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
             />
-            <p className="text-[11px] text-gray-500 mt-1">Non-project time (admin, meetings, training) — always non-billable.</p>
+            <p className="text-[11px] text-gray-500 mt-1">Non-client time (admin, meetings, training) — always non-billable.</p>
           </div>
         )}
 
@@ -341,7 +386,7 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
           <div className="flex items-center justify-between">
             <div>
               <span className="text-sm font-medium text-gray-700">Billable</span>
-              <p className="text-xs text-gray-400">Other (non-project) time can’t be billed</p>
+              <p className="text-xs text-gray-400">Other (non-client) time can’t be billed</p>
             </div>
             <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">Non-billable</span>
           </div>

@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import {
   BadRequestException, Body, Controller, ForbiddenException, Get, Injectable, Module,
   NotFoundException, Param, Post, Query,
@@ -344,7 +345,10 @@ export class LifecycleService {
     const items = [
       { key: 'projectsManaged', label: 'Projects they manage', count: managedProjects.length, blocking: true },
       { key: 'openTasks', label: 'Open tasks assigned to them', count: openTasks.length, blocking: true },
-      { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: true },
+      // CLIENTS-FLOW: commented out as a BLOCKER — the client records it counts belong to the
+      // switched-off client-code system, whose screens (the client ledger) are switched off too,
+      // so nothing in the product could clear it. It is still reported.
+      { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: PATENTS_AND_CLIENT_CODES },
       { key: 'unsubmittedTime', label: 'Time logged with no PID attached', count: unsubmitted.length, blocking: false },
       { key: 'pendingLeave', label: 'Leave requests still pending', count: pendingLeave.length, blocking: false },
       { key: 'projectsMember', label: 'Other projects they are on', count: memberProjects.length, blocking: false },

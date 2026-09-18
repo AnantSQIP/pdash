@@ -116,6 +116,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
                       <span className="min-w-0 truncate">
                         {pid && <span className="font-mono text-[10.5px] text-gray-500">{pid} · </span>}
                         <span className="text-gray-700">{seg.task.project ?? (seg.task.isTeamWork ? 'Team space' : '—')}</span>
+                        {seg.task.taskGroup && <span className="text-gray-400"> · {seg.task.taskGroup}</span>}
                       </span>
                       <span className="shrink-0 font-semibold tabular-nums text-gray-900">{Math.round(seg.hours * 10) / 10}h</span>
                     </div>

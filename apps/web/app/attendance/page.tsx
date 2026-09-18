@@ -482,7 +482,7 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
                 This is {nonWorking} — a non-working day. Worked anyway? Claim <b>comp-off</b> — HR, your manager and Yash will review it. On approval you get a compensatory day off to use later.
               </p>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Project ID (PID) <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">PID <span className="text-red-500">*</span></label>
                 <input value={pid} onChange={e => setPid(e.target.value)} placeholder="e.g. PID-1042" className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500" />
               </div>
             </>
@@ -682,7 +682,7 @@ function CompOffCard() {
               <DateField type="date" value={form.workDate} max={today} onChange={e => setForm(f => ({ ...f, workDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Project ID (PID) <span className="text-red-500">*</span></label>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">PID <span className="text-red-500">*</span></label>
               <input value={form.projectRef} onChange={e => setForm(f => ({ ...f, projectRef: e.target.value }))} placeholder="e.g. PID-1042" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
             <div>

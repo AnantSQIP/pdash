@@ -64,7 +64,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
   const breachedProjects = data.byProject.filter(p => p.hoursBreaches.times > 0 || p.deadlineBreaches.times > 0);
 
   const projectCols: GridColumn<ProjectBreachRow>[] = [
-    { key: 'projectName', header: 'Project', sortable: true, accessor: r => r.projectName, render: r => <span className="text-gray-800">{projectLabel(r)}</span>, exportValue: r => projectLabel(r) },
+    { key: 'projectName', header: 'Client', sortable: true, accessor: r => r.projectName, render: r => <span className="text-gray-800">{projectLabel(r)}</span>, exportValue: r => projectLabel(r) },
     { key: 'deliveries', header: 'Finished', align: 'right', sortable: true, accessor: r => r.deliveries },
     {
       key: 'hoursBreaches', header: 'Over allocated hours', sortable: true, accessor: r => r.hoursBreaches.times,
@@ -95,7 +95,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
     rows: [
       ['KPI 1 — time spent vs allocated', ratioText(overrun)],
       ['Times over allocated hours', `${data.hoursBreaches.times} times across ${data.hoursBreaches.things} tasks`],
-      ['Projects with an over-run', String(breachedProjects.length)],
+      ['Clients with an over-run', String(breachedProjects.length)],
       ['Red flags (2× or more)', String(hours.redFlag)],
       ['Allocated hours', `${hours.allocatedHours}h`],
       ['Hours spent', `${hours.spentHours}h`],
@@ -142,7 +142,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
         >
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <Stat label="over the limit" value={<Breaches count={data.hoursBreaches} thing="task" />} />
-            <Stat label="projects affected" value={breachedProjects.length} />
+            <Stat label="clients affected" value={breachedProjects.length} />
             <Stat label="red flags (2×+)" value={hours.redFlag} tone={hours.redFlag ? 'bad' : undefined} />
             <Stat label="hours beyond allocation" value={`${hours.overHours}h`} tone={hours.overHours > 0 ? 'bad' : undefined} />
           </div>
@@ -193,18 +193,18 @@ export function UserKpiPanel({ userId, period, self = false }: {
         </ChartCard>
       </div>
 
-      {/* Layer 3 — the detail, folded away. Requirements 5 and 11: which projects, how often. */}
+      {/* Layer 3 — the detail, folded away. Requirements 5 and 11: which clients, how often. */}
       <details className="group" open={breachedProjects.length > 0 && breachedProjects.length <= 3}>
         <summary className="cursor-pointer select-none text-sm font-medium text-gray-600 hover:text-gray-800 py-2">
           Where the breaches happened
-          <span className="font-normal text-gray-400"> · {data.byProject.length} {data.byProject.length === 1 ? 'project' : 'projects'} worked on, {breachedProjects.length} with a breach</span>
+          <span className="font-normal text-gray-400"> · {data.byProject.length} {data.byProject.length === 1 ? 'client' : 'clients'} worked on, {breachedProjects.length} with a breach</span>
         </summary>
         <div className="mt-2">
           <DataGrid
             columns={projectCols}
             rows={data.byProject}
             initialSort={{ key: 'hoursBreaches', dir: 'desc' }}
-            exportName={`breaches-by-project-${period.key}`}
+            exportName={`breaches-by-client-${period.key}`}
             emptyLabel="Nothing was finished in this period"
           />
         </div>

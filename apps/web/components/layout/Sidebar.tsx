@@ -20,8 +20,11 @@ type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | 
 // sees only what it can use — e.g. HR (no project/task perms) won't see Projects/My Tasks.
 const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
-  { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view' },
-  { href: '/patents',     icon: FileLock2,       label: 'Patents',     perm: 'patent.manage' },
+  // CLIENTS-FLOW: what was a project is a client now; the route keeps its name so every stored
+  // link (notifications, bookmarks) still lands.
+  { href: '/projects',    icon: FolderKanban,    label: 'Clients',     perm: 'project.view' },
+  // CLIENTS-FLOW: commented out — the patent portal is switched off (lib/features.ts).
+  // { href: '/patents',     icon: FileLock2,       label: 'Patents',     perm: 'patent.manage' },
   { href: '/tasks',       icon: ListTodo,        label: 'My Tasks',    perm: 'task.view' },
   // My time across every project — logging + reviewing hours is now a first-class
   // destination, not buried in a per-project tab. timesheet.view is held by everyone.
@@ -51,7 +54,8 @@ const NAV: NavItem[] = [
   // The handle <-> number directory. Gated on patent.view, which every role but HR holds — the
   // point of the screen is that anybody asked "what is Pat_ABC_001?" can answer it themselves
   // rather than interrupting a Super Admin. It resolves; it cannot list.
-  { href: '/patent-lookup', icon: ScanSearch,     label: 'Patent Lookup', perm: 'patent.view' },
+  // CLIENTS-FLOW: commented out — patent IDs are switched off (lib/features.ts).
+  // { href: '/patent-lookup', icon: ScanSearch,     label: 'Patent Lookup', perm: 'patent.view' },
   // Probation, confirmation and leaving. Gated on user.update — the same permission the rest of
   // people-operations already sits behind, so HR and admins see it and nobody else does.
   { href: '/people-ops',  icon: UserCog,         label: 'People Ops', perm: 'user.update' },
@@ -72,7 +76,8 @@ const ADMIN_NAV: NavItem[] = [
   { href: '/pid-ledger',  icon: KeyRound,       label: 'PID Ledger', perm: 'user.manage_access' },
   // What each client's work amounts to. Same gate as the patent portal (client identity is the
   // Super-Admin-only fact), but a separate destination — it never reveals a patent number.
-  { href: '/client-ledger', icon: BookOpen,     label: 'Client Ledger', perm: 'patent.manage' },
+  // CLIENTS-FLOW: commented out — the client ledger is keyed on client codes, which are switched off.
+  // { href: '/client-ledger', icon: BookOpen,     label: 'Client Ledger', perm: 'patent.manage' },
   { href: '/admin/audit', icon: History,        label: 'Audit Log', perm: ['audit.view'] },
   // The bin: restore something deleted by mistake, or destroy it for good. Super-Admin-only
   // rather than permission-gated, because both permanent-delete codes live in

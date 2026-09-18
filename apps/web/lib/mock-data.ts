@@ -23,6 +23,18 @@ export interface MockProject {
   members: { initials: string; color: string }[];
   statusColor: string;
   createdAt: string;
+  // ── CLIENTS-FLOW: a project row is a client ────────────────────────────────────────
+  clientGroupId?: string | null;
+  clientGroupName?: string | null;
+  /** Live task groups — every one, and the ones still active. */
+  taskGroupCount?: number;
+  activeTaskGroups?: { id: string; name: string; groupType?: string | null; dueDate?: string | null }[];
+  /** Task-group domains, so a domain filter can find a client by the work inside it. */
+  taskGroupDomains?: string[];
+  openTaskCount?: number;
+  overdueTaskCount?: number;
+  /** The soonest deadline among the client's active task groups. */
+  nextDeadline?: string | null;
 }
 
 // (Removed the fabricated MOCK_PROJECTS demo array — L26; the MockProject type above is still used by real API mappers.)

@@ -17,6 +17,7 @@ import { DeadlineScope, DeadlineVisibilityService } from '../deadlines/deadline-
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { resolveDate, startOfUtcDay } from '../../common/dates';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
+import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import { PROJECT_TYPES, templateFor } from './project-templates';
 import { TECHNOLOGY_DOMAINS, builtInDomain, slugifyDomain, domainLabel } from './technology-domains';
 
@@ -104,6 +105,9 @@ export class ProjectsService {
 
   /** May the CURRENT actor be told which client a matter belongs to? Super Admin only. */
   private async canViewClient(): Promise<boolean> {
+    // CLIENTS-FLOW: commented out — with client codes switched off nobody is told the old
+    // client fact, so every route that carries it strips it through redactClient below.
+    if (!PATENTS_AND_CLIENT_CODES) return false;
     const actorId = getActorId();
     return actorId ? this.permissions.check(actorId, 'patent.manage') : false;
   }
@@ -126,6 +130,9 @@ export class ProjectsService {
       const out: Record<string, unknown> = {};
       for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
         if (key === 'client' || key === 'clientId') continue;
+        // CLIENTS-FLOW: commented out — patent handles travel with the client fact while the
+        // feature is off (they read Pat_<clientcode>_n, so they ARE client codes).
+        if (!PATENTS_AND_CLIENT_CODES && key === 'patents') continue;
         out[key] = walk(v);
       }
       return out;
@@ -547,7 +554,7 @@ export class ProjectsService {
     const creator = actorId
       ? await this.prisma.user.findFirst({ where: { id: actorId, deletedAt: null } })
       : null;
-    if (!creator) throw new ForbiddenException('You must be signed in to add a project.');
+    if (!creator) throw new ForbiddenException('You must be signed in to add a client.');
     await this.access.assertProjectAccess(actorId, fromProjectId);
 
     const source = await this.prisma.project.findFirst({
@@ -556,7 +563,7 @@ export class ProjectsService {
     });
     if (!source) throw new NotFoundException(`Project ${fromProjectId} not found`);
     if (!source.code) {
-      throw new BadRequestException('This project has no Project ID yet. Attach a PID before adding another project under it.');
+      throw new BadRequestException('This client has no PID yet. Attach a PID before adding another project under it.');
     }
 
     const organizationId = creator.organizationId;
@@ -582,7 +589,7 @@ export class ProjectsService {
 
     if (dto.projectType) {
       const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
-      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+      if (t?.comingSoon) throw new BadRequestException(`Work of type "${t.label}" aren't available yet.`);
     }
     const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
     const technologyDomain = await this.resolveDomain(organizationId, creator.id, dto);
@@ -733,7 +740,7 @@ export class ProjectsService {
     const creator = actorId
       ? await this.prisma.user.findFirst({ where: { id: actorId, deletedAt: null } })
       : null;
-    if (!creator) throw new ForbiddenException('You must be signed in to create a project.');
+    if (!creator) throw new ForbiddenException('You must be signed in to create a client.');
     const organizationId = creator.organizationId;
 
     // ── PID authority: who assigns the Project ID ─────────────────────────────────
@@ -752,7 +759,7 @@ export class ProjectsService {
           where: { id: delegateId, organizationId, deletedAt: null, status: 'ACTIVE' },
           select: { id: true },
         });
-        if (!delegate) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
+        if (!delegate) throw new BadRequestException('The selected client manager is not an active member of this organization.');
         managerId = delegateId;
       }
     }
@@ -761,7 +768,7 @@ export class ProjectsService {
       //     attaches the PID. Must actually hold project.generate_pid.
       pidAssigneeId = dto.pidAssigneeId?.trim() || '';
       if (!pidAssigneeId) {
-        throw new BadRequestException('Select who should assign the Project ID (PID) for this project.');
+        throw new BadRequestException('Choose who should assign the PID for this client.');
       }
       const assignee = await this.prisma.user.findFirst({
         where: { id: pidAssigneeId, organizationId, deletedAt: null, status: 'ACTIVE' },
@@ -793,15 +800,15 @@ export class ProjectsService {
       //     the person already had. Nominating a colleague is the case that still needs the
       //     permission, and it is unchanged.
       managerId = dto.managerId?.trim() || '';
-      if (!managerId) throw new BadRequestException('Select a Project Manager for this project.');
+      if (!managerId) throw new BadRequestException('Choose a client manager.');
       const manager = await this.prisma.user.findFirst({
         where: { id: managerId, organizationId, deletedAt: null, status: 'ACTIVE' },
         select: { id: true, designation: true },
       });
-      if (!manager) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
+      if (!manager) throw new BadRequestException('The selected client manager is not an active member of this organization.');
       const managingOwn = manager.id === creator.id;
       if (!managingOwn && !(await this.permissions.check(manager.id, 'project.approve'))) {
-        throw new BadRequestException('That person cannot be a Project Manager — choose a Manager, Senior Consultant or Admin.');
+        throw new BadRequestException('That person cannot manage a client — choose a Manager, Senior Consultant or Admin.');
       }
     }
 
@@ -838,7 +845,7 @@ export class ProjectsService {
     // too so a direct API call can't create a live project of an unbuilt type.
     if (dto.projectType) {
       const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
-      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+      if (t?.comingSoon) throw new BadRequestException(`Work of type "${t.label}" aren't available yet.`);
     }
 
     // Resolve the project TYPE template that auto-creates a task list. Three sources:
@@ -866,6 +873,11 @@ export class ProjectsService {
     // patents; the field is hidden for everyone else and the API re-checks so it can't be forced.
     let patentIds: string[] = [];
     let derivedClientId: string | null = null;
+    // CLIENTS-FLOW: commented out — patent IDs and client codes are switched off, so a request that
+    // still carries them is told so rather than having them silently dropped.
+    if (!PATENTS_AND_CLIENT_CODES && (dto.patentIds?.length || dto.clientId)) {
+      throw new BadRequestException('Patent IDs and client codes are switched off in this version.');
+    }
     if (dto.patentIds?.length) {
       if (!(await this.permissions.check(creator.id, 'patent.view'))) {
         throw new ForbiddenException('You are not permitted to attach patents.');
@@ -969,7 +981,7 @@ export class ProjectsService {
     } catch (e: any) {
       // A concurrent create claiming the same PID (or any unique-code race) → friendly message,
       // mirroring fulfillPidRequest instead of surfacing a raw 500.
-      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      if (e?.code === 'P2002') throw new BadRequestException(`PID ${pid} is already in use.`);
       throw e;
     }
 
@@ -994,7 +1006,7 @@ export class ProjectsService {
       await this.notifications.notify(pidAssigneeId, {
         type: 'project.pid_requested',
         title: 'PID requested',
-        message: `${creator.firstName} ${creator.lastName} needs a Project ID for "${project.title}".`,
+        message: `${creator.firstName} ${creator.lastName} needs a PID for the client "${project.title}".`,
         link: '/projects',
       });
     }
@@ -1029,12 +1041,12 @@ export class ProjectsService {
   private parsePid(raw: string, orgCode: string): { pid: string; fyLabel: string; serial: number } {
     const esc = orgCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const m = new RegExp(`^${esc}_(\\d{2})_(\\d{2})_(\\d{1,6})$`).exec(raw.trim().toUpperCase());
-    if (!m) throw new BadRequestException(`"${raw}" is not a valid Project ID (expected ${orgCode}_YY_YY_NNN).`);
+    if (!m) throw new BadRequestException(`"${raw}" is not a valid PID (expected ${orgCode}_YY_YY_NNN).`);
     const fyStart = parseInt(m[1], 10), fyEnd = parseInt(m[2], 10), serial = parseInt(m[3], 10);
     if (fyEnd !== (fyStart + 1) % 100) {
       throw new BadRequestException(`"${raw}" has an invalid financial year — the two years must be consecutive (e.g. ${orgCode}_26_27_001).`);
     }
-    if (serial < 1) throw new BadRequestException('A Project ID serial must be 1 or greater.');
+    if (serial < 1) throw new BadRequestException('A PID serial must be 1 or greater.');
     const fyLabel = `${m[1]}_${m[2]}`;
     return { pid: formatPid(orgCode, fyLabel, serial), fyLabel, serial };
   }
@@ -1103,16 +1115,16 @@ export class ProjectsService {
       // Already this user's live reservation? Reuse it.
       const mine = await this.prisma.pidReservation.findFirst({ where: { organizationId, pid, status: 'RESERVED' } });
       if (mine) {
-        if (mine.generatedById !== userId) throw new BadRequestException('That Project ID was generated by someone else.');
+        if (mine.generatedById !== userId) throw new BadRequestException('That PID was generated by someone else.');
         return { pid: mine.pid, reservationId: mine.id };
       }
       // Otherwise it must be free (not reserved/attached/discontinued, and no project uses it) …
       const taken = await this.takenSerials(organizationId, fyLabel, orgCode);
-      if (taken.has(serial)) throw new BadRequestException(`Project ID ${pid} is already in use or has been discontinued.`);
+      if (taken.has(serial)) throw new BadRequestException(`PID ${pid} is already in use or has been discontinued.`);
       // … and not a fat-fingered serial far beyond the current sequence.
       const maxTaken = taken.size ? Math.max(...taken) : 0;
       if (serial > maxTaken + ProjectsService.MAX_AHEAD) {
-        throw new BadRequestException(`Project ID serial ${serial} is too far ahead of the current sequence. Please check the number.`);
+        throw new BadRequestException(`PID serial ${serial} is too far ahead of the current sequence. Please check the number.`);
       }
       const res = await this.prisma.pidReservation.create({
         data: { organizationId, fyLabel, serial, pid, generatedById: userId, status: 'RESERVED', expiresAt },
@@ -1135,7 +1147,7 @@ export class ProjectsService {
         throw e;
       }
     }
-    throw new BadRequestException('Could not allocate a Project ID right now — please try again.');
+    throw new BadRequestException('Could not allocate a PID right now — please try again.');
   }
 
   /** Flip a reservation RESERVED → ATTACHED once its project row exists. */
@@ -1157,7 +1169,7 @@ export class ProjectsService {
       select: { pid: true },
     });
     if (existing) {
-      throw new BadRequestException(`You already hold an un-attached Project ID (${existing.pid}). Attach it to a project — or wait for it to expire — before generating another.`);
+      throw new BadRequestException(`You already hold an un-attached PID (${existing.pid}). Attach it to a client — or wait for it to expire — before generating another.`);
     }
     const { pid, reservationId } = await this.ensureReservation(organizationId, userId);
     const res = await this.prisma.pidReservation.findUnique({ where: { id: reservationId }, select: { createdAt: true, expiresAt: true } });
@@ -1178,8 +1190,8 @@ export class ProjectsService {
   /** Attach a PID to a project that currently has none (e.g. a reopened one). Authority only. */
   async attachPidToProject(organizationId: string, userId: string, projectId: string, rawPid?: string) {
     const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true, code: true, title: true } });
-    if (!project) throw new NotFoundException('Project not found.');
-    if (project.code) throw new BadRequestException('This project already has a Project ID.');
+    if (!project) throw new NotFoundException('Client not found.');
+    if (project.code) throw new BadRequestException('This client already has a PID.');
     const { pid, reservationId } = await this.ensureReservation(organizationId, userId, rawPid);
     try {
       await this.prisma.project.update({ where: { id: projectId }, data: { code: pid } });
@@ -1187,7 +1199,7 @@ export class ProjectsService {
       // project.code is no longer UNIQUE (a PID can hold several projects), so a duplicate code
       // cannot surface here any more — ensureReservation above is what rejects an in-use PID.
       // The catch stays for any other constraint, reported plainly rather than as a 500.
-      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} could not be attached.`);
+      if (e?.code === 'P2002') throw new BadRequestException(`PID ${pid} could not be attached.`);
       throw e;
     }
     await this.markAttached(reservationId, projectId);
@@ -1241,7 +1253,7 @@ export class ProjectsService {
     } as const;
 
     const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
-    if (!project) throw new NotFoundException('Project not found.');
+    if (!project) throw new NotFoundException('Client not found.');
     await this.assertProjectInOrg(organizationId, projectId);
 
     // Resolve the destination. Naming it as a PROJECT is how the merge picker works — the person
@@ -1253,10 +1265,10 @@ export class ProjectsService {
       const into = await this.prisma.project.findFirst({
         where: { id: opts.intoProjectId }, select: { id: true, code: true, deletedAt: true, title: true },
       });
-      if (!into) throw new NotFoundException('The project to merge into was not found.');
+      if (!into) throw new NotFoundException('The client to merge into was not found.');
       await this.assertProjectInOrg(organizationId, into.id);
-      if (into.deletedAt) throw new BadRequestException('The project to merge into is in the bin.');
-      if (!into.code) throw new BadRequestException(`"${into.title}" has no Project ID of its own to merge into.`);
+      if (into.deletedAt) throw new BadRequestException('The client to merge into is in the bin.');
+      if (!into.code) throw new BadRequestException(`"${into.title}" has no PID of its own to merge into.`);
       targetPid = into.code;
     } else if (opts.pid?.trim()) {
       targetPid = this.parsePid(opts.pid, orgCode).pid;
@@ -1296,7 +1308,7 @@ export class ProjectsService {
    */
   private async assertProjectInOrg(organizationId: string, projectId: string): Promise<void> {
     const owner = await this.orgOfProject(projectId);
-    if (owner && owner !== organizationId) throw new NotFoundException('Project not found.');
+    if (owner && owner !== organizationId) throw new NotFoundException('Client not found.');
   }
 
   /**
@@ -1439,7 +1451,7 @@ export class ProjectsService {
       // planMove only reports a MERGE when the destination already holds rounds, which it can only
       // know from a PID it was given — so this is never null. Checked rather than asserted because
       // a null slipping through would write `code: null` onto a live project.
-      if (!plan.toPid) throw new BadRequestException('No Project ID was given to merge into.');
+      if (!plan.toPid) throw new BadRequestException('No PID was given to merge into.');
       toPid = plan.toPid;
     } else {
       const reserved = await this.ensureReservation(organizationId, userId, plan.toPid ?? undefined);
@@ -1574,7 +1586,7 @@ export class ProjectsService {
     if (recipients.length) {
       await this.notifications.notify(recipients, {
         type: 'project.pid_moved',
-        title: 'Project ID changed',
+        title: 'PID changed',
         message: `"${project.title}" moved from ${plan.fromPid} to ${toPid}`
           + (plan.mode === 'MERGE' ? ` (project ${plan.newRoundSeq} under ${toPid}).` : '.'),
         link: `/projects/${projectId}`,
@@ -1814,7 +1826,7 @@ export class ProjectsService {
     const before = await this.prisma.project.findFirst({
       where: { id: req.projectId, deletedAt: null }, select: { startDate: true, dueDate: true },
     });
-    if (!before) throw new NotFoundException('Project not found.');
+    if (!before) throw new NotFoundException('Client not found.');
 
     const startDate = dto.startDate === undefined ? undefined : resolveDate(dto.startDate, null);
     const dueDate = dto.dueDate === undefined ? undefined : resolveDate(dto.dueDate, null);
@@ -1827,7 +1839,7 @@ export class ProjectsService {
     // The reviewer may set the project TYPE (rejecting a "coming soon" one).
     if (dto.projectType) {
       const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
-      if (t?.comingSoon) throw new BadRequestException(`Projects of type "${t.label}" aren't available yet.`);
+      if (t?.comingSoon) throw new BadRequestException(`Work of type "${t.label}" aren't available yet.`);
     }
 
     const updated = await this.prisma.$transaction(async tx => {
@@ -1861,7 +1873,7 @@ export class ProjectsService {
       const mgr = await this.prisma.user.findFirst({
         where: { id: dto.managerId, organizationId, deletedAt: null, status: 'ACTIVE' }, select: { id: true },
       });
-      if (!mgr) throw new BadRequestException('The selected Project Manager is not an active member of this organization.');
+      if (!mgr) throw new BadRequestException('The selected client manager is not an active member of this organization.');
       await this.prisma.projectMember.updateMany({
         where: { projectId: req.projectId, projectRole: 'MANAGER', userId: { not: dto.managerId } },
         data: { projectRole: 'MEMBER' },
@@ -1908,14 +1920,14 @@ export class ProjectsService {
       if (!ok) throw new BadRequestException('This PID request has already been resolved.');
     } catch (e: any) {
       if (e instanceof BadRequestException) throw e;
-      if (e?.code === 'P2002') throw new BadRequestException(`Project ID ${pid} is already in use.`);
+      if (e?.code === 'P2002') throw new BadRequestException(`PID ${pid} is already in use.`);
       throw e;
     }
     await this.markAttached(reservationId, req.projectId);
     await this.notifications.notify(req.requestedById, {
       type: 'project.pid_assigned',
       title: 'PID assigned',
-      message: `Your project has been assigned Project ID ${pid}.`,
+      message: `Your client has been assigned PID ${pid}.`,
       link: `/projects/${req.projectId}`,
     });
     return { pid, projectId: req.projectId };
@@ -1992,7 +2004,15 @@ export class ProjectsService {
         deletedAt: null,
         ...scope,
         projectPhase: opts.phase,
-        ...(opts.technologyDomain ? { technologyDomain: opts.technologyDomain } : {}),
+        ...(opts.technologyDomain ? {
+          // CLIENTS-FLOW: the domain lives on task groups now, so a client matches when it OR any
+          // of its live task groups is in the domain. Reading only the client row would find no
+          // client created since.
+          OR: [
+            { technologyDomain: opts.technologyDomain },
+            { taskLists: { some: { deletedAt: null, technologyDomain: opts.technologyDomain } } },
+          ],
+        } : {}),
       },
       // Newest first by default: a PID's later rounds are what somebody is looking for, and a
       // long-running client's first engagement is rarely the one being asked about. The other
@@ -2032,7 +2052,7 @@ export class ProjectsService {
         taskLists: {
           where: { deletedAt: null },
           orderBy: { sequence: 'asc' },
-          select: { id: true, name: true, isDefault: true, status: true, dueDate: true, groupType: true },
+          select: { id: true, name: true, isDefault: true, status: true, dueDate: true, groupType: true, technologyDomain: true },
         },
         members: {
           where: { isActive: true },
@@ -2285,7 +2305,8 @@ export class ProjectsService {
     const redacted: any = this.deadlines.redactProject(project, await this.deadlines.scope());
     // Patent HANDLES are visible to patent.view holders (any project creator); CLIENT details
     // are stricter — patent.manage (Super Admin) only. The PID stays visible to everyone.
-    const canViewPatents = actorId ? await this.permissions.check(actorId, 'patent.view') : false;
+    // CLIENTS-FLOW: commented out — no patent handles while patent IDs are switched off.
+    const canViewPatents = PATENTS_AND_CLIENT_CODES && actorId ? await this.permissions.check(actorId, 'patent.view') : false;
     const canViewClient = await this.canViewClient();
     if (!canViewPatents) delete redacted.patents;
     // Same pass the report, the ledger and the rounds stack use. This route's own `delete` was
@@ -2525,7 +2546,7 @@ export class ProjectsService {
     const project = await this.getRaw(id);
     const phase = (project as { projectPhase: string }).projectPhase;
     if (phase === 'COMPLETED') return this.get(id);
-    if (phase === 'CLOSED') throw new BadRequestException('This project is closed. Reopen it before marking it complete.');
+    if (phase === 'CLOSED') throw new BadRequestException('This client is closed. Reopen it before marking it complete.');
 
     // A project is only "complete" when its WORK is complete. Every task must be closed (or
     // deleted) first — otherwise a project could be signed off with live work still on it.
@@ -2541,7 +2562,7 @@ export class ProjectsService {
       const names = openTasks.slice(0, 3).map(t => `“${t.task.title}”`).join(', ');
       const more = openTasks.length > 3 ? ` and ${openTasks.length - 3} more` : '';
       throw new BadRequestException(
-        `${openTasks.length} task${openTasks.length === 1 ? ' is' : 's are'} still open — ${names}${more}. Close or delete every task before completing the project.`,
+        `${openTasks.length} task${openTasks.length === 1 ? ' is' : 's are'} still open — ${names}${more}. Close or delete every task before completing the client.`,
       );
     }
 
@@ -2576,7 +2597,7 @@ export class ProjectsService {
       metadata: { projectId: id, title: project.title, clientDeliveryDate: delivery.toISOString(), workingHours, actualHours },
     });
     await this.notifyMembers(project, actorId, {
-      type: 'project.completed', title: 'Project completed',
+      type: 'project.completed', title: 'Client completed',
       message: `"${project.title}" was marked complete — delivered ${delivery.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}${actualHours != null ? `, ${actualHours}h actual` : ''}.`,
     });
     return this.redactProjectOut(updated);
@@ -2640,7 +2661,7 @@ export class ProjectsService {
       actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
     });
     await this.notifyMembers(project, actorId, {
-      type: 'project.closed', title: 'Project closed',
+      type: 'project.closed', title: 'Client closed',
       message: `"${project.title}" was closed and moved to the Closed section.`,
     });
     return this.redactProjectOut(updated);
@@ -2673,8 +2694,8 @@ export class ProjectsService {
       actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title },
     });
     await this.notifyMembers(project, actorId, {
-      type: 'project.reopened', title: 'Project reopened',
-      message: `"${project.title}" was reopened — same Project ID, back to Working.`,
+      type: 'project.reopened', title: 'Client reopened',
+      message: `"${project.title}" was reopened — same PID, back to Working.`,
     });
     return this.redactProjectOut(updated);
   }
@@ -2713,8 +2734,8 @@ export class ProjectsService {
       actorId: actorId ?? undefined, metadata: { projectId: id, title: project.title, reinitialized: true, fromPhase: phase },
     });
     await this.notifyMembers(project, actorId, {
-      type: 'project.reopened', title: 'Project re-initialized',
-      message: `"${project.title}" was re-initialized for a returning client — same Project ID, existing data reused.`,
+      type: 'project.reopened', title: 'Client re-initialized',
+      message: `"${project.title}" was re-initialized — same PID, existing work kept.`,
     });
     return this.redactProjectOut(updated);
   }

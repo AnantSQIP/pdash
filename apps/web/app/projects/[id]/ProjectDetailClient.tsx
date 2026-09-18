@@ -7,7 +7,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
   LayoutList, Flag, UserPlus, X as XIcon, Lock as LockIcon,
-  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock, Trash2, ChevronsDownUp, ChevronsUpDown,
+  CheckCircle2, Archive, RotateCcw, KeyRound, Truck, Clock, Trash2, ChevronsDownUp, ChevronsUpDown, Layers,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { KanbanBoard } from '@/components/projects/KanbanBoard';
@@ -24,9 +24,12 @@ import { TaskListView, OverviewView } from '@/components/projects/views';
 import { RoundCard } from '@/components/projects/RoundCard';
 import { RoundTabContent } from '@/components/projects/RoundTabContent';
 import { TaskGroups } from '@/components/projects/TaskGroups';
+import { TaskGroupModal } from '@/components/projects/TaskGroupModal';
+import { ClientGroupChip } from '@/components/projects/ClientGroups';
 import { AddRoundModal } from '@/components/projects/AddRoundModal';
 import { PidMoveModal } from '@/components/projects/PidMoveModal';
 import { PatentTagsEditor } from '@/components/projects/PatentTagsEditor';
+import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
@@ -43,7 +46,10 @@ import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 type Tab = 'Overview' | 'Task List' | 'Board' | 'Gantt' | 'Capacity' | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 // Timesheets is a core, frequently-used tab, so it sits up front (3rd) rather than buried.
-const BASE_TABS: Tab[] = ['Overview', 'Task List', 'Timesheets', 'Board', 'Gantt', 'Files', 'Issues', 'Activity', 'Discussions'];
+// CLIENTS-FLOW: the work comes first on a client's page, so Task groups leads.
+const BASE_TABS: Tab[] = ['Task List', 'Overview', 'Timesheets', 'Board', 'Gantt', 'Files', 'Issues', 'Activity', 'Discussions'];
+/** CLIENTS-FLOW: what each tab is CALLED. The ids stay, because the round cards share them. */
+const TAB_LABEL: Partial<Record<Tab, string>> = { 'Task List': 'Task groups' };
 
 const PRIORITY_FLAG: Record<string, string> = {
   CRITICAL: 'text-red-600',
@@ -70,6 +76,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [completing, setCompleting] = useState(false); // the completion form (delivery + hours)
   const [addingRound, setAddingRound] = useState(false); // "new project under this PID"
   const [movingPid, setMovingPid] = useState(false); // "this project's PID is wrong" — reassign/split/merge
+  const [creatingGroup, setCreatingGroup] = useState(false); // CLIENTS-FLOW: "New task group" from the header
   // Which project a task came from, so the detail panel edits the right one on a multi-project PID.
   const [taskProjectId, setTaskProjectId] = useState(projectId);
 
@@ -109,7 +116,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     const confirms: Record<typeof action, string | null> = {
       complete: null, // asked for in the modal instead
       reopen: null,
-      reinitialize: 'Re-initialize this project for a returning client? It reopens with the SAME Project ID and reuses all the existing data.',
+      reinitialize: 'Re-initialize this client? It reopens with the SAME PID and keeps all of its existing work.',
     };
     const msg = confirms[action];
     if (msg && !await confirmDialog(msg)) return;
@@ -119,10 +126,10 @@ export function ProjectDetailClient({ projectId }: Props) {
       else await api.projects[action](projectId);
       qc.invalidateQueries({ queryKey: ['project', projectId] });
       qc.invalidateQueries({ queryKey: ['projects'] });
-      toast(action === 'complete' ? 'Project marked complete' : action === 'reinitialize' ? 'Project re-initialized (same PID)' : 'Project reopened', 'success');
+      toast(action === 'complete' ? 'Client marked complete' : action === 'reinitialize' ? 'Client re-initialized (same PID)' : 'Client reopened', 'success');
       if (action === 'complete') setCompleting(false);
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not update the project', 'error');
+      toast(e instanceof Error ? e.message : 'Could not update the client', 'error');
     } finally {
       setLifecycleBusy(false);
     }
@@ -143,8 +150,8 @@ export function ProjectDetailClient({ projectId }: Props) {
   async function deleteProject() {
     if (lifecycleBusy) return;
     if (!await confirmDialog({
-      title: 'Delete this project?',
-      body: 'It stops appearing in projects, reports and the capacity board. Nothing is destroyed — '
+      title: 'Delete this client?',
+      body: 'It stops appearing in clients, reports and the capacity board. Nothing is destroyed — '
         + 'a Super Admin can restore it, or remove it for good, from Administration → Deleted Data.',
       danger: true,
       confirmLabel: 'Delete',
@@ -153,10 +160,10 @@ export function ProjectDetailClient({ projectId }: Props) {
     try {
       await api.projects.delete(projectId);
       qc.invalidateQueries({ queryKey: ['projects'] });
-      toast('Project deleted — restore it from Administration → Deleted Data', 'success');
+      toast('Client deleted — restore it from Administration → Deleted Data', 'success');
       router.push('/projects');
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not delete the project', 'error');
+      toast(e instanceof Error ? e.message : 'Could not delete the client', 'error');
       setLifecycleBusy(false);
     }
   }
@@ -240,11 +247,20 @@ export function ProjectDetailClient({ projectId }: Props) {
     setAddTaskStatusId(statusId);
     setShowAddTask(true);
   }
-  /** The task list a new task should land in, for whichever project the card belongs to. */
+  /**
+   * The task list a new task should land in, for whichever project the card belongs to.
+   *
+   * CLIENTS-FLOW: the first ACTIVE task group — the default one if it is still active. A completed
+   * group takes no new work (the server refuses it), so offering it as the landing place would make
+   * "Add task" fail for anyone whose first group is finished.
+   */
+  const firstActive = (lists?: { id: string; isDefault: boolean; status?: string }[]) =>
+    lists?.find(tl => tl.isDefault && tl.status !== 'COMPLETED')
+      ?? lists?.find(tl => tl.status !== 'COMPLETED');
   const addTaskList = addTaskListId
     ? { id: addTaskListId }
     : addTaskProjectId === projectId
-      ? (project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0])
+      ? firstActive(project?.taskLists)
       : (() => {
           const r = rounds.find(x => x.id === addTaskProjectId);
           return r?.taskLists?.find(tl => tl.isDefault) ?? r?.taskLists?.[0];
@@ -356,16 +372,19 @@ export function ProjectDetailClient({ projectId }: Props) {
     // you open a matter you're not staffed on, or 404s for a moved/deleted project.
     return (
       <div className="flex flex-col h-full items-center justify-center text-center px-8">
-        <p className="text-gray-600 font-medium">Couldn&apos;t open this project</p>
+        <p className="text-gray-600 font-medium">Couldn&apos;t open this client</p>
         <p className="text-sm text-gray-500 mt-1 max-w-sm">It may have been moved, or you don&apos;t have access to it.</p>
-        <Link href="/projects" className="mt-4 text-sm text-brand-600 hover:underline">← Back to Projects</Link>
+        <Link href="/projects" className="mt-4 text-sm text-brand-600 hover:underline">← Back to Clients</Link>
       </div>
     );
   }
 
   const phase = PHASE_META[project.projectPhase as Phase] ?? PHASE_META['ACTIVE'];
   const priority = PRIORITY_META[project.priority as Priority] ?? PRIORITY_META['MEDIUM'];
-  const defaultTaskList = project.taskLists?.find(tl => tl.isDefault) ?? project.taskLists?.[0];
+  const defaultTaskList = firstActive(project.taskLists);
+  const liveGroups = project.taskLists ?? [];
+  const activeGroupCount = liveGroups.filter(g => g.status !== 'COMPLETED').length;
+  const clientLocked = ['COMPLETED', 'CLOSED'].includes(project.projectPhase);
   // The project's manager — used to pre-fill each task's Project Manager (still editable per task).
   const projectManagerId = project.members?.find(m => m.projectRole === 'MANAGER' && m.isActive)?.userId ?? null;
   // The activity feed is the whole matter's history in one list, so it is oversight material:
@@ -397,10 +416,10 @@ export function ProjectDetailClient({ projectId }: Props) {
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             <Link
               href="/projects"
-              title="Back to all projects"
+              title="Back to all clients"
               className="flex items-center gap-1 -ml-1 pr-1 text-xs text-gray-500 hover:text-gray-700 shrink-0"
             >
-              <ArrowLeft size={13} /> <span className="hidden sm:inline">All Projects</span>
+              <ArrowLeft size={13} /> <span className="hidden sm:inline">All clients</span>
             </Link>
             <span className="w-px h-3.5 bg-gray-200 shrink-0" aria-hidden />
             <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -409,20 +428,20 @@ export function ProjectDetailClient({ projectId }: Props) {
                     {project.code}
                     {multiRound && (
                       <span className="font-sans font-medium text-gray-500">
-                        · {rounds.length} project{rounds.length === 1 ? '' : 's'}
+                        · {rounds.length} under this PID
                       </span>
                     )}
                   </span>
                 ) : (
                   <>
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 font-mono ring-1 ring-amber-200" title="A PID authority will assign the Project ID">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 font-mono ring-1 ring-amber-200" title="A PID authority will assign the PID">
                       PID pending
                     </span>
                     {can('project.generate_pid') && (
                       <button
                         onClick={handleAttachPid}
                         disabled={attachingPid}
-                        title="Attach a fresh Project ID to this project"
+                        title="Attach a fresh PID to this client"
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-brand-700 border border-brand-200 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 transition-colors"
                       >
                         <KeyRound size={12} /> {attachingPid ? 'Attaching…' : 'Attach PID'}
@@ -430,6 +449,14 @@ export function ProjectDetailClient({ projectId }: Props) {
                     )}
                   </>
                 )}
+                {/* CLIENTS-FLOW: which client group this client is filed under — changeable in place. */}
+                <ClientGroupChip
+                  projectId={projectId}
+                  groupId={project.clientGroupId ?? null}
+                  groupName={project.clientGroup?.name ?? null}
+                  canEdit={can('project.update') && !clientLocked}
+                />
+                {/* A client created before task groups carried the type still shows it. */}
                 {typeLabel && (
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-brand-50 text-brand-700 ring-1 ring-brand-100">
                     {typeLabel}
@@ -447,7 +474,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               onClick={toggleHeader}
               aria-expanded={!headerCollapsed}
               title={headerCollapsed
-                ? 'Show the description, client, patents and statistics'
+                ? 'Show the description and statistics'
                 : 'Fold these details away and give the screen to the work'}
               className="flex items-center gap-1 ml-auto shrink-0 px-2 py-1 text-xs font-medium text-gray-500 border border-gray-200 rounded-md hover:bg-gray-50 hover:text-gray-700 transition-colors"
             >
@@ -463,25 +490,29 @@ export function ProjectDetailClient({ projectId }: Props) {
               {!headerCollapsed && project.description && (
                 <p className="text-[13px] leading-snug text-gray-500 mt-0.5 max-w-2xl line-clamp-2">{project.description}</p>
               )}
-              {!headerCollapsed && <PatentTagsEditor project={project} />}
+              {/* CLIENTS-FLOW: commented out — the client-code line and patent IDs are switched off. */}
+              {PATENTS_AND_CLIENT_CODES && !headerCollapsed && <PatentTagsEditor project={project} />}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {/* A returning client keeps this PID; their next piece of work becomes another
                   project under it rather than being forced into this one's task list. */}
-              {multiRound && can('project.create') && project.code && (
+              {/* CLIENTS-FLOW: another piece of work for this client is another TASK GROUP, not another
+                  project under its PID — so "New project" (a round) gives way to "New task group".
+                  The round machinery is untouched; existing rounds still show below. */}
+              {can('tasklist.create') && !clientLocked && !multiRound && (
                 <button
-                  onClick={() => setAddingRound(true)}
-                  title={`Start another project under ${project.code}`}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors"
+                  onClick={() => setCreatingGroup(true)}
+                  title="Start a new piece of work for this client"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors"
                 >
-                  <Plus size={14} /> New project
+                  <Layers size={14} /> New task group
                 </button>
               )}
               {can('project.update') && ['ACTIVE', 'ON_HOLD'].includes(project.projectPhase) && (
                 <button
                   onClick={() => setCompleting(true)}
                   disabled={lifecycleBusy}
-                  title="Mark this project as complete"
+                  title="Mark this client as complete"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-green-700 border border-green-200 bg-green-50 rounded-lg hover:bg-green-100 transition-colors disabled:opacity-50"
                 >
                   <CheckCircle2 size={14} /> Mark complete
@@ -499,8 +530,8 @@ export function ProjectDetailClient({ projectId }: Props) {
                   onClick={() => runLifecycle('reinitialize')}
                   disabled={lifecycleBusy}
                   title={multiRound
-                    ? 'Reopen this project — use “New project” for a returning client with new work'
-                    : 'Re-initialize for a returning client — same Project ID, existing data reused'}
+                    ? 'Reopen this client'
+                    : 'Re-initialize this client — same PID, existing work kept'}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
                   <RotateCcw size={14} /> {multiRound ? 'Reopen' : 'Re-initialize'}
@@ -511,7 +542,7 @@ export function ProjectDetailClient({ projectId }: Props) {
                 <button
                   onClick={() => runLifecycle('reopen')}
                   disabled={lifecycleBusy}
-                  title="Reopen this project — same Project ID, back to Working"
+                  title="Reopen this client — same PID, back to Working"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
                   <RotateCcw size={14} /> Reopen
@@ -520,7 +551,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               {can('project.update') && project.projectPhase !== 'CLOSED' && (
                 <button
                   onClick={() => setEditingProject(true)}
-                  title="Edit the project's details and deadlines"
+                  title="Edit the client's details and its group"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   <Pencil size={14} /> Edit
@@ -535,7 +566,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               {can('project.generate_pid') && project.code && (
                 <button
                   onClick={() => setMovingPid(true)}
-                  title={`Change this project's Project ID — currently ${project.code}`}
+                  title={`Change this client's PID — currently ${project.code}`}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   <KeyRound size={14} /> Change PID
@@ -547,7 +578,7 @@ export function ProjectDetailClient({ projectId }: Props) {
                 <button
                   onClick={deleteProject}
                   disabled={lifecycleBusy}
-                  title="Delete this project — it can be restored, or destroyed for good, from Administration → Deleted Data"
+                  title="Delete this client — it can be restored, or destroyed for good, from Administration → Deleted Data"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
                 >
                   <Trash2 size={14} /> Delete
@@ -559,7 +590,7 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <button
                     onClick={() => openAddTask()}
                     disabled={!defaultTaskList || locked}
-                    title={locked ? 'This project is ' + (project.projectPhase === 'CLOSED' ? 'closed' : 'complete') + ' — reopen it to add work' : defaultTaskList ? 'Add a task' : 'This project has no task list yet'}
+                    title={locked ? 'This client is ' + (project.projectPhase === 'CLOSED' ? 'closed' : 'complete') + ' — reopen it to add work' : defaultTaskList ? 'Add a task' : 'Every task group is complete — create or reopen one to add work'}
                     className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Plus size={14} /> Add Task
@@ -571,6 +602,12 @@ export function ProjectDetailClient({ projectId }: Props) {
 
           {/* Stats row — the bulk of the header's height, and the first thing to go when it is folded. */}
           <div className={clsx('flex items-center flex-wrap gap-x-5 gap-y-1.5 mt-2 text-[13px]', headerCollapsed && 'hidden')}>
+            <div className="flex items-center gap-1.5 text-gray-500">
+              <Layers size={14} />
+              <span><span className="font-medium text-gray-900">{activeGroupCount}</span> active task group{activeGroupCount === 1 ? '' : 's'}
+                {liveGroups.length > activeGroupCount && <span className="text-gray-400"> · {liveGroups.length - activeGroupCount} completed</span>}
+              </span>
+            </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <CheckSquare size={14} />
               <span><span className="font-medium text-gray-900">{project._count?.projectTasks ?? tasks.length}</span> tasks</span>
@@ -640,7 +677,7 @@ export function ProjectDetailClient({ projectId }: Props) {
                   : 'border-transparent text-gray-500 hover:text-gray-700',
               )}
             >
-              {tab}
+              {TAB_LABEL[tab] ?? tab}
             </button>
           ))}
         </nav>
@@ -708,6 +745,14 @@ export function ProjectDetailClient({ projectId }: Props) {
             onTaskClick={task => setSelectedTask(task)}
             onAddTask={listId => openAddTask(undefined, projectId, listId)}
             onStatusChange={handleMove}
+            clientName={project.title}
+            members={project.members}
+            managerId={projectManagerId}
+            locked={clientLocked}
+            canManageGroups={can('tasklist.create') || can('tasklist.update')}
+            canDeleteGroups={can('tasklist.delete')}
+            canAssign={can('task.assign')}
+            canMoveTasks={can('task.update')}
           />
         )}
         {activeTab === 'Board' && (
@@ -766,6 +811,16 @@ export function ProjectDetailClient({ projectId }: Props) {
             qc.invalidateQueries({ queryKey: ['projects'] });
             qc.invalidateQueries({ queryKey: ['capacity'] }); // the board reads these dates
           }}
+        />
+      )}
+
+      {creatingGroup && (
+        <TaskGroupModal
+          projectId={projectId}
+          clientName={project.title}
+          members={project.members}
+          onClose={() => setCreatingGroup(false)}
+          onSaved={() => setActiveTab('Task List')}
         />
       )}
 

@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import type { DigestDetail, DigestProject, DigestTask } from '@/lib/api';
 
 /**
@@ -18,13 +19,14 @@ const d = (v: string | null | undefined) => (v ? String(v).slice(0, 10) : '');
 const dt = (v: string | null | undefined) =>
   v ? new Date(v).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) : '';
 
+// CLIENTS-FLOW: the row is a client; the old client-code column is commented out with that feature.
 const PROJECT_COLUMNS = [
-  'PID', 'Project #', 'Project', 'Type', 'Phase', 'Priority', 'Client', 'Progress %', 'Tasks',
+  'PID', '#', 'Client', 'Type', 'Phase', 'Priority', ...(PATENTS_AND_CLIENT_CODES ? ['Client code'] : []), 'Progress %', 'Tasks',
   'Start', 'Deadline', 'Client Deadline', 'Client Delivered', 'Completed At',
-  'Working Hours', 'Actual Hours', 'Hours Variance', 'Project Managers', 'Members',
+  'Working Hours', 'Actual Hours', 'Hours Variance', 'Client Managers', 'Members',
 ];
 const projectRow = (p: DigestProject) => [
-  p.pid ?? 'PID pending', p.roundSeq ?? 1, p.title, p.type ?? '', p.phase, p.priority, p.client ?? '',
+  p.pid ?? 'PID pending', p.roundSeq ?? 1, p.title, p.type ?? '', p.phase, p.priority, ...(PATENTS_AND_CLIENT_CODES ? [p.client ?? ''] : []),
   p.progress, p.taskCount,
   d(p.startDate), d(p.dueDate), d(p.clientDueDate), d(p.clientDeliveryDate), dt(p.completedAt),
   p.workingHours ?? '', p.actualHours ?? '',

@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import type { ReportProject } from '@/lib/api';
 import type { ExportData } from '@/components/ExportMenu';
 import { projectTypeLabel } from '@/lib/mock-data';
@@ -27,23 +28,26 @@ const dt = (v: string | null | undefined) =>
 const variance = (p: ReportProject) =>
   p.actualHours != null && p.workingHours != null ? Math.round((p.actualHours - p.workingHours) * 10) / 10 : '';
 
+// CLIENTS-FLOW: the row is a client now. The old client-code and patent columns are commented
+// out with those features — header and row are filtered by the same flag, so they cannot drift.
 export const PROJECT_COLUMNS = [
-  'PID', 'Project #', 'Project', 'Project Type', 'Phase', 'Status', 'Priority', 'Client', 'Billable',
+  'PID', '#', 'Client', 'Type', 'Phase', 'Status', 'Priority',
+  ...(PATENTS_AND_CLIENT_CODES ? ['Client code'] : []), 'Billable',
   'Progress %', 'Tasks', 'Tasks Closed', 'Tasks Open', 'Members',
   'Start', 'Deadline', 'Client Deadline', 'Client Delivered', 'Completed At', 'Closed At',
   'Working Hours', 'Actual Hours', 'Hours Variance', 'Logged Hours', 'Estimated Hours',
-  'Project Managers', 'Team', 'Patents', 'Created By', 'Created At', 'Description',
+  'Client Managers', 'Team', ...(PATENTS_AND_CLIENT_CODES ? ['Patents'] : []), 'Created By', 'Created At', 'Description',
 ];
 
 export const projectRow = (p: ReportProject) => [
   p.pid ?? 'PID pending', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '', p.phase, p.status ?? '',
-  p.priority, p.client ?? '', p.billable ? 'Yes' : 'No',
+  p.priority, ...(PATENTS_AND_CLIENT_CODES ? [p.client ?? ''] : []), p.billable ? 'Yes' : 'No',
   p.progress, p.taskCount, p.tasksClosed, p.tasksOpen, p.memberCount,
   d(p.startDate), d(p.dueDate), d(p.clientDueDate), d(p.clientDeliveryDate), dt(p.completedAt), dt(p.closedAt),
   p.workingHours ?? '', p.actualHours ?? '', variance(p), p.loggedHours, p.estimatedHours,
   p.managers.map(m => m.name).join('; '),
   p.members.map(m => `${m.name} (${m.role}${m.designation ? `, ${m.designation}` : ''})`).join('; '),
-  p.patents.join('; '),
+  ...(PATENTS_AND_CLIENT_CODES ? [p.patents.join('; ')] : []),
   p.createdBy ?? '', d(p.createdAt), p.description ?? '',
 ];
 

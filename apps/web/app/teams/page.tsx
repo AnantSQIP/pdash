@@ -95,7 +95,7 @@ export default function TeamsPage() {
             <p className="mt-3 text-sm font-medium text-gray-700">No team spaces yet</p>
             <p className="text-sm text-gray-400 mt-1 max-w-sm mx-auto">
               {can('team.manage')
-                ? 'Create one for HR, business development or operations — work that should not have to pretend to be a client project.'
+                ? 'Create one for HR, business development or operations — work that should not have to pretend to be client work.'
                 : 'You will see a space here once you are added to one.'}
             </p>
           </div>

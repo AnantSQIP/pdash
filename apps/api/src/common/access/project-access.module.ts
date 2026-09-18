@@ -85,7 +85,7 @@ export class ProjectAccessService {
   async assertProjectAccess(actorId: string | null, projectId: string): Promise<void> {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
     if (!(await this.canAccessProject(actorId, projectId))) {
-      throw new ForbiddenException('You do not have access to this project.');
+      throw new ForbiddenException('You do not have access to this client.');
     }
   }
 
@@ -183,9 +183,9 @@ export class ProjectAccessService {
     const project = await this.prisma.project.findFirst({
       where: { id: projectId }, select: { projectPhase: true, deletedAt: true },
     });
-    if (!project || project.deletedAt) throw new ForbiddenException('Project not found.');
+    if (!project || project.deletedAt) throw new ForbiddenException('Client not found.');
     if (project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED') {
-      throw new ForbiddenException('This project is completed or closed — reopen it to add work or log time.');
+      throw new ForbiddenException('This client is completed or closed — reopen it to add work or log time.');
     }
   }
 
@@ -202,7 +202,7 @@ export class ProjectAccessService {
     if (!links.length) return; // no live project link — don't over-block edge/standalone tasks
     const anyWritable = links.some(l => l.project.projectPhase !== 'COMPLETED' && l.project.projectPhase !== 'CLOSED');
     if (!anyWritable) {
-      throw new ForbiddenException('This task belongs to a completed or closed project — reopen it to make changes.');
+      throw new ForbiddenException('This task belongs to a completed or closed client — reopen it to make changes.');
     }
   }
 }

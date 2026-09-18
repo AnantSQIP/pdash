@@ -27,7 +27,7 @@ export default function PidLedgerPage() {
     <div className="min-h-full">
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4">
         <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2"><KeyRound size={20} className="text-brand-600" /> PID Ledger</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Every Project ID — working, discontinued and full history</p>
+        <p className="text-sm text-gray-500 mt-0.5">Every PID — working, discontinued and full history</p>
       </div>
       <div className="p-4 sm:p-6">
         <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5">

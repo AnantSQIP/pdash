@@ -121,7 +121,7 @@ export default function UserDetailPage() {
                     <thead>
                       <tr className="text-left text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100 bg-gray-50/60">
                         <th className="px-5 py-2.5 font-semibold">Task</th>
-                        <th className="px-3 py-2.5 font-semibold">Project</th>
+                        <th className="px-3 py-2.5 font-semibold">Client</th>
                         <th className="px-3 py-2.5 font-semibold">Priority</th>
                         <th className="px-3 py-2.5 font-semibold">Deadline</th>
                         <th className="px-5 py-2.5 font-semibold text-right">Remaining</th>
