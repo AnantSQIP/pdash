@@ -9,7 +9,7 @@
  *
  * Roles used (the seeded roster): mohit = Super Admin (mints PIDs), ankit.verma = Manager
  * (runs clients, assigns), ketan.dagar = Senior Research Associate (makes groups, cannot assign),
- * meetu.singh = Consultant (never put on the fixture client), ajay.sharma = Employee (cannot make
+ * meetu.singh = Consultant (never put on the fixture client), aman.sharma = Employee (cannot make
  * groups), hr = HR (no delivery access at all).
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:4011';
@@ -43,7 +43,7 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   const who = {};
   for (const [s, email, key] of [
     [su, 'mohit@squarkip.com', 'su'], [mgr, 'ankit.verma@squarkip.com', 'mgr'], [sra, 'ketan.dagar@squarkip.com', 'sra'],
-    [con, 'meetu.singh@squarkip.com', 'con'], [emp, 'ajay.sharma@squarkip.com', 'emp'], [hr, 'hr@squarkip.com', 'hr'],
+    [con, 'meetu.singh@squarkip.com', 'con'], [emp, process.env.EMPLOYEE || 'aman.sharma@squarkip.com', 'emp'], [hr, 'hr@squarkip.com', 'hr'],
   ]) {
     const r = await s('/auth/login', { method: 'POST', body: { email, password: PW } });
     who[key] = r.data?.user?.id;

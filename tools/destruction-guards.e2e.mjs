@@ -50,7 +50,7 @@ const upload = async (s, projectId, name, text) => {
   const su = sess(), other = sess(), emp = sess();
   await su('/auth/login', { method: 'POST', body: { email: 'mohit@squarkip.com', password: PW } });
   await other('/auth/login', { method: 'POST', body: { email: 'yash@squarkip.com', password: PW } });
-  await emp('/auth/login', { method: 'POST', body: { email: 'ajay.sharma@squarkip.com', password: PW } });
+  await emp('/auth/login', { method: 'POST', body: { email: process.env.EMPLOYEE || 'aman.sharma@squarkip.com', password: PW } });
 
   // A matter the employee genuinely cannot reach. Found rather than assumed: the seed changes.
   const all = (await su('/projects')).data ?? [];
