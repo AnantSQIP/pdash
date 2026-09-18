@@ -349,7 +349,7 @@ export class LifecycleService {
       // switched-off client-code system, whose screens (the client ledger) are switched off too,
       // so nothing in the product could clear it. It is still reported.
       { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: PATENTS_AND_CLIENT_CODES },
-      { key: 'unsubmittedTime', label: 'Time logged with no PID attached', count: unsubmitted.length, blocking: false },
+      { key: 'unsubmittedTime', label: 'Time logged with no client attached', count: unsubmitted.length, blocking: false },
       { key: 'pendingLeave', label: 'Leave requests still pending', count: pendingLeave.length, blocking: false },
       { key: 'projectsMember', label: 'Other projects they are on', count: memberProjects.length, blocking: false },
     ];

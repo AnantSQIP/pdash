@@ -14,8 +14,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-/** PID shape (org-agnostic): ORGCODE_YY_YY_serial. The service re-checks against the real org code. */
-const PID_PATTERN = /^[A-Z0-9]+_\d{2}_\d{2}_\d{1,6}$/i;
+/** CID shape (org-agnostic): PREFIX_YY_YY_serial. The service re-checks against the org's prefix. */
+const CID_PATTERN = /^[A-Z0-9]+_\d{2}_\d{2}_\d{1,6}$/i;
 import { Transform, Type } from 'class-transformer';
 import { PROJECT_TYPE_VALUES } from './project-templates';
 
@@ -162,34 +162,12 @@ export class CreateProjectDto {
   createdBy?: string;
 
   /**
-   * The Project Manager who OWNS this project (becomes its MANAGER). Required for a requester
-   * WITHOUT project.generate_pid; must be of equal-or-higher seniority than the creator. This is
-   * separate from pidAssigneeId (the PID authority who assigns the Project ID).
+   * Who manages the client (becomes its MANAGER). Optional: blank means the creator. There is no
+   * CID field — every client is given its CID automatically, in the transaction that creates it.
    */
   @IsOptional()
   @IsString()
   managerId?: string;
-
-  /**
-   * A Project ID minted via the Generate PID action. Honored ONLY for users who hold
-   * project.generate_pid (ignored otherwise). When such a user omits it, a fresh PID is
-   * minted automatically. A user WITHOUT that permission never supplies a PID — they set
-   * pidAssigneeId instead and the project is created with the PID pending.
-   */
-  @IsOptional()
-  @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @MaxLength(40)
-  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
-  pid?: string;
-
-  /**
-   * For a requester WITHOUT project.generate_pid: the authority they ask to assign the PID.
-   * The project is created with a pending PID and a request is routed to this person.
-   */
-  @IsOptional()
-  @IsString()
-  pidAssigneeId?: string;
 
   @IsOptional()
   @IsString()
@@ -202,8 +180,6 @@ export class CreateProjectDto {
 
   /**
    * The office that owns this matter (GURGAON | JAIPUR). Defaults to the creator's own office.
-   * It is not cosmetic: a JAIPUR project's PID may hold MULTIPLE projects (a returning client
-   * gets a new one under the same PID), while a GURGAON PID stays one project as it always has.
    */
   @IsOptional()
   @IsIn(OFFICES)
@@ -280,92 +256,29 @@ export class UpdateProjectDto {
   clientGroupId?: string | null;
 }
 
-// The PID reviewer's edit — everything they may verify/correct before attaching the PID,
-// INCLUDING the project type and the project manager (which they set on the requester's behalf).
-export class ReviewPidProjectDto {
-  @IsOptional()
-  @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @MinLength(1)
-  @MaxLength(100)
-  title?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(2000)
-  description?: string;
-
-  @IsOptional()
-  @IsIn(PROJECT_PRIORITIES)
-  priority?: string;
-
-  /** The project type — the reviewer picks it (drives the auto-created task template). */
-  @IsOptional()
-  @IsIn(PROJECT_TYPE_VALUES)
-  projectType?: string;
-
-  /** Technology domain slug — a built-in or one this org saved. */
-  @IsOptional() @IsString() @MaxLength(60)
-  technologyDomain?: string;
-
-  /** The project manager (userId) — the reviewer assigns the owner. */
-  @IsOptional()
-  @IsString()
-  managerId?: string;
-
-  @IsOptional()
-  @IsDateString()
-  @Transform(({ value }) => (value === '' ? null : value))
-  startDate?: string | null;
-
-  @IsOptional()
-  @IsDateString()
-  @Transform(({ value }) => (value === '' ? null : value))
-  dueDate?: string | null;
-}
-
-export class FulfillPidDto {
-  @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @MinLength(1)
-  @MaxLength(40)
-  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
-  pid!: string;
-}
-
-export class AttachPidDto {
-  // Optional: a specific (reserved/typed) PID to attach. Omitted → an auto-assigned serial.
-  @IsOptional()
-  @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @MaxLength(40)
-  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
-  pid?: string;
-}
-
 /**
- * Where a project's Project ID should move to.
+ * Where a client's CID should move to.
  *
  * WHICH of the three corrections this is — reassign, split or merge — comes from the ROUTE, never
- * from the body: the operation decides which refusals apply ("you cannot split a project that is
- * already alone under its PID"), and a field the client could set would let a caller ask for one
+ * from the body: the operation decides which refusals apply ("you cannot split a client that is
+ * already alone under its CID"), and a field the caller could set would let them ask for one
  * operation and be given another.
  *
  * Both fields are optional and at most one is meaningful:
- *   · neither — mint a fresh serial in the current financial year (reassign / split).
- *   · `pid`   — a number typed or picked by hand.
- *   · `intoProjectId` — the merge picker, which names a PROJECT because that is what the person
- *     doing this is looking at. The service reads that project's PID.
+ *   · neither — issue the next CID in the current financial year (reassign / split).
+ *   · `cid`   — an existing CID that holds live work, typed (merge only; a CID is never re-used).
+ *   · `intoProjectId` — the merge picker, which names a CLIENT because that is what the person
+ *     doing this is looking at. The service reads that client's CID.
  */
-export class MovePidDto {
+export class MoveCidDto {
   @IsOptional()
   @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MaxLength(40)
-  @Matches(PID_PATTERN, { message: 'PID must look like SQ_YY_YY_NNN.' })
-  pid?: string;
+  @Matches(CID_PATTERN, { message: 'CID must look like SQ_YY_YY_NNN.' })
+  cid?: string;
 
-  /** The project to merge this one under — its PID is the destination. */
+  /** The client to merge this one under — its CID is the destination. */
   @IsOptional()
   @IsString()
   @MaxLength(64)
@@ -384,9 +297,9 @@ export class ApprovalDto {
 }
 
 /**
- * A NEW PROJECT UNDER AN EXISTING PID — the returning-client flow.
+ * A NEW CLIENT UNDER AN EXISTING CID — the returning-client flow.
  *
- * Deliberately smaller than CreateProjectDto: the PID, the client and the office are inherited
+ * Deliberately smaller than CreateProjectDto: the CID, the client and the office are inherited
  * from the round before it, so they are never asked for again and cannot be contradicted here.
  * What genuinely changes for a second piece of work is the name, the kind of work, when it runs,
  * who staffs it, and how urgent it is.
@@ -488,26 +401,3 @@ export class SetProjectClientDto {
 }
 
 
-/** CLIENTS-FLOW (PID rework): ask for a PID for a client with none. */
-export class RequestPidDto {
-  @IsOptional() @IsString() @MaxLength(40)
-  assigneeId?: string;
-
-  @IsOptional() @IsString() @MaxLength(500)
-  note?: string;
-}
-
-/** CLIENTS-FLOW (PID rework): ask for a client's PID to be changed. */
-export class RequestPidChangeDto {
-  @IsString() @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value)) @MinLength(3) @MaxLength(500)
-  reason!: string;
-
-  @IsOptional() @IsString() @MaxLength(40)
-  suggestedPid?: string;
-}
-
-/** CLIENTS-FLOW (PID rework): decline a change request, saying why. */
-export class DeclinePidRequestDto {
-  @IsString() @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value)) @MinLength(3) @MaxLength(500)
-  reason!: string;
-}

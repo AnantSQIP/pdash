@@ -364,7 +364,7 @@ export class TimesheetsService {
     if (dto.category === 'CLIENT_CALL') {
       const title = dto.title?.trim();
       if (!title) throw new BadRequestException('Say what the call was about.');
-      if (!dto.projectId) throw new BadRequestException('Choose the PID the call was about.');
+      if (!dto.projectId) throw new BadRequestException('Choose the client the call was about.');
       // The PID must be one that exists in the caller's own organisation — this is the only
       // check left, so it is the one that stops time being booked to another firm's matter.
       const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
@@ -493,8 +493,8 @@ export class TimesheetsService {
     // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
     // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a PID.
-    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a PID.');
-    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its PID — there is nothing to assign.');
+    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a client.');
+    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its client — there is nothing to assign.');
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).

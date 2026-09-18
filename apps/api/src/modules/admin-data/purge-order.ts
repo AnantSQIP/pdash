@@ -6,8 +6,8 @@
  * A permanent delete is the one operation in this system with no undo and nothing to restore
  * from. It therefore has to be right on the first attempt, and it has to STAY right as the
  * schema grows. The failure mode is not a crash — a missing table leaves orphan rows behind
- * (a timesheet whose project silently became null lands in the "assign a PID later" buffer and
- * gets chased for a PID it can never have), or the delete throws half way and the transaction
+ * (a timesheet whose project silently became null lands in the "assign a client later" buffer and
+ * gets chased for a client it can never have), or the delete throws half way and the transaction
  * rolls back, which at least fails loudly.
  *
  * Naming the order here, separately from the code that runs it, is what lets
@@ -23,8 +23,10 @@
  *
  *   · AuditLog — the whole point. `AuditLog.entityId` is a plain String with no foreign key
  *     precisely so the record of a destruction outlives the thing destroyed.
- *   · PidReservation — the PID ledger is the authority on which serials have ever existed; a
- *     purged project's serial must never be reused, so the reservation is retired, not removed.
+ *   · PidReservation — the CID registry is the authority on which numbers have ever existed; a
+ *     purged client's CID must never be reused, so its row is marked PURGED, not removed.
+ *   · CidEvent — the CID ledger. No foreign key, deliberately: the purged client stays visible
+ *     there through its PURGED event.
  *   · TaskStandard — holds no row per task, only a learned average. The task's contribution is
  *     withdrawn by name before the purge runs (see PurgeService).
  */
@@ -87,7 +89,6 @@ export const PROJECT_PURGE_ORDER = [
   'projectDepartment',
   'projectTeam',
   'projectPatent',
-  'pidRequest',
   'approvalAction',
   'approval',
   'commentAttachment',
