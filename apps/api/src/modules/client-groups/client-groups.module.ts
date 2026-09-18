@@ -11,6 +11,7 @@ import { PermissionService } from '../permissions/permission.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
+import { CidService } from '../../common/cid/cid.service';
 
 /**
  * CLIENTS-FLOW: groups of clients.
@@ -61,6 +62,7 @@ export class ClientGroupsService {
     private readonly access: ProjectAccessService,
     private readonly permissions: PermissionService,
     private readonly events: EventService,
+    private readonly cid: CidService,
   ) {}
 
   private async actor() {
@@ -180,10 +182,21 @@ export class ClientGroupsService {
     const me = await this.actor();
     const g = await this.find(me.organizationId, id);
     if (g.archivedAt) return { ...g, movedClients: 0 };
-    const [moved, archived] = await this.prisma.$transaction([
-      this.prisma.project.updateMany({ where: { clientGroupId: id }, data: { clientGroupId: null } }),
-      this.prisma.clientGroup.update({ where: { id }, data: { archivedAt: new Date() } }),
-    ]);
+    const [moved, archived] = await this.prisma.$transaction(async tx => {
+      const clients = await tx.project.findMany({ where: { clientGroupId: id }, select: { id: true, code: true, title: true } });
+      const un = await tx.project.updateMany({ where: { clientGroupId: id }, data: { clientGroupId: null } });
+      const done = await tx.clientGroup.update({ where: { id }, data: { archivedAt: new Date() } });
+      // Each client's move to "ungrouped" is a change to that client, and the CID ledger keeps it.
+      for (const c of clients) {
+        if (!c.code) continue;
+        await this.cid.recordInTx(tx, {
+          organizationId: me.organizationId, cid: c.code, projectId: c.id, clientTitle: c.title,
+          type: 'CLIENT_GROUP_CHANGED',
+          metadata: { fromGroupId: id, fromGroup: g.name, toGroupId: null, toGroup: null, reason: 'the group was archived' },
+        });
+      }
+      return [un, done] as const;
+    });
     await this.events.emit({
       action: EVENTS.CLIENT_GROUP_ARCHIVED, entityType: 'CLIENT_GROUP', entityId: id,
       organizationId: me.organizationId, metadata: { name: g.name, movedClients: moved.count },

@@ -36,7 +36,7 @@ function parseDay(s: string): Date { return new Date(`${String(s).slice(0, 10)}T
 const USER_SELECT = { id: true, firstName: true, lastName: true };
 const TASK_SELECT = { id: true, title: true };
 const ISSUE_SELECT = { id: true, title: true };
-// The project a task belongs to — its code is the PID shown on the timesheet.
+// The project a task belongs to — its code is the CID shown on the timesheet.
 const PROJECT_SELECT = { id: true, code: true, projectType: true };
 const PAGE_CAP = 500;
 
@@ -131,7 +131,7 @@ export class TimesheetsService {
   }
 
   /** The project (id + type) a task belongs to — the task is the source of truth for the
-   *  project, so logging by task keeps task-level progress AND records the PID/type. */
+   *  project, so logging by task keeps task-level progress AND records the CID/type. */
   private async projectOfTask(taskId: string): Promise<{ projectId: string | null; projectType: string | null }> {
     const pt = await this.prisma.projectTask.findFirst({
       where: { taskId, project: { deletedAt: null } },
@@ -145,7 +145,7 @@ export class TimesheetsService {
    *
    * A task lives in exactly one of the two, so this is only consulted when the project lookup
    * came back empty. Recording it is what stops internal time being read as an entry sitting in
-   * the PID buffer — chased forever for a Project ID it can never have, and counted on the client
+   * the CID buffer — chased forever for a CID it can never have, and counted on the client
    * ledger as unattributed *client* work.
    */
   /**
@@ -338,7 +338,7 @@ export class TimesheetsService {
     const billable = dto.billable ?? true;
 
     // ── "Other" entry: miscellaneous NON-PROJECT time (admin, internal meetings, training).
-    //    Always non-billable, never tied to a project/task, and never a PID buffer to assign —
+    //    Always non-billable, never tied to a project/task, and never a CID buffer to assign —
     //    it stands on its own. The 16h/day cap still applies. ──
     if (dto.category === 'OTHER') {
       const title = dto.title?.trim();
@@ -362,7 +362,7 @@ export class TimesheetsService {
       return entry;
     }
 
-    // ── Client call: time on the phone to a client, booked to the PID rather than to a task.
+    // ── Client call: time on the phone to a client, booked to the CID rather than to a task.
     //    Three deliberate departures from a normal entry, all for the same reason — a call is
     //    about a MATTER, not about a piece of work inside it:
     //      • no task is needed, and none is recorded;
@@ -374,8 +374,8 @@ export class TimesheetsService {
     if (dto.category === 'CLIENT_CALL') {
       const title = dto.title?.trim();
       if (!title) throw new BadRequestException('Say what the call was about.');
-      if (!dto.projectId) throw new BadRequestException('Choose the PID the call was about.');
-      // The PID must be one that exists in the caller's own organisation — this is the only
+      if (!dto.projectId) throw new BadRequestException('Choose the client the call was about.');
+      // The CID must be one that exists in the caller's own organisation — this is the only
       // check left, so it is the one that stops time being booked to another firm's matter.
       const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
       const organizationId = me?.organizationId ?? undefined;
@@ -406,7 +406,7 @@ export class TimesheetsService {
       return entry;
     }
 
-    // ── Buffer entry: log hours now, assign the PID (task) later (within a week). No task yet
+    // ── Buffer entry: log hours now, assign the CID (task) later (within a week). No task yet
     //    means no project/type; the 16h/day cap still applies. `entryDay` is normalised to the
     //    calendar-day boundary so the cap can't be side-stepped with a time component. ──
     if (!dto.taskId) {
@@ -428,7 +428,7 @@ export class TimesheetsService {
     }
 
     // ── Task entry: the task determines the project (keeps task-level progress) and records
-    //    the PID (projectId) + project type snapshot. ──
+    //    the CID (projectId) + project type snapshot. ──
     const task = await this.prisma.task.findFirst({
       where: { id: dto.taskId, deletedAt: null },
       select: { id: true },
@@ -438,7 +438,7 @@ export class TimesheetsService {
     // not the right to book hours against work you aren't staffed on.
     await this.access.assertTaskAssignee(actorId, dto.taskId);
     const { projectId, projectType } = await this.projectOfTask(dto.taskId);
-    // No project? It is either team-space work or an entry still awaiting its PID. Resolving the
+    // No project? It is either team-space work or an entry still awaiting its CID. Resolving the
     // team here keeps those two apart for every reader downstream.
     const teamId = projectId ? null : await this.teamOfTask(dto.taskId);
     // No time may be booked to a completed/closed client matter (was UI-only before).
@@ -492,21 +492,21 @@ export class TimesheetsService {
     return entry;
   }
 
-  /** Assign a PID (task) to a buffer entry that was logged without one. The task fixes the
+  /** Assign a CID (task) to a buffer entry that was logged without one. The task fixes the
    *  project + type; task-level progress is recomputed. Owner-or-Super-Admin only. */
   async assign(id: string, taskId: string) {
     const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
-    // Same backdating rule as create/update: attaching a PID to an old buffer entry shifts its
+    // Same backdating rule as create/update: attaching a CID to an old buffer entry shifts its
     // hours into a task/project total, so a month-old entry needs approval (Super Admin bypasses).
     await this.assertBackfillAllowed(entry.userId, entry.date);
     // Only a buffer entry (no task AND no issue) can be assigned — an issue-logged entry must
     // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
-    // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a PID.
-    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a PID.');
-    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its PID — there is nothing to assign.');
+    // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a CID.
+    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a client.');
+    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its client — there is nothing to assign.');
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).

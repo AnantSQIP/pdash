@@ -362,8 +362,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     const lines = [
       `Daily report — ${r.date}`,
       ``,
-      `• Projects created: ${r.projectsCreated.length}${r.projectsCreated.length ? ' — ' + r.projectsCreated.map(p => `${p.code ?? 'PID-pending'} ${p.title}`).slice(0, 6).join('; ') : ''}`,
-      `• Projects completed: ${r.projectsCompleted.length}${r.projectsCompleted.length ? ' — ' + r.projectsCompleted.map(p => `${p.code ?? ''} ${p.title}`).slice(0, 6).join('; ') : ''}`,
+      `• Clients created: ${r.projectsCreated.length}${r.projectsCreated.length ? ' — ' + r.projectsCreated.map(p => `${p.code ?? '—'} ${p.title}`).slice(0, 6).join('; ') : ''}`,
+      `• Clients completed: ${r.projectsCompleted.length}${r.projectsCompleted.length ? ' — ' + r.projectsCompleted.map(p => `${p.code ?? ''} ${p.title}`).slice(0, 6).join('; ') : ''}`,
       `• Tasks completed today: ${r.tasksCompleted}`,
       `• Deadlines met today: ${r.deadlinesMetToday}`,
       `• Overdue tasks: ${r.overdueCount}${r.overdueCount ? ' — ' + r.overdueSample.map(t => t.title).slice(0, 5).join('; ') + (r.overdueCount > 5 ? ` (+${r.overdueCount - 5} more)` : '') : ''}`,

@@ -176,8 +176,11 @@ const PASS = { 'x-org-passcode': PASSCODE };
   // perfectly ordinary — a project created moments ago, or one whose tasks moved elsewhere. This
   // suite then failed on "a task exists to staff", which reads like the staffing fix broke and is
   // really the fixture being thin.
+  // Nor a finished one: a completed or closed client locks its tasks (assertTaskWritable), and
+  // another suite finishing its own fixture client first would read here as a staffing failure.
   let tasks = [];
   for (const p of list) {
+    if (p.projectPhase === 'COMPLETED' || p.projectPhase === 'CLOSED') continue;
     const r = await su(`/tasks?projectId=${p.id}`);
     const rows = Array.isArray(r.data) ? r.data : (r.data?.items ?? []);
     if (rows.length) { tasks = rows; break; }

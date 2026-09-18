@@ -5,6 +5,8 @@ import { EventService } from '../audit-events/event.service';
 import { TaskTimeService } from '../tasks/task-time.service';
 import { getActorId } from '../../common/context/request-context';
 import { documentStorage } from '../documents/document-storage';
+import { CidService } from '../../common/cid/cid.service';
+import { isRetiredCid } from '../../common/cid/cid';
 import {
   PROJECT_PURGE_ORDER, TASK_PURGE_ORDER,
   type ProjectPurgeModel, type TaskPurgeModel,
@@ -44,9 +46,11 @@ const PURGE_TX = { maxWait: 15_000, timeout: 120_000 };
  *   3. IT IS ONE TRANSACTION. A half-purged project is worse than either outcome: rows that
  *      reference nothing, screens that half-render, and no way to tell what is missing.
  *   4. IT LEAVES A RECORD THAT OUTLIVES IT. AuditLog.entityId is a plain String with no foreign
- *      key, so the row survives its subject. It carries the title, the PID, and a count of every
+ *      key, so the row survives its subject. It carries the title, the CID, and a count of every
  *      child type destroyed — enough to answer "what was destroyed, by whom, when" next year,
- *      when the thing itself is gone and the only evidence is that row.
+ *      when the thing itself is gone and the only evidence is that row. A purged client also
+ *      stays visible in the CID ledger: its PURGED event (cid_event, no foreign key either) keeps
+ *      its title, hours and task-group count, and its CID stays taken forever.
  */
 @Injectable()
 export class PurgeService {
@@ -54,6 +58,7 @@ export class PurgeService {
     private readonly prisma: PrismaService,
     private readonly events: EventService,
     private readonly time: TaskTimeService,
+    private readonly cid: CidService,
   ) {}
 
   // ── Soft-deleted inventory (the Admin → Data screen) ───────────────────────
@@ -112,19 +117,55 @@ export class PurgeService {
    */
   async restoreProject(id: string) {
     const project = await this.prisma.project.findUnique({
-      where: { id }, select: { id: true, title: true, code: true, deletedAt: true },
+      where: { id }, select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true },
     });
     if (!project) throw new NotFoundException('Project not found.');
     if (!project.deletedAt) throw new BadRequestException('That project is not deleted.');
     const deletedAt = project.deletedAt;
+    const organizationId = await this.cid.ledgerOrg(this.prisma, id);
+
+    // The phase it held before the delete. softDelete overwrites the phase with ARCHIVED, but the
+    // CID ledger's DELETED event recorded what it was, so a completed client comes back completed
+    // and an on-hold one on hold. Anything else (or a delete from before the ledger) → ACTIVE.
+    const deletedEvent = await this.prisma.cidEvent.findFirst({
+      where: { projectId: id, type: 'DELETED' }, orderBy: { createdAt: 'desc' }, select: { metadata: true },
+    });
+    const recorded = (deletedEvent?.metadata as Record<string, unknown> | null)?.phaseBefore;
+    const phase = typeof recorded === 'string' && ['ACTIVE', 'ON_HOLD', 'COMPLETED'].includes(recorded) ? recorded : 'ACTIVE';
 
     const restored = await this.prisma.$transaction(async tx => {
-      // Back to ACTIVE rather than to whatever phase it held: softDelete OVERWROTE the phase
-      // with ARCHIVED, so the original is genuinely unrecoverable. ACTIVE is the honest default
-      // — the project is back on the books and whoever runs it can set the phase again.
+      // ITS CID. A deleted client's number stays reserved to it, so normally it simply comes back
+      // with the number it had. A number that was retired meanwhile — merged away, reassigned off,
+      // or never issued (a client deleted before CIDs were automatic) — is NEVER revived: the client
+      // is given the next CID instead, and the ledger says which it had.
+      const reg = project.code ? await this.cid.registryRow(tx, organizationId, project.code) : null;
+      let code = project.code;
+      let roundSeq = project.roundSeq;
+      let reissuedFrom: string | null | undefined;
+      if (!code || (reg && isRetiredCid(reg.status))) {
+        const minted = await this.cid.mintInTx(tx, { organizationId, projectId: id });
+        reissuedFrom = code;
+        code = minted.cid;
+        roundSeq = 1;
+        await this.cid.recordInTx(tx, {
+          organizationId, cid: code, projectId: id, clientTitle: project.title, type: 'MINTED',
+          fromCid: reissuedFrom ?? null, toCid: code,
+          metadata: {
+            reason: reissuedFrom ? 'restored client’s CID had been retired' : 'restored client had no CID',
+            previousCid: reissuedFrom ?? null, previousStatus: reg?.status ?? null,
+            fyLabel: minted.fyLabel, serial: minted.serial,
+          },
+        });
+      } else {
+        // Rounds still live under the number may have been renumbered while this one was in the
+        // bin; it rejoins at the end rather than sharing a round number.
+        const live = await tx.project.findMany({ where: { code, deletedAt: null }, select: { roundSeq: true } });
+        if (live.some(r => r.roundSeq === roundSeq)) roundSeq = Math.max(...live.map(r => r.roundSeq)) + 1;
+      }
+
       const p = await tx.project.update({
         where: { id },
-        data: { deletedAt: null, projectPhase: 'ACTIVE' },
+        data: { deletedAt: null, projectPhase: phase, code, roundSeq },
       });
       await tx.issue.updateMany({ where: { projectId: id, deletedAt }, data: { deletedAt: null } });
       const links = await tx.projectTask.findMany({ where: { projectId: id }, select: { taskId: true } });
@@ -134,24 +175,25 @@ export class PurgeService {
         // Same-instant match: these are the tasks the project's own delete archived.
         tasks = (await tx.task.updateMany({ where: { id: { in: taskIds }, deletedAt }, data: { deletedAt: null } })).count;
       }
-      // CLIENTS-FLOW (PID rework): deleting a client CANCELS its open PID request so no serial is
-      // burned on a client that is gone. Restoring it has to put the request back, or the client
-      // comes back with no PID and nothing tracking that — the one state the queue exists to
-      // prevent. Same-instant match again: only the request this delete cancelled.
-      let pidRequeued = 0;
-      if (!project.code) {
-        pidRequeued = (await tx.pidRequest.updateMany({
-          where: { projectId: id, status: 'CANCELLED', resolvedAt: deletedAt },
-          data: { status: 'PENDING', resolvedAt: null, resolvedById: null, resolutionNote: null, remindedAt: null },
-        })).count;
-      }
-      return { project: p, tasks, pidRequeued };
+      await this.cid.syncRegistryInTx(tx, organizationId, code!);
+      await this.cid.recordInTx(tx, {
+        organizationId, cid: code!, projectId: id, clientTitle: p.title, type: 'RESTORED',
+        ...(reissuedFrom !== undefined ? { fromCid: reissuedFrom ?? null } : {}), toCid: code!,
+        metadata: { phaseRestored: phase, tasksRestored: tasks, deletedAt: deletedAt.toISOString(), cidReissued: reissuedFrom !== undefined },
+      });
+      return { project: p, tasks, cid: code!, reissuedFrom };
     });
     await this.events.emit({
       action: 'project.restored', entityType: 'PROJECT', entityId: id,
-      metadata: { title: project.title, code: project.code, tasksRestored: restored.tasks, pidRequeued: restored.pidRequeued },
+      metadata: {
+        title: project.title, cid: restored.cid, phase, tasksRestored: restored.tasks,
+        ...(restored.reissuedFrom !== undefined ? { cidReissuedFrom: restored.reissuedFrom } : {}),
+      },
     });
-    return { id, title: project.title, tasksRestored: restored.tasks, pidRequeued: restored.pidRequeued };
+    return {
+      id, title: project.title, tasksRestored: restored.tasks, cid: restored.cid, phase,
+      cidReissued: restored.reissuedFrom !== undefined,
+    };
   }
 
   async restoreTask(id: string) {
@@ -260,6 +302,11 @@ export class PurgeService {
     // stand BEFORE the purge removes them.
     const files = await this.doomedDocuments(id, taskIds, keep);
 
+    // What the CID ledger keeps of the client after its rows are gone: enough for the ledger to
+    // go on showing it — name, hours, task groups, who ran it — when nothing else in the system can.
+    const organizationId = await this.cid.ledgerOrg(this.prisma, id);
+    const snapshot = await this.ledgerSnapshot(id, project.deletedAt);
+
     const counts = await this.prisma.$transaction(async tx => {
       await this.assertStillDeleted(tx, 'project', id, 'project');
       // Every doomed task in ONE pass per table rather than a full pass per task. A project with
@@ -277,6 +324,20 @@ export class PurgeService {
         createdBy: project.createdBy, createdAt: project.createdAt, softDeletedAt: project.deletedAt,
         tasksDestroyed: doomed.length, tasksUnlinkedButKept: keep.size,
       }, c);
+      // The number stays taken forever: the registry reads PURGED once nothing carries it (another
+      // round, live or in the bin, keeps it ATTACHED or DELETED), and the ledger keeps the client.
+      const cidStatus = project.code ? await this.cid.syncRegistryInTx(tx, organizationId, project.code) : null;
+      if (project.code) {
+        await this.cid.recordInTx(tx, {
+          organizationId, cid: project.code, projectId: id, clientTitle: project.title, type: 'PURGED',
+          metadata: {
+            ...snapshot, roundSeq: project.roundSeq, office: project.office, projectType: project.projectType,
+            technologyDomain: project.technologyDomain, startDate: project.startDate, dueDate: project.dueDate,
+            completedAt: project.completedAt, createdAt: project.createdAt, softDeletedAt: project.deletedAt,
+            tasksDestroyed: doomed.length, cidStatusAfter: cidStatus,
+          },
+        });
+      }
       return c;
     }, PURGE_TX);
     await this.freeBytes(files);
@@ -284,6 +345,41 @@ export class PurgeService {
   }
 
   // ── Internals ─────────────────────────────────────────────────────────────
+
+  /** What the CID ledger keeps of a client once its rows are destroyed. Read before the purge. */
+  private async ledgerSnapshot(projectId: string, deletedAt: Date | null) {
+    const [logged, tasks, groups, p] = await Promise.all([
+      this.prisma.timesheet.aggregate({ where: { projectId, deletedAt: null }, _sum: { hoursLogged: true } }),
+      this.prisma.projectTask.findMany({
+        where: { projectId }, select: { task: { select: { estimatedHours: true, deletedAt: true } } },
+      }),
+      this.prisma.taskList.count({ where: { projectId, deletedAt: null } }),
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: {
+          createdBy: true,
+          clientGroup: { select: { name: true } },
+          members: { where: { projectRole: 'MANAGER' }, select: { user: { select: { firstName: true, lastName: true } } } },
+        },
+      }),
+    ]);
+    const round1 = (n: number) => Math.round(n * 10) / 10;
+    // Tasks archived WITH the client (same instant) still count toward what it was allotted.
+    const allotted = tasks
+      .filter(t => !t.task.deletedAt || (deletedAt && t.task.deletedAt.getTime() === deletedAt.getTime()))
+      .reduce((n, t) => n + (t.task.estimatedHours ?? 0), 0);
+    const creator = p?.createdBy
+      ? await this.prisma.user.findUnique({ where: { id: p.createdBy }, select: { firstName: true, lastName: true } })
+      : null;
+    return {
+      loggedHours: round1(logged._sum.hoursLogged ?? 0),
+      allottedHours: round1(allotted),
+      taskGroupCount: groups,
+      clientGroup: p?.clientGroup?.name ?? null,
+      managers: (p?.members ?? []).map(m => `${m.user.firstName ?? ''} ${m.user.lastName ?? ''}`.trim()),
+      createdByName: creator ? `${creator.firstName} ${creator.lastName}`.trim() : null,
+    };
+  }
 
   /**
    * The two gates, together, because they answer the same question: is it safe to run this at
@@ -456,7 +552,7 @@ export class PurgeService {
     const del: Record<ProjectPurgeModel, () => Promise<{ count: number }>> = {
       // Timesheets point at the project with onDelete: SetNull, so without an explicit delete
       // they would SURVIVE with a null projectId — indistinguishable from an entry still inside
-      // the "assign a PID later" buffer, and chased forever for a PID that cannot exist.
+      // the "assign a client later" buffer, and chased forever for a client that cannot exist.
       timesheet:         () => tx.timesheet.deleteMany({ where: { OR: [{ projectId: id }, { issue: { projectId: id } }] } }),
       issue:             () => tx.issue.deleteMany({ where: { projectId: id } }),
       projectTask:       () => tx.projectTask.deleteMany({ where: { projectId: id } }),
@@ -466,7 +562,6 @@ export class PurgeService {
       projectDepartment: () => tx.projectDepartment.deleteMany({ where: { projectId: id } }),
       projectTeam:       () => tx.projectTeam.deleteMany({ where: { projectId: id } }),
       projectPatent:     () => tx.projectPatent.deleteMany({ where: { projectId: id } }),
-      pidRequest:        () => tx.pidRequest.deleteMany({ where: { projectId: id } }),
       approvalAction:    () => tx.approvalAction.deleteMany({ where: { approval: { entityId: id } } }),
       approval:          () => tx.approval.deleteMany({ where: { entityId: id } }),
       commentAttachment: () => tx.commentAttachment.deleteMany({ where: { comment: { entityId: id } } }),
@@ -482,16 +577,10 @@ export class PurgeService {
     };
     const counts = await this.runOrdered(PROJECT_PURGE_ORDER, del);
 
-    // ── Two things that are CHANGED rather than destroyed ────────────────────
-    // The PID ledger is the authority on which serials have ever existed, and its whole purpose
-    // is that a serial is never silently reused. Deleting the reservation would free the number
-    // for reissue and erase the history of what it was for; DISCONTINUED is the status the model
-    // already defines for a retired serial that leaves a permanent gap.
-    const pid = await tx.pidReservation.updateMany({
-      where: { projectId: id, status: { in: ['RESERVED', 'ATTACHED'] } },
-      data: { status: 'DISCONTINUED', resolvedAt: new Date() },
-    });
-    if (pid.count) counts.pidReservationsDiscontinued = pid.count;
+    // ── Things that are CHANGED rather than destroyed ─────────────────────────
+    // The CID registry row is not touched here: purgeProject re-reads it after this (PURGED once
+    // nothing carries the number) and the ledger's PURGED event keeps the client. Deleting the
+    // registry row would free the number for reissue, which is the one thing it must never do.
     // A meeting that happened is an organisation-level fact with its own attendees; it is tagged
     // to a project, not owned by one. Untag it rather than delete somebody's calendar history.
     const events = await tx.calendarEvent.updateMany({ where: { projectId: id }, data: { projectId: null } });

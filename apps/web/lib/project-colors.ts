@@ -8,7 +8,7 @@
 //
 // Four variables, four channels, never sharing one:
 //
-//   hue        = WHICH CLIENT.  Seven families, assigned by a client's rank (by PID) among the
+//   hue        = WHICH CLIENT.  Seven families, assigned by a client's rank (by CID) among the
 //                clients on the board, so no two clients visible together share a hue until there
 //                are more than seven. Every family has a pastel FILL ladder and one saturated EDGE
 //                (OKLCH L 0.58, C 0.15) drawn as the segment's 1px ring. The edge carries identity
@@ -17,7 +17,7 @@
 //                first three EDGES pass the validator all-pairs (CVD ΔE 10.7, normal-vision 15.8,
 //                ≥ 4:1 on the free base); the fourth onwards cannot, for any order of any set that
 //                avoids green, teal, red and amber — so from the fourth on each family also carries
-//                a TEXTURE (Bertin's second channel), and the PID label, the legend and every hover
+//                a TEXTURE (Bertin's second channel), and the CID label, the legend and every hover
 //                name the client in words.
 //   lightness  = HOW URGENT THE TASK IS.  Critical deepest, low lightest, as an ordinal ramp:
 //                OKLCH L 0.725 / 0.79 / 0.855 / 0.92, one hue per family, validator ordinal check
@@ -37,7 +37,7 @@
 //   · no green or teal (40°–195° is excluded outright): green means "free" on this board;
 //   · red and amber are reserved for the deadline rail, rose for the over-committed line;
 //   · colour is never the only carrier: priority is also a word, deadline is also a date,
-//     over-committed is also "over by Nh", and a client is also its PID.
+//     over-committed is also "over by Nh", and a client is also its CID.
 //
 // The one green on the board is the FREE base of a working-day cell — the owner's "green box",
 // now a paler one. It means "unallocated hours", and nothing here may be confused with it.
@@ -135,12 +135,12 @@ export const FREE_BASE = { bg: '#ecfdf5', border: '#a7f3d0' } as const;
 /**
  * Give every project on a board its hue.
  *
- * Rank by PID (then by id for anything without one) and take rank mod 7. Deterministic for a
+ * Rank by CID (then by id for anything without one) and take rank mod 7. Deterministic for a
  * given set of projects, collision-free up to seven, and it reshuffles ONLY when the set of
  * projects on the board changes — never on hover, sort, filter or search, because callers pass
  * the whole payload's project set, not what is currently on screen.
  *
- * Why rank rather than a hash or the PID's serial: a hash collides at random, and serial mod 7
+ * Why rank rather than a hash or the CID's serial: a hash collides at random, and serial mod 7
  * collides as soon as two visible projects are seven apart (003 and 010) — which, with a dozen
  * open matters, is most windows. Rank keeps the seven projects you are looking at distinct.
  */

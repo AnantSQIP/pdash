@@ -26,7 +26,7 @@ export const TASK_INVALIDATES = [
   'tasks',           // per-project task lists
   'project',         // project detail: completion %, hours
   'projects',        // project list cards: progress
-  'project-rounds',  // round cards under a PID
+  'project-rounds',  // round cards under a CID
   'perf-user-tasks', // performance panel task breakdown
   'capacity',        // capacity board: who is loaded (and the project tab, same prefix)
   'coverage-risks',  // emergency-leave coverage: remaining hours on at-risk tasks

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { api, type ApiTask, type ApiProject, type TaskGroup } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { Modal } from '@/components/ui/Modal';
@@ -30,8 +30,8 @@ function tasksByGroup(tasks: ApiTask[], projectId: string, groups: TaskGroup[]) 
   return out;
 }
 
-/** Attach a PID (client) + task to a buffer time-entry that was logged without one. */
-export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; onClose: () => void; onDone: () => void }) {
+/** Attach a client + task to a buffer time-entry that was logged without one ("assign later"). */
+export function AssignClientModal({ entryId, onClose, onDone }: { entryId: string; onClose: () => void; onDone: () => void }) {
   const { org, currentUser } = useOrg();
   const [projectId, setProjectId] = useState('');
   const [taskId, setTaskId] = useState('');
@@ -55,13 +55,13 @@ export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; 
   const assign = useMutation({
     mutationFn: () => api.timesheets.assign(entryId, taskId),
     onSuccess: () => { onDone(); onClose(); },
-    onError: e => setError(e instanceof Error ? e.message : 'Could not assign the PID.'),
+    onError: e => setError(e instanceof Error ? e.message : 'Could not assign the entry to a client.'),
   });
 
   return (
     <Modal
-      title="Assign PID"
-      subtitle="Attach this time entry to a client (PID) and task"
+      title="Assign to a client"
+      subtitle="Attach this time entry to a client and one of its tasks"
       size="md"
       onClose={onClose}
       footer={
@@ -79,12 +79,12 @@ export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; 
     >
       <form id="assign-pid-form" onSubmit={e => { e.preventDefault(); if (taskId) assign.mutate(); }} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Client PID <span className="text-red-500">*</span></label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Client <span className="text-red-500">*</span></label>
           <select required value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); }}
             className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white">
-            <option value="">{lp ? 'Loading…' : projects.length === 0 ? 'You are not on any clients' : 'Select a client by its PID'}</option>
-            {/* One PID can hold several rounds — show the round so the right one is picked. */}
-            {projects.map(p => <option key={p.id} value={p.id}>{pidLabel(p.code, p.roundSeq)} — {p.title}</option>)}
+            <option value="">{lp ? 'Loading…' : projects.length === 0 ? 'You are not on any clients' : 'Select a client'}</option>
+            {/* One CID can hold several rounds — show the round so the right one is picked. */}
+            {projects.map(p => <option key={p.id} value={p.id}>{cidLabel(p.code, p.roundSeq)} — {p.title}</option>)}
           </select>
           {selectedProject && <p className="text-[11px] text-gray-500 mt-1">Type: <span className="font-medium text-gray-700">{selectedProject.projectType ?? '—'}</span></p>}
         </div>
@@ -92,7 +92,7 @@ export function AssignPidModal({ entryId, onClose, onDone }: { entryId: string; 
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Task <span className="text-red-500">*</span></label>
           <select required value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!projectId}
             className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white disabled:bg-gray-50 disabled:text-gray-400">
-            <option value="">{!projectId ? 'Pick a PID first' : lt ? 'Loading…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
+            <option value="">{!projectId ? 'Pick a client first' : lt ? 'Loading…' : tasks.length === 0 ? 'No tasks assigned to you here' : 'Select a task'}</option>
             {groupedTasks
               ? groupedTasks.map(g => (
                   <optgroup key={g.key} label={g.label}>

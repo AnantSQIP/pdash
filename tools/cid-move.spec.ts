@@ -1,13 +1,13 @@
 /**
- * Tests for correcting a project's PID — apps/api/src/modules/projects/pid-move.ts.
+ * Tests for correcting a project's CID — apps/api/src/modules/projects/cid-move.ts.
  *
- *   npx ts-node --compiler-options '{"module":"commonjs"}' tools/pid-move.spec.ts
+ *   npx ts-node --compiler-options '{"module":"commonjs"}' tools/cid-move.spec.ts
  *
  * Plain assertions, no framework — this repo has none.
  *
  * WHY THESE EXIST
  *
- * A PID is the number the firm files a matter under: it is on the invoice, in the client's email,
+ * A CID is the number the firm files a matter under: it is on the invoice, in the client's email,
  * and in the report. Moving a project between numbers is therefore not a cosmetic edit — it is an
  * edit to the firm's index of its own work, made by hand, usually months after the fact, by
  * somebody who has just noticed something is wrong.
@@ -25,13 +25,13 @@ process.env.TZ = 'Asia/Kolkata';
 import {
   deriveMode,
   nextSerial,
-  pidFy,
+  cidFy,
   planMove,
   renumberRounds,
   reservationPointer,
   type MoveInput,
   type MoveProject,
-} from '../apps/api/src/modules/projects/pid-move';
+} from '../apps/api/src/modules/projects/cid-move';
 
 let passed = 0;
 const failures: string[] = [];
@@ -44,14 +44,14 @@ function check(name: string, got: unknown, want: unknown) {
 }
 
 // ── fixtures ────────────────────────────────────────────────────────────────
-/** A project under a PID. Active unless a case says otherwise, because most of them are. */
+/** A project under a CID. Active unless a case says otherwise, because most of them are. */
 const proj = (id: string, code: string | null, roundSeq: number, over: Partial<MoveProject> = {}): MoveProject =>
   ({ id, code, roundSeq, phase: 'ACTIVE', title: id, ...over });
 
 /** The shape planMove takes, with the boring halves defaulted. */
 const move = (over: Partial<MoveInput> & Pick<MoveInput, 'project'>): MoveInput => ({
   sourceGroup: [over.project],
-  targetPid: null,
+  targetCid: null,
   targetGroup: [],
   ...over,
 });
@@ -64,36 +64,36 @@ const outcome = (input: MoveInput) => {
 const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.id, c.to]);
 
 // ── 1. reassign: the number itself was wrong ────────────────────────────────
-// One project, alone under its PID, moving to a freshly minted one. Nothing else in the firm is
+// One project, alone under its CID, moving to a freshly minted one. Nothing else in the firm is
 // touched, and the number it leaves is left holding nothing.
 {
   const p = proj('p1', 'SQ_26_27_004', 1);
-  const plan = planMove(move({ project: p, sourceGroup: [p], targetPid: null }));
-  check('reassigning a lone project to a fresh PID is a REASSIGN', plan.ok && plan.plan.mode, 'REASSIGN');
-  check('the fresh PID starts the arrival at round 1', plan.ok && plan.plan.newRoundSeq, 1);
-  check('the PID it leaves is vacated', plan.ok && plan.plan.vacatesSource, true);
+  const plan = planMove(move({ project: p, sourceGroup: [p], targetCid: null }));
+  check('reassigning a lone project to a fresh CID is a REASSIGN', plan.ok && plan.plan.mode, 'REASSIGN');
+  check('the fresh CID starts the arrival at round 1', plan.ok && plan.plan.newRoundSeq, 1);
+  check('the CID it leaves is vacated', plan.ok && plan.plan.vacatesSource, true);
   check('nothing else is renumbered', plan.ok && plan.plan.affected, []);
-  check('the old number is reported so the audit record can name it', plan.ok && plan.plan.fromPid, 'SQ_26_27_004');
+  check('the old number is reported so the audit record can name it', plan.ok && plan.plan.fromCid, 'SQ_26_27_004');
 }
 
-// Reassigning onto a PID that exists but holds nothing — a serial reserved and never used, say.
+// Reassigning onto a CID that exists but holds nothing — a serial reserved and never used, say.
 // Still a reassign, still round 1: an empty number has no rounds to queue behind.
 {
   const p = proj('p1', 'SQ_26_27_004', 1);
-  const plan = planMove(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_009', targetGroup: [] }));
-  check('reassigning onto an existing but empty PID is a REASSIGN', plan.ok && plan.plan.mode, 'REASSIGN');
-  check('the arrival takes round 1 of the empty PID', plan.ok && plan.plan.newRoundSeq, 1);
-  check('the destination PID is carried into the plan', plan.ok && plan.plan.toPid, 'SQ_26_27_009');
-  check('the vacated PID is still vacated', plan.ok && plan.plan.vacatesSource, true);
+  const plan = planMove(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_009', targetGroup: [] }));
+  check('reassigning onto an existing but empty CID is a REASSIGN', plan.ok && plan.plan.mode, 'REASSIGN');
+  check('the arrival takes round 1 of the empty CID', plan.ok && plan.plan.newRoundSeq, 1);
+  check('the destination CID is carried into the plan', plan.ok && plan.plan.toCid, 'SQ_26_27_009');
+  check('the vacated CID is still vacated', plan.ok && plan.plan.vacatesSource, true);
 }
 
 // ── the three ways a caller can ask for the wrong operation ─────────────────
 // Each refusal must name what the CALLER asked for. Written as a two-way choice, the third case
 // answered "there is nothing to merge into" to somebody who had asked to reassign — an operation
-// they never requested, about a Project ID they never supplied.
+// they never requested, about a CID they never supplied.
 {
   const a = proj('p1', 'SQ_26_27_004', 1), b = proj('p2', 'SQ_26_27_004', 2);
-  const d = planMove(move({ project: a, sourceGroup: [a, b], targetPid: null, declaredMode: 'REASSIGN' }));
+  const d = planMove(move({ project: a, sourceGroup: [a, b], targetCid: null, declaredMode: 'REASSIGN' }));
   check('asking to reassign a SHARED number is refused', d.ok, false);
   check('and it is refused as a mode mismatch', !d.ok && d.reason, 'MODE_MISMATCH');
   check('and the message says it is a split, not a merge',
@@ -103,38 +103,38 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
 }
 {
   const a = proj('p1', 'SQ_26_27_004', 1), b = proj('p2', 'SQ_26_27_004', 2), c = proj('p3', 'SQ_26_27_004', 3);
-  const d = planMove(move({ project: a, sourceGroup: [a, b, c], targetPid: null, declaredMode: 'REASSIGN' }));
+  const d = planMove(move({ project: a, sourceGroup: [a, b, c], targetCid: null, declaredMode: 'REASSIGN' }));
   check('the count is pluralised when more than one other shares it',
     !d.ok && /shared with 2 other projects/.test(d.message), true);
 }
 {
   const p = proj('p1', 'SQ_26_27_004', 1), q = proj('p2', 'SQ_26_27_002', 1);
-  const d = planMove(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_002', targetGroup: [q], declaredMode: 'REASSIGN' }));
+  const d = planMove(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_002', targetGroup: [q], declaredMode: 'REASSIGN' }));
   check('asking to reassign ONTO an occupied number is refused', !d.ok && d.reason, 'MODE_MISMATCH');
   check('and the message offers the merge that was actually meant',
     !d.ok && /Merge it instead/.test(d.message), true);
 }
 {
   const p = proj('p1', 'SQ_26_27_004', 1);
-  const d = planMove(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_009', targetGroup: [], declaredMode: 'MERGE' }));
+  const d = planMove(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_009', targetGroup: [], declaredMode: 'MERGE' }));
   check('asking to merge into an EMPTY number is refused', !d.ok && d.reason, 'MODE_MISMATCH');
   check('and the message names the empty number and offers a reassign',
     !d.ok && /SQ_26_27_009 holds no work/.test(d.message) && /Reassign/.test(d.message), true);
 }
 
 // ── 2. split: two matters were filed under one number ───────────────────────
-// Three rounds under one PID. The FIRST one leaves — the hardest case, because the two behind it
+// Three rounds under one CID. The FIRST one leaves — the hardest case, because the two behind it
 // must both move down or the group is left starting at 2.
 {
   const a = proj('a', 'SQ_26_27_004', 1);
   const b = proj('b', 'SQ_26_27_004', 2);
   const c = proj('c', 'SQ_26_27_004', 3);
-  const d = planMove(move({ project: a, sourceGroup: [a, b, c], targetPid: null, declaredMode: 'SPLIT' }));
+  const d = planMove(move({ project: a, sourceGroup: [a, b, c], targetCid: null, declaredMode: 'SPLIT' }));
   check('splitting one of three is a SPLIT', d.ok && d.plan.mode, 'SPLIT');
-  check('the departing project restarts at round 1 under its own PID', d.ok && d.plan.newRoundSeq, 1);
+  check('the departing project restarts at round 1 under its own CID', d.ok && d.plan.newRoundSeq, 1);
   check('the two left behind close ranks to 1 and 2', d.ok && numbers(d.plan.sourceRenumber), [['b', 1], ['c', 2]]);
-  check('two rounds remain under the old PID', d.ok && d.plan.sourceRemaining, 2);
-  check('the old PID is NOT vacated — work is still under it', d.ok && d.plan.vacatesSource, false);
+  check('two rounds remain under the old CID', d.ok && d.plan.sourceRemaining, 2);
+  check('the old CID is NOT vacated — work is still under it', d.ok && d.plan.vacatesSource, false);
   check('both remaining projects are named as affected', d.ok && d.plan.affected, ['b', 'c']);
 }
 
@@ -144,7 +144,7 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
   const a = proj('a', 'SQ_26_27_004', 1);
   const b = proj('b', 'SQ_26_27_004', 2);
   const c = proj('c', 'SQ_26_27_004', 3);
-  const d = planMove(move({ project: c, sourceGroup: [a, b, c], targetPid: null, declaredMode: 'SPLIT' }));
+  const d = planMove(move({ project: c, sourceGroup: [a, b, c], targetCid: null, declaredMode: 'SPLIT' }));
   check('splitting the last round out is still a SPLIT', d.ok && d.plan.mode, 'SPLIT');
   check('splitting the last round renumbers nobody', d.ok && d.plan.sourceRenumber, []);
   check('the rounds before it are untouched', d.ok && d.plan.affected, []);
@@ -154,7 +154,7 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
 // A middle round leaving is the case that makes the hole most obvious.
 {
   const rounds = [proj('a', 'SQ_26_27_004', 1), proj('b', 'SQ_26_27_004', 2), proj('c', 'SQ_26_27_004', 3)];
-  const d = planMove(move({ project: rounds[1], sourceGroup: rounds, targetPid: null, declaredMode: 'SPLIT' }));
+  const d = planMove(move({ project: rounds[1], sourceGroup: rounds, targetCid: null, declaredMode: 'SPLIT' }));
   check('a middle round leaving pulls the ones behind it down', d.ok && numbers(d.plan.sourceRenumber), [['c', 2]]);
 }
 
@@ -163,7 +163,7 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
 {
   const p = proj('p1', 'SQ_26_27_004', 1);
   const q = proj('q1', 'SQ_26_27_002', 1);
-  const d = planMove(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_002', targetGroup: [q], declaredMode: 'MERGE' }));
+  const d = planMove(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_002', targetGroup: [q], declaredMode: 'MERGE' }));
   check('merging two singletons is a MERGE', d.ok && d.plan.mode, 'MERGE');
   check('the arrival becomes round 2', d.ok && d.plan.newRoundSeq, 2);
   check('the destination keeps its existing round numbers', d.ok && d.plan.targetRenumber, []);
@@ -171,15 +171,15 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
   check('the destination now holds two rounds', d.ok && d.plan.targetTotal, 2);
 }
 
-// A group moving into a group: one of two rounds joins a PID that already holds three. It takes
+// A group moving into a group: one of two rounds joins a CID that already holds three. It takes
 // round 4, and the round left behind becomes the only one under its old number.
 {
   const src = [proj('s1', 'SQ_26_27_007', 1), proj('s2', 'SQ_26_27_007', 2)];
   const dst = [proj('d1', 'SQ_26_27_002', 1), proj('d2', 'SQ_26_27_002', 2), proj('d3', 'SQ_26_27_002', 3)];
-  const d = planMove(move({ project: src[0], sourceGroup: src, targetPid: 'SQ_26_27_002', targetGroup: dst, declaredMode: 'MERGE' }));
+  const d = planMove(move({ project: src[0], sourceGroup: src, targetCid: 'SQ_26_27_002', targetGroup: dst, declaredMode: 'MERGE' }));
   check('a round moving into a group of three takes round 4', d.ok && d.plan.newRoundSeq, 4);
   check('the round left behind becomes round 1', d.ok && numbers(d.plan.sourceRenumber), [['s2', 1]]);
-  check('the old PID keeps one round and is not vacated', d.ok && [d.plan.sourceRemaining, d.plan.vacatesSource], [1, false]);
+  check('the old CID keeps one round and is not vacated', d.ok && [d.plan.sourceRemaining, d.plan.vacatesSource], [1, false]);
   check('the destination ends up with four rounds', d.ok && d.plan.targetTotal, 4);
 }
 
@@ -188,7 +188,7 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
 {
   const dst = [proj('d1', 'SQ_26_27_002', 1), proj('d3', 'SQ_26_27_002', 3)];
   const p = proj('p1', 'SQ_26_27_004', 1);
-  const d = planMove(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_002', targetGroup: dst, declaredMode: 'MERGE' }));
+  const d = planMove(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_002', targetGroup: dst, declaredMode: 'MERGE' }));
   check('a gapped destination is made contiguous', d.ok && numbers(d.plan.targetRenumber), [['d3', 2]]);
   check('and the arrival takes 3, not 4', d.ok && d.plan.newRoundSeq, 3);
 }
@@ -196,41 +196,41 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
 // ── 4. the moves that must be refused ───────────────────────────────────────
 {
   const p = proj('p1', 'SQ_26_27_004', 1);
-  check('moving a project onto the PID it already has is refused',
-    outcome(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_004' })), 'SAME_PID');
+  check('moving a project onto the CID it already has is refused',
+    outcome(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_004' })), 'SAME_CID');
 
   check('merging a project into itself is refused',
-    outcome(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_004', targetGroup: [p], targetProjectId: 'p1', declaredMode: 'MERGE' })),
+    outcome(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_004', targetGroup: [p], targetProjectId: 'p1', declaredMode: 'MERGE' })),
     'SELF');
 
-  check('splitting a project that is alone under its PID is refused',
-    outcome(move({ project: p, sourceGroup: [p], targetPid: null, declaredMode: 'SPLIT' })), 'NOT_SHARED');
+  check('splitting a project that is alone under its CID is refused',
+    outcome(move({ project: p, sourceGroup: [p], targetCid: null, declaredMode: 'SPLIT' })), 'NOT_SHARED');
 
   check('a project in the bin cannot be moved',
-    outcome(move({ project: { ...p, deleted: true }, sourceGroup: [p], targetPid: null })), 'DELETED');
+    outcome(move({ project: { ...p, deleted: true }, sourceGroup: [p], targetCid: null })), 'DELETED');
 
-  check('a project with no PID is told to attach one instead',
-    outcome(move({ project: proj('p1', null, 1), sourceGroup: [], targetPid: null })), 'NO_PID');
+  check('a project with no CID is refused (every live client has one)',
+    outcome(move({ project: proj('p1', null, 1), sourceGroup: [], targetCid: null })), 'NO_CID');
 
   check('a destination in another financial year is refused',
-    outcome(move({ project: p, sourceGroup: [p], targetPid: 'SQ_25_26_011', targetGroup: [proj('x', 'SQ_25_26_011', 1)], declaredMode: 'MERGE' })),
+    outcome(move({ project: p, sourceGroup: [p], targetCid: 'SQ_25_26_011', targetGroup: [proj('x', 'SQ_25_26_011', 1)], declaredMode: 'MERGE' })),
     'CROSS_FY');
 
   // Asking to merge into a number nothing is filed under, or to give a number of its own to a
   // project by picking one that is already occupied, is a different operation from the one asked
   // for — and doing it silently would put work under a client's number by accident.
-  check('a merge into an empty PID is refused as the wrong operation',
-    outcome(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_009', targetGroup: [], declaredMode: 'MERGE' })),
+  check('a merge into an empty CID is refused as the wrong operation',
+    outcome(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_009', targetGroup: [], declaredMode: 'MERGE' })),
     'MODE_MISMATCH');
-  check('a reassign onto an occupied PID is refused as the wrong operation',
-    outcome(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_002', targetGroup: [proj('q', 'SQ_26_27_002', 1)], declaredMode: 'REASSIGN' })),
+  check('a reassign onto an occupied CID is refused as the wrong operation',
+    outcome(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_002', targetGroup: [proj('q', 'SQ_26_27_002', 1)], declaredMode: 'REASSIGN' })),
     'MODE_MISMATCH');
 
-  // A soft-deleted sibling neither holds a round number nor keeps the PID alive: leaving a group
+  // A soft-deleted sibling neither holds a round number nor keeps the CID alive: leaving a group
   // whose only other member is in the bin still vacates the number.
   const ghost = proj('gone', 'SQ_26_27_004', 2, { deleted: true });
-  const d = planMove(move({ project: p, sourceGroup: [p, ghost], targetPid: null }));
-  check('a deleted sibling does not keep a vacated PID alive', d.ok && d.plan.vacatesSource, true);
+  const d = planMove(move({ project: p, sourceGroup: [p, ghost], targetCid: null }));
+  check('a deleted sibling does not keep a vacated CID alive', d.ok && d.plan.vacatesSource, true);
   check('and it does not make the move a split', d.ok && d.plan.mode, 'REASSIGN');
 }
 
@@ -248,7 +248,7 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
 
   for (const leaving of [0, 1, 2, 3]) {
     const group = [0, 1, 2, 3].map(i => proj(`r${i}`, 'SQ_26_27_004', i + 1));
-    const d = planMove(move({ project: group[leaving], sourceGroup: group, targetPid: null, declaredMode: 'SPLIT' }));
+    const d = planMove(move({ project: group[leaving], sourceGroup: group, targetCid: null, declaredMode: 'SPLIT' }));
     check(`round numbers stay contiguous when round ${leaving + 1} of 4 leaves`,
       d.ok && contiguous(applied(group, d.plan, group[leaving].id)), true);
   }
@@ -256,7 +256,7 @@ const numbers = (changes: { id: string; to: number }[]) => changes.map(c => [c.i
   // And the destination, including the arrival, is 1..N too.
   const dst = [proj('d1', 'SQ_26_27_002', 1), proj('d2', 'SQ_26_27_002', 4), proj('d3', 'SQ_26_27_002', 9)];
   const p = proj('p1', 'SQ_26_27_004', 1);
-  const d = planMove(move({ project: p, sourceGroup: [p], targetPid: 'SQ_26_27_002', targetGroup: dst, declaredMode: 'MERGE' }));
+  const d = planMove(move({ project: p, sourceGroup: [p], targetCid: 'SQ_26_27_002', targetGroup: dst, declaredMode: 'MERGE' }));
   const after = d.ok
     ? [...dst.map(x => d.plan.targetRenumber.find(c => c.id === x.id)?.to ?? x.roundSeq), d.plan.newRoundSeq].sort((a, b) => a - b)
     : [];
@@ -278,7 +278,7 @@ check('renumbering closes a hole',
 
 // ── 6. a serial is never handed out twice, across a whole sequence of moves ──
 // The series is driven exactly as the service drives it: the taken set only ever GROWS. A vacated
-// PID's serial stays in it, because vacating retires a number rather than releasing it. If a
+// CID's serial stays in it, because vacating retires a number rather than releasing it. If a
 // future edit ever removed a vacated serial from that set, this is the check that would fail.
 {
   const taken = new Set<number>([1, 2, 3, 4]); // four projects already filed this year
@@ -298,21 +298,21 @@ check('renumbering closes a hole',
 }
 
 // ── 7. small pieces the rest of the module leans on ─────────────────────────
-check('a PID yields its financial year', pidFy('SQ_26_27_001'), '26_27');
-check('a two-letter org code is not required', pidFy('SQIP_26_27_1'), '26_27');
-check('nonsense yields no financial year', pidFy('not-a-pid'), null);
-check('nothing yields no financial year', pidFy(null), null);
+check('a CID yields its financial year', cidFy('SQ_26_27_001'), '26_27');
+check('a two-letter org code is not required', cidFy('SQIP_26_27_1'), '26_27');
+check('nonsense yields no financial year', cidFy('not-a-pid'), null);
+check('nothing yields no financial year', cidFy(null), null);
 
 check('a destination holding work makes it a merge', deriveMode(1, 2), 'MERGE');
-check('leaving a shared PID for an empty one is a split', deriveMode(3, 0), 'SPLIT');
-check('leaving a PID of your own for an empty one is a reassign', deriveMode(1, 0), 'REASSIGN');
+check('leaving a shared CID for an empty one is a split', deriveMode(3, 0), 'SPLIT');
+check('leaving a CID of your own for an empty one is a reassign', deriveMode(1, 0), 'REASSIGN');
 
 // The reservation's single projectId has to point at something a person would land on.
 check('a reservation points at the newest LIVE round',
   reservationPointer([proj('a', null, 1), proj('b', null, 2, { phase: 'CLOSED' })]), 'a');
 check('when every round is finished it points at the newest of them',
   reservationPointer([proj('a', null, 1, { phase: 'COMPLETED' }), proj('b', null, 2, { phase: 'CLOSED' })]), 'b');
-check('a PID holding nothing points at nothing', reservationPointer([]), null);
+check('a CID holding nothing points at nothing', reservationPointer([]), null);
 check('a deleted round is not something to point at',
   reservationPointer([proj('a', null, 1, { deleted: true })]), null);
 
@@ -322,4 +322,4 @@ if (failures.length) {
   failures.forEach(f => console.error(`  ✗ ${f}\n`));
   process.exit(1);
 }
-console.log(`✓ pid move: ${passed}/${passed} passed`);
+console.log(`✓ cid move: ${passed}/${passed} passed`);

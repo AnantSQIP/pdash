@@ -128,7 +128,7 @@ const UNCHANGED = [
   ['the coverage risks', '/capacity/coverage-risks?days=14'],
   ['my plan for today', '/capacity/my-plan?date=' + new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10)],
   ['the task standards', '/tasks/standards'],
-  ['the PID ledger', '/patents/pid-ledger'],
+  ['the CID ledger', '/projects/cid-ledger'],
   ['the appraisal cycles', '/appraisals/cycles'],
   ['the company feed', '/company/announcements'],
   ['the HR policies', '/company/policies'],

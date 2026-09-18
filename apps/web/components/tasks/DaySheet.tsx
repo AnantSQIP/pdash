@@ -8,7 +8,7 @@ import { api, type DayPlan, type DayPlanRow } from '@/lib/api';
 import { warningsForSheet, sheetSummary } from '@/lib/day-plan';
 import { useToast } from '@/components/ui/Toast';
 import { todayIST, formatDate } from '@/lib/date';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { NonBillableChip } from '@/components/tasks/BillableToggle';
 
 /** Nobody may book more than this against one calendar day — the server's rule, said here first. */
@@ -84,7 +84,7 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
     for (const r of groups.OTHER) {
       const key = r.projectId ?? '—';
       const label = r.project
-        ? `${r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}${r.project}`
+        ? `${r.projectPid ? `${cidLabel(r.projectPid, r.projectRound)} · ` : ''}${r.project}`
         : 'No client';
       if (!map.has(key)) map.set(key, { key, label, rows: [] });
       map.get(key)!.rows.push(r);
@@ -170,7 +170,7 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
               {r.billable === false && <NonBillableChip className="shrink-0" />}
             </p>
             <p className="mt-0.5 truncate text-[11px] text-gray-500">
-              {r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}{r.project ?? 'No client'}
+              {r.projectPid ? `${cidLabel(r.projectPid, r.projectRound)} · ` : ''}{r.project ?? 'No client'}
               {r.taskGroup && <span className="text-gray-400"> · {r.taskGroup}</span>}
               {r.plannedHours > 0 && <span className="text-gray-400"> · planned {r.plannedHours}h</span>}
               {r.loggedToday > 0 && <span className="text-gray-400"> · {r.loggedToday}h already logged</span>}

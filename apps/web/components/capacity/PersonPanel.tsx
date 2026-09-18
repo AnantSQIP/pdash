@@ -15,7 +15,7 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { formatDate, shiftDay, toUtcDay, todayIST } from '@/lib/date';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { type ProjectHue, NO_PROJECT_HUE, segmentFill, segmentRing, textureStyle, deadlineState, railStyle, urgencyOrder } from '@/lib/project-colors';
 import type { TaskActions } from './TaskEditor';
@@ -349,7 +349,7 @@ export function PersonPanel({
             <p className="truncate text-[10.5px] text-gray-400" title={t.taskGroup ? 'Task group' : undefined}>
               {withClient && t.project && (
                 <span className="text-gray-500">
-                  {t.projectPid && !t.isTeamWork ? `${pidLabel(t.projectPid, t.projectRound)} · ` : ''}{t.project}
+                  {t.projectPid && !t.isTeamWork ? `${cidLabel(t.projectPid, t.projectRound)} · ` : ''}{t.project}
                   {t.taskGroup ? ' · ' : ''}
                 </span>
               )}
@@ -521,7 +521,7 @@ export function PersonPanel({
                 <section key={g.key}>
                   <div className="flex items-center gap-2 rounded-md px-1 py-1.5" style={{ backgroundColor: g.hue.tint }}>
                     <span className="h-3 w-4 shrink-0 rounded-sm" style={{ backgroundColor: g.hue.high, boxShadow: segmentRing(g.hue), ...textureStyle(g.hue.texture) }} />
-                    {g.pid && <span className="font-mono text-[11px] font-semibold" style={{ color: g.hue.ink }}>{pidLabel(g.pid, g.round)}</span>}
+                    {g.pid && <span className="font-mono text-[11px] font-semibold" style={{ color: g.hue.ink }}>{cidLabel(g.pid, g.round)}</span>}
                     {g.id && !g.isTeam
                       ? <Link href={`/projects/${g.id}`} className="min-w-0 truncate text-[12.5px] font-medium text-gray-800 hover:underline">{g.title}</Link>
                       : <span className="min-w-0 truncate text-[12.5px] font-medium text-gray-800">{g.title}</span>}

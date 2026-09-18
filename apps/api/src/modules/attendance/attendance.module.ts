@@ -113,7 +113,7 @@ const MARK_STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE', 'HOLIDAY', '
 const REG_TYPES = ['MISSED_PUNCH', 'LATE', 'ON_DUTY', 'WFH', 'PAST_MIDNIGHT', 'OTHER'];
 // Upper bounds on free-text so a single request can't store/broadcast a novel-length blob.
 const MAX_REASON = 2000;
-const MAX_PID = 120;
+const MAX_CID_REF = 120;
 const MAX_NAME = 160;
 // A comp-off claim must be reasonably recent — no farming weekends from years ago.
 const COMPOFF_MAX_AGE_DAYS = 90;
@@ -1643,9 +1643,9 @@ export class LeaveService {
 
   async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: string }) {
     if (!data?.reason?.trim()) throw new BadRequestException('Tell us what you worked on.');
-    if (!data?.projectRef?.trim()) throw new BadRequestException('A Project ID (PID) is required.');
+    if (!data?.projectRef?.trim()) throw new BadRequestException('A client ID (CID) is required.');
     if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
-    if (data.projectRef.length > MAX_PID) throw new BadRequestException('Project ID is too long.');
+    if (data.projectRef.length > MAX_CID_REF) throw new BadRequestException('The CID is too long.');
     const dayType = data.dayType === 'HALF' ? 'HALF' : 'FULL';
     if (data.hoursWorked != null && (!(data.hoursWorked > 0) || data.hoursWorked > 24)) {
       throw new BadRequestException('Hours worked must be between 0 and 24.');
@@ -1670,7 +1670,7 @@ export class LeaveService {
     // Comp-off routes to HR + Managers + Yash.
     await this.notifications.notify(await this.compOffApproverIds(organizationId), {
       type: 'compoff.requested', title: 'Comp-off to review',
-      message: `${name} claims comp-off for working ${dayKey(workDate)} (PID ${req.projectRef}): ${req.reason}`,
+      message: `${name} claims comp-off for working ${dayKey(workDate)} (CID ${req.projectRef}): ${req.reason}`,
       link: '/attendance',
     });
     return req;

@@ -24,7 +24,7 @@ const PRIORITY_FLAG: Record<string, string> = {
  * One team space: its board, its people.
  *
  * Intentionally simpler than a project. There is no Gantt, no capacity tab, no issues, no
- * timesheet tab and no PID — a hiring round does not have a critical path or a client to bill.
+ * timesheet tab and no CID — a hiring round does not have a critical path or a client to bill.
  * What it has is columns, tasks and the people in the space, which is what this kind of work
  * actually needs.
  */

@@ -29,7 +29,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Modal } from '@/components/ui/Modal';
 import { DateField } from '@/components/ui/DateField';
 import { formatDate } from '@/lib/date';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
 // ── what opens the editor ───────────────────────────────────────────────────────────────────
@@ -380,13 +380,13 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
             <Field label="Client">
               {isEdit ? (
                 <p className="truncate rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700" title="A task stays with its client; move it between that client's task groups instead">
-                  {client ? `${client.code ? `${pidLabel(client.code, client.roundSeq)} · ` : ''}${client.title}` : '—'}
+                  {client ? `${client.code ? `${cidLabel(client.code, client.roundSeq)} · ` : ''}${client.title}` : '—'}
                 </p>
               ) : (
                 <select autoFocus value={projectId} onChange={e => { setProjectId(e.target.value); setGroupId(''); }} className={INPUT}>
                   <option value="">Select a client…</option>
                   {clients.map(c => (
-                    <option key={c.id} value={c.id}>{c.code ? `${pidLabel(c.code, c.roundSeq)} · ` : ''}{c.title}</option>
+                    <option key={c.id} value={c.id}>{c.code ? `${cidLabel(c.code, c.roundSeq)} · ` : ''}{c.title}</option>
                   ))}
                 </select>
               )}

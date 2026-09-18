@@ -4,9 +4,9 @@
  * Companion to tools/authz-holes.e2e.mjs, which found these two holes. This one exists because
  * that pin has two blind spots and because a wall is only proven by BOTH answers:
  *
- *   • Its pid-ledger assertion passes vacuously on a freshly seeded database — the ledger is
- *     empty until some project has a PID attached, so "HR is not handed the client name" was
- *     true because HR was handed nothing at all. Here the ledger is checked against the Super
+ *   • Its ledger assertion passed vacuously on a freshly seeded database — the ledger was empty
+ *     until some project had a number attached, so "HR is not handed the client name" was true
+ *     because HR was handed nothing at all. Here the (now CID) ledger is checked against the Super
  *     Admin's own view of it: whatever client SA can see in a row, HR must not.
  *   • Its rename assertion sources the list id from the read that is now (correctly) 403, so the
  *     check silently stops running the moment the bug is fixed. Here the id comes from an admin
@@ -24,11 +24,29 @@ const BASE = process.env.BASE || 'http://127.0.0.1:4011';
 const PW = process.env.SEED_PASSWORD || 'sqip@1234';
 const PASSCODE = process.env.ORG_PASSCODE || 'Hunt-Passcode-4419';
 
-const ADMIN = 'mohit@squarkip.com';          // Super Admin — the only role holding patent.manage
-const MANAGER = 'ankit.verma@squarkip.com';  // delivery oversight, no patent.manage
-const STAFF = 'ajay.sharma@squarkip.com';    // Employee
-const HR = 'hr@squarkip.com';                // holds no tasklist permission of any kind
-const CONSULTANT = 'meetu.singh@squarkip.com';
+// The actors are chosen by what they may DO (/me/effective-permissions), not by name: the roster
+// moves (ajay.sharma, once the Employee here, became a Senior Consultant with oversight, and the
+// "matter the Employee is not staffed on" setup then found nothing). Each role is described by the
+// permissions the checks below depend on:
+//   ADMIN      — patent.manage (a Super Admin)
+//   MANAGER    — project.approve (delivery oversight), no patent.manage
+//   STAFF      — project.create, no project.approve (no oversight), no tasklist.create
+//   HR         — user.manage_access and no tasklist permission of any kind
+//   CONSULTANT — tasklist.create but no project.approve (can make lists, only where staffed)
+const CANDIDATES = [
+  // Likeliest first, so a normal run logs in five times, not fifteen (the login is rate-limited).
+  'mohit@squarkip.com', 'ankit.verma@squarkip.com', 'meetu.singh@squarkip.com', 'aman.sharma@squarkip.com',
+  'hr@squarkip.com', 'yash@squarkip.com', 'ajay.sharma@squarkip.com', 'neha.shukla@squarkip.com',
+  'vijay.mishra@squarkip.com', 'ketan.dagar@squarkip.com', 'khushi.gupta@squarkip.com', 'shavetasharma@squarkip.com',
+  'ritik.sharma@squarkip.com', 'drishti.jain@squarkip.com', 'rajesh.joshi@squarkip.com',
+];
+const ROLE_TESTS = {
+  ADMIN: c => c.has('patent.manage'),
+  MANAGER: c => c.has('project.approve') && !c.has('patent.manage'),
+  STAFF: c => c.has('project.create') && !c.has('project.approve') && !c.has('tasklist.create') && !c.has('user.manage_access'),
+  HR: c => c.has('user.manage_access') && ![...c].some(x => x.startsWith('tasklist.')) && !c.has('project.approve'),
+  CONSULTANT: c => c.has('tasklist.create') && !c.has('project.approve'),
+};
 
 let passed = 0, skipped = 0; const fails = [];
 const ok = (n, c, d = '') => {
@@ -57,11 +75,20 @@ function sess() {
 const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, password: PW } });
 
 (async () => {
-  const admin = sess(), manager = sess(), staff = sess(), hr = sess(), consultant = sess();
-  await Promise.all([
-    login(admin, ADMIN), login(manager, MANAGER), login(staff, STAFF),
-    login(hr, HR), login(consultant, CONSULTANT),
-  ]);
+  const picked = {};
+  for (const email of CANDIDATES) {
+    if (Object.keys(ROLE_TESTS).every(k => picked[k])) break;
+    const s = sess();
+    if ((await login(s, email)).status >= 300) continue;
+    const codes = new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+    const role = Object.keys(ROLE_TESTS).find(k => !picked[k] && ROLE_TESTS[k](codes));
+    if (role) picked[role] = { s, email };
+  }
+  const missing = Object.keys(ROLE_TESTS).filter(k => !picked[k]);
+  if (missing.length) { console.log(`FIXTURE: nobody in the roster fits ${missing.join(', ')} — reseed the scratch database`); process.exit(2); }
+  console.log('actors: ' + Object.entries(picked).map(([k, v]) => `${k}=${v.email}`).join(' '));
+  const admin = picked.ADMIN.s, manager = picked.MANAGER.s, staff = picked.STAFF.s, hr = picked.HR.s, consultant = picked.CONSULTANT.s;
+  const CONSULTANT = picked.CONSULTANT.email;
 
   // ── Fixture: a matter whose client is resolvable ──────────────────────────────
   // An Employee holds patent.view, so they can tag a patent and mint a matter whose client the
@@ -86,14 +113,12 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
   if (patentsOff) skip('setup: a client and a patent an Employee can pick', 'patents and client codes are switched off');
   else ok('setup: a client and a patent an Employee can pick', !!client?.name && options.length > 0);
 
-  const authority = ((await staff('/projects/pid-authorities')).data ?? [])[0];
   const managers = ((await staff('/projects/eligible-managers')).data?.managers ?? []);
   const made = await staff('/projects', {
     method: 'POST',
     body: {
       title: 'conflict-wall probe',
       ...(patentsOff ? {} : { patentIds: [options[0]?.id].filter(Boolean) }),
-      pidAssigneeId: authority?.id,
       managerId: managers[0]?.id,
     },
   });
@@ -146,21 +171,30 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
     ok('a Super Admin still sees it on /full-report', clientOf(adminRow?.client) === client.name);
   }
 
-  // ── 2. The PID ledger — checked against what the Super Admin can actually see ──
-  const adminLedger = (await admin('/projects/pid-ledger')).data ?? [];
-  const named = adminLedger.filter(r => (r.rounds ?? []).some(x => x.client) || r.project?.client);
-  const hrLedger = await hr('/projects/pid-ledger');
+  // ── 2. The CID ledger — checked against what the Super Admin can actually see ──
+  const adminLedger = (await admin('/projects/cid-ledger')).data ?? [];
+  const named = adminLedger.filter(r => (r.rounds ?? []).some(x => x.client) || r.client);
+  const hrLedger = await hr('/projects/cid-ledger');
   ok('HR still reaches the ledger (it is their module too)', hrLedger.status === 200, `status ${hrLedger.status}`);
   if (!named.length) {
-    skip('the ledger withholds the client from HR', 'no PID in the ledger has a client to withhold');
+    skip('the ledger withholds the client from HR', 'no CID in the ledger has a client to withhold');
+    // The rest of the wall still holds: HR's rows are the admin's rows, minus nothing but the client fact.
+    const hrRows = hrLedger.data ?? [];
+    const probe = adminLedger.find(r => (r.rounds ?? []).some(x => x.id === mine));
+    const hrProbe = hrRows.find(r => r.cid === probe?.cid) ?? {};
+    ok('HR sees the probe client\'s CID row as the admin does', !!probe && hrProbe.cid === probe.cid
+      && hrProbe.status === probe.status && hrProbe.clientName === probe.clientName
+      && (hrProbe.events ?? []).length === (probe.events ?? []).length, JSON.stringify(hrProbe).slice(0, 200));
+    ok('…and no row of HR\'s carries a client key at all',
+      hrRows.every(r => !('client' in r) && (r.rounds ?? []).every(x => !('client' in x) && !('clientId' in x))));
   } else {
     const hrRows = hrLedger.data ?? [];
-    const leaked = hrRows.filter(r => (r.rounds ?? []).some(x => x.client) || r.project?.client);
+    const leaked = hrRows.filter(r => (r.rounds ?? []).some(x => x.client) || r.client);
     ok('the ledger withholds the client from HR', leaked.length === 0,
-      `${leaked.length} of ${hrRows.length} rows still name a client, e.g. ${JSON.stringify(leaked[0]?.project?.client)}`);
-    const sameRow = (hrRows.find(r => r.pid === named[0].pid) ?? {});
+      `${leaked.length} of ${hrRows.length} rows still name a client, e.g. ${JSON.stringify(leaked[0]?.client)}`);
+    const sameRow = (hrRows.find(r => r.cid === named[0].cid) ?? {});
     ok('…while the rest of the ledger row survives for HR',
-      sameRow.pid === named[0].pid && sameRow.state === named[0].state
+      sameRow.cid === named[0].cid && sameRow.status === named[0].status
       && (sameRow.rounds ?? []).length === (named[0].rounds ?? []).length
       && sameRow.totalLoggedHours === named[0].totalLoggedHours,
       JSON.stringify(sameRow).slice(0, 200));
@@ -171,8 +205,14 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
   // everything the Employee's own scope returns — picking "any project that is not the probe"
   // quietly selects one they ARE on, and then every refusal below is asserted against a matter
   // they were entitled to all along.
-  const staffScope = new Set(((await staff('/projects')).data ?? []).map(p => p.id));
-  const foreign = ((await admin('/projects')).data ?? []).find(p => p.id !== mine && !staffScope.has(p.id));
+  // …and one the CONSULTANT is not on either, since every refusal below is asserted for both.
+  const staffScope = new Set([
+    ...((await staff('/projects')).data ?? []).map(p => p.id),
+    ...((await consultant('/projects')).data ?? []).map(p => p.id),
+  ]);
+  let foreign = ((await admin('/projects')).data ?? []).find(p => p.id !== mine && !staffScope.has(p.id));
+  // A roster where the two are on everything leaves nothing to test against; make one.
+  if (!foreign) foreign = (await admin('/projects', { method: 'POST', body: { title: 'conflict-wall foreign' } })).data;
   ok('setup: a matter the Employee is not staffed on', !!foreign);
   const lists = (await admin(`/projects/${foreign.id}/tasklists`)).data ?? [];
   const def = lists.find(l => l.isDefault) ?? lists[0];
@@ -216,7 +256,9 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
     : false);
 
   // ── 4. Team spaces — the other home of TaskList, through a different module ────
-  let team = ((await admin('/teams')).data ?? [])[0];
+  // A LIVE space: an archived one refuses new work by design, and another suite may have left one
+  // archived at the top of the list.
+  let team = ((await admin('/teams')).data ?? []).find(t => !t.archivedAt);
   if (!team) team = (await admin('/teams', { method: 'POST', body: { name: 'conflict-wall space' } })).data;
   if (!team?.id) {
     skip('team-space columns still work', 'no team space available');

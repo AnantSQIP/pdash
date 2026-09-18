@@ -16,7 +16,7 @@ import { formatDate } from '@/lib/date';
 import { daysOverdue, segmentRing, textureStyle } from '@/lib/project-colors';
 import { DAILY_CAPACITY, type Segment } from './grid';
 import type { TaskActions } from './TaskEditor';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 
 const WIDTH = 320;
 const GAP = 6;
@@ -122,7 +122,7 @@ export function HoverCard({ target, today, actions, onPointerInside, onAction }:
           <ul className="mt-2.5 space-y-2">
             {shown.map(seg => {
               const due = dueText(seg, today);
-              const pid = seg.task.projectPid ? pidLabel(seg.task.projectPid, seg.task.projectRound) : null;
+              const pid = seg.task.projectPid ? cidLabel(seg.task.projectPid, seg.task.projectRound) : null;
               return (
                 <li key={seg.taskId} className="flex gap-2">
                   <span className="relative mt-0.5 h-2.5 w-3.5 shrink-0 rounded-sm" style={{ backgroundColor: seg.fill, boxShadow: segmentRing(seg.hue), ...textureStyle(seg.hue.texture) }}>

@@ -32,7 +32,7 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Generate PID',
+  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -122,8 +122,8 @@ export const CODE_NOTES: Record<string, string> = {
   // "request a project" — the project starts PENDING and the nominated manager approves it.
   // Removing it stops that role starting projects at all (the server enforces it on POST /projects).
   'project.create': 'Lets the role START a project. A role that also has Projects — Approve creates it outright; a role without it can only REQUEST one, which a manager must approve. It also covers adding a later round to an existing project, so taking it away stops both.',
-  'project.approve': 'Approves a project someone else requested. Not the same as minting a PID — that is Generate PID.',
-  'project.generate_pid': 'Mints the Project ID (SQ_26_27_nnn). Kept narrow deliberately: running a project is not the same authority as issuing its number.',
+  'project.approve': 'Approves a client someone else requested, and may be named a client\'s manager. Not the same as changing a CID — that is Change CID.',
+  'project.generate_pid': 'Changes a client\'s CID (SQ_26_27_nnn) — reassign, split or merge, with the org passcode. CIDs themselves are issued automatically when a client is created. Kept narrow deliberately: running a client is not the same authority as renumbering it.',
   'project.delete.permanent': 'Removes the row itself, not the “deleted” flag every other Delete sets. There is no undo and nothing left to restore.',
   'task.delete.permanent': 'Removes the row itself, not the “deleted” flag every other Delete sets. There is no undo and nothing left to restore.',
   'attendance.view.organization': 'Sees everyone’s attendance, not just their own. This plus Manage is what HR holds today.',

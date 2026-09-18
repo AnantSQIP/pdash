@@ -43,7 +43,7 @@ import {
   resolveWindow, countWorkingDays, daysOf, weekdayOf, weekdayName, WEEKDAYS_IN_ORDER,
   type Weekday, type WindowChoice,
 } from '@/lib/work-week';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { useCapacityTaskActions } from '@/components/capacity/TaskEditor';
 
@@ -353,7 +353,7 @@ export default function CapacityPage() {
               title={isPast ? 'Client filter applies to the forward view' : 'Filter by client team'}
               className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white disabled:opacity-50 max-w-[180px]">
               <option value="">All clients</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}</option>)}
+              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${cidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}</option>)}
             </select>
             {departments.length > 0 && (
               <select value={dept} onChange={e => setDept(e.target.value)}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { api, type ApiTask, type ApiProject, type PidRound, type WorkflowStatus } from '@/lib/api';
+import { api, type ApiTask, type ApiProject, type CidRound, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { OverviewView } from './views';
 import { TaskGroups } from './TaskGroups';
@@ -20,7 +20,7 @@ export type ProjectTab =
   | 'Files' | 'Discussions' | 'Issues' | 'Activity' | 'Timesheets';
 
 /**
- * One project's worth of a tab, inside its card on a multi-project PID page.
+ * One project's worth of a tab, inside its card on a multi-project CID page.
  *
  * Each card fetches its OWN tasks rather than sharing one list, because these are genuinely
  * separate pieces of work: round 2's board must not show round 1's finished tasks. The cost is
@@ -30,7 +30,7 @@ export type ProjectTab =
  * round-aware — that is precisely why a round is modelled as a project.
  */
 export function RoundTabContent({ round, tab, statuses, canEdit, onTaskClick, onAddTask, onAddTaskToGroup }: {
-  round: PidRound;
+  round: CidRound;
   tab: ProjectTab;
   statuses: WorkflowStatus[];
   canEdit: boolean;

@@ -113,7 +113,7 @@ const TASK_KPI_SELECT = Prisma.validator<Prisma.TaskSelect>()({
   completedAt: true,
   estimatedHours: true,
   assignees: { select: { userId: true, estimatedHours: true, dueDate: true } },
-  // A task can belong to more than one project (two rounds of one PID share tasks), and `take: 1`
+  // A task can belong to more than one project (two rounds of one CID share tasks), and `take: 1`
   // with no ordering picks whichever row the database returned first — so the same task could be
   // credited to a different project on two consecutive page loads. Ordering by project id makes
   // the choice arbitrary but STABLE, which is the most that can honestly be claimed here.
@@ -1064,7 +1064,7 @@ export class PerformanceService {
     const projMap = new Map<string, { name: string; pid: string | null; roundSeq: number | null; hours: number; billable: number }>();
     for (const s of sheets) {
       const team = s.task?.teamTasks?.[0]?.team;
-      // A team space stands in for a project in this breakdown: same shape, no PID, so the
+      // A team space stands in for a project in this breakdown: same shape, no CID, so the
       // person's hours still sum to their total instead of quietly losing the internal ones.
       const proj = s.project ?? s.task?.projectTasks?.[0]?.project
         ?? (team ? { id: team.id, title: team.name, code: null, roundSeq: null } : null);
@@ -1085,7 +1085,7 @@ export class PerformanceService {
       tasksByStatus: [...statusMap].map(([name, value]) => ({ name, value })),
       tasksByPriority: PRIO.filter(p => prioMap.has(p)).map(p => ({ name: p, value: prioMap.get(p)! })),
       issuesBySeverity: SEV.filter(s => sevMap.has(s)).map(s => ({ name: s, value: sevMap.get(s)! })),
-      // pid + roundSeq travel with the name: two rounds of one PID would otherwise be told apart
+      // pid + roundSeq travel with the name: two rounds of one CID would otherwise be told apart
       // only by their titles.
       hoursByProject: [...projMap].map(([projectId, v]) => ({
         projectId, name: v.name, pid: v.pid, roundSeq: v.roundSeq,

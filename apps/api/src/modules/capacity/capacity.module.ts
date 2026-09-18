@@ -210,9 +210,9 @@ export interface CapacityRow {
     taskGroupId?: string | null; taskGroup?: string | null;
     /** The group's own (team) deadline — "extend the whole task group" starts from it. */
     taskGroupDueDate?: string | null;
-    /** The project's PID and which round it is — two rounds of one PID share a code. */
+    /** The project's CID and which round it is — two rounds of one CID share a code. */
     projectPid?: string | null; projectRound?: number;
-    /** Internal team-space work rather than a client matter — no PID, never billable. */
+    /** Internal team-space work rather than a client matter — no CID, never billable. */
     isTeamWork?: boolean;
     /** The project's own priority and INTERNAL deadline — the board shades urgency from these. */
     projectPriority?: string;
@@ -413,7 +413,7 @@ export class CapacityService {
           // hours drive their capacity — NOT an even split of the task total.
           assignees: { select: { userId: true, estimatedHours: true, dueDate: true, startDate: true, hoursPerDay: true } },
           projectTasks: {
-            // A PID can hold several projects, so the title alone no longer identifies the work —
+            // A CID can hold several projects, so the title alone no longer identifies the work —
             // the code + round do.
             // priority + dueDate (the INTERNAL deadline) so the board can shade by urgency.
             // clientDueDate is deliberately not selected: it is redacted per permission elsewhere.
@@ -605,7 +605,7 @@ export class CapacityService {
           id: task.id,
           title: task.title,
           projectId: project?.id ?? team?.id,
-          // Team work has no PID and no round — it is labelled by the space it belongs to, and
+          // Team work has no CID and no round — it is labelled by the space it belongs to, and
           // flagged so the UI can tell a client matter from an internal one.
           project: project?.title ?? team?.name,
           taskGroupId: project ? liveGroup?.id ?? null : null,

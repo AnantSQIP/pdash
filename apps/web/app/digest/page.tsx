@@ -13,7 +13,7 @@ import { api, type DigestDetail, type DigestProject, type DigestTask, type Diges
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { formatDate, formatDateIST, formatDateTimeIST, todayIST, shiftDay } from '@/lib/date';
-import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
+import { projectTypeLabel, cidLabel } from '@/lib/mock-data';
 import { digestCsv } from './export';
 
 const shift = shiftDay;
@@ -61,7 +61,7 @@ function ProjectCardRow({ p }: { p: DigestProject }) {
             {p.title} <ExternalLink size={12} className="text-gray-300" />
           </Link>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
-            <span className="text-[11px] font-mono font-bold text-brand-700">{pidLabel(p.pid, p.roundSeq)}</span>
+            <span className="text-[11px] font-mono font-bold text-brand-700">{cidLabel(p.pid, p.roundSeq)}</span>
             {p.type && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">{projectTypeLabel(p.type)}</span>}
             <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{p.phase}</span>
             <span className={clsx('text-[11px] px-1.5 py-0.5 rounded-full border', PRIORITY_TINT[p.priority] ?? PRIORITY_TINT.LOW)}>{p.priority}</span>
@@ -121,7 +121,7 @@ function TaskCardRow({ t, showOverdue }: { t: DigestTask; showOverdue?: boolean 
           <div className="flex items-center gap-1.5 flex-wrap mt-1 text-[11px]">
             {t.project ? (
               <Link href={`/projects/${t.project.id}`} className="inline-flex items-center gap-1 text-brand-700 hover:underline">
-                <span className="font-mono font-bold">{pidLabel(t.project.pid, t.project.roundSeq)}</span>
+                <span className="font-mono font-bold">{cidLabel(t.project.pid, t.project.roundSeq)}</span>
                 <span className="text-gray-600">{t.project.title}</span>
                 <ExternalLink size={10} className="text-gray-300" />
               </Link>
@@ -181,7 +181,7 @@ function PersonHoursRow({ p }: { p: DigestPersonHours }) {
               <div className="min-w-0">
                 {e.project ? (
                   <Link href={`/projects/${e.project.id}`} className="text-brand-700 hover:underline">
-                    <span className="font-mono font-bold">{pidLabel(e.project.pid, e.project.roundSeq)}</span> <span className="text-gray-600">{e.project.title}</span>
+                    <span className="font-mono font-bold">{cidLabel(e.project.pid, e.project.roundSeq)}</span> <span className="text-gray-600">{e.project.title}</span>
                   </Link>
                 ) : <span className="text-gray-400">No client</span>}
                 {e.task && <span className="text-gray-500"> · {e.task.title}</span>}
@@ -376,7 +376,7 @@ export default function DigestPage() {
 // ── Coming up — next 5 working days ───────────────────────────────────────────
 // The old version stacked full detail cards under a thin grey strip, five days deep, which read
 // as one undifferentiated wall. This gives each day its own card with a date rail, and each item
-// one tidy line that still carries the whole story: what it is, which client and PID, priority,
+// one tidy line that still carries the whole story: what it is, which client and CID, priority,
 // deadline, hours and who is on it — every one of them a working link.
 
 const UP_PRIORITY_DOT: Record<string, string> = {
@@ -464,7 +464,7 @@ function UpcomingPanel({ days, total }: { days: DigestDetail['upcoming']; total:
 /** Small shared bits so a client row and a task row line up with each other. */
 function PidChip({ pid, roundSeq }: { pid: string | null; roundSeq?: number }) {
   if (!pid) return null;
-  return <span className="text-[11px] font-mono font-bold text-brand-700 shrink-0">{pidLabel(pid, roundSeq)}</span>;
+  return <span className="text-[11px] font-mono font-bold text-brand-700 shrink-0">{cidLabel(pid, roundSeq)}</span>;
 }
 function PersonChip({ id, name, note }: { id: string; name: string; note?: string }) {
   return (

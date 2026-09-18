@@ -21,7 +21,7 @@ import {
   type KpiRange,
 } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { ChartCard, DonutCard, DataGrid, type GridColumn } from './charts';
 import { KpiHero, Breaches, Stat, ExcludedNote, KpiGlossary, KPI_HELP, kpiDonuts, overrunColor } from './KpiCards';
 import { UserKpiPanel } from './UserKpiPanel';
@@ -40,7 +40,7 @@ function uniq(values: (string | undefined)[]): string[] {
   return [...new Set(values.filter((v): v is string => !!v))].sort();
 }
 function projectLabel(p: { code: string | null; roundSeq: number | null; name: string }): string {
-  return p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.name}` : p.name;
+  return p.code ? `${cidLabel(p.code, p.roundSeq)} · ${p.name}` : p.name;
 }
 
 export function OrgKpiView({ period }: { period: PeriodWindow }) {

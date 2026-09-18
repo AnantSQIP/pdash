@@ -1,43 +1,25 @@
-// One-off: (1) backfill PIDs for existing projects (creation order, per financial year),
-// and (2) seed the Phase-2 demo clients + confidential patents straight from the source sheet.
-// Idempotent: skips projects that already have a code, and clients/patents already present.
+// One-off: seed the Phase-2 demo clients + confidential patents straight from the source sheet.
+// (Step 1, a PID backfill, is retired: CIDs are issued on create and backfilled by migration.)
+// Idempotent: skips clients/patents already present.
 //   DATABASE_URL=... npx ts-node packages/db/prisma/seed-patents-demo.ts
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// FY (Apr–Mar) computed in IST — matches apps/api common/financial-year.ts.
-function fyLabel(instant: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric' }).formatToParts(instant);
-  const y = Number(parts.find(p => p.type === 'year')!.value);
-  const m = Number(parts.find(p => p.type === 'month')!.value);
-  const start = m >= 4 ? y : y - 1;
-  return `${String(start % 100).padStart(2, '0')}_${String((start + 1) % 100).padStart(2, '0')}`;
-}
 async function allocate(scope: string): Promise<number> {
   const rows = await prisma.$queryRaw<Array<{ value: number }>>`
     INSERT INTO "sequence_counter" ("scope", "value") VALUES (${scope}, 1)
     ON CONFLICT ("scope") DO UPDATE SET "value" = "sequence_counter"."value" + 1 RETURNING "value"`;
   return Number(rows[0].value);
 }
-const pid = (org: string, fy: string, n: number) => `${org}_${fy}_${String(n).padStart(3, '0')}`;
 
 async function main() {
   const org = await prisma.organization.findFirst({ select: { id: true, code: true } });
   if (!org) throw new Error('no organization');
 
-  // 1) Backfill PIDs — creation order, per-FY serial via the same allocator new creates use.
-  const projects = await prisma.project.findMany({
-    where: { deletedAt: null, code: null },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, createdAt: true },
-  });
-  for (const p of projects) {
-    const fy = fyLabel(p.createdAt);
-    const n = await allocate(`pid:${org.id}:${fy}`);
-    await prisma.project.update({ where: { id: p.id }, data: { code: pid(org.code, fy, n) } });
-  }
-  console.log(`Backfilled ${projects.length} project PID(s)`);
+  // 1) (Retired.) This used to backfill PIDs through the sequence counter. Every client is now given
+  //    its CID when it is created, and the migration 20261020120000_cid_auto_mint_and_ledger backfilled
+  //    the rest into the CID registry and ledger — a second issuer here could only disagree with it.
 
   // 2) Demo clients + patents (Malikie is verbatim from the sheet).
   const MALIKIE = [123, 1234, 2345, 3456, 4567, 5678, 6789, 7900, 9011, 10122, 11233, 12344,

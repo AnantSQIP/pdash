@@ -7,7 +7,7 @@ import type { DigestDetail, DigestProject, DigestTask } from '@/lib/api';
  *
  * This writes the whole report instead: one CSV with a section per part of the screen, each with
  * its own header row, so it opens in Excel as a readable document rather than a summary. Every
- * row carries the identifiers (PID, project, person) needed to join it against anything else.
+ * row carries the identifiers (CID, project, person) needed to join it against anything else.
  */
 
 const cell = (v: unknown): string => {
@@ -21,12 +21,12 @@ const dt = (v: string | null | undefined) =>
 
 // CLIENTS-FLOW: the row is a client; the old client-code column is commented out with that feature.
 const PROJECT_COLUMNS = [
-  'PID', '#', 'Client', 'Type', 'Phase', 'Priority', ...(PATENTS_AND_CLIENT_CODES ? ['Client code'] : []), 'Progress %', 'Tasks',
+  'CID', '#', 'Client', 'Type', 'Phase', 'Priority', ...(PATENTS_AND_CLIENT_CODES ? ['Client code'] : []), 'Progress %', 'Tasks',
   'Start', 'Deadline', 'Client Deadline', 'Client Delivered', 'Completed At',
   'Working Hours', 'Actual Hours', 'Hours Variance', 'Client Managers', 'Members',
 ];
 const projectRow = (p: DigestProject) => [
-  p.pid ?? 'PID pending', p.roundSeq ?? 1, p.title, p.type ?? '', p.phase, p.priority, ...(PATENTS_AND_CLIENT_CODES ? [p.client ?? ''] : []),
+  p.pid ?? '—', p.roundSeq ?? 1, p.title, p.type ?? '', p.phase, p.priority, ...(PATENTS_AND_CLIENT_CODES ? [p.client ?? ''] : []),
   p.progress, p.taskCount,
   d(p.startDate), d(p.dueDate), d(p.clientDueDate), d(p.clientDeliveryDate), dt(p.completedAt),
   p.workingHours ?? '', p.actualHours ?? '',
@@ -37,7 +37,7 @@ const projectRow = (p: DigestProject) => [
 ];
 
 const TASK_COLUMNS = [
-  'PID', 'Project #', 'Project', 'Project Type', 'Project Progress %', 'Task', 'Status', 'Priority',
+  'CID', 'Project #', 'Project', 'Project Type', 'Project Progress %', 'Task', 'Status', 'Priority',
   'Deadline', 'Days Overdue', 'Estimated Hours', 'Actual Hours', 'Assignees',
 ];
 const taskRow = (t: DigestTask) => [
@@ -98,7 +98,7 @@ export function digestCsv(report: DigestDetail): void {
     'Nobody logged time.');
 
   // Every individual entry, so the per-person totals can be audited rather than trusted.
-  section('HOURS LOGGED — EVERY ENTRY', ['Person', 'PID', 'Project #', 'Project', 'Task', 'Hours', 'Billable', 'Notes'],
+  section('HOURS LOGGED — EVERY ENTRY', ['Person', 'CID', 'Project #', 'Project', 'Task', 'Hours', 'Billable', 'Notes'],
     report.hoursByPerson.flatMap(p => p.entries.map(e => [
       p.name, e.project?.pid ?? '', e.project?.roundSeq ?? '', e.project?.title ?? '', e.task?.title ?? '',
       e.hours, e.billable ? 'Yes' : 'No', e.notes ?? '',

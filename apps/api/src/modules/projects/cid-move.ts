@@ -1,16 +1,16 @@
 /**
- * Correcting a project's PID — the arithmetic, with no database in it.
+ * Correcting a project's CID — the arithmetic, with no database in it.
  *
- * A PID (SQ_26_27_001) is the number the firm files a matter under: it goes on invoices, on
+ * A CID (SQ_26_27_001) is the number the firm files a matter under: it goes on invoices, on
  * reports, and into what a client says on the phone. It is set once, when the project is created,
  * by a person reading a brief — so it is sometimes set wrong, and the three ways it is wrong are
  * the three ways this file knows how to fix:
  *
- *   REASSIGN — the number itself is wrong. The project moves to a different PID.
+ *   REASSIGN — the number itself is wrong. The project moves to a different CID.
  *   SPLIT    — two pieces of work were filed under one number and are actually separate matters.
  *              One of them leaves and takes a number of its own.
  *   MERGE    — two numbers were issued for what is one matter. One project moves under the other's
- *              PID and becomes the next round of it.
+ *              CID and becomes the next round of it.
  *
  * They are one mechanic — a project's `code` changes and its `roundSeq` is re-dealt — so they are
  * planned by one function. What differs is only which destination was chosen, and that is derived
@@ -19,14 +19,14 @@
  * THE INVARIANTS THIS FILE EXISTS TO HOLD
  *
  *  1. A SERIAL IS NEVER REISSUED. Nothing here ever frees a number. `nextSerial` only ever looks
- *     one past the highest number ever taken, and a plan that empties a PID reports
+ *     one past the highest number ever taken, and a plan that empties a CID reports
  *     `vacatesSource` — "retire it" — and never "release it". The day somebody writes code that
  *     deletes a reservation to make its number available again, two different matters end up
- *     quoting the same PID on two different invoices, and no record in the system says which is
+ *     quoting the same CID on two different invoices, and no record in the system says which is
  *     which. Retiring a number costs one integer; reissuing one costs the firm's paper trail.
  *
  *  2. ROUND NUMBERS STAY A SEQUENCE. Rounds are labelled "project 2 of 3", and that label is only
- *     true while the live rounds under one PID are numbered 1..N with no gaps and no duplicates.
+ *     true while the live rounds under one CID are numbered 1..N with no gaps and no duplicates.
  *     A project leaving the middle of a group leaves a hole, so the rounds behind it close ranks.
  *     A project arriving takes N+1 — computed AFTER the destination has been made contiguous, so
  *     merging into a group that legacy data left with a hole heals it instead of inheriting it.
@@ -36,7 +36,7 @@
  *     change — which is exactly why this correction is safe to offer at all.
  *
  * Kept free of Nest and Prisma so every case above can be tested without a database:
- * see tools/pid-move.spec.ts.
+ * see tools/cid-move.spec.ts.
  */
 
 /** Which of the owner's three corrections a move turned out to be. */
@@ -48,17 +48,18 @@ export type MoveMode = 'REASSIGN' | 'SPLIT' | 'MERGE';
  */
 export type MoveRefusal =
   | 'DELETED'        // the project being moved is in the bin
-  | 'NO_PID'         // it has no PID to move away from — that is "attach", not "move"
+  | 'NO_CID'         // it has no CID to move away from (every live client has one; defensive)
   | 'SELF'           // asked to merge a project into itself
-  | 'SAME_PID'       // the destination is the PID it already has: a no-op dressed as a change
-  | 'NOT_SHARED'     // asked to split a project that is already alone under its PID
+  | 'SAME_CID'       // the destination is the CID it already has: a no-op dressed as a change
+  | 'NOT_SHARED'     // asked to split a project that is already alone under its CID
   | 'MODE_MISMATCH'  // the destination turned out to be a different operation from the one asked for
-  | 'CROSS_FY';      // the destination PID belongs to another financial year
+  | 'CROSS_FY'       // the destination CID belongs to another financial year
+  | 'NO_REUSE';      // a named destination holds no live work: a CID is never taken over, only minted
 
 /** A project as this file needs to see it. Deliberately tiny — a move reads almost nothing. */
 export interface MoveProject {
   id: string;
-  /** The PID it currently carries; null when it has never been given one. */
+  /** The CID it currently carries; null when it has never been given one. */
   code: string | null;
   roundSeq: number;
   /** ACTIVE | ON_HOLD | COMPLETED | CLOSED | ARCHIVED | CANCELLED. */
@@ -81,11 +82,11 @@ export interface MoveInput {
   project: MoveProject;
   /** Every project sharing `project.code`, the project itself included. Any order. */
   sourceGroup: MoveProject[];
-  /** The PID to move onto; null means "mint a fresh serial". */
-  targetPid: string | null;
-  /** Every project already under `targetPid`. Empty for a free serial or a fresh mint. */
+  /** The CID to move onto; null means "mint a fresh serial". */
+  targetCid: string | null;
+  /** Every project already under `targetCid`. Empty for a free serial or a fresh mint. */
   targetGroup: MoveProject[];
-  /** Set when the destination was named as a PROJECT rather than a PID — used to catch a self-merge. */
+  /** Set when the destination was named as a PROJECT rather than a CID — used to catch a self-merge. */
   targetProjectId?: string;
   /** The operation the caller believes they are performing. Checked, not trusted. */
   declaredMode?: MoveMode;
@@ -93,11 +94,11 @@ export interface MoveInput {
 
 export interface MovePlan {
   mode: MoveMode;
-  /** The PID being left. */
-  fromPid: string;
-  /** The PID being taken, or null when it is still to be minted. */
-  toPid: string | null;
-  /** The round number the moved project takes under its new PID. */
+  /** The CID being left. */
+  fromCid: string;
+  /** The CID being taken, or null when it is still to be minted. */
+  toCid: string | null;
+  /** The round number the moved project takes under its new CID. */
   newRoundSeq: number;
   /** The moved project's number before the move, so the audit record can say what changed. */
   oldRoundSeq: number;
@@ -105,12 +106,12 @@ export interface MovePlan {
   sourceRenumber: RoundChange[];
   /** Renumbering of the destination's existing rounds, only where a number changes. */
   targetRenumber: RoundChange[];
-  /** Live rounds still under the old PID after the move. */
+  /** Live rounds still under the old CID after the move. */
   sourceRemaining: number;
   /** Live rounds under the destination after the move, the arrival included. */
   targetTotal: number;
   /**
-   * True when the old PID is left holding nothing. Its reservation must be RETIRED (marked
+   * True when the old CID is left holding nothing. Its reservation must be RETIRED (marked
    * discontinued and kept in the ledger forever) — never deleted, and never made available.
    */
   vacatesSource: boolean;
@@ -122,17 +123,17 @@ export type MoveDecision =
   | { ok: true; plan: MovePlan }
   | { ok: false; reason: MoveRefusal; message: string };
 
-/** Phases that mean the work is over. A PID holding only these is a finished matter, not a live one. */
+/** Phases that mean the work is over. A CID holding only these is a finished matter, not a live one. */
 export const TERMINAL_PHASES = ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
 
 export const isTerminal = (phase: string): boolean => TERMINAL_PHASES.includes(phase);
 
 /**
- * The financial-year segment of a PID (the `26_27` of `SQ_26_27_001`), or null if it does not
+ * The financial-year segment of a CID (the `26_27` of `SQ_26_27_001`), or null if it does not
  * parse. Read off the string rather than taken from the reservation row because the modal needs
- * the same answer for a PID somebody has merely typed.
+ * the same answer for a CID somebody has merely typed.
  */
-export function pidFy(pid: string | null | undefined): string | null {
+export function cidFy(pid: string | null | undefined): string | null {
   if (!pid) return null;
   const m = /^[A-Za-z0-9]+_(\d{2}_\d{2})_\d{1,6}$/.exec(pid.trim());
   return m ? m[1] : null;
@@ -153,7 +154,7 @@ export function nextSerial(taken: Iterable<number>): number {
 }
 
 /**
- * Re-deal a PID's rounds as 1..N, oldest first, returning only the ones whose number changes.
+ * Re-deal a CID's rounds as 1..N, oldest first, returning only the ones whose number changes.
  *
  * The order is by existing round number and then by id. The id tie-break is not decoration: two
  * rounds can legitimately hold the same number after a soft delete and restore, and without a
@@ -194,18 +195,18 @@ const refuse = (reason: MoveRefusal, message: string): MoveDecision => ({ ok: fa
  * that, not to have something else done quietly on their behalf.
  */
 export function planMove(input: MoveInput): MoveDecision {
-  const { project, targetPid, targetProjectId, declaredMode } = input;
+  const { project, targetCid, targetProjectId, declaredMode } = input;
 
   // Live members only, on both sides. A soft-deleted round is not work the firm is doing, so it
-  // neither occupies a round number nor keeps a PID from being vacated.
+  // neither occupies a round number nor keeps a CID from being vacated.
   const sourceGroup = input.sourceGroup.filter(p => !p.deleted);
   const targetGroup = input.targetGroup.filter(p => !p.deleted);
 
   if (project.deleted) {
-    return refuse('DELETED', 'This project is in the bin. Restore it before changing its Project ID.');
+    return refuse('DELETED', 'This project is in the bin. Restore it before changing its CID.');
   }
   if (!project.code) {
-    return refuse('NO_PID', 'This project has no Project ID yet — attach one instead of moving it.');
+    return refuse('NO_CID', 'This client has no CID to move.');
   }
 
   // A self-merge. Only reachable when the destination was named as a project, and worth its own
@@ -213,10 +214,10 @@ export function planMove(input: MoveInput): MoveDecision {
   if (targetProjectId && targetProjectId === project.id) {
     return refuse('SELF', 'A project cannot be merged into itself.');
   }
-  if (targetPid && targetPid === project.code) {
+  if (targetCid && targetCid === project.code) {
     return refuse(
-      'SAME_PID',
-      `This project is already under ${project.code}. Choose a different Project ID, or a fresh one.`,
+      'SAME_CID',
+      `This project is already under ${project.code}. Choose a different CID, or leave it empty to issue the next one.`,
     );
   }
 
@@ -225,14 +226,14 @@ export function planMove(input: MoveInput): MoveDecision {
   // year backdates the work and files this year's engagement inside last year's series. So a
   // typed or chosen destination must share the source's year, and a correction that crosses years
   // is done by minting — which is the only way to get a number that is honest about its date.
-  if (targetPid) {
-    const from = pidFy(project.code);
-    const to = pidFy(targetPid);
+  if (targetCid) {
+    const from = cidFy(project.code);
+    const to = cidFy(targetCid);
     if (from && to && from !== to) {
       return refuse(
         'CROSS_FY',
-        `${targetPid} belongs to financial year ${to.replace('_', '–')} and this project is filed under `
-        + `${from.replace('_', '–')}. A Project ID cannot be moved across financial years — mint a fresh one instead.`,
+        `${targetCid} belongs to financial year ${to.replace('_', '–')} and this project is filed under `
+        + `${from.replace('_', '–')}. A CID cannot be moved across financial years — issue the next one instead.`,
       );
     }
   }
@@ -241,29 +242,29 @@ export function planMove(input: MoveInput): MoveDecision {
 
   // Splitting a project that is already alone under its number is not a split — there is nothing
   // to split it from. Saying so is more useful than doing a reassign under the wrong name, because
-  // the person asking believes another project is sharing this PID and it is worth them finding
+  // the person asking believes another project is sharing this CID and it is worth them finding
   // out that none is.
   if (declaredMode === 'SPLIT' && sourceGroup.length <= 1) {
     return refuse(
       'NOT_SHARED',
       `${project.code} holds only this project, so there is nothing to split it from. `
-      + 'Reassign it to a different Project ID instead.',
+      + 'Reassign it to a different CID instead.',
     );
   }
   if (declaredMode && declaredMode !== mode) {
     // The message has to name what the CALLER asked for, not only what was derived. Written as a
     // two-way choice it read the wrong way round for the third case: asking to reassign a project
     // that shares its number answered "there is nothing to merge into", which mentions an
-    // operation nobody requested and names a Project ID nobody supplied. On a rare admin action
+    // operation nobody requested and names a CID nobody supplied. On a rare admin action
     // that is the difference between a correction and a lost afternoon.
     const explain: Record<MoveMode, string> = {
-      MERGE: `${targetPid ?? 'That Project ID'} holds no work, so there is nothing to merge into. `
-        + 'Reassign this project to that number instead.',
+      MERGE: `${targetCid ?? 'That CID'} holds no work, so there is nothing to merge into. `
+        + 'Reassign this client instead — it is issued the next CID.',
       SPLIT: `${project.code} holds only this project, so there is nothing to split it from. `
-        + 'Reassign it to a different Project ID instead.',
+        + 'Reassign it to a different CID instead.',
       REASSIGN: mode === 'MERGE'
-        ? `${targetPid} already holds work, so this would put this project under it rather than giving it a number of its own. `
-          + 'Merge it instead, or choose a number nothing is filed under.'
+        ? `${targetCid} already holds work, so this would put this project under it rather than giving it a number of its own. `
+          + 'Merge it instead, or leave the destination empty to issue the next CID.'
         : `${project.code} is shared with ${sourceGroup.length - 1} other project`
           + `${sourceGroup.length === 2 ? '' : 's'}, so moving this one off it is a split, not a reassignment.`,
     };
@@ -284,8 +285,8 @@ export function planMove(input: MoveInput): MoveDecision {
     ok: true,
     plan: {
       mode,
-      fromPid: project.code,
-      toPid: targetPid,
+      fromCid: project.code,
+      toCid: targetCid,
       newRoundSeq,
       oldRoundSeq: project.roundSeq,
       sourceRenumber,
@@ -301,13 +302,13 @@ export function planMove(input: MoveInput): MoveDecision {
 }
 
 /**
- * The round a PID's reservation should point at after a move.
+ * The round a CID's reservation should point at after a move.
  *
  * A reservation carries one `projectId`, and plenty of code still reads it as "the project this
  * number is about". With several rounds under one number that pointer has to mean something, and
  * the only useful meaning is the piece of work someone would land on: the newest round that is
  * still running, falling back to the newest round of all when every one of them is finished.
- * Returns null when the PID is left holding nothing.
+ * Returns null when the CID is left holding nothing.
  */
 export function reservationPointer(rounds: MoveProject[]): string | null {
   const live = rounds.filter(p => !p.deleted);

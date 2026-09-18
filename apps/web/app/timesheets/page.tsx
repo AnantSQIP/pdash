@@ -9,18 +9,18 @@ import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
 import { TimesheetCalendar } from '@/components/timesheets/TimesheetCalendar';
 import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
-import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
+import { AssignClientModal } from '@/components/timesheets/AssignClientModal';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { todayIST } from '@/lib/date';
 import { monthStartDay, weekStartDay } from '@/lib/timesheet-window';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
-/** "Other" = miscellaneous non-client time — never a buffer to assign a PID to. */
+/** "Other" = miscellaneous non-client time — never a buffer to assign a client to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
-/** A client call: booked to a PID but to no task, so it is not a buffer awaiting one either. */
+/** A client call: booked to a client but to no task, so it is not a buffer awaiting one either. */
 const isCall = (e: Timesheet) => e.category === 'CLIENT_CALL';
-/** A buffer entry (logged without a PID) — no task/issue/client, and not "Other". */
+/** A buffer entry (logged "assign later") — no task/issue/client, and not "Other". */
 const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e) && !isCall(e);
 const bufferDaysLeft = (e: Timesheet): number | null =>
   e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
@@ -149,7 +149,7 @@ export default function TimesheetsPage() {
             <div className="divide-y divide-gray-100">
               {dayEntries.map(entry => (
                 <div key={entry.id} className="flex items-start gap-3 px-4 sm:px-5 py-3 hover:bg-gray-50">
-                  {/* PID / kind */}
+                  {/* CID / kind */}
                   <div className="w-28 shrink-0">
                     {entry.project?.code ? (
                       <>
@@ -163,7 +163,7 @@ export default function TimesheetsPage() {
                       <div className="flex flex-col gap-1">
                         <button onClick={() => setAssigning(entry)}
                           className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-md hover:bg-brand-100 w-max">
-                          <KeyRound size={11} /> Assign PID
+                          <KeyRound size={11} /> Assign to client
                         </button>
                         {(() => { const d = bufferDaysLeft(entry); return d === null ? null : (
                           <span className={clsx('text-[10px] font-medium', d < 0 ? 'text-red-500' : d <= 2 ? 'text-amber-600' : 'text-gray-400')}>{d < 0 ? 'overdue' : `${d}d left`}</span>
@@ -211,7 +211,7 @@ export default function TimesheetsPage() {
       </div>
 
       {showLog && <LogTimeStandaloneModal defaultDate={selectedDate <= todayKey ? selectedDate : todayKey} onClose={() => setShowLog(false)} onSuccess={invalidate} />}
-      {assigning && <AssignPidModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
+      {assigning && <AssignClientModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
     </div>
   );
 }

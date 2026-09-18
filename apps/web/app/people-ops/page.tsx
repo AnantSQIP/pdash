@@ -321,7 +321,7 @@ function HandoverPanel({ person, onClose, onDone }: { person: LifecyclePerson; o
 
           {data.projectsManaged.length > 0 && (
             <List title="Clients they manage — these need a new owner" items={data.projectsManaged.map(p =>
-              `${p.code ?? 'no PID'} · ${p.title}`)} tone="red" />
+              `${p.code ?? '—'} · ${p.title}`)} tone="red" />
           )}
           {/* CLIENTS-FLOW: commented out — these are client-code records, which are switched off. */}
           {PATENTS_AND_CLIENT_CODES && data.clientsOwned.length > 0 && (
@@ -332,7 +332,7 @@ function HandoverPanel({ person, onClose, onDone }: { person: LifecyclePerson; o
               `${t.title}${t.project ? ` — ${t.project.code ?? t.project.title}` : ''}`)} tone="red" />
           )}
           {data.unsubmittedTime.length > 0 && (
-            <List title="Time logged with no PID attached" items={data.unsubmittedTime.slice(0, 10).map(t =>
+            <List title="Time logged with no client attached" items={data.unsubmittedTime.slice(0, 10).map(t =>
               `${String(t.date).slice(0, 10)} · ${t.hoursLogged}h${t.notes ? ` · ${t.notes}` : ''}`)} tone="amber" />
           )}
 

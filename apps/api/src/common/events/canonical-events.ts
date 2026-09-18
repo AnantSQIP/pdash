@@ -38,11 +38,14 @@ export const EVENTS = {
   PROJECT_CLOSED: 'project.closed',
   PROJECT_REOPENED: 'project.reopened',
   PROJECT_DELETED: 'project.deleted',
-  // A project changing its PID — reassigned to another number, split out onto its own, or merged
-  // under another project's. Its own event rather than a project.updated, because the PID is the
+  // A client changing its CID — reassigned to a fresh number, split out onto its own, or merged
+  // under another client's. Its own event rather than a project.updated, because the CID is the
   // identifier the firm files work under: "which number was this matter under in March" is a
-  // question asked of the audit log directly, and it cannot be answered by replaying generic
-  // updates. The metadata carries both numbers and every round the move renumbered.
+  // question asked of the audit log directly. The metadata carries both numbers and every round the
+  // move renumbered. (The CID ledger, cid_event, records the same move with its own snapshot.)
+  PROJECT_CID_MOVED: 'project.cid_moved',
+  // The same event under its pre-CID name. No longer written; kept so feeds can still label the
+  // rows written before the rename.
   PROJECT_PID_MOVED: 'project.pid_moved',
   // CLIENTS-FLOW. A task group is one piece of work for a client; creating, finishing and deleting
   // one are facts the client's activity feed must show, and none of them is a project.updated.

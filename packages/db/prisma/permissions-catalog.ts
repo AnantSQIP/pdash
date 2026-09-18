@@ -16,7 +16,7 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Generate PID',
+  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',

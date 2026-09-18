@@ -6,13 +6,13 @@ export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface MockProject {
   id: string;
-  code?: string | null; // the PID, e.g. SQ_26_27_001
+  code?: string | null; // the CID, e.g. SQ_26_27_001
   title: string;
   description: string;
   projectType?: string | null; // e.g. HML, Novelty, FTO — shown as a tag on the card
   // The FIELD the work is in (Medical, Automobile …) — a second tag beside the type.
   technologyDomain?: string | null;
-  /** Which project this is under its PID (1 for the first). A PID may hold several. */
+  /** Which project this is under its CID (1 for the first). A CID may hold several. */
   roundSeq?: number;
   projectPhase: Phase;
   priority: Priority;
@@ -81,14 +81,14 @@ export function projectTypeLabel(value?: string | null): string {
 }
 
 /**
- * How a project is identified once a PID can hold more than one.
+ * A client's CID for display, with its round when it is not the first — e.g. SQ_26_27_004 · P2.
+ * Two clients under one CID share the code, so every place that lists them — the digest, timesheet
+ * pickers, the capacity board — appends the round so they can be told apart.
  *
- * A returning client's second engagement shares the first's Project ID, so "SQ_26_27_001" alone
- * is ambiguous the moment there are two. Anywhere a project is listed next to others — reports,
- * the digest, timesheet pickers, the capacity board — append the round so they can be told apart.
- * Round 1 of a single-project PID adds nothing, keeping Gurgaon's display exactly as it was.
+ * Every live client is given its CID when it is created, so a missing one is not a state anybody
+ * should see; it renders as a plain dash rather than the old "PID pending".
  */
-export function pidLabel(code?: string | null, roundSeq?: number | null): string {
-  const pid = code ?? 'PID pending';
-  return roundSeq && roundSeq > 1 ? `${pid} · P${roundSeq}` : pid;
+export function cidLabel(code?: string | null, roundSeq?: number | null): string {
+  const cid = code || '—';
+  return code && roundSeq && roundSeq > 1 ? `${cid} · P${roundSeq}` : cid;
 }

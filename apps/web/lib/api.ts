@@ -361,8 +361,8 @@ export type ReportProject = {
   tasks: ReportTask[];
 };
 
-/** One project under a PID — the "card" the PID page stacks. */
-export type PidRound = {
+/** One client under a CID — the "card" the client page stacks. */
+export type CidRound = {
   id: string; code: string | null; roundSeq: number; office: string | null;
   title: string; description: string | null;
   projectType: string | null;
@@ -381,140 +381,125 @@ export type PidRound = {
   members: { projectRole: string | null; user: UserSummary }[];
   _count?: { projectTasks: number; members: number };
 };
-/** Every project sharing a PID. `multiRound` is false for a normal single-project PID. */
-export type PidRounds = { pid: string | null; multiRound: boolean; rounds: PidRound[] };
+/** Every client sharing a CID. `multiRound` is false for a CID that holds one client. */
+export type CidRounds = { cid: string | null; multiRound: boolean; rounds: CidRound[] };
 
-/** Which of the three corrections a PID move is. */
-export type PidMoveMode = 'REASSIGN' | 'SPLIT' | 'MERGE';
+/** Which of the three corrections a CID move is. */
+export type CidMoveMode = 'REASSIGN' | 'SPLIT' | 'MERGE';
 
 /** One round as the move preview lists it, on either side of the move. */
-export type PidMoveRound = {
+export type CidMoveRound = {
   id: string; title: string; roundSeq: number; phase: string;
-  /** The project being moved, so the preview can mark it in both lists. */
+  /** The client being moved, so the preview can mark it in both lists. */
   isThisProject: boolean;
 };
 
-/** A round number changing because of the move — somebody else's project, usually. */
-export type PidMoveRenumber = { id: string; from: number; to: number; title: string };
+/** A round number changing because of the move — somebody else's client, usually. */
+export type CidMoveRenumber = { id: string; from: number; to: number; title: string };
 
 /**
- * What a PID move WOULD do. Computed by the server from the same plan the move itself runs, so the
- * consequence the modal shows and the consequence that happens cannot drift apart.
+ * What a CID move WOULD do. Computed by the server from the same plan the move itself runs, so the
+ * consequence the dialog shows and the consequence that happens cannot drift apart.
  */
-type PidMovePreviewBase = {
+type CidMovePreviewBase = {
   projectId: string; projectTitle: string;
-  fromPid: string | null; fromRoundSeq: number;
-  sourceRounds: PidMoveRound[];
-  targetRounds: PidMoveRound[];
-  targetPid: string | null;
-  /** The number a mint would issue. Non-binding — a project created first takes it. */
+  fromCid: string | null; fromRoundSeq: number;
+  sourceRounds: CidMoveRound[];
+  targetRounds: CidMoveRound[];
+  targetCid: string | null;
+  /** The number a mint would issue. Non-binding — a client created first takes it. */
   mintPreview: string | null;
 };
 /**
- * A plain union rather than `base & (A | B)`: only a union narrows on `preview.ok`, and the modal
+ * A plain union rather than `base & (A | B)`: only a union narrows on `preview.ok`, and the dialog
  * reads every field of the successful half after exactly that check.
  */
-export type PidMovePreview =
-  | (PidMovePreviewBase & { ok: false; reason: string; message: string })
-  | (PidMovePreviewBase & {
+export type CidMovePreview =
+  | (CidMovePreviewBase & { ok: false; reason: string; message: string })
+  | (CidMovePreviewBase & {
       ok: true;
-      mode: PidMoveMode;
-      toPid: string | null;
-      mintsNewPid: boolean;
+      mode: CidMoveMode;
+      toCid: string | null;
+      mintsNewCid: boolean;
       newRoundSeq: number;
-      sourceRenumber: PidMoveRenumber[];
-      targetRenumber: PidMoveRenumber[];
+      sourceRenumber: CidMoveRenumber[];
+      targetRenumber: CidMoveRenumber[];
       sourceRemaining: number;
       targetTotal: number;
       /** The old number is retired into the ledger — kept forever, never issued again. */
-      retiresFromPid: boolean;
+      retiresFromCid: boolean;
       affectedCount: number;
     });
 
-/** An existing PID a project could be merged into, with the work already filed under it. */
-export type PidMoveTarget = {
-  pid: string; fyLabel: string; serial: number;
-  client: string | null;
+/** An existing CID a client could be merged into, with the work already filed under it. */
+export type CidMoveTarget = {
+  cid: string; fyLabel: string; serial: number;
   rounds: { id: string; title: string; roundSeq: number; phase: string }[];
 };
 
 /** The result of a completed move. */
-export type PidMoveResult = {
-  projectId: string; mode: PidMoveMode;
-  fromPid: string; toPid: string; roundSeq: number;
-  retiredFromPid: boolean;
-  renumbered: PidMoveRenumber[];
+export type CidMoveResult = {
+  projectId: string; mode: CidMoveMode;
+  fromCid: string; toCid: string; roundSeq: number;
+  retiredFromCid: boolean;
+  fromCidStatus: CidRegistryStatus | null;
+  renumbered: CidMoveRenumber[];
 };
 
-/** A single project under a PID, as the ledger reports it. */
-export type PidLedgerRound = {
-  id: string; round: number; title: string; description?: string | null;
-  phase: string | null; type?: string | null; priority?: string | null; office?: string | null;
-  /** Technology domain: the stored slug plus its human label. */
-  domain?: string | null; domainLabel?: string | null;
-  startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
-  completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
-  workingHours?: number | null; actualHours?: number | null;
-  /** Hours logged on THIS round — reconciles against timesheets. */
-  loggedHours?: number;
-  /** Hours ALLOTTED to this round — the sum of its tasks' estimates. */
-  allottedHours?: number;
-  progress?: number | null; client?: string | null;
-  createdBy?: string | null; createdAt?: string | null;
-  patents?: string[]; members?: { name: string; role: string }[];
+/** What the CID registry says about a number. */
+export type CidRegistryStatus = 'ATTACHED' | 'DELETED' | 'PURGED' | 'MERGED' | 'DISCONTINUED';
+/** The status the ledger shows for a CID (derived from the registry and the clients under it). */
+export type CidLedgerStatus = 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'DELETED' | 'MERGED' | 'PURGED' | 'RETIRED';
+export type CidEventType =
+  | 'MINTED' | 'BACKFILLED' | 'IMPORTED' | 'ROUND_ADDED' | 'RENAMED' | 'CLIENT_GROUP_CHANGED'
+  | 'MANAGER_CHANGED' | 'PHASE_CHANGED' | 'DELETED' | 'RESTORED' | 'COMPLETED' | 'REOPENED'
+  | 'REINITIALIZED' | 'REASSIGNED' | 'SPLIT' | 'MERGED' | 'PURGED';
+
+/** One stored, append-only CID ledger event. */
+export type CidLedgerEvent = {
+  id: string; type: CidEventType; label: string; at: string;
+  /** The CID it is filed under (for a move: the CID the client ended up with). */
+  cid: string;
+  projectId: string | null; clientTitle: string | null;
+  fromCid: string | null; toCid: string | null;
+  fromTitle: string | null; toTitle: string | null;
+  actorName: string;
+  metadata: Record<string, unknown> | null;
 };
 
-export type PidLedgerState = 'WORKING' | 'COMPLETED' | 'RESERVED' | 'DISCONTINUED';
-export type PidLedgerEntry = {
-  id: string; pid: string; fyLabel: string; serial: number;
-  status: 'RESERVED' | 'ATTACHED' | 'DISCONTINUED';
-  /** The PID's real lifecycle, derived from the attached project's phase (drives the badge/filter). */
-  state: PidLedgerState;
-  generatedBy: string;
-  /** Every project under this PID, oldest first. One entry for a single-project PID. */
-  rounds?: PidLedgerRound[];
-  roundCount?: number;
-  /** Every hour logged across every round of this PID. */
-  totalLoggedHours?: number;
-  totalAllottedHours?: number;
-  multiRound?: boolean;
-  /** The LATEST round — kept so single-project consumers keep working unchanged. */
-  project: {
-    id: string; title: string; phase: string | null;
-    description?: string | null; type?: string | null; priority?: string | null;
-    startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
-    /** Completion record: when it was signed off, when it reached the client, and the hours. */
-    completedAt?: string | null; closedAt?: string | null; clientDeliveryDate?: string | null;
-    workingHours?: number | null; actualHours?: number | null;
-    progress?: number | null; client?: string | null;
-    createdBy?: string | null; createdAt?: string | null;
-    patents?: string[];
-    members?: { name: string; role: string }[];
-  } | null;
-  createdAt: string; expiresAt: string; resolvedAt: string | null;
+/** One client that has carried a CID — live, in the bin, or permanently deleted. */
+export type CidLedgerRound = {
+  id: string; round: number | null; title: string; description?: string | null;
+  phase: string; deleted: boolean; deletedAt?: string | null; purged: boolean; purgedAt?: string | null;
+  type?: string | null; domain?: string | null; domainLabel?: string | null;
+  priority?: string | null; office?: string | null;
+  clientGroup: string | null; managers: string[];
+  members?: { name: string; role: string }[];
+  startDate?: string | null; dueDate?: string | null; completedAt?: string | null;
+  clientDeliveryDate?: string | null; workingHours?: number | null; actualHours?: number | null;
+  loggedHours: number; allottedHours: number; taskGroupCount: number;
+  progress?: number | null; createdBy?: string | null; createdAt?: string | null;
 };
 
-export type PidRequestItem = {
-  id: string; projectId: string; projectTitle: string;
-  /** CLIENTS-FLOW: NEW = mint one; CHANGE = correct the one the client has. */
-  kind: 'NEW' | 'CHANGE';
-  currentPid?: string | null;
-  description?: string | null; priority?: string | null;
-  projectType?: string | null; managerId?: string | null;
-  startDate?: string | null; dueDate?: string | null;
-  requestedBy: string; requestedById?: string; note: string | null; createdAt: string;
-  /** Who the requester asked first (null = everyone), and whether that is the reader. */
-  askedFirst?: string | null; askedYou?: boolean;
-  reason?: string | null; suggestedPid?: string | null;
-  waitingHours?: number; remindedAt?: string | null; reminderCount?: number;
-};
-
-/** CLIENTS-FLOW: what a client is waiting on, on its own page. */
-export type OpenPidRequest = {
-  id: string; kind: 'NEW' | 'CHANGE'; createdAt: string;
-  askedFirst: string | null; requestedBy: string | null;
-  reason: string | null; suggestedPid: string | null;
-  remindedAt: string | null; reminderCount: number;
+/** One row of the CID ledger: a number the organisation has issued, and everything that happened to it. */
+export type CidLedgerEntry = {
+  id: string; cid: string; fyLabel: string; serial: number;
+  registryStatus: CidRegistryStatus;
+  status: CidLedgerStatus;
+  /** Set when the CID was merged away: the number its client now lives under. */
+  mergedIntoCid: string | null;
+  /** The current client's name — or the last one recorded, for a deleted/purged/moved client. */
+  clientName: string | null;
+  /** Every other name recorded under this CID (earlier titles, other clients that carried it), for search. */
+  pastNames: string[];
+  clientGroup: string | null;
+  managers: string[];
+  createdBy: string | null; createdAt: string;
+  rounds: CidLedgerRound[];
+  liveRoundCount: number; roundCount: number;
+  totalLoggedHours: number; totalAllottedHours: number; taskGroupCount: number;
+  events: CidLedgerEvent[];
+  lastEventAt: string;
 };
 
 /**
@@ -570,7 +555,8 @@ export type ApiProject = {
   projectType?: string | null;
   /** The FIELD the work is in (Medical, Automobile, Source Code …) — separate from the type. */
   technologyDomain?: string | null;
-  /** The PID, e.g. SQ_26_27_001 (globally unique; also searchable). */
+  /** The CID (Client ID), e.g. SQ_26_27_001 — issued automatically when the client is created, so
+   *  every live client has one (also searchable). Stored as `code` for historical reasons. */
   code?: string | null;
   /** The client/matter this project is for. */
   client?: { id: string; name: string; code: string } | null;
@@ -596,9 +582,9 @@ export type ApiProject = {
   /** Captured at completion: when the work reached the CLIENT (distinct from completedAt, which is
    *  when someone pressed the button), the hours on paper, and the hand-typed real cost. */
   clientDeliveryDate?: string | null; workingHours?: number | null; actualHours?: number | null;
-  /** Which project this is under its PID (1 for the first). A PID can hold several. */
+  /** Which client this is under its CID (1 for the first). A CID can hold several. */
   roundSeq?: number;
-  /** GURGAON | JAIPUR — the owning office. Jaipur PIDs may hold multiple projects. */
+  /** GURGAON | JAIPUR — the owning office. */
   office?: string | null;
   createdAt?: string; updatedAt?: string; // omitted by the list projection
   currentStatus?: WorkflowStatus;
@@ -611,8 +597,6 @@ export type ApiProject = {
   /** CLIENTS-FLOW: on the list projection — tasks still open, and those past their deadline. */
   openTaskCount?: number;
   overdueTaskCount?: number;
-  /** CLIENTS-FLOW: the open PID request, on the single-client read. */
-  openPidRequest?: OpenPidRequest | null;
 };
 
 // ─── Patent-analysis client codes + confidential coded patents ────────────────
@@ -625,7 +609,7 @@ export type ClientSummary = {
   activeProjects?: number;
 };
 // ─── Team spaces (Phase 3) ───────────────────────────────────────────────────
-/** A space for work that is not client delivery: no PID, no client, no billability. */
+/** A space for work that is not client delivery: no CID, no client, no billability. */
 export type TeamSpace = {
   id: string; name: string; description?: string | null;
   archivedAt?: string | null; createdAt: string; createdBy?: string | null;
@@ -738,7 +722,7 @@ export type LedgerEffective = {
   stale?: boolean;
 };
 /** Hours the ledger cannot attribute to any client, split by the reason. */
-/** Where the client → patent → PID → hours chain was never joined up. */
+/** Where the client → patent → CID → hours chain was never joined up. */
 export type ChainGaps = {
   unusedPatents: {
     count: number; total: number;
@@ -780,10 +764,10 @@ export type LedgerProject = {
   id: string; code?: string | null; title: string; projectPhase: string; projectType?: string | null;
   startDate?: string | null; dueDate?: string | null; completedAt?: string | null;
   workingHours?: number | null; actualHours?: number | null;
-  /** Which round this project is under its PID — one PID can group several. */
+  /** Which round this project is under its CID — one CID can group several. */
   roundSeq?: number;
   /**
-   * Why there is no PID, so the screen can say something better than a dash:
+   * Why there is no CID, so the screen can say something better than a dash:
    * 'assigned' it has one · 'requested' an authority has been asked · 'missing' nobody has asked.
    */
   pidStatus?: 'assigned' | 'requested' | 'missing';
@@ -1305,7 +1289,7 @@ export type UserBreakdowns = {
   tasksByStatus: NameValue[];
   tasksByPriority: NameValue[];
   issuesBySeverity: NameValue[];
-  /** pid + roundSeq travel with the name: two rounds of one PID share a code. */
+  /** pid + roundSeq travel with the name: two rounds of one CID share a code. */
   hoursByProject: { projectId: string; name: string; pid?: string | null; roundSeq?: number | null; hours: number; billable: number }[];
   estimatedVsActual: { taskId: string; name: string; target: number; actual: number }[];
 };
@@ -1458,9 +1442,9 @@ export type CapacityOpenTask = {
   taskGroupId?: string | null; taskGroup?: string | null;
   /** The task group's own (team) deadline, YYYY-MM-DD. */
   taskGroupDueDate?: string | null;
-  /** The project's PID and which round it is — two rounds of one PID share a code. */
+  /** The project's CID and which round it is — two rounds of one CID share a code. */
   projectPid?: string | null; projectRound?: number;
-  /** Team-space work: no PID, labelled by the space. */
+  /** Team-space work: no CID, labelled by the space. */
   isTeamWork?: boolean;
   dueDate?: string | null; priority: string; completionPercentage: number;
   projectPriority?: string; projectDueDate?: string | null;
@@ -1812,14 +1796,11 @@ export const api = {
     types: () => req<ProjectTypeDef[]>('/projects/types'),
     /** Built-in technology domains + the org's saved custom ones, alphabetical. */
     technologyDomains: () => req<TechnologyDomainDef[]>('/projects/technology-domains'),
-    /** Non-binding preview of the PID the next created project would get. */
-    nextPid: () => req<{ pid: string | null }>('/projects/next-pid'),
     create: (data: {
       title: string; projectType?: string; clientId?: string; patentIds?: string[];
       description?: string; priority?: string; startDate?: string;
       dueDate?: string; clientDueDate?: string; managerId?: string; createdBy: string;
-      pid?: string; pidAssigneeId?: string;
-      /** GURGAON | JAIPUR — decides whether this project's PID may later hold more projects. */
+      /** GURGAON | JAIPUR — the owning office. */
       office?: string;
       customType?: { label: string; tasks: string[]; save?: boolean };
       /** Technology domain slug — a built-in or one the org saved. */
@@ -1831,17 +1812,14 @@ export const api = {
       /** CLIENTS-FLOW: the client's first task group, created in the same transaction. */
       taskGroup?: TaskGroupInput;
     }) => req<ApiProject>('/projects', { method: 'POST', body: JSON.stringify(data) }),
-    /** Reserve a Project ID (Generate PID) for 5 minutes. Authority only. */
-    generatePid: () => req<{ pid: string; reservationId: string; createdAt?: string; expiresAt?: string }>('/projects/generate-pid', { method: 'POST' }),
-    /** My current un-attached PID (countdown), or null. */
-    myPidReservation: () => req<{ reservation: { pid: string; createdAt: string; expiresAt: string } | null }>('/projects/pid-reservation'),
-    /** The full PID ledger (working / discontinued / history). Admin + Super Admin only. */
-    pidLedger: () => req<PidLedgerEntry[]>('/projects/pid-ledger'),
+    /** The CID ledger — every CID ever issued, with its clients, hours and full event timeline.
+     *  Admin, Super Admin and HR (user.manage_access). */
+    cidLedger: () => req<CidLedgerEntry[]>('/projects/cid-ledger'),
     /** Every project with its full detail — the Reports module's table and CSV share this. */
     fullReport: () => req<ReportProject[]>('/projects/full-report'),
-    /** Every project sharing this one's PID — the PID page's stack of cards. */
-    rounds: (id: string) => req<PidRounds>(`/projects/${id}/rounds`),
-    /** Start ANOTHER project under this one's PID (returning client, Jaipur only). */
+    /** Every client sharing this one's CID — the client page's stack of cards. */
+    rounds: (id: string) => req<CidRounds>(`/projects/${id}/rounds`),
+    /** Start ANOTHER client under this one's CID (returning client). */
     addRound: (id: string, body: {
       title: string; projectType?: string; description?: string; priority?: string;
       projectPhase?: string;
@@ -1853,34 +1831,6 @@ export const api = {
       /** A domain somebody typed; `save` adds it to the org's list for next time. */
       customDomain?: { label: string; save?: boolean };
     }) => req<ApiProject>(`/projects/${id}/rounds`, { method: 'POST', body: JSON.stringify(body) }),
-    /** Attach a fresh PID to a project that has none (e.g. reopened). Authority only. */
-    attachPid: (id: string, pid?: string) =>
-      req<{ pid: string; projectId: string }>(`/projects/${id}/attach-pid`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
-    /** People who can assign a PID — the request dropdown for non-authorities. */
-    pidAuthorities: () =>
-      req<Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>[]>(
-        '/projects/pid-authorities'),
-    /** My incoming PID requests, as an authority. */
-    pidRequests: () => req<PidRequestItem[]>('/projects/pid-requests'),
-    /** Verify/edit a pending-request project's details (incl. type + manager) before assigning its PID. */
-    editPidRequestProject: (id: string, data: { title?: string; description?: string; priority?: string; projectType?: string | null; managerId?: string; startDate?: string | null; dueDate?: string | null }) =>
-      req<ApiProject>(`/projects/pid-requests/${id}/project`, { method: 'PATCH', body: JSON.stringify(data) }),
-    /** Assign a PID to a pending-request project. */
-    /** CLIENTS-FLOW: decline a PID-change request, with a reason the requester is told. */
-    declinePidRequest: (id: string, reason: string) =>
-      req<{ declined: boolean }>(`/projects/pid-requests/${id}/decline`, { method: 'POST', body: JSON.stringify({ reason }) }),
-    /** CLIENTS-FLOW: ask for a PID for a client with none and no open request. */
-    requestPid: (projectId: string, data: { assigneeId?: string; note?: string } = {}) =>
-      req<OpenPidRequest>(`/projects/${projectId}/pid-request`, { method: 'POST', body: JSON.stringify(data) }),
-    /** CLIENTS-FLOW: remind every PID authority (hourly at most). */
-    nudgePidRequest: (projectId: string) =>
-      req<{ reminded: number }>(`/projects/${projectId}/pid-request/nudge`, { method: 'POST' }),
-    /** CLIENTS-FLOW: ask for this client's PID to be changed. */
-    requestPidChange: (projectId: string, data: { reason: string; suggestedPid?: string }) =>
-      req<OpenPidRequest>(`/projects/${projectId}/pid-change-request`, { method: 'POST', body: JSON.stringify(data) }),
-    fulfillPidRequest: (id: string, pid: string) =>
-      req<{ pid: string | null; projectId: string; alreadyHad?: boolean }>(`/projects/pid-requests/${id}/fulfill`,
-        { method: 'POST', body: JSON.stringify({ pid }) }),
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage' | 'clientGroupId'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Project requests routed to me as their manager (or, for admins, any pending). Org is
@@ -1892,12 +1842,6 @@ export const api = {
       req<{
         /** True when the caller may name THEMSELVES as the manager — the "I'll manage it" option. */
         canManageOwn: boolean;
-        /**
-         * True when the caller mints the PID themselves. When false the form must still ask who
-         * will: running a project and issuing its number are separate jobs held by different
-         * people, and naming yourself as manager does not conjure a PID.
-         */
-        canIssuePid: boolean;
         managers: (Pick<UserSummary, 'id' | 'firstName' | 'lastName' | 'designation' | 'profilePhoto'>
           & { isSelf: boolean; youAreDefault: boolean })[];
       }>('/projects/eligible-managers'),
@@ -1911,33 +1855,33 @@ export const api = {
     deletePermanent: (id: string, confirmTitle: string) =>
       req<PurgeResult>(`/projects/${id}/permanent?confirm=${encodeURIComponent(confirmTitle)}`, { method: 'DELETE' }),
     /**
-     * ── Correcting a Project ID ──────────────────────────────────────────────────
-     * Three calls for one idea ("this project's PID is wrong"), kept apart because each rules out
-     * a different mistake server-side: a split refuses a project that is already alone under its
-     * number, a merge refuses a destination that holds no work. All three mint or retire a number
-     * the firm files work under, so all three go through the org step-up passcode (collected by
-     * the interceptor at the top of this file — no extra plumbing needed here).
+     * ── Correcting a CID ─────────────────────────────────────────────────────────
+     * Three calls for one idea ("this client's CID should change"), kept apart because each rules
+     * out a different mistake server-side: a split refuses a client that is already alone under its
+     * number, a merge refuses a destination that holds no work. All three issue or retire a number
+     * the firm files work under, so all three go through the org step-up passcode (collected by the
+     * interceptor at the top of this file — no extra plumbing needed here).
      *
-     * `pid` omitted mints a fresh serial in the current financial year; `intoProjectId` names the
-     * project to merge under, and the server reads ITS PID.
+     * Reassign and split always issue the next CID; a merge names the client (or a CID holding live
+     * work) to merge under. A CID is never re-used.
      */
-    pidMovePreview: (id: string, opts: { mode: PidMoveMode; pid?: string; intoProjectId?: string }) => {
+    cidMovePreview: (id: string, opts: { mode: CidMoveMode; cid?: string; intoProjectId?: string }) => {
       const params = new URLSearchParams({ mode: opts.mode });
-      if (opts.pid) params.set('pid', opts.pid);
+      if (opts.cid) params.set('cid', opts.cid);
       if (opts.intoProjectId) params.set('intoProjectId', opts.intoProjectId);
-      return req<PidMovePreview>(`/projects/${id}/pid-move?${params}`);
+      return req<CidMovePreview>(`/projects/${id}/cid-move?${params}`);
     },
-    /** Existing PIDs in the same financial year that still hold live work — the merge picker. */
-    pidMoveTargets: (id: string) => req<PidMoveTarget[]>(`/projects/${id}/pid-move/targets`),
-    /** The number is wrong: move this project to another one, or to a freshly minted one. */
-    reassignPid: (id: string, pid?: string) =>
-      req<PidMoveResult>(`/projects/${id}/pid/reassign`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
-    /** This project is sharing a PID and is really a separate matter: give it its own number. */
-    splitPid: (id: string, pid?: string) =>
-      req<PidMoveResult>(`/projects/${id}/pid/split`, { method: 'POST', body: JSON.stringify(pid ? { pid } : {}) }),
-    /** Two numbers, one matter: move this project under another's PID as its next round. */
-    mergePid: (id: string, into: { pid?: string; intoProjectId?: string }) =>
-      req<PidMoveResult>(`/projects/${id}/pid/merge`, { method: 'POST', body: JSON.stringify(into) }),
+    /** Existing CIDs in the same financial year that still hold live work — the merge picker. */
+    cidMoveTargets: (id: string) => req<CidMoveTarget[]>(`/projects/${id}/cid-move/targets`),
+    /** This client should have a number of its own: move it to the next freshly issued CID. */
+    reassignCid: (id: string) =>
+      req<CidMoveResult>(`/projects/${id}/cid/reassign`, { method: 'POST', body: JSON.stringify({}) }),
+    /** This client shares a CID and is really a separate matter: give it its own number. */
+    splitCid: (id: string) =>
+      req<CidMoveResult>(`/projects/${id}/cid/split`, { method: 'POST', body: JSON.stringify({}) }),
+    /** Two numbers, one matter: move this client under another's CID as its next round. */
+    mergeCid: (id: string, into: { cid?: string; intoProjectId?: string }) =>
+      req<CidMoveResult>(`/projects/${id}/cid/merge`, { method: 'POST', body: JSON.stringify(into) }),
     // The approver is the verified cookie actor server-side; only an optional reason is sent.
     approve: (id: string, reason?: string) =>
       req<void>(`/projects/${id}/approve`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }),
@@ -1947,7 +1891,7 @@ export const api = {
     complete: (id: string, body?: { clientDeliveryDate?: string; workingHours?: number; actualHours?: number }) =>
       req<ApiProject>(`/projects/${id}/complete`, { method: 'POST', body: JSON.stringify(body ?? {}) }),
     reopen: (id: string) => req<ApiProject>(`/projects/${id}/reopen`, { method: 'POST' }),
-    /** Re-initialize a COMPLETED project (returning client) — same PID, existing data reused. */
+    /** Re-initialize a COMPLETED client (returning engagement) — same CID, existing data reused. */
     reinitialize: (id: string) => req<ApiProject>(`/projects/${id}/reinitialize`, { method: 'POST' }),
     /** What the completion form should prefill "working hours" with (logged time, else estimates). */
     completionHours: (id: string) =>
@@ -2150,7 +2094,7 @@ export const api = {
     list: (includeArchived = true) =>
       req<LedgerRow[]>(`/client-ledger?includeArchived=${includeArchived}`),
     detail: (clientId: string) => req<LedgerDetail>(`/client-ledger/${clientId}`),
-    /** Hours that reach no client — the PID buffer, and projects with no client set. */
+    /** Hours that reach no client — the assign-later buffer, and projects with no client set. */
     gaps: () => req<ChainGaps>('/client-ledger/gaps'),
     unattributed: () => req<LedgerUnattributed>('/client-ledger/unattributed'),
     /**
@@ -2359,13 +2303,13 @@ export const api = {
     /** Per-day fill calendar for a month (color-coded: complete/incomplete/leave/holiday/weekend/future). */
     calendar: (year: number, month: number) =>
       req<TimesheetCalendar>(`/timesheets/calendar?year=${year}&month=${month}`),
-    // taskId is optional: omit it to log a "buffer" entry whose PID (task) is assigned later.
+    // taskId is optional: omit it to log a "buffer" entry whose client and task are assigned later.
     create: (data: {
       userId?: string; taskId?: string;
-      /** OTHER = non-project time. CLIENT_CALL = a call booked to a PID, no task needed and
+      /** OTHER = non-project time. CLIENT_CALL = a call booked to a CID, no task needed and
        *  allowed whether the matter is open or finished. */
       category?: 'OTHER' | 'CLIENT_CALL';
-      /** Required for CLIENT_CALL — which PID the call was about. */
+      /** Required for CLIENT_CALL — which CID the call was about. */
       projectId?: string;
       title?: string; date: string; hoursLogged: number; billable?: boolean; notes?: string;
       /** Which flow wrote the row. Omitted means a person typed it. */
@@ -2374,7 +2318,7 @@ export const api = {
       req<Timesheet>('/timesheets', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: { hoursLogged?: number; billable?: boolean; notes?: string }) =>
       req<Timesheet>(`/timesheets/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    /** Assign a PID (task) to a buffer entry logged without one. */
+    /** Assign a client + task to a buffer entry logged without one. */
     assign: (id: string, taskId: string) =>
       req<Timesheet>(`/timesheets/${id}/assign`, { method: 'POST', body: JSON.stringify({ taskId }) }),
     delete: (id: string) => req<void>(`/timesheets/${id}`, { method: 'DELETE' }),
