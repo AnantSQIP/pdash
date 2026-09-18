@@ -245,6 +245,17 @@ function sess() {
   ok('an open task due after the target group is refused, saying what to do', mv.status === 400 && /deadline/i.test(mv.data?.message ?? ''), brief(mv));
 
   // ── What the review found, held down ────────────────────────────────────────────────────────
+  // Deleting a client cancels its request so no serial is burned on a client that is gone —
+  // restoring it has to put the request BACK, or the client returns with no PID and nothing
+  // tracking that, which is the one state the queue exists to prevent.
+  step('a client restored from the bin waits in the queue again');
+  const restored = await su(`/admin/data/projects/${d.data.id}/restore`, { method: 'POST' });
+  ok('an authority restores the deleted client', restored.status === 201 || restored.status === 200, brief(restored));
+  ok('…and it is back in the PID queue, still without a number',
+    !!(await inQueue(su, d.data.id)) && !(await mgr(`/projects/${d.data.id}`)).data?.code,
+    JSON.stringify(restored.data));
+  ok('…seen by every authority, not just the one who restored it', !!(await inQueue(yash, d.data.id)));
+
   step('the promise is not in the payload either');
   const leakR = await mgr('/projects', { method: 'POST', body: {
     title: `Leak ${RUN}`, managerId: who.mgr,
