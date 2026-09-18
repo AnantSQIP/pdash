@@ -15,7 +15,7 @@ import { formatDate, isPastDue } from '@/lib/date';
 import { RunningTimersBar, TimerButton, FinishButton, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
 import { DaySheet } from '@/components/tasks/DaySheet';
 import { TaskStateMark } from '@/components/tasks/TaskStateMark';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import type { RunningTimer, DayStatus } from '@/lib/api';
 import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
 import { TrackedTodayBar } from '@/components/tasks/TrackedTodayBar';
@@ -482,7 +482,7 @@ export default function TasksPage() {
           projectLabel={(() => {
             const p = logging.task.projectTasks?.[0]?.project;
             if (!p) return undefined;
-            const client = p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.title}` : p.title;
+            const client = p.code ? `${cidLabel(p.code, p.roundSeq)} · ${p.title}` : p.title;
             const group = taskGroupOf(logging.task);
             return group ? `${client} · ${group}` : client;
           })()}

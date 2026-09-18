@@ -12,7 +12,7 @@ import {
 import {
   api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance,
   type OrgPerformance, type OrgAttendanceSummary, type LeaveRequestItem,
-  type Holiday, type RoleSummary, type UserSummary, type TeamCapacity, type PidRequestItem,
+  type Holiday, type RoleSummary, type UserSummary, type TeamCapacity,
   type RegularizationRequest, type CompOffRequest, type Expense } from '@/lib/api';
 import { formatDate, fmtHours, fmtNum, fmtPct, plural, longDateIST, hourIST, todayUtc, isPastDue, relativePast } from '@/lib/date';
 import { nextUpFirst } from '@/lib/tasks';
@@ -21,7 +21,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { progressColor } from '@/lib/progress';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import {
   Card, CardHeader, CountBadge, StatTile, MetricRow, EmptyHint, ErrorState, SkeletonRows,
   PersonRow, ConfirmButton, BADGE, phaseChip, priorityDotClass,
@@ -47,7 +47,7 @@ const ROLE_PERSONA: Record<string, { label: string; sub: string }> = {
   HR:                          { label: 'People Operations',         sub: 'Attendance, leave & people' },
   'Senior Consultant':         { label: 'Senior Consultant',         sub: 'Delivery & org performance' },
   Consultant:                  { label: 'Consultant',                sub: 'Your matters & delivery' },
-  'Senior Research Associate': { label: 'Senior Research Associate', sub: 'Your research & PID requests' },
+  'Senior Research Associate': { label: 'Senior Research Associate', sub: 'Your research & clients' },
   Employee:                    { label: 'Team Member',               sub: 'Your tasks & performance' },
 };
 
@@ -296,8 +296,8 @@ export function MyProjectsCard() {
             /* The name is the row, and it was the only thing being squeezed: every trailing item
                is shrink-0, so in a third-of-the-page card the title rendered as "Pat…" / "Trad…",
                which tells you nothing and makes two different clients look identical.
-               The PID badge went because it read "PID pending" on every row here — furniture
-               carrying no information, at the cost of the one thing that identifies the row.
+               The ID badge went because it read "pending" on every row here back then —
+               furniture carrying no information, at the cost of the one thing that identifies the row.
                overflow-hidden is the backstop: the fixed items must never push the percentage
                out past the card's edge. */
             <div key={project.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3 overflow-hidden">
@@ -633,7 +633,7 @@ export function PendingRequestsCard() {
           })}
           {coRows.slice(0, 4).map(c => {
             const nm = c.user ? `${c.user.firstName} ${c.user.lastName ?? ''}`.trim() : 'A team member';
-            return <Row key={c.id} id={c.id} kind="co" name={nm} user={c.user} primary={`worked ${formatDate(c.workDate)}`} secondary={`${c.projectRef ? `PID ${c.projectRef} · ` : ''}${c.reason}`} />;
+            return <Row key={c.id} id={c.id} kind="co" name={nm} user={c.user} primary={`worked ${formatDate(c.workDate)}`} secondary={`${c.projectRef ? `CID ${c.projectRef} · ` : ''}${c.reason}`} />;
           })}
         </>
       )}
@@ -715,78 +715,6 @@ export function AdminShortcutsCard() {
           </Link>
         ))}
       </div>
-    </Card>
-  );
-}
-
-// ── The PID queue (project.generate_pid) ────────────────────────────────────
-// Replaces the old (dead) client-approval card: client approval was removed, but
-// juniors still RAISE PID requests that an authority mints & assigns here.
-//
-// CLIENTS-FLOW: the queue is a POOL now — every open request in the organisation, and two kinds
-// of them. A CHANGE request cannot be fulfilled from here (the server refuses it: a change is
-// made from the client's page, where the move is audited). Offering "Assign PID" on one both
-// failed AND reserved a serial that was never released, locking that authority out of minting
-// for five minutes. A change row links to the client instead.
-export function PidRequestsCard() {
-  const { org } = useOrg();
-  const { can } = usePermissions();
-  const { toast } = useToast();
-  const allowed = can('project.generate_pid');
-  const qc = useQueryClient();
-  const { data: pending = [], isLoading, isError, refetch } = useQuery<PidRequestItem[]>({
-    queryKey: homeKeys.pidRequests(org?.id),
-    queryFn: () => api.projects.pidRequests(),
-    enabled: allowed && !!org?.id, staleTime: 30_000, placeholderData: keepPreviousData,
-  });
-  const fulfill = useMutation({
-    mutationFn: async (id: string) => { const { pid } = await api.projects.generatePid(); return api.projects.fulfillPidRequest(id, pid); },
-    onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: homeKeys.pidRequests(org?.id) });
-      qc.invalidateQueries({ queryKey: ['projects'] });
-      toast(`PID ${res.pid} assigned.`, 'success');
-    },
-    onError: e => toast(errMsg(e), 'error'),
-  });
-  if (!allowed) return null;
-  const pendingId = fulfill.isPending ? fulfill.variables : null;
-  return (
-    <Card>
-      <CardHeader title="PID Requests" icon={Hash} badge={<CountBadge n={pending.length} />} href="/projects?pidRequests=1" linkLabel="Open the queue" />
-      {isError ? (
-        <ErrorState onRetry={() => refetch()} />
-      ) : isLoading ? (
-        <SkeletonRows n={3} />
-      ) : pending.length === 0 ? (
-        <EmptyHint>Nothing is waiting for a PID.</EmptyHint>
-      ) : (
-        pending.slice(0, 5).map(p => {
-          const busy = p.id === pendingId;
-          return (
-            <div key={p.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <Link href={`/projects/${p.projectId}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 truncate block">{p.projectTitle}</Link>
-                <p className="text-xs text-gray-500 truncate">
-                  {p.kind === 'CHANGE' ? 'change' : 'PID'} requested {relativePast(p.createdAt)}
-                  {p.kind === 'CHANGE' && p.currentPid ? ` · now ${p.currentPid}` : ''}
-                  {p.reason ? ` · ${p.reason}` : p.note ? ` · ${p.note}` : ''}
-                </p>
-              </div>
-              {p.kind === 'CHANGE' ? (
-                <Link href={`/projects/${p.projectId}?changePid=1`} title="A PID change is made on the client, where the move is recorded"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-brand-200 bg-brand-50 text-brand-700 text-xs font-semibold hover:bg-brand-100 shrink-0">
-                  <Hash size={13} /> Change PID
-                </Link>
-              ) : (
-                <button disabled={busy} onClick={() => fulfill.mutate(p.id)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 shrink-0" title="Generate and assign a PID">
-                  <Hash size={13} /> {busy ? 'Assigning…' : 'Assign PID'}
-                </button>
-              )}
-            </div>
-          );
-        })
-      )}
     </Card>
   );
 }

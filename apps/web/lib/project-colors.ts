@@ -2,9 +2,9 @@
 //
 // Three variables, three visual channels, never sharing one:
 //
-//   hue        = WHICH PROJECT.  Seven hues, assigned by a project's rank (by PID) among the
+//   hue        = WHICH PROJECT.  Seven hues, assigned by a project's rank (by CID) among the
 //                projects on the board, so no two projects visible together share a hue until
-//                there are more than seven. The PID is always printed beside the swatch — in the
+//                there are more than seven. The CID is always printed beside the swatch — in the
 //                legend, the hover card and the person panel — so hue never has to carry meaning
 //                on its own.
 //   lightness  = HOW URGENT THE TASK IS.  Critical darkest, low lightest. The four steps are
@@ -20,7 +20,7 @@
 //                hues are ASSIGNED in the order that keeps the first four furthest apart for
 //                protan, deutan and normal vision alike (worst-case ΔE 121 → 51 → 20), and the
 //                last three carry a faint hatch or dot texture as a second, colour-free channel
-//                (Bertin's texture variable). The PID label inside wide segments, in the legend
+//                (Bertin's texture variable). The CID label inside wide segments, in the legend
 //                and in every hover is the third.
 //
 // Palette rules inherited from lib/calendar-colors.ts and kept here:
@@ -110,12 +110,12 @@ export const FREE_BASE = { bg: '#d1fae5', border: '#a7f3d0' } as const;
 /**
  * Give every project on a board its hue.
  *
- * Rank by PID (then by id for anything without one) and take rank mod 7. Deterministic for a
+ * Rank by CID (then by id for anything without one) and take rank mod 7. Deterministic for a
  * given set of projects, collision-free up to seven, and it reshuffles ONLY when the set of
  * projects on the board changes — never on hover, sort, filter or search, because callers pass
  * the whole payload's project set, not what is currently on screen.
  *
- * Why rank rather than a hash or the PID's serial: a hash collides at random, and serial mod 7
+ * Why rank rather than a hash or the CID's serial: a hash collides at random, and serial mod 7
  * collides as soon as two visible projects are seven apart (003 and 010) — which, with a dozen
  * open matters, is most windows. Rank keeps the seven projects you are looking at distinct.
  */

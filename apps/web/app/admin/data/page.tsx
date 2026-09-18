@@ -203,7 +203,7 @@ function ProjectTable({ rows, onRestore, onPurge, busy }: {
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
             <th className="px-5 py-2.5">Client</th>
-            <th className="px-3 py-2.5">PID</th>
+            <th className="px-3 py-2.5">CID</th>
             <th className="px-3 py-2.5">Deleted</th>
             <th className="px-3 py-2.5">Would destroy</th>
             <th className="px-5 py-2.5 text-right">Actions</th>

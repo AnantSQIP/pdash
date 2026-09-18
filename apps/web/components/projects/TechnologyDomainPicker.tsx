@@ -11,7 +11,7 @@ import { api, type TechnologyDomainDef } from '@/lib/api';
  * behaving differently would be its own small puzzle to solve every time.
  *
  * Shared by the new-project form and the new-round form so the two cannot drift: a project
- * started under an existing PID asks for its domain exactly as a brand-new one does.
+ * started under an existing CID asks for its domain exactly as a brand-new one does.
  */
 export const CUSTOM_DOMAIN = '__custom_domain__';
 

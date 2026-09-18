@@ -26,10 +26,8 @@ import { RoundTabContent } from '@/components/projects/RoundTabContent';
 import { TaskGroups } from '@/components/projects/TaskGroups';
 import { TaskGroupModal } from '@/components/projects/TaskGroupModal';
 import { ClientGroupChip } from '@/components/projects/ClientGroups';
-import { PidStatus } from '@/components/projects/PidStatus';
-import { useSearchParams } from 'next/navigation';
-import { AddRoundModal } from '@/components/projects/AddRoundModal';
-import { PidMoveModal } from '@/components/projects/PidMoveModal';
+import { CidBadge } from '@/components/projects/CidBadge';
+import { CidMoveModal } from '@/components/projects/CidMoveModal';
 import { PatentTagsEditor } from '@/components/projects/PatentTagsEditor';
 import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
@@ -72,17 +70,12 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [showAddTask, setShowAddTask] = useState(false);
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
-  const [attachingPid, setAttachingPid] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [completing, setCompleting] = useState(false); // the completion form (delivery + hours)
-  const [addingRound, setAddingRound] = useState(false); // "new project under this PID"
-  const [movingPid, setMovingPid] = useState(false); // "this project's PID is wrong" — reassign/split/merge
+  const [movingCid, setMovingCid] = useState(false); // "this client's CID should change" — reassign/split/merge
   const [creatingGroup, setCreatingGroup] = useState(false); // CLIENTS-FLOW: "New task group" from the header
-  // CLIENTS-FLOW (PID rework): the number a change request suggested, pre-filled into Change PID.
-  const [moveSuggestion, setMoveSuggestion] = useState<string | null>(null);
-  const searchParams = useSearchParams();
-  // Which project a task came from, so the detail panel edits the right one on a multi-project PID.
+  // Which client a task came from, so the detail panel edits the right one on a multi-client CID.
   const [taskProjectId, setTaskProjectId] = useState(projectId);
 
   /**
@@ -121,7 +114,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     const confirms: Record<typeof action, string | null> = {
       complete: null, // asked for in the modal instead
       reopen: null,
-      reinitialize: 'Re-initialize this client? It reopens with the SAME PID and keeps all of its existing work.',
+      reinitialize: 'Re-initialize this client? It reopens with the SAME CID and keeps all of its existing work.',
     };
     const msg = confirms[action];
     if (msg && !await confirmDialog(msg)) return;
@@ -131,7 +124,7 @@ export function ProjectDetailClient({ projectId }: Props) {
       else await api.projects[action](projectId);
       qc.invalidateQueries({ queryKey: ['project', projectId] });
       qc.invalidateQueries({ queryKey: ['projects'] });
-      toast(action === 'complete' ? 'Client marked complete' : action === 'reinitialize' ? 'Client re-initialized (same PID)' : 'Client reopened', 'success');
+      toast(action === 'complete' ? 'Client marked complete' : action === 'reinitialize' ? 'Client re-initialized (same CID)' : 'Client reopened', 'success');
       if (action === 'complete') setCompleting(false);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not update the client', 'error');
@@ -199,7 +192,7 @@ export function ProjectDetailClient({ projectId }: Props) {
     placeholderData: keepPreviousData,
   });
 
-  // Every project sharing this PID. A Gurgaon (single-project) PID reports multiRound=false and
+  // Every project sharing this CID. A Gurgaon (single-project) CID reports multiRound=false and
   // the page renders exactly as it always has — the card layout is additive, not a replacement.
   const { data: roundsData } = useQuery({
     queryKey: ['project-rounds', projectId],
@@ -207,9 +200,9 @@ export function ProjectDetailClient({ projectId }: Props) {
     enabled: !!project,
     staleTime: 30_000,
   });
-  // CLIENTS-FLOW: a PID names ONE client now, and further work is a task group inside it — so the
-  // stacked-rounds layout is only for a PID that genuinely holds more than one client (data from
-  // before this change). It used to switch on for every PID with a single round, which drew the
+  // CLIENTS-FLOW: a CID names ONE client now, and further work is a task group inside it — so the
+  // stacked-rounds layout is only for a CID that genuinely holds more than one client (data from
+  // before this change). It used to switch on for every CID with a single round, which drew the
   // client inside a "The project you opened" card and hid the client's own task-group controls.
   const multiRound = !!roundsData?.multiRound && (roundsData?.rounds?.length ?? 0) > 1;
   const rounds = roundsData?.rounds ?? [];
@@ -217,7 +210,7 @@ export function ProjectDetailClient({ projectId }: Props) {
   /**
    * The cards, with the project the URL actually names pulled to the front.
    *
-   * A PID that a returning client keeps coming back to holds several rounds, and every card
+   * A CID that a returning client keeps coming back to holds several rounds, and every card
    * draws the SAME tab — so a stack of them is a stack of identically-shaped task lists for
    * different matters. The header says which project you opened; the cards did not, and the
    * first one you met was simply whichever round sorted earliest and happened to be live.
@@ -240,12 +233,12 @@ export function ProjectDetailClient({ projectId }: Props) {
     queryKey: ['workflow-statuses', project?.workflowId ?? 'default'],
     queryFn: () => api.workflows.statuses(project?.workflowId ?? 'default'),
     // Needed by the Board (columns) AND the Task List (inline status control).
-    // On a multi-project PID every card's Task List and Board needs them, so load them there too.
+    // On a multi-project CID every card's Task List and Board needs them, so load them there too.
     enabled: !!project && (activeTab === 'Board' || activeTab === 'Task List' || multiRound),
     staleTime: 5 * 60_000,
   });
 
-  // On a multi-project PID the task is added to the round whose card was clicked, not to
+  // On a multi-project CID the task is added to the round whose card was clicked, not to
   // whichever project the URL happens to point at.
   const [addTaskProjectId, setAddTaskProjectId] = useState(projectId);
   // Which GROUP the new task lands in. Null = the project's default group.
@@ -283,22 +276,6 @@ export function ProjectDetailClient({ projectId }: Props) {
     invalidateTaskCaches(qc);
   }
 
-  // A reopened (or otherwise pending) project needs a fresh PID — an authority attaches one
-  // (auto-assigned from the next free serial). The old PID stayed discontinued on close.
-  async function handleAttachPid() {
-    setAttachingPid(true);
-    try {
-      const r = await api.projects.attachPid(projectId);
-      toast(`Project ID ${r.pid} attached`, 'success');
-      qc.invalidateQueries({ queryKey: ['project', projectId] });
-      qc.invalidateQueries({ queryKey: ['projects'] });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not attach a Project ID', 'error');
-    } finally {
-      setAttachingPid(false);
-    }
-  }
-
   async function handleMove(taskId: string, statusId: string) {
     const status = statuses.find(s => s.id === statusId);
     const movedTask = tasks.find(t => t.id === taskId);
@@ -321,11 +298,6 @@ export function ProjectDetailClient({ projectId }: Props) {
     }
   }
 
-
-  // Arriving from the PID queue ("Open client to change it") lands straight in Change PID, with
-  // the number the client's team suggested already typed in.
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useChangePidFromLink(searchParams?.get('changePid') === '1', project, can('project.generate_pid'), s => { setMoveSuggestion(s); setMovingPid(true); });
 
   if (projLoading) {
     return (
@@ -443,15 +415,8 @@ export function ProjectDetailClient({ projectId }: Props) {
             </Link>
             <span className="w-px h-3.5 bg-gray-200 shrink-0" aria-hidden />
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-                {/* CLIENTS-FLOW (PID rework): the PID and what the client is waiting on. */}
-                <PidStatus
-                  project={project}
-                  multiRound={multiRound}
-                  roundsCount={rounds.length}
-                  attaching={attachingPid}
-                  onAttach={handleAttachPid}
-                  onChangePid={suggested => { setMoveSuggestion(suggested ?? null); setMovingPid(true); }}
-                />
+                {/* The client's CID — issued automatically when the client was created. */}
+                <CidBadge cid={project.code ?? null} multiRound={multiRound} roundsCount={rounds.length} />
                 {/* CLIENTS-FLOW: which client group this client is filed under — changeable in place. */}
                 <ClientGroupChip
                   projectId={projectId}
@@ -497,10 +462,8 @@ export function ProjectDetailClient({ projectId }: Props) {
               {PATENTS_AND_CLIENT_CODES && !headerCollapsed && <PatentTagsEditor project={project} />}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {/* A returning client keeps this PID; their next piece of work becomes another
-                  project under it rather than being forced into this one's task list. */}
               {/* CLIENTS-FLOW: another piece of work for this client is another TASK GROUP, not another
-                  project under its PID — so "New project" (a round) gives way to "New task group".
+                  client under its CID — so "New project" (a round) gives way to "New task group".
                   The round machinery is untouched; existing rounds still show below. */}
               {can('tasklist.create') && !clientLocked && !multiRound && (
                 <button
@@ -521,11 +484,10 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <CheckCircle2 size={14} /> Mark complete
                 </button>
               )}
-              {/* On a SINGLE-project PID this is the returning-client action: reopen in place,
-                  keeping the same Project ID.
+              {/* On a CID holding ONE client this is the returning-client action: reopen in place,
+                  keeping the same CID.
 
-                  On a MULTI-project PID the returning client gets a NEW project instead ("New
-                  project" above), so the same button here would say two contradictory things.
+                  On a CID holding several clients the same button would say two contradictory things.
                   It stays available — you still need a way to undo a completion made by mistake —
                   but it is worded as what it actually does: reopen THIS piece of work. */}
               {can('project.update') && project.projectPhase === 'COMPLETED' && (
@@ -534,18 +496,18 @@ export function ProjectDetailClient({ projectId }: Props) {
                   disabled={lifecycleBusy}
                   title={multiRound
                     ? 'Reopen this client'
-                    : 'Re-initialize this client — same PID, existing work kept'}
+                    : 'Re-initialize this client — same CID, existing work kept'}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
                   <RotateCcw size={14} /> {multiRound ? 'Reopen' : 'Re-initialize'}
                 </button>
               )}
-              {/* A CLOSED project reopens with a FRESH PID (the old one was discontinued on close). */}
+              {/* A legacy CLOSED client reopens with the same CID. */}
               {can('project.update') && project.projectPhase === 'CLOSED' && (
                 <button
                   onClick={() => runLifecycle('reopen')}
                   disabled={lifecycleBusy}
-                  title="Reopen this client — same PID, back to Working"
+                  title="Reopen this client — same CID, back to Working"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
                 >
                   <RotateCcw size={14} /> Reopen
@@ -560,19 +522,17 @@ export function ProjectDetailClient({ projectId }: Props) {
                   <Pencil size={14} /> Edit
                 </button>
               )}
-              {/* Correcting the Project ID is a rare, deliberate act — and one only an Admin or
-                  Super Admin may perform, since it mints or retires a number the firm files work
-                  under. It sits with Edit rather than near the primary action for the same reason
-                  Delete does: nothing here should be reachable by muscle memory. Offered only once
-                  the project actually HAS a number; before that the job is "Attach PID", which
-                  already has its own button beside the pending badge above. */}
+              {/* Changing a CID is a rare, deliberate act — and one only an Admin or Super Admin may
+                  perform, since it issues or retires a number the firm files work under. It sits
+                  with Edit rather than near the primary action for the same reason Delete does:
+                  nothing here should be reachable by muscle memory. */}
               {can('project.generate_pid') && project.code && (
                 <button
-                  onClick={() => setMovingPid(true)}
-                  title={`Change this client's PID — currently ${project.code}`}
+                  onClick={() => setMovingCid(true)}
+                  title={`Change this client's CID — currently ${project.code}`}
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                 >
-                  <KeyRound size={14} /> Change PID
+                  <KeyRound size={14} /> Change CID
                 </button>
               )}
               {/* Sits AFTER Edit and before the primary action, so the destructive button is never
@@ -688,8 +648,8 @@ export function ProjectDetailClient({ projectId }: Props) {
 
 
       {/* Tab content */}
-      {/* A multi-project PID stacks one card per project and shows the SAME tab inside each, so
-          the whole client history is visible in one place. A single-project PID falls through to
+      {/* A multi-project CID stacks one card per project and shows the SAME tab inside each, so
+          the whole client history is visible in one place. A single-project CID falls through to
           the original rendering below, byte for byte. */}
       {multiRound ? (
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
@@ -705,7 +665,7 @@ export function ProjectDetailClient({ projectId }: Props) {
               {position === firstOtherRound && (
                 <p className="flex items-center gap-2 mb-1.5 mt-5 text-[11px] font-medium uppercase tracking-wide text-gray-400">
                   <span className="h-px flex-1 bg-gray-200" aria-hidden />
-                  Also under {project.code ?? 'this Project ID'}
+                  Also under {project.code ?? 'this CID'}
                   <span className="h-px flex-1 bg-gray-200" aria-hidden />
                 </p>
               )}
@@ -716,7 +676,7 @@ export function ProjectDetailClient({ projectId }: Props) {
                   total={rounds.length}
                   canEdit={can('project.update')}
                   // Only the project you opened is expanded. The earlier rule — every live round
-                  // open — meant that on a PID whose rounds are all ACTIVE the clause never
+                  // open — meant that on a CID whose rounds are all ACTIVE the clause never
                   // singled anything out, and the first task list on screen was somebody else's.
                   // The rest stay one click away: their bar still carries title, phase and dates.
                   defaultOpen={isThisProject}
@@ -829,32 +789,19 @@ export function ProjectDetailClient({ projectId }: Props) {
         />
       )}
 
-      {addingRound && project.code && (
-        <AddRoundModal
-          fromProjectId={projectId}
-          pid={project.code}
-          onClose={() => setAddingRound(false)}
-          onCreated={() => {
-            setAddingRound(false);
-            qc.invalidateQueries({ queryKey: ['project-rounds', projectId] });
-          }}
-        />
-      )}
-
-      {/* Reassign / split / merge the Project ID. One modal, because to the person opening it they
-          are one thought: this project's PID is wrong. */}
-      {movingPid && project.code && (
-        <PidMoveModal
+      {/* Reassign / split / merge the CID. One dialog, because to the person opening it they are
+          one thought: this client's CID should change. */}
+      {movingCid && project.code && (
+        <CidMoveModal
           projectId={projectId}
           projectTitle={project.title}
-          currentPid={project.code}
-          suggestedPid={moveSuggestion}
-          onClose={() => setMovingPid(false)}
+          currentCid={project.code}
+          onClose={() => setMovingCid(false)}
           onMoved={() => {
             qc.invalidateQueries({ queryKey: ['project', projectId] });
             qc.invalidateQueries({ queryKey: ['project-rounds', projectId] });
-            qc.invalidateQueries({ queryKey: ['pid-requests'] });
-            setMoveSuggestion(null);
+            qc.invalidateQueries({ queryKey: ['projects'] });
+            qc.invalidateQueries({ queryKey: ['cid-ledger'] });
           }}
         />
       )}
@@ -875,15 +822,3 @@ export function ProjectDetailClient({ projectId }: Props) {
 }
 
 
-/** Open Change PID once, when the page was reached from the PID queue's "Open client to change it". */
-function useChangePidFromLink(
-  wanted: boolean, project: ApiProject | undefined, isAuthority: boolean, open: (suggested: string | null) => void,
-) {
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    if (done || !wanted || !project?.code || !isAuthority) return;
-    setDone(true);
-    open(project.openPidRequest?.kind === 'CHANGE' ? project.openPidRequest.suggestedPid : null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wanted, project?.code, project?.openPidRequest, isAuthority, done]);
-}

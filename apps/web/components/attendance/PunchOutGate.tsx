@@ -21,7 +21,7 @@ import { toast, toastError } from '@/components/ui/Toast';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 import { fileTrackedTime } from '@/components/tasks/TrackedTodayBar';
 import { formatDate } from '@/lib/date';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 
 export function PunchOutGate({ check, onClose, onReady, onLeaveAnyway }: {
   check: PunchOutCheck;
@@ -129,7 +129,7 @@ export function PunchOutGate({ check, onClose, onReady, onLeaveAnyway }: {
                   <div className="min-w-0">
                     <p className="truncate text-[13px] font-medium text-gray-900">{t.title}</p>
                     <p className="truncate text-[11px] text-gray-500">
-                      {t.projectPid ? <span className="font-mono">{pidLabel(t.projectPid, t.projectRound)} · </span> : null}
+                      {t.projectPid ? <span className="font-mono">{cidLabel(t.projectPid, t.projectRound)} · </span> : null}
                       {t.project ?? 'Team space'}
                       {t.running && <span className="text-emerald-700"> · clock stopped just now</span>}
                     </p>

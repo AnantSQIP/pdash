@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Users, Calendar, ArrowUpRight, Layers, AlertTriangle, ListChecks } from 'lucide-react';
 import clsx from 'clsx';
-import { MockProject, PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel } from '@/lib/mock-data';
+import { MockProject, PHASE_META, PRIORITY_META, projectTypeLabel, cidLabel } from '@/lib/mock-data';
 import { domainLabelOf } from './TechnologyDomainPicker';
 import { progressColor, progressTrack } from '@/lib/progress';
 import { formatDate, isPastDue } from '@/lib/date';
@@ -13,7 +13,7 @@ interface ProjectCardProps {
 /**
  * CLIENTS-FLOW: a CLIENT's card (the row is still a project underneath).
  *
- * Ordered NAME → PID → status, then the thing a client card has that a project card never did:
+ * Ordered NAME → CID → status, then the thing a client card has that a project card never did:
  * the work inside it. Its open task groups are named — "FTO – Widget X", "Invalidity – US123" —
  * because "3 task groups" says nothing about which client this is; and the open-task count carries
  * its overdue share in red, because that is what somebody scanning a wall of clients is looking for.
@@ -48,9 +48,8 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <h3 title={project.title} className="font-semibold text-gray-900 text-[17px] leading-snug group-hover:text-brand-600 transition-colors line-clamp-2">
               {project.title}
             </h3>
-            {project.code
-              ? <span className="block mt-1.5 text-sm font-mono font-bold text-brand-700 tracking-tight">{pidLabel(project.code, project.roundSeq)}</span>
-              : <span className="block mt-1.5 text-sm font-mono font-bold text-amber-500">PID pending</span>}
+            {/* Every client has its CID from creation; a missing one renders as a dash. */}
+            <span className="block mt-1.5 text-sm font-mono font-bold text-brand-700 tracking-tight" title="Client ID">{cidLabel(project.code, project.roundSeq)}</span>
             <div className="flex items-center gap-1.5 flex-wrap mt-2">
               <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold', phase.bg, phase.text)}>
                 {phase.label}
@@ -162,9 +161,7 @@ export function ProjectListRow({ project }: ProjectCardProps) {
       <div className="flex-1 min-w-0">
         <p className="font-semibold text-gray-900 truncate group-hover:text-brand-600 transition-colors">{project.title}</p>
         <div className="flex items-center gap-2 flex-wrap mt-1">
-          {project.code
-            ? <span className="text-xs font-mono font-bold text-brand-700">{pidLabel(project.code, project.roundSeq)}</span>
-            : <span className="text-xs font-mono font-bold text-amber-500">PID pending</span>}
+          <span className="text-xs font-mono font-bold text-brand-700" title="Client ID">{cidLabel(project.code, project.roundSeq)}</span>
           <span className={clsx('text-[11px] font-semibold px-2 py-0.5 rounded-full', phase.bg, phase.text)}>{phase.label}</span>
           <span className={clsx('text-[11px] font-semibold', priority.color)}>{priority.label}</span>
           {groups.length > 0 && (

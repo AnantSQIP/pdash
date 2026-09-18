@@ -73,7 +73,7 @@ const ADMIN_NAV: NavItem[] = [
   // The digest aggregates the WHOLE organisation — every project, every person's hours, every
   // deadline — so it is Super-Admin only, matching the server-side gate in daily-digest.module.
   { href: '/digest',      icon: ClipboardList,  label: 'Daily Digest', superAdminOnly: true },
-  { href: '/pid-ledger',  icon: KeyRound,       label: 'PID Ledger', perm: 'user.manage_access' },
+  { href: '/cid-ledger',  icon: KeyRound,       label: 'CID Ledger', perm: 'user.manage_access' },
   // What each client's work amounts to. Same gate as the patent portal (client identity is the
   // Super-Admin-only fact), but a separate destination — it never reveals a patent number.
   // CLIENTS-FLOW: commented out — the client ledger is keyed on client codes, which are switched off.

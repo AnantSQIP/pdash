@@ -13,7 +13,7 @@ import {
   MyExpensesCard,
   MyTasksCard, MyProjectsCard, ProjectStatusCard, QuickStatsCard,
   OrgPerformanceCard, TeamAttendanceCard, LeaveApprovalsCard, PeopleOpsCard,
-  AdminShortcutsCard, QuickAccessCard, PidRequestsCard, TeamAvailabilityCard,
+  AdminShortcutsCard, QuickAccessCard, TeamAvailabilityCard,
   PendingRequestsCard,
 } from '@/components/home/sections';
 import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
@@ -35,7 +35,6 @@ export default function HomeDashboardPage() {
           {/* First card in the masonry: the day's work is what a person opens this page to
               find, and it was sitting fifth behind four approval queues. */}
           <MyTasksCard />
-          <PidRequestsCard />
           <TeamAvailabilityCard />
           <LeaveApprovalsCard />
           <PendingRequestsCard />

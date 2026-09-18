@@ -17,7 +17,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader } from 'lucide-react';
 import { api, type UserKpis, type ProjectBreachRow, type KpiRange } from '@/lib/api';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 import { ChartCard, DonutCard, DataGrid, type GridColumn } from './charts';
 import { KpiHero, Breaches, Stat, ExcludedNote, KpiGlossary, KPI_HELP, kpiDonuts, streakCaption, overrunColor } from './KpiCards';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
@@ -30,9 +30,9 @@ function ratioText(r: number | null): string {
 function pctText(v: number | null): string {
   return v == null ? 'n/a' : `${v}%`;
 }
-/** Two rounds of one PID share a code, so the round has to be on the label or rows are ambiguous. */
+/** Two rounds of one CID share a code, so the round has to be on the label or rows are ambiguous. */
 function projectLabel(r: ProjectBreachRow): string {
-  return r.projectCode ? `${pidLabel(r.projectCode, r.roundSeq)} · ${r.projectName}` : r.projectName;
+  return r.projectCode ? `${cidLabel(r.projectCode, r.roundSeq)} · ${r.projectName}` : r.projectName;
 }
 
 export function UserKpiPanel({ userId, period, self = false }: {

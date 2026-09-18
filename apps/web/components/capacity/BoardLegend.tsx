@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plane, Flag } from 'lucide-react';
 import type { CapacityRow } from '@/lib/api';
 import { type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED, RAIL, textureStyle } from '@/lib/project-colors';
-import { pidLabel } from '@/lib/mock-data';
+import { cidLabel } from '@/lib/mock-data';
 
 const RAMP = ['#3d3d3d', '#595959', '#808080', '#a8a8a8'];
 const RAMP_LABEL = ['Critical', 'High', 'Medium', 'Low'];
@@ -29,7 +29,7 @@ export function BoardLegend({
 }) {
   const [pinned, setPinned] = useState<string | null>(defaultPinned);
 
-  // Every client with at least one open task on the board, by PID.
+  // Every client with at least one open task on the board, by CID.
   const projects = useMemo(() => {
     const m = new Map<string, { id: string; pid: string | null; round?: number; title: string }>();
     for (const r of rows) for (const t of r.openTasks) {
@@ -87,18 +87,18 @@ export function BoardLegend({
                   onMouseLeave={() => preview(null)}
                   onClick={() => pin(p.id)}
                   aria-pressed={pinned === p.id}
-                  title={`${p.pid ? pidLabel(p.pid, p.round) + ' · ' : ''}${p.title}${pinned === p.id ? ' — pinned; click or press Escape to clear' : ' — click to pin'}`}
+                  title={`${p.pid ? cidLabel(p.pid, p.round) + ' · ' : ''}${p.title}${pinned === p.id ? ' — pinned; click or press Escape to clear' : ' — click to pin'}`}
                   className="inline-flex max-w-[240px] items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-opacity hover:bg-white"
                   style={{ opacity: faded ? 0.4 : 1, ...(pinned === p.id ? { boxShadow: `inset 0 0 0 1px ${hue?.ring ?? '#d1d5db'}`, backgroundColor: hue?.tint } : {}) }}
                 >
                   <span className="h-2.5 w-3.5 shrink-0 rounded-sm" style={{ backgroundColor: hue?.medium ?? '#6b7280', ...textureStyle(hue?.texture ?? 'none') }} />
-                  {p.pid && <span className="font-mono text-[10.5px] text-gray-500">{pidLabel(p.pid, p.round)}</span>}
+                  {p.pid && <span className="font-mono text-[10.5px] text-gray-500">{cidLabel(p.pid, p.round)}</span>}
                   <span className="truncate text-gray-700">{p.title}</span>
                 </button>
               );
             })}
             {hasTeamWork && (
-              <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-gray-600" title="Work in a team space — no client, no PID">
+              <span className="inline-flex items-center gap-1.5 px-1.5 py-0.5 text-gray-600" title="Work in a team space — no client, no CID">
                 <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: NO_PROJECT_HUE.medium }} />Team space
               </span>
             )}
@@ -145,7 +145,7 @@ export function BoardLegend({
           </span>More than 8h that day
         </span>
 
-        <span className="ml-auto text-gray-400">Label inside a bar = the PID's serial · black line under a day = more than 8h planned · red rail = that task is late</span>
+        <span className="ml-auto text-gray-400">Label inside a bar = the CID's serial · black line under a day = more than 8h planned · red rail = that task is late</span>
       </div>
     </div>
   );

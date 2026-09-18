@@ -114,8 +114,8 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
           </div>
 
           <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-            Completing locks the project&apos;s work. Its Project ID is kept, and it can be re-initialized later for a
-            returning client under the same PID.
+            Completing locks the client&apos;s work. Its CID is kept, and it can be re-initialized later for a
+            returning engagement under the same CID.
           </p>
         </div>
 

@@ -10,7 +10,7 @@ import { api, type DashboardStats, type ReportProject } from '@/lib/api';
 import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
+import { projectTypeLabel, cidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
 import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
 import { PeriodFilter, buildPeriods, inPeriod, type Period } from '@/components/reports/PeriodFilter';
@@ -113,7 +113,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
             {expanded ? <ChevronDown size={14} className="text-brand-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
             <div className="min-w-0">
               <span className={clsx('block text-[11px] font-mono font-bold', expanded ? 'text-brand-800' : 'text-brand-700')}>
-                {pidLabel(project.pid, project.roundSeq)}
+                {cidLabel(project.pid, project.roundSeq)}
               </span>
               <span className={clsx('text-sm', expanded ? 'font-semibold text-gray-900' : 'font-medium text-gray-900')}>{project.title}</span>
             </div>
@@ -140,7 +140,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
             <div className="rounded-xl border-2 border-brand-200 bg-white p-4">
               <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-mono font-bold text-brand-700">{pidLabel(project.pid, project.roundSeq)}</span>
+                  <span className="text-sm font-mono font-bold text-brand-700">{cidLabel(project.pid, project.roundSeq)}</span>
                   <Link href={`/projects/${project.id}`} onClick={e => e.stopPropagation()}
                     className="text-sm font-semibold text-gray-900 hover:text-brand-600 hover:underline inline-flex items-center gap-1">
                     {project.title} <ExternalLink size={12} className="text-gray-300" />
@@ -258,7 +258,7 @@ export default function ReportsPage() {
   const [sortField, setSortField] = useState<'title' | 'progress' | 'phase' | 'priority'>('progress');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [openId, setOpenId] = useState<string | null>(null); // expanded client detail (spotlit)
-  const [search, setSearch] = useState('');                   // by PID or client name
+  const [search, setSearch] = useState('');                   // by CID or client name
   const [period, setPeriod] = useState<Period>(() => buildPeriods()[0]);   // All time
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
@@ -296,7 +296,7 @@ export default function ReportsPage() {
     search.trim() ? `Filtered by “${search.trim()}”` : null,
   ].filter(Boolean).join(' · ');
 
-  // Search matches the PID or the name — the two things anyone actually has to hand.
+  // Search matches the CID or the name — the two things anyone actually has to hand.
   const q = search.trim().toLowerCase();
   const filtered = q
     ? inWindow.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''}`.toLowerCase().includes(q))
@@ -470,7 +470,7 @@ export default function ReportsPage() {
                 <input
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  placeholder="Search PID or client…"
+                  placeholder="Search CID or client…"
                   className="w-56 sm:w-72 pl-8 pr-7 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400"
                 />
                 {search && (

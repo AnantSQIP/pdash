@@ -17,7 +17,7 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wr
  * Team Spaces — where HR, BD and operations work lives.
  *
  * Deliberately a separate destination from Projects. A project is a client matter: it carries a
- * PID, a client, billability and a client deadline, and it feeds the ledgers and delivery
+ * CID, a client, billability and a client deadline, and it feeds the ledgers and delivery
  * reporting. None of that is true of a hiring round or a conference push, and making that work
  * pretend to be a project is what this module exists to stop.
  */

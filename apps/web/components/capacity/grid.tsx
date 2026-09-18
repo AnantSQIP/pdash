@@ -43,9 +43,9 @@ export function isToday(iso: string) { return iso === todayIST(); }
 export const DAILY_CAPACITY = 8;
 
 /**
- * The words printed INSIDE a segment when it is wide enough to hold them: the PID's serial
+ * The words printed INSIDE a segment when it is wide enough to hold them: the CID's serial
  * ("003"), or the space for team work. A legend is what you consult when a label will not fit;
- * a label is what you read without looking away. The full PID and title are always in the hover.
+ * a label is what you read without looking away. The full CID and title are always in the hover.
  */
 export function segmentLabel(task: CapacityOpenTask): string | null {
   if (task.isTeamWork) return 'team';
@@ -53,7 +53,7 @@ export function segmentLabel(task: CapacityOpenTask): string | null {
     const serial = task.projectPid.split(/[_\-/]/).pop() ?? task.projectPid;
     return task.projectRound && task.projectRound > 1 ? `${serial}·P${task.projectRound}` : serial;
   }
-  // No PID yet (a client still waiting for one): the initials of its title's first words.
+  // No CID yet (a client still waiting for one): the initials of its title's first words.
   const words = (task.project ?? '').split(/[^A-Za-z0-9]+/).filter(w => w.length > 2);
   return words.length ? words.slice(0, 3).map(w => w[0].toUpperCase()).join('') : null;
 }

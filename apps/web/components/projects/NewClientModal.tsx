@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { X, Plus, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock, Layers, Building2, Lock } from 'lucide-react';
+import { X, Plus, Info, Search, KeyRound, Layers, Building2, Lock } from 'lucide-react';
 import clsx from 'clsx';
 
 import { api, type ApiProject, type ProjectTypeDef, type PatentOption, type ClientSummary } from '@/lib/api';
@@ -29,8 +29,9 @@ interface NewClientModalProps {
  * CLIENTS-FLOW: creating a client — what "New project" became.
  *
  * What was a project is a client now, so this asks what a client needs: a name, the group it is
- * filed under, who runs it, and its PID (minted by an authority, or requested from one — that
- * flow is unchanged). The KIND of work and its FIELD moved down a level, to task groups: a client
+ * filed under and who runs it. Its CID is issued automatically, in the same transaction that creates
+ * it — there is nothing to generate, request or wait for. The KIND of work and its FIELD moved down
+ * a level, to task groups: a client
  * does many kinds of work, so stamping one type on the whole client would misdescribe the rest.
  *
  * Most new clients arrive with a first piece of work, so the form offers to create the first task
@@ -41,12 +42,9 @@ interface NewClientModalProps {
  * not deleted — they are still below, behind the flag.
  */
 export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defaultClientGroupId = '' }: NewClientModalProps) {
-  const { org, currentUser } = useOrg();
+  const { org } = useOrg();
   const { can } = usePermissions();
   const { user } = useAuth();
-  // A PID AUTHORITY (project.generate_pid) mints the PID themselves. Everyone else REQUESTS one:
-  // they nominate an authority who assigns the PID after the client is created.
-  const canGeneratePid = can('project.generate_pid');
   // CLIENTS-FLOW: commented out — patent IDs and client codes are switched off.
   const canSeePatents = PATENTS_AND_CLIENT_CODES && can('patent.view');
   const canPickClient = PATENTS_AND_CLIENT_CODES && can('patent.manage');
@@ -99,51 +97,13 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
     setPatentIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   }
 
-  // ── PID ───────────────────────────────────────────────────────────────────────────
-  const [pidAssigneeId, setPidAssigneeId] = useState('');
+  // ── Who runs it ───────────────────────────────────────────────────────────────────
   const [managerId, setManagerId] = useState('');
-  const [pid, setPid] = useState('');
-  const [expiresAt, setExpiresAt] = useState<string | null>(null);   // reservation countdown
-  const [now, setNow] = useState(() => Date.now());
-  const [generating, setGenerating] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const queryClient = useQueryClient();
 
-  // Restore an outstanding (un-attached) reservation when the dialog opens, so its countdown
-  // continues and the authority isn't blocked from creating without a clue why.
-  useEffect(() => {
-    if (!canGeneratePid) return;
-    api.projects.myPidReservation().then(r => {
-      if (r.reservation) { setPid(r.reservation.pid); setExpiresAt(r.reservation.expiresAt); }
-    }).catch(() => { /* ignore */ });
-  }, [canGeneratePid]);
-
-  useEffect(() => {
-    if (!expiresAt) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [expiresAt]);
-  const secsLeft = expiresAt ? Math.max(0, Math.round((new Date(expiresAt).getTime() - now) / 1000)) : 0;
-  useEffect(() => {
-    if (expiresAt && secsLeft === 0) { setPid(''); setExpiresAt(null); }
-  }, [expiresAt, secsLeft]);
-
-  // The people who can assign a PID — the request dropdown for non-authorities.
-  const { data: authorities = [] } = useQuery({
-    queryKey: ['pid-authorities', org?.id],
-    queryFn: () => api.projects.pidAuthorities(),
-    enabled: !!org?.id && !canGeneratePid,
-    staleTime: 5 * 60_000,
-  });
-  const authorityOptions = useMemo(
-    () => authorities.filter(u => u.id !== currentUser?.id),
-    [authorities, currentUser],
-  );
-
-  // Everyone who may run a client — the caller INCLUDED, and first. Running a client and being
-  // allowed to mint its PID are different rights; the PID request still goes to an authority.
+  // Everyone who may run a client — the caller INCLUDED, and first. Leaving it blank means "me".
   const { data: managerData } = useQuery({
     queryKey: ['eligible-managers', org?.id],
     queryFn: () => api.projects.eligibleManagers(),
@@ -151,23 +111,8 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
     staleTime: 5 * 60_000,
   });
   const managers = managerData?.managers ?? [];
-  const selfEligible = managers.some(u => u.isSelf);
-  const managerOptions = [...managers].sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
-
-  async function generatePid() {
-    setGenerating(true); setError('');
-    try {
-      const res = await api.projects.generatePid();
-      setPid(res.pid);
-      setExpiresAt(res.expiresAt ?? null);
-      setNow(Date.now());
-      try { await navigator.clipboard.writeText(res.pid); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* clipboard blocked */ }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not generate a PID.');
-    } finally {
-      setGenerating(false);
-    }
-  }
+  // "Me" is the blank option at the top, so the caller's own row is not listed twice.
+  const managerOptions = managers.filter(u => !u.isSelf);
 
   // Types of work and their standard tasks. Not cached forever — someone may have saved a new
   // custom type since this tab loaded.
@@ -190,13 +135,10 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
   const groupDatesInverted = !!groupStart && !!groupDue && groupDue < groupStart;
   const clientBeforeInternal = !!groupClientDue && !!groupDue && groupClientDue < groupDue;
   const groupIncomplete = withGroup && (!groupName.trim() || (isCustom && !customLabel.trim()) || groupDatesInverted || clientBeforeInternal);
-  // CLIENTS-FLOW (PID rework): naming who assigns the PID is optional — every authority sees it.
-  const requestIncomplete = !canGeneratePid && !managerId;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) { setError('Give the client a name.'); return; }
-    if (!canGeneratePid && !managerId) { setError('Choose who manages this client.'); return; }
     if (withGroup && !groupName.trim()) { setError('Give the first task group a name, or untick “Start with a task group”.'); return; }
     if (withGroup && isCustom && !customLabel.trim()) { setError('Give the new type of work a name.'); return; }
     if (groupDatesInverted) { setError('The task group’s deadline cannot be before its start.'); return; }
@@ -210,10 +152,8 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
         priority,
         office: office || undefined,
         clientGroupId: clientGroupId || undefined,
-        pid: canGeneratePid && pid ? pid : undefined,
-        // Requester → required manager; authority → optional delegation (blank = self).
+        // Blank = the creator manages it. The CID is issued by the server; nothing is sent for it.
         managerId: managerId || undefined,
-        pidAssigneeId: !canGeneratePid ? pidAssigneeId : undefined,
         createdBy,
         taskGroup: withGroup ? {
           name: groupName.trim(),
@@ -255,11 +195,9 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <div className="sticky top-0 z-10 bg-white flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">{canGeneratePid ? 'New client' : 'Request a new client'}</h2>
+            <h2 className="text-lg font-semibold text-gray-900">New client</h2>
             <p className="text-sm text-gray-500 mt-0.5">
-              {canGeneratePid
-                ? 'Name the client, file it in a group, and start its first piece of work.'
-                : 'A PID authority will assign the client’s PID.'}
+              Name the client, file it in a group, and start its first piece of work. Its CID is issued automatically.
             </p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100 transition-colors" aria-label="Close">
@@ -268,17 +206,6 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
         </div>
 
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-5">
-          {!canGeneratePid && (
-            <div className="flex items-start gap-2 text-xs text-brand-800 bg-brand-50 border border-brand-100 rounded-lg px-3 py-2">
-              <Info size={14} className="mt-0.5 shrink-0 text-brand-500" />
-              <span>
-                You don&apos;t have PID authority, so the client is created with its <b>PID pending</b>.
-                Every PID authority sees the request and any of them can assign it — you&apos;ll be told once
-                it&apos;s set. Work on the client can start straight away.
-              </span>
-            </div>
-          )}
-
           {/* ── The client ─────────────────────────────────────────────────────────── */}
           <section className="space-y-4">
             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
@@ -379,73 +306,31 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
             )}
           </section>
 
-          {/* ── PID and who runs it ────────────────────────────────────────────────── */}
+          {/* ── Who runs it — and the CID, which nobody has to do anything about ─────── */}
           <section className="space-y-4">
             <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
-              <KeyRound size={13} /> PID and manager
+              <KeyRound size={13} /> Manager and CID
             </h3>
-            {canGeneratePid && (
-              <div className="rounded-lg border border-brand-100 bg-brand-50/50 px-3.5 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-brand-800">PID</p>
-                    {pid
-                      ? <p className="text-sm font-semibold text-brand-700 font-mono truncate">{pid}</p>
-                      : <p className="text-[11px] text-gray-500">Generate one now (held for 5 minutes), or leave it — the client waits in the PID queue until one is attached.</p>}
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {pid && (
-                      <button type="button" title="Copy"
-                        onClick={() => { navigator.clipboard?.writeText(pid); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-                        className="p-1.5 rounded-md text-brand-600 hover:bg-brand-100">
-                        {copied ? <Check size={14} /> : <Copy size={14} />}
-                      </button>
-                    )}
-                    {!(pid && expiresAt) && (
-                      <button type="button" onClick={generatePid} disabled={generating}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-                        <RefreshCw size={13} className={generating ? 'animate-spin' : ''} /> Generate PID
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {pid && expiresAt && (
-                  <p className="mt-2 text-[11px] text-amber-700 flex items-center gap-1">
-                    <Clock size={11} /> Reserved — create the client within {Math.floor(secsLeft / 60)}m {String(secsLeft % 60).padStart(2, '0')}s, or the number is released.
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div className={clsx('grid gap-4', !canGeneratePid && 'sm:grid-cols-2')}>
-              <div>
-                <label htmlFor="nc-manager" className={label}>
-                  Client manager {!canGeneratePid ? <span className="text-red-500">*</span> : <span className="text-gray-400 font-normal">(optional)</span>}
-                </label>
-                <select id="nc-manager" required={!canGeneratePid} value={managerId} onChange={e => setManagerId(e.target.value)} className={field}>
-                  <option value="">{canGeneratePid ? 'Me — I’ll manage it' : 'Select a manager…'}</option>
-                  {managerOptions.map(u => (
-                    <option key={u.id} value={u.id}>
-                      {u.isSelf ? 'Me — I’ll manage it' : fullName(u)}{!u.isSelf && u.designation ? ` — ${u.designation}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {!canGeneratePid && !selfEligible && (
-                  <p className="text-[11px] text-gray-400 mt-1">Managing a client needs the manager permission, which your role does not carry.</p>
-                )}
-              </div>
-              {!canGeneratePid && (
-                <div>
-                  <label htmlFor="nc-pid-from" className={label}>Ask first for the PID <span className="text-gray-400 font-normal">(optional)</span></label>
-                  <select id="nc-pid-from" value={pidAssigneeId} onChange={e => setPidAssigneeId(e.target.value)} className={field}>
-                    <option value="">Any PID authority</option>
-                    {authorityOptions.map(u => (
-                      <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+            <div>
+              <label htmlFor="nc-manager" className={label}>
+                Client manager <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <select id="nc-manager" value={managerId} onChange={e => setManagerId(e.target.value)} className={field}>
+                <option value="">Me — I’ll manage it</option>
+                {managerOptions.map(u => (
+                  <option key={u.id} value={u.id}>
+                    {fullName(u)}{u.designation ? ` — ${u.designation}` : ''}
+                  </option>
+                ))}
+              </select>
             </div>
+            <p className="flex items-start gap-2 text-[11px] text-gray-500">
+              <Info size={13} className="mt-px shrink-0 text-brand-500" />
+              <span>
+                The client is given the next <b>CID</b> (Client ID) in this financial year the moment it is created. Every
+                change to it afterwards — a rename, a new manager, a merge, a deletion — is kept in the CID Ledger.
+              </span>
+            </p>
           </section>
 
           {/* ── The first task group ───────────────────────────────────────────────── */}
@@ -548,16 +433,16 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
             </button>
             <button
               type="submit"
-              disabled={loading || !title.trim() || groupIncomplete || requestIncomplete}
+              disabled={loading || !title.trim() || groupIncomplete}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  {canGeneratePid ? 'Creating…' : 'Submitting…'}
+                  Creating…
                 </span>
               ) : (
-                <><Plus size={15} /> {canGeneratePid ? 'Create client' : 'Submit request'}</>
+                <><Plus size={15} /> Create client</>
               )}
             </button>
           </div>

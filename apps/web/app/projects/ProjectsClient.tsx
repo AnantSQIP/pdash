@@ -4,18 +4,16 @@ import { useState, useRef, useEffect, useMemo, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
-  Plus, LayoutGrid, List, Filter, Search, KeyRound, Copy, Check, Inbox, ScrollText, ChevronDown, FolderTree, Building2,
+  Plus, LayoutGrid, List, Filter, Search, ScrollText, ChevronDown, FolderTree, Building2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { ProjectCard, ProjectListRow } from '@/components/projects/ProjectCard';
 import { NewClientModal } from '@/components/projects/NewClientModal';
-import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
 import { ManageClientGroupsModal, useClientGroups } from '@/components/projects/ClientGroups';
 import { PHASE_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useTechnologyDomains, domainLabelOf } from '@/components/projects/TechnologyDomainPicker';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { useToast } from '@/components/ui/Toast';
 import { api, type ApiProject } from '@/lib/api';
 
 type ViewMode = 'grid' | 'list';
@@ -108,31 +106,18 @@ function StatPill({ label, value, color, dot }: { label: string; value: number; 
 export function ProjectsClient() {
   const { org, currentUser, loading: orgLoading } = useOrg();
   const { can } = usePermissions();
-  const { toast } = useToast();
   const qc = useQueryClient();
   const router = useRouter();
 
   const [view, setView] = useState<ViewMode>('grid');
   const [phase, setPhase] = useState<Phase | 'ALL'>('ALL');
   const [showNew, setShowNew] = useState<{ groupId: string } | null>(null);
-  const [showPidRequests, setShowPidRequests] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
-  const [pidCopied, setPidCopied] = useState('');
-  const [generating, setGenerating] = useState(false);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState('NAME');
   const [domain, setDomain] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-
-  // CLIENTS-FLOW (PID rework): notifications about PID requests link to /projects?pidRequests=1,
-  // which opens the queue. Read from the URL in an effect: this page is statically rendered, and
-  // useSearchParams would force a Suspense boundary on it.
-  useEffect(() => {
-    try {
-      if (new URLSearchParams(window.location.search).get('pidRequests') === '1') setShowPidRequests(true);
-    } catch { /* no window */ }
-  }, []);
 
   // The fold survives a reload — somebody who parks "Archived work" out of the way wants it to stay there.
   useEffect(() => {
@@ -146,30 +131,7 @@ export function ProjectsClient() {
     });
   }
 
-  const canGeneratePid = can('project.generate_pid');
   const mayArrangeGroups = can('project.approve');
-  const { data: pidRequests = [] } = useQuery({
-    queryKey: ['pid-requests'],
-    queryFn: () => api.projects.pidRequests(),
-    enabled: canGeneratePid,
-    staleTime: 30_000,
-  });
-
-  async function handleGeneratePid() {
-    setGenerating(true);
-    try {
-      const res = await api.projects.generatePid();
-      let copied = true;
-      try { await navigator.clipboard.writeText(res.pid); } catch { copied = false; }
-      setPidCopied(res.pid);
-      setTimeout(() => setPidCopied(''), 3000);
-      toast(copied ? `PID ${res.pid} copied to clipboard.` : `PID ${res.pid} generated.`, 'success');
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not generate a PID.', 'error');
-    } finally {
-      setGenerating(false);
-    }
-  }
 
   const { data: domains = [] } = useTechnologyDomains();
   const { data: clientGroups = [] } = useClientGroups();
@@ -265,31 +227,11 @@ export function ProjectsClient() {
               <span className="hidden sm:inline">Client groups</span>
             </button>
           )}
-          {canGeneratePid && (
-            <>
-              <button onClick={() => setShowPidRequests(true)} title="Pending PID requests"
-                className="relative flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <Inbox size={15} />
-                <span className="hidden sm:inline">PID Requests</span>
-                {pidRequests.length > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center text-[10px] font-bold text-white bg-red-500 rounded-full">
-                    {pidRequests.length}
-                  </span>
-                )}
-              </button>
-              <button onClick={handleGeneratePid} disabled={generating} title="Generate a PID and copy it"
-                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50">
-                {pidCopied ? <Check size={15} /> : <KeyRound size={15} />}
-                <span className="hidden sm:inline font-mono">{pidCopied || 'Generate PID'}</span>
-                {pidCopied && <Copy size={13} className="text-brand-400" />}
-              </button>
-            </>
-          )}
           {can('user.manage_access') && (
-            <button onClick={() => router.push('/pid-ledger')} title="Open the PID Ledger"
+            <button onClick={() => router.push('/cid-ledger')} title="Open the CID Ledger"
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
               <ScrollText size={15} />
-              <span className="hidden sm:inline">PID Ledger</span>
+              <span className="hidden sm:inline">CID Ledger</span>
             </button>
           )}
           {can('project.create') && (
@@ -333,7 +275,7 @@ export function ProjectsClient() {
           <option value="NAME">Name (A–Z)</option>
           <option value="NEWEST">Newest first</option>
           <option value="OLDEST">Oldest first</option>
-          <option value="PID">PID</option>
+          <option value="CID">CID</option>
           <option value="PROGRESS">Progress (highest)</option>
         </select>
 
@@ -369,7 +311,7 @@ export function ProjectsClient() {
                 <Building2 size={24} className="text-brand-500" />
               </div>
               <p className="text-gray-700 font-medium">No clients yet</p>
-              <p className="text-sm text-gray-500 mt-1 max-w-sm">A client holds its task groups, its team and its PID. Create the first one to get started.</p>
+              <p className="text-sm text-gray-500 mt-1 max-w-sm">A client holds its task groups, its team and its CID. Create the first one to get started.</p>
               {can('project.create') && (
                 <button onClick={() => setShowNew({ groupId: '' })} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700">
                   <Plus size={15} /> New client
@@ -441,9 +383,6 @@ export function ProjectsClient() {
           createdBy={currentUser?.email ?? 'system'}
         />
       )}
-      {showPidRequests && (
-        <PidRequestsModal onClose={() => setShowPidRequests(false)} onAssigned={invalidate} />
-      )}
       {showGroups && <ManageClientGroupsModal onClose={() => setShowGroups(false)} />}
     </div>
   );
@@ -488,7 +427,7 @@ function ClientSearch({
         onChange={e => { onChange(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKey}
-        placeholder="Search clients, PIDs, task groups…"
+        placeholder="Search clients, CIDs, task groups…"
         className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/20"
       />
       {open && matches.length > 0 && (

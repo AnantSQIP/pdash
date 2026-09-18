@@ -179,7 +179,7 @@ export function ClientLedgerPanel({ clientId, onClose }: { clientId: string; onC
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100">
-                          <th className="px-4 py-2 font-medium">PID</th>
+                          <th className="px-4 py-2 font-medium">CID</th>
                           <th className="px-3 py-2 font-medium">Project</th>
                           <th className="px-3 py-2 font-medium">Phase</th>
                           <th className="px-3 py-2 font-medium text-right">Billable</th>
@@ -189,7 +189,7 @@ export function ClientLedgerPanel({ clientId, onClose }: { clientId: string; onC
                       <tbody className="divide-y divide-gray-50">
                         {data.projects.map(p => (
                           <tr key={p.id} className="hover:bg-gray-50">
-                            {/* The PID is the identifier people quote; making it the way through
+                            {/* The CID is the identifier people quote; making it the way through
                                 to the work is the whole point of it being here. The ledger used
                                 to be a dead end — a figure with no route to what produced it. */}
                             <td className="px-4 py-2 text-xs">
@@ -301,12 +301,8 @@ function OverrideForm({ data, onDone, onCancel }: { data: LedgerDetail; onDone: 
 }
 
 /**
- * The PID cell.
- *
- * It used to render a bare "—" for a project with no PID, which is the least useful thing it
- * could say: "no PID" has two entirely different causes and two entirely different next steps.
- * Either an authority has been asked and has not got to it, or nobody ever asked and the hours on
- * this project are one step away from reaching no client ledger at all. The dash covered both.
+ * The CID cell. Every live client carries a CID from the moment it is created, so a missing one
+ * only appears for rows that predate that rule; it says so plainly rather than as a bare dash.
  */
 function PidCell({ project }: { project: LedgerProject }) {
   if (project.code) {
@@ -316,27 +312,20 @@ function PidCell({ project }: { project: LedgerProject }) {
           {project.code}
         </Link>
         {(project.roundSeq ?? 1) > 1 && (
-          // One PID can group several rounds. Two identical codes with nothing between them read
+          // One CID can group several rounds. Two identical codes with nothing between them read
           // as a duplicated row rather than as round 1 and round 2.
           <span className="text-[10px] uppercase tracking-wide text-gray-400">R{project.roundSeq}</span>
         )}
       </span>
     );
   }
-  const requested = project.pidStatus === 'requested';
   return (
     <Link
       href={`/projects/${project.id}`}
-      title={requested
-        ? 'A PID has been requested and is waiting on an authority.'
-        : 'No PID has been requested. Until one is, this work has no identifier to quote.'}
-      className={clsx('inline-flex items-center gap-1 rounded px-1.5 py-0.5 border',
-        requested
-          ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
-          : 'text-red-700 bg-red-50 border-red-200 hover:bg-red-100')}
+      title="This row has no CID. Every client created since CIDs became automatic has one."
+      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 border text-red-700 bg-red-50 border-red-200 hover:bg-red-100"
     >
-      {requested ? <Clock size={10} /> : <AlertTriangle size={10} />}
-      {requested ? 'PID pending' : 'No PID'}
+      <AlertTriangle size={10} /> No CID
     </Link>
   );
 }

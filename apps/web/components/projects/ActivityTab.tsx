@@ -35,7 +35,9 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'issue.resolved':       { verb: 'resolved issue',        cat: 'Issues',   icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
   'project.created':      { verb: 'created the client',    cat: 'Clients',  icon: <FolderKanban className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
   'project.approved':     { verb: 'approved the client',   cat: 'Clients',  icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
-  'project.pid_moved':    { verb: 'changed the PID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
+  'project.cid_moved':    { verb: 'changed the CID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
+  // Written before CIDs were renamed CIDs; the same fact.
+  'project.pid_moved':    { verb: 'changed the CID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
   'project.rejected':     { verb: 'rejected the client',   cat: 'Clients',  icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
   'project.client_group_changed': { verb: 'changed the client group', cat: 'Clients', icon: <FolderInput className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
   'clientgroup.created':  { verb: 'created the client group',  cat: 'Clients', icon: <FolderPlus className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },

@@ -253,7 +253,7 @@ export function FinishButton({ taskId, disabled, onDone }: {
 /**
  * Log time on a task, from the row it is on.
  *
- * Filing a timesheet used to mean leaving this screen: Timesheets → new entry → project → PID →
+ * Filing a timesheet used to mean leaving this screen: Timesheets → new entry → project → CID →
  * task → date → hours → save, for work you had just been looking at. This is the same entry with
  * everything it can know already filled in — the task, its project, today's date, and the hours
  * the timer counted — so the ordinary case is: check the number, save.

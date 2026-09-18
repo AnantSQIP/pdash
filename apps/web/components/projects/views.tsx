@@ -25,7 +25,7 @@ const byName = (a: { firstName?: string | null; lastName?: string | null }, b: {
   fullName(a as never).toLowerCase().localeCompare(fullName(b as never).toLowerCase());
 
 // The Task List and Overview bodies, shared by the single-project page and by each card on a
-// multi-project PID page. They were local to the page until a PID could hold several projects;
+// multi-project CID page. They were local to the page until a CID could hold several projects;
 // keeping one copy is what stops the two paths drifting apart.
 
 export function TaskListView({
