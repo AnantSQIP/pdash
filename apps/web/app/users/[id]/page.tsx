@@ -159,14 +159,13 @@ export default function UserDetailPage() {
               )}
             </div>
           </>
-        ) : (
+        ) : canSeeLoad ? (
           <div className="bg-white rounded-xl border border-gray-200 px-5 py-10 text-center">
-            <p className="text-sm text-gray-400">
-              {canSeeLoad ? 'No capacity information for this person.' : 'You do not have access to workload information.'}
-            </p>
-            {canSeeLoad && <p className="text-xs text-gray-400 mt-1">They may be inactive, or have no assigned work in the next fortnight.</p>}
+            <p className="text-sm text-gray-400">No capacity information for this person.</p>
+            <p className="text-xs text-gray-400 mt-1">They may be inactive, or have no assigned work in the next fortnight.</p>
           </div>
-        )}
+        ) : null /* Workload is Team Capacity's, which is Senior Consultant and above: nothing to show,
+                    and no box saying so on every profile everybody else opens. */}
 
         {canSeeLoad && (
           <p className="text-[11px] text-gray-400">
