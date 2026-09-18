@@ -67,8 +67,13 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
  */
 export const supportsRounds = (_office?: string | null): boolean => true;
 
-/** Thrown inside the fulfil transaction to roll the claim back when the client already has a PID. */
-class PidRaceAbort extends Error {}
+/**
+ * Thrown inside the fulfil transaction to roll the whole thing back when somebody else got there
+ * first — either the client already carries a PID, or the request was resolved meanwhile.
+ */
+class PidRaceAbort extends Error {
+  constructor(readonly why: 'has-code' | 'resolved') { super('pid-race:' + why); }
+}
 
 @Injectable()
 export class ProjectsService {
@@ -2033,18 +2038,23 @@ export class ProjectsService {
     let outcome: 'ok' | 'resolved' | 'has-code';
     try {
       outcome = await this.prisma.$transaction(async (tx) => {
+        // LOCK ORDER: the client row first, then its request — the order every other path that
+        // touches both takes (attach from the client's page, Change PID, deleting a client).
+        // Claiming the request first deadlocked against them when two authorities acted on the
+        // same client at once, and Postgres ends a deadlock with a 500 rather than the plain
+        // "somebody else just did this" this code is written to give.
+        const set = await tx.project.updateMany({ where: { id: req.projectId, code: null, deletedAt: null }, data: { code: pid } });
+        if (set.count === 0) throw new PidRaceAbort('has-code');
         const claimed = await tx.pidRequest.updateMany({
           where: { id: req.id, status: 'PENDING' },
           data: { status: 'FULFILLED', pid, resolvedAt: new Date(), resolvedById: userId },
         });
-        if (claimed.count === 0) return 'resolved' as const;
-        // Only a client that still has NO number takes this one.
-        const set = await tx.project.updateMany({ where: { id: req.projectId, code: null, deletedAt: null }, data: { code: pid } });
-        if (set.count === 0) throw new PidRaceAbort();
+        // Resolved by someone else in the meantime: the PID above goes back with the rollback.
+        if (claimed.count === 0) throw new PidRaceAbort('resolved');
         return 'ok' as const;
       });
     } catch (e: any) {
-      if (e instanceof PidRaceAbort) outcome = 'has-code';
+      if (e instanceof PidRaceAbort) outcome = e.why;
       else if (e?.code === 'P2002') {
         await this.prisma.pidReservation.deleteMany({ where: { id: reservationId, status: 'RESERVED' } });
         throw new BadRequestException(`PID ${pid} is already in use.`);

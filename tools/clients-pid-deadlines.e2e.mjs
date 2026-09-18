@@ -76,6 +76,34 @@ function sess() {
   ok('…the client carries the PID', (await mgr(`/projects/${b.data.id}`)).data?.code === gen.data.pid);
   ok('…and the request is gone from every queue', !(await inQueue(yash, b.data.id)) && !(await inQueue(su, b.data.id)));
 
+  // ── Two authorities, one client, at the same moment ─────────────────────────────────────────
+  // The client's page attaches a PID; the queue fulfils the request. Both write the client row and
+  // its request, and when they took those two rows in opposite orders Postgres ended the race as a
+  // DEADLOCK — a 500, not the plain refusal this code is written to give. Whoever loses must be
+  // told plainly, and the client must end with exactly one number.
+  //
+  // The two calls have to land TOGETHER to collide, so Yash's number is reserved BEFORE the race
+  // (reserving it inside the race let the other call finish first, and the suite passed against
+  // the very bug it was written for). Several rounds, because a deadlock is a matter of timing.
+  step('two authorities acting on the same client at once');
+  let raceFailures = 0, raceCodeless = 0, raceLeftWaiting = 0;
+  for (let i = 0; i < 4; i++) {
+    const race = await mgr('/projects', { method: 'POST', body: { title: `Race ${RUN}-${i}`, managerId: who.mgr } });
+    const raceReq = await inQueue(su, race.data.id);
+    const reserved = await yash('/projects/generate-pid', { method: 'POST' });   // held, not attached
+    const [viaPage, viaQueue] = await Promise.all([
+      su(`/projects/${race.data.id}/attach-pid`, { method: 'POST', body: {} }),
+      yash(`/projects/pid-requests/${raceReq.id}/fulfill`, { method: 'POST', body: { pid: reserved.data.pid } }),
+    ]);
+    for (const r of [viaPage, viaQueue]) if (r.status >= 500) { raceFailures++; console.log(`      round ${i}: ${r.status} ${JSON.stringify(r.data)?.slice(0, 150)}`); }
+    const after = (await mgr(`/projects/${race.data.id}`)).data;
+    if (!after?.code) raceCodeless++;
+    if (await inQueue(su, race.data.id)) raceLeftWaiting++;
+  }
+  ok('neither authority is ever met with a 500 (a deadlock is not an answer)', raceFailures === 0, `${raceFailures} of 8 calls failed hard`);
+  ok('every raced client still ends with exactly one PID', raceCodeless === 0, `${raceCodeless} of 4 ended with no PID`);
+  ok('…and none is left waiting in the queue', raceLeftWaiting === 0, `${raceLeftWaiting} of 4 still queued`);
+
   step('a client never waits silently for a PID');
   const c = await su('/projects', { method: 'POST', body: { title: `Auth no PID ${RUN}` } });
   ok('an authority who skips "Generate PID" still leaves a request in the queue', !!(await inQueue(yash, c.data.id)), brief(c));
