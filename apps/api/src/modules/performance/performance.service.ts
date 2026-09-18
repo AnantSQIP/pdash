@@ -481,7 +481,9 @@ export class PerformanceService {
     for (const row of shifts) {
       if (!row.projectId) continue;
       const cur = projectShifts.get(row.projectId) ?? { project: 0, task: 0 };
-      if (row.entityType === 'PROJECT') cur.project += row._count._all;
+      // CLIENTS-FLOW: a task group's deadline is the commitment to the client now, so its moves
+      // count with the project-level ones rather than as task churn.
+      if (row.entityType === 'PROJECT' || row.entityType === 'TASK_GROUP') cur.project += row._count._all;
       else cur.task += row._count._all;
       projectShifts.set(row.projectId, cur);
     }

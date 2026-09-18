@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
-import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, FulfillPidDto, MovePidDto, ReviewPidProjectDto, SetProjectClientDto, SetProjectPatentsDto, UpdateProjectDto } from './dto';
+import { AddProjectRoundDto, ApprovalDto, AttachPidDto, CreateProjectDto, DeclinePidRequestDto, FulfillPidDto, MovePidDto, RequestPidChangeDto, RequestPidDto, ReviewPidProjectDto, SetProjectClientDto, SetProjectPatentsDto, UpdateProjectDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
@@ -102,13 +102,13 @@ export class ProjectsController {
     return this.projects.pidAuthorities(await this.actor.requireOrgId());
   }
 
-  /** My incoming PID requests, as an authority — the fulfilment queue. */
+  /** The PID request pool — every open request in the organisation, for any authority. */
   @Get('pid-requests') @RequirePermission('project.generate_pid')
   async pidRequests() {
     return this.projects.pidRequestsFor(await this.actor.requireOrgId(), this.actor.requireActorId());
   }
 
-  /** Verify/edit the pending project's details before assigning its PID (assignee-gated). */
+  /** Verify/edit a pending client's details before assigning its PID (any authority). */
   @Patch('pid-requests/:id/project') @RequirePermission('project.generate_pid')
   async editPidRequestProject(@Param('id') id: string, @Body() dto: ReviewPidProjectDto) {
     return this.projects.editPidRequestProject(
@@ -122,6 +122,32 @@ export class ProjectsController {
     return this.projects.fulfillPidRequest(
       await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto.pid,
     );
+  }
+
+  /** CLIENTS-FLOW (PID rework): decline a PID-change request, with a reason the requester is told. */
+  @Post('pid-requests/:id/decline') @RequirePermission('project.generate_pid')
+  async declinePidRequest(@Param('id') id: string, @Body() dto: DeclinePidRequestDto) {
+    return this.projects.declinePidRequest(
+      await this.actor.requireOrgId(), this.actor.requireActorId(), id, dto.reason,
+    );
+  }
+
+  /** CLIENTS-FLOW (PID rework): ask for a PID for a client that has none and no open request. */
+  @Post(':id/pid-request') @RequirePermission('project.update')
+  requestPid(@Param('id') id: string, @Body() dto: RequestPidDto) {
+    return this.projects.requestPid(id, dto);
+  }
+
+  /** CLIENTS-FLOW (PID rework): remind every authority about this client's open request (hourly at most). */
+  @Post(':id/pid-request/nudge') @RequirePermission('project.view')
+  nudgePidRequest(@Param('id') id: string) {
+    return this.projects.nudgePidRequest(id);
+  }
+
+  /** CLIENTS-FLOW (PID rework): ask for this client's PID to be changed. */
+  @Post(':id/pid-change-request') @RequirePermission('project.update')
+  requestPidChange(@Param('id') id: string, @Body() dto: RequestPidChangeDto) {
+    return this.projects.requestPidChange(id, dto);
   }
 
   /**

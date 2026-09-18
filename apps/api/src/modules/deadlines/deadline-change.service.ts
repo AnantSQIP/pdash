@@ -4,7 +4,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
 import { describeShift } from './deadline-shift';
 
-export type DeadlineEntityType = 'PROJECT' | 'TASK';
+// CLIENTS-FLOW: a TASK_GROUP's deadline is the client-facing commitment now, so its moves are
+// recorded too. Callers always pass projectId for it (the client the group belongs to).
+export type DeadlineEntityType = 'PROJECT' | 'TASK' | 'TASK_GROUP';
 
 export interface RecordShiftOptions {
   entityType: DeadlineEntityType;

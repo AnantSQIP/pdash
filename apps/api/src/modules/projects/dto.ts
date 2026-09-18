@@ -83,6 +83,10 @@ export class TaskGroupSpecDto {
   @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
   dueDate?: string | null;
 
+  /** The date promised to the client for this piece of work. Restricted (deadline.view.client). */
+  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
+
   /**
    * Who does the group's standard tasks. Needs task.assign; creates a real staffing seat on each
    * task, which is what makes the work appear on Team Capacity.
@@ -481,4 +485,29 @@ export class SetProjectClientDto {
   @IsOptional()
   @IsString()
   clientId?: string | null;
+}
+
+
+/** CLIENTS-FLOW (PID rework): ask for a PID for a client with none. */
+export class RequestPidDto {
+  @IsOptional() @IsString() @MaxLength(40)
+  assigneeId?: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  note?: string;
+}
+
+/** CLIENTS-FLOW (PID rework): ask for a client's PID to be changed. */
+export class RequestPidChangeDto {
+  @IsString() @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value)) @MinLength(3) @MaxLength(500)
+  reason!: string;
+
+  @IsOptional() @IsString() @MaxLength(40)
+  suggestedPid?: string;
+}
+
+/** CLIENTS-FLOW (PID rework): decline a change request, saying why. */
+export class DeclinePidRequestDto {
+  @IsString() @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value)) @MinLength(3) @MaxLength(500)
+  reason!: string;
 }

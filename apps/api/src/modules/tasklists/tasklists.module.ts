@@ -11,6 +11,8 @@ import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { startOfIstDay, startOfUtcDay } from '../../common/dates';
+import { DeadlineVisibilityService, type DeadlineScope } from '../deadlines/deadline-visibility.service';
+import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { ProjectsModule } from '../projects/projects.module';
 import { ProjectsService } from '../projects/projects.service';
 import { TasksModule } from '../tasks/tasks.module';
@@ -53,7 +55,14 @@ class UpdateTaskListDto {
 
   @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
   dueDate?: string | null;
+
+  /** The date promised to the client. Restricted; never before the team's deadline. */
+  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
+  clientDueDate?: string | null;
 }
+
+const sameDay = (a?: Date | null, b?: Date | null) =>
+  !!a && !!b && a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
 
 /**
  * A PROJECT's task lists — which the CLIENTS-FLOW calls TASK GROUPS: one piece of work for the
@@ -86,7 +95,20 @@ export class TaskListsService {
     private readonly events: EventService,
     private readonly projects: ProjectsService,
     private readonly tasks: TasksService,
+    private readonly deadlines: DeadlineVisibilityService,
+    private readonly deadlineChanges: DeadlineChangeService,
   ) {}
+
+  /**
+   * CLIENTS-FLOW (deadlines): the client deadline leaves the building only for someone who may see
+   * it — the client-deadline permission, or managing this client. The same rule a project's own
+   * client date has always had, applied to the level where the promise now lives.
+   */
+  private redact<T extends { clientDueDate?: Date | null }>(list: T, scope: DeadlineScope, projectId: string): T {
+    if (this.deadlines.canSee(scope, [projectId])) return list;
+    const { clientDueDate: _hidden, ...rest } = list;
+    return rest as T;
+  }
 
   private actorId(): string {
     const id = getActorId();
@@ -113,6 +135,8 @@ export class TaskListsService {
     if (!actor) throw new ForbiddenException('You must be signed in.');
 
     const group = await this.projects.prepareTaskGroup(actor.organizationId, actorId, dto);
+    const scope = await this.deadlines.scope(actorId);
+    if (group.clientDueDate) await this.deadlines.assertMaySetClientDue([projectId], scope);
 
     // Assigning is its own right. Someone who may create a group but not assign work gets a clear
     // refusal instead of a group created half-way with nobody on it.
@@ -170,7 +194,7 @@ export class TaskListsService {
         ...(assigneeId ? { assigneeId, assigned } : {}),
       },
     });
-    return { ...(await this.find(projectId, list.id)), createdTaskCount: taskIds.length, assigned, assignmentWarning };
+    return { ...this.redact(await this.find(projectId, list.id), scope, projectId), createdTaskCount: taskIds.length, assigned, assignmentWarning };
   }
 
   /**
@@ -191,12 +215,13 @@ export class TaskListsService {
       _count: { _all: true },
     });
     const openBy = new Map(open.map(o => [o.taskListId, o._count._all]));
-    return lists.map(l => ({ ...l, openTaskCount: openBy.get(l.id) ?? 0 }));
+    const scope = await this.deadlines.scope();
+    return lists.map(l => this.redact({ ...l, openTaskCount: openBy.get(l.id) ?? 0 }, scope, projectId));
   }
 
   async get(projectId: string, id: string) {
     await this.access.assertProjectAccess(getActorId(), projectId);
-    return this.find(projectId, id);
+    return this.redact(await this.find(projectId, id), await this.deadlines.scope(), projectId);
   }
 
   /**
@@ -237,6 +262,14 @@ export class TaskListsService {
     const due = dto.dueDate === undefined ? existing.dueDate : (dto.dueDate ? startOfUtcDay(new Date(dto.dueDate)) : null);
     if (start && due && due < start) throw new BadRequestException('The deadline cannot be before the start date.');
 
+    // CLIENTS-FLOW (deadlines): the date promised to the client. Only someone who may see it may
+    // move it; and whichever of the two dates moved, the team's deadline stays inside the promise.
+    const scope = await this.deadlines.scope(actorId);
+    if (dto.clientDueDate !== undefined) await this.deadlines.assertMaySetClientDue([projectId], scope);
+    const clientDue = dto.clientDueDate === undefined ? existing.clientDueDate : (dto.clientDueDate ? startOfUtcDay(new Date(dto.clientDueDate)) : null);
+    if (clientDue && start && clientDue < start) throw new BadRequestException('The client deadline cannot be before the start date.');
+    this.deadlines.assertOrdered(due, clientDue);
+
     let groupType: string | null | undefined = undefined;
     if (dto.groupType !== undefined) {
       groupType = dto.groupType?.trim() || null;
@@ -264,17 +297,51 @@ export class TaskListsService {
           });
     }
 
-    const updated = await this.prisma.taskList.update({
-      where: { id },
-      data: {
-        name: dto.name,
-        sequence: dto.sequence,
-        ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
-        ...(groupType !== undefined ? { groupType } : {}),
-        ...(technologyDomain !== undefined ? { technologyDomain } : {}),
-        ...(dto.startDate !== undefined ? { startDate: start } : {}),
-        ...(dto.dueDate !== undefined ? { dueDate: due } : {}),
-      },
+    // The group, and — when its deadline moves — the tasks that hang off that deadline, in ONE
+    // transaction, each move written to the deadline ledger. Tasks that were due ON the old date
+    // move with it; any open task due after a nearer new date is pulled in to it, because a task in
+    // the group cannot be due after the group. Closed tasks are history and are left alone.
+    const dueMoved = dto.dueDate !== undefined && !sameDay(existing.dueDate, due) && (!!existing.dueDate || !!due);
+    const { updated, movedTasks } = await this.prisma.$transaction(async tx => {
+      const updated = await tx.taskList.update({
+        where: { id },
+        data: {
+          name: dto.name,
+          sequence: dto.sequence,
+          ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
+          ...(groupType !== undefined ? { groupType } : {}),
+          ...(technologyDomain !== undefined ? { technologyDomain } : {}),
+          ...(dto.startDate !== undefined ? { startDate: start } : {}),
+          ...(dto.dueDate !== undefined ? { dueDate: due } : {}),
+          ...(dto.clientDueDate !== undefined ? { clientDueDate: clientDue } : {}),
+        },
+      });
+      let movedTasks = 0;
+      if (dueMoved) {
+        await this.deadlineChanges.record({
+          entityType: 'TASK_GROUP', entityId: id, projectId,
+          previous: existing.dueDate, next: due, changedById: actorId, tx,
+        });
+        if (due) {
+          const open = await tx.task.findMany({
+            where: { deletedAt: null, projectTasks: { some: { projectId, taskListId: id } }, ...OPEN_TASK_WHERE },
+            select: { id: true, dueDate: true },
+          });
+          for (const t of open) {
+            const rides = sameDay(t.dueDate, existing.dueDate);
+            const overruns = !!t.dueDate && t.dueDate > due;
+            if (!rides && !overruns) continue;
+            await tx.task.update({ where: { id: t.id }, data: { dueDate: due, overdueNotifiedAt: null } });
+            await this.deadlineChanges.record({
+              entityType: 'TASK', entityId: t.id, projectId,
+              previous: t.dueDate, next: due, changedById: actorId, tx,
+              reason: rides ? 'moved with its task group' : 'pulled in to its task group',
+            });
+            movedTasks++;
+          }
+        }
+      }
+      return { updated, movedTasks };
     });
     // A pure reorder is not worth a line in anybody's feed.
     const meaningful = Object.keys(dto).some(k => k !== 'sequence');
@@ -283,10 +350,14 @@ export class TaskListsService {
         action: EVENTS.TASKGROUP_UPDATED,
         entityType: 'TASK_GROUP',
         entityId: id,
-        metadata: { projectId, name: updated.name, ...(dto.name && dto.name !== existing.name ? { previousName: existing.name } : {}) },
+        metadata: {
+          projectId, name: updated.name,
+          ...(dto.name && dto.name !== existing.name ? { previousName: existing.name } : {}),
+          ...(dueMoved ? { dueDate: due?.toISOString().slice(0, 10) ?? null, movedTasks } : {}),
+        },
       });
     }
-    return this.find(projectId, id);
+    return { ...this.redact(await this.find(projectId, id), scope, projectId), movedTasks };
   }
 
   /** CLIENTS-FLOW: mark a group complete — only when nothing in it is still open. */
@@ -295,7 +366,7 @@ export class TaskListsService {
     await this.access.assertProjectAccess(actorId, projectId);
     await this.access.assertProjectWritable(projectId);
     const group = await this.find(projectId, id);
-    if (group.status === 'COMPLETED') return group;
+    if (group.status === 'COMPLETED') return this.redact(group, await this.deadlines.scope(actorId), projectId);
     if (group._count.projectTasks === 0) {
       throw new BadRequestException('This group has no tasks yet — there is nothing to complete.');
     }
@@ -313,7 +384,7 @@ export class TaskListsService {
       entityId: id,
       metadata: { projectId, name: group.name, taskCount: group._count.projectTasks },
     });
-    return this.find(projectId, id);
+    return this.redact(await this.find(projectId, id), await this.deadlines.scope(actorId), projectId);
   }
 
   /** CLIENTS-FLOW: re-open a completed group so work can be added to it again. */
@@ -322,7 +393,7 @@ export class TaskListsService {
     await this.access.assertProjectAccess(actorId, projectId);
     await this.access.assertProjectWritable(projectId);
     const group = await this.find(projectId, id);
-    if (group.status !== 'COMPLETED') return group;
+    if (group.status !== 'COMPLETED') return this.redact(group, await this.deadlines.scope(actorId), projectId);
     await this.prisma.taskList.updateMany({ where: { id, status: 'COMPLETED' }, data: { status: 'ACTIVE', completedAt: null } });
     await this.events.emit({
       action: EVENTS.TASKGROUP_REOPENED,
@@ -330,7 +401,7 @@ export class TaskListsService {
       entityId: id,
       metadata: { projectId, name: group.name },
     });
-    return this.find(projectId, id);
+    return this.redact(await this.find(projectId, id), await this.deadlines.scope(actorId), projectId);
   }
 
   async remove(projectId: string, id: string) {
@@ -359,7 +430,8 @@ export class TaskListsService {
       entityId: id,
       metadata: { projectId, name: list.name, movedTasks: moving, movedTo: def?.name ?? null },
     });
-    return { ...updated, movedTasks: moving, movedTo: def ? { id: def.id, name: def.name } : null };
+    const { clientDueDate: _cd, ...safe } = updated;
+    return { ...safe, movedTasks: moving, movedTo: def ? { id: def.id, name: def.name } : null };
   }
 }
 

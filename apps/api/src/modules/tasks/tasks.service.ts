@@ -159,6 +159,28 @@ export class TasksService {
     return u?.organizationId ?? null;
   }
 
+  /**
+   * CLIENTS-FLOW (deadlines): a task in a task group with a deadline cannot be due after it — the
+   * group's date is what the client was told, and a step inside it that lands later would make the
+   * group late on paper while it still looked on time. Refused in words that say what to do.
+   */
+  private assertWithinGroup(group: { name: string; dueDate: Date | null } | null | undefined, due?: Date | null) {
+    if (!group?.dueDate || !due) return;
+    if (startOfUtcDay(due) > group.dueDate) {
+      const when = group.dueDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+      throw new BadRequestException(`“${group.name}” is due ${when}, so a task in it cannot be due later. Move the task group's deadline first.`);
+    }
+  }
+
+  /** The live task group(s) a task sits in — for the rule above. */
+  private async groupsOfTask(taskId: string) {
+    const links = await this.prisma.projectTask.findMany({
+      where: { taskId, taskList: { deletedAt: null } },
+      select: { taskList: { select: { id: true, name: true, dueDate: true } } },
+    });
+    return links.map(l => l.taskList).filter((g): g is NonNullable<typeof g> => !!g);
+  }
+
   /** A task's deadline can't fall before its start. */
   private assertTaskDateOrder(start?: Date | null, due?: Date | null) {
     if (start && due && due < start) throw new BadRequestException('The due date cannot be before the start date.');
@@ -271,8 +293,10 @@ export class TasksService {
 
     // A task has a single deadline (dueDate). Client-facing deadlines live only on the
     // project now — tasks no longer carry one.
-    const internalDue = dto.dueDate ? new Date(dto.dueDate) : undefined;
+    // CLIENTS-FLOW (deadlines): with no date of its own, a task in a dated group takes the group's.
+    const internalDue = dto.dueDate ? new Date(dto.dueDate) : (taskList.dueDate ?? undefined);
     this.assertTaskDateOrder(dto.startDate ? new Date(dto.startDate) : undefined, internalDue);
+    this.assertWithinGroup(taskList, internalDue);
     // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
     await this.ensureAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
 
@@ -374,10 +398,16 @@ export class TasksService {
     if (!link || link.task.deletedAt) throw new NotFoundException('That task is not in this client.');
     const target = await this.prisma.taskList.findFirst({
       where: { id: taskListId, projectId, deletedAt: null },
-      select: { id: true, name: true, status: true },
+      select: { id: true, name: true, status: true, dueDate: true },
     });
     if (!target) throw new BadRequestException('That task group is not part of this client.');
     if (link.taskListId === target.id) return this.get(taskId);
+    const moving = await this.prisma.task.findUnique({ where: { id: taskId }, select: { dueDate: true } });
+    if (target.dueDate && moving?.dueDate && moving.dueDate > target.dueDate
+        && (await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } }))) {
+      const when = target.dueDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+      throw new BadRequestException(`“${target.name}” is due ${when} and this task is due later. Bring the task's deadline in first.`);
+    }
     if (target.status === 'COMPLETED') {
       const open = await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } });
       if (open) throw new BadRequestException(`"${target.name}" is complete. Reopen it before moving open work into it.`);
@@ -477,6 +507,9 @@ export class TasksService {
     // Validate the effective (post-update) order — a partial edit can't leave due < start.
     const effectiveStart = dto.startDate === undefined ? before.startDate : resolveDate(dto.startDate, null);
     this.assertTaskDateOrder(effectiveStart, internalDue);
+    if (dto.dueDate !== undefined && internalDue) {
+      for (const g of await this.groupsOfTask(id)) this.assertWithinGroup(g, internalDue);
+    }
 
     // Re-arm the overdue alert when the task can no longer be late for the reason it was
     // flagged — the internal deadline moved into the future, or was removed altogether — so

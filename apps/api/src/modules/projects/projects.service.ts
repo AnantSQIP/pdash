@@ -67,6 +67,9 @@ const round1 = (n: number) => Math.round(n * 10) / 10;
  */
 export const supportsRounds = (_office?: string | null): boolean => true;
 
+/** Thrown inside the fulfil transaction to roll the claim back when the client already has a PID. */
+class PidRaceAbort extends Error {}
+
 @Injectable()
 export class ProjectsService {
   constructor(
@@ -372,7 +375,7 @@ export class ProjectsService {
     name: string; description?: string; groupType?: string;
     customType?: { label?: string; tasks?: string[]; save?: boolean };
     technologyDomain?: string; customDomain?: { label?: string; save?: boolean };
-    startDate?: string | null; dueDate?: string | null;
+    startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
   }) {
     const name = (spec.name ?? '').trim();
     if (!name) throw new BadRequestException('Give the task group a name.');
@@ -398,6 +401,13 @@ export class ProjectsService {
     if (startDate && dueDate && dueDate < startDate) {
       throw new BadRequestException('The deadline cannot be before the start date.');
     }
+    // The date promised to the client. Who may SET it is checked by the caller, which knows
+    // whether the client exists yet; the order is the same everywhere — the team's deadline is the
+    // buffered one and can never fall after the promise.
+    const clientDueDate = spec.clientDueDate ? startOfUtcDay(new Date(spec.clientDueDate)) : null;
+    if (clientDueDate && Number.isNaN(clientDueDate.getTime())) throw new BadRequestException('The client deadline is not a date.');
+    if (clientDueDate && startDate && clientDueDate < startDate) throw new BadRequestException('The client deadline cannot be before the start date.');
+    this.deadlines.assertOrdered(dueDate, clientDueDate);
     return {
       name,
       description: spec.description?.trim() || null,
@@ -406,6 +416,7 @@ export class ProjectsService {
       technologyDomain,
       startDate,
       dueDate,
+      clientDueDate,
     };
   }
 
@@ -430,6 +441,7 @@ export class ProjectsService {
         technologyDomain: group.technologyDomain,
         startDate: group.startDate,
         dueDate: group.dueDate,
+        clientDueDate: group.clientDueDate,
         status: 'ACTIVE',
         createdBy: args.actorId,
         isDefault: args.isDefault,
@@ -768,17 +780,20 @@ export class ProjectsService {
     if (!canGeneratePid) {
       // (a) PID authority — the person who receives the request, reviews/edits the project and
       //     attaches the PID. Must actually hold project.generate_pid.
+      //
+      // CLIENTS-FLOW (PID rework): naming someone is optional now — it only says who to ASK
+      // FIRST. Every PID authority sees every open request and any of them can fulfil it, so one
+      // busy person no longer stalls the client. With nobody named, all of them are told.
       pidAssigneeId = dto.pidAssigneeId?.trim() || '';
-      if (!pidAssigneeId) {
-        throw new BadRequestException('Choose who should assign the PID for this client.');
-      }
-      const assignee = await this.prisma.user.findFirst({
-        where: { id: pidAssigneeId, organizationId, deletedAt: null, status: 'ACTIVE' },
-        select: { id: true },
-      });
-      if (!assignee) throw new BadRequestException('The selected person is not an active member of this organization.');
-      if (!(await this.permissions.check(pidAssigneeId, 'project.generate_pid'))) {
-        throw new BadRequestException('The selected person cannot assign a PID. Choose someone with PID authority.');
+      if (pidAssigneeId) {
+        const assignee = await this.prisma.user.findFirst({
+          where: { id: pidAssigneeId, organizationId, deletedAt: null, status: 'ACTIVE' },
+          select: { id: true },
+        });
+        if (!assignee) throw new BadRequestException('The selected person is not an active member of this organization.');
+        if (!(await this.permissions.check(pidAssigneeId, 'project.generate_pid'))) {
+          throw new BadRequestException('The selected person cannot assign a PID. Choose someone with PID authority.');
+        }
       }
 
       // (b) Project Manager — a SEPARATE choice: someone who holds project.approve (Super Admin,
@@ -869,6 +884,9 @@ export class ProjectsService {
     const clientGroup = dto.clientGroupId?.trim()
       ? await this.assertClientGroup(organizationId, dto.clientGroupId.trim())
       : null;
+    // A client deadline on the first group: a new client has no manager relationship yet, so only
+    // the global permission qualifies — the same rule a project's own client date always had.
+    if (firstGroup?.clientDueDate) await this.deadlines.assertMaySetClientDue([], scope);
 
     // ── Patent linkage — TAGGED PATENTS DECIDE THE CLIENT, and nothing else does while any
     // exist. Only patent.view holders (Super Admin by default, or anyone granted it) may attach
@@ -971,10 +989,12 @@ export class ProjectsService {
         });
       }
 
-      // A requester's project carries a pending PID request, routed to the chosen authority.
-      if (pidAssigneeId) {
+      // CLIENTS-FLOW (PID rework): EVERY client created without a PID carries an open request —
+      // an authority's too. Before, an authority who skipped "Generate PID" left a client that
+      // nothing tracked, and it surfaced only when somebody tried to invoice it.
+      if (!pid) {
         await tx.pidRequest.create({
-          data: { organizationId, projectId: created.id, requestedById: creator.id, assigneeId: pidAssigneeId },
+          data: { organizationId, projectId: created.id, requestedById: creator.id, assigneeId: pidAssigneeId || null, kind: 'NEW' },
         });
       }
 
@@ -1003,14 +1023,19 @@ export class ProjectsService {
       },
     });
 
-    // Route the PID request to the chosen authority (best-effort, outside the tx).
-    if (pidAssigneeId) {
-      await this.notifications.notify(pidAssigneeId, {
-        type: 'project.pid_requested',
-        title: 'PID requested',
-        message: `${creator.firstName} ${creator.lastName} needs a PID for the client "${project.title}".`,
-        link: '/projects',
-      });
+    // Tell whoever should act (best-effort, outside the tx): the person named first, or — with
+    // nobody named, from someone who cannot mint — every authority. An authority who created a
+    // PID-less client on purpose is not told about their own choice; it simply waits in the queue.
+    if (!pid && (pidAssigneeId || !canGeneratePid)) {
+      const to = pidAssigneeId ? [pidAssigneeId] : await this.pidAuthorityIds(organizationId, creator.id);
+      if (to.length) {
+        await this.notifications.notify(to, {
+          type: 'project.pid_requested',
+          title: 'PID requested',
+          message: `${creator.firstName} ${creator.lastName} needs a PID for the client "${project.title}".`,
+          link: '/projects?pidRequests=1',
+        });
+      }
     }
 
     // Projects are billable by default; billability is decided per time entry by each
@@ -1196,8 +1221,24 @@ export class ProjectsService {
     if (project.code) throw new BadRequestException('This client already has a PID.');
     const { pid, reservationId } = await this.ensureReservation(organizationId, userId, rawPid);
     try {
-      await this.prisma.project.update({ where: { id: projectId }, data: { code: pid } });
+      // CLIENTS-FLOW (PID rework): the attach and the closing of the client's open request are one
+      // transaction, and the attach only lands on a client that still has NO number — so two
+      // authorities acting at once cannot give a client two PIDs.
+      const attached = await this.prisma.$transaction(async tx => {
+        const set = await tx.project.updateMany({ where: { id: projectId, code: null, deletedAt: null }, data: { code: pid } });
+        if (!set.count) return false;
+        await tx.pidRequest.updateMany({
+          where: { projectId, status: 'PENDING', kind: 'NEW' },
+          data: { status: 'FULFILLED', pid, resolvedAt: new Date(), resolvedById: userId },
+        });
+        return true;
+      });
+      if (!attached) {
+        await this.prisma.pidReservation.deleteMany({ where: { id: reservationId, status: 'RESERVED' } });
+        throw new BadRequestException('This client was given a PID a moment ago by someone else.');
+      }
     } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
       // project.code is no longer UNIQUE (a PID can hold several projects), so a duplicate code
       // cannot surface here any more — ensureReservation above is what rejects an in-use PID.
       // The catch stays for any other constraint, reported plainly rather than as a 500.
@@ -1545,6 +1586,12 @@ export class ProjectsService {
         // on naming the old one. A PENDING request is untouched — it belongs to a project that has
         // no PID at all, and such a project is refused by planMove before it reaches here.
         await tx.pidRequest.updateMany({ where: { projectId, status: 'FULFILLED' }, data: { pid: toPid } });
+        // CLIENTS-FLOW (PID rework): if the client's team had ASKED for this change, the move is
+        // the answer — the request closes with the number it produced.
+        await tx.pidRequest.updateMany({
+          where: { projectId, status: 'PENDING', kind: 'CHANGE' },
+          data: { status: 'FULFILLED', pid: toPid, resolvedAt: new Date(), resolvedById: userId },
+        });
       });
     } catch (e: unknown) {
       // The transaction rolled back, so a serial reserved for it is held by nobody and attached to
@@ -1772,58 +1819,134 @@ export class ProjectsService {
     });
   }
 
-  /** PENDING PID requests routed to this authority (their fulfilment queue). Returns the FULL
-   *  project detail so the reviewer can verify — and edit — everything before assigning the PID. */
+  // ── CLIENTS-FLOW: the PID request pool ─────────────────────────────────────────────
+  //
+  // A request used to belong to ONE named authority: only they could see, edit or fulfil it, so a
+  // busy or absent Super Admin stalled a client for as long as they were busy. Now every authority
+  // in the organisation works one shared queue; the named person is only who is asked first.
+
+  /** Ids of everyone who may mint a PID in this organisation, optionally leaving someone out. */
+  async pidAuthorityIds(organizationId: string, except?: string | null): Promise<string[]> {
+    const rows = await this.pidAuthorities(organizationId);
+    return rows.map(u => u.id).filter(id => id !== except);
+  }
+
+  /** Tell every PID authority something (best-effort; a notification failure never undoes work). */
+  async notifyPidAuthorities(organizationId: string, except: string | null, payload: { title: string; message: string; type?: string }) {
+    const to = await this.pidAuthorityIds(organizationId, except);
+    if (!to.length) return 0;
+    await this.notifications.notify(to, {
+      type: payload.type ?? 'project.pid_requested',
+      title: payload.title,
+      message: payload.message,
+      link: '/projects?pidRequests=1',
+    });
+    return to.length;
+  }
+
+  private async nameMap(ids: (string | null | undefined)[]) {
+    const clean = [...new Set(ids.filter((x): x is string => !!x))];
+    if (!clean.length) return new Map<string, string>();
+    const users = await this.prisma.user.findMany({ where: { id: { in: clean } }, select: { id: true, firstName: true, lastName: true } });
+    return new Map(users.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+  }
+
+  /**
+   * The queue: EVERY open request in the organisation — new PIDs and PID changes — for any
+   * authority to act on. Requests addressed to the reader come first, then the longest-waiting.
+   * A deleted client's request is not offered (deleting cancels it; this is the belt to that brace).
+   * Returns the full client detail so a NEW request can be verified and edited before the PID goes on.
+   */
   async pidRequestsFor(organizationId: string, userId: string) {
     const rows = await this.prisma.pidRequest.findMany({
-      where: { organizationId, assigneeId: userId, status: 'PENDING' },
+      where: { organizationId, status: 'PENDING', project: { deletedAt: null } },
       orderBy: { createdAt: 'asc' },
-      // The reviewer sees + edits everything they may set on the requester's behalf, including
-      // the project TYPE and the project MANAGER, before assigning the PID.
       include: {
         project: {
           select: {
-            id: true, title: true, description: true, projectType: true, priority: true,
+            id: true, title: true, description: true, projectType: true, priority: true, code: true,
             startDate: true, dueDate: true,
             members: { where: { projectRole: 'MANAGER', isActive: true }, select: { userId: true } },
           },
         },
       },
     });
-    const requesterIds = [...new Set(rows.map(r => r.requestedById))];
-    const requesters = requesterIds.length
-      ? await this.prisma.user.findMany({ where: { id: { in: requesterIds } }, select: { id: true, firstName: true, lastName: true } })
-      : [];
-    const nameById = new Map(requesters.map(u => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
-    return rows.map(r => ({
-      id: r.id,
-      projectId: r.projectId,
-      projectTitle: r.project.title,
-      description: r.project.description,
-      projectType: r.project.projectType,
-      managerId: r.project.members[0]?.userId ?? null,
-      priority: r.project.priority,
-      startDate: r.project.startDate,
-      dueDate: r.project.dueDate,
-      requestedBy: nameById.get(r.requestedById) ?? 'A colleague',
-      note: r.note,
-      createdAt: r.createdAt,
-    }));
+    const names = await this.nameMap(rows.flatMap(r => [r.requestedById, r.assigneeId]));
+    const now = Date.now();
+    return rows
+      .map(r => ({
+        id: r.id,
+        kind: r.kind as 'NEW' | 'CHANGE',
+        projectId: r.projectId,
+        projectTitle: r.project.title,
+        currentPid: r.project.code,
+        description: r.project.description,
+        projectType: r.project.projectType,
+        managerId: r.project.members[0]?.userId ?? null,
+        priority: r.project.priority,
+        startDate: r.project.startDate,
+        dueDate: r.project.dueDate,
+        requestedBy: names.get(r.requestedById) ?? 'A colleague',
+        requestedById: r.requestedById,
+        askedFirst: r.assigneeId ? (names.get(r.assigneeId) ?? null) : null,
+        askedYou: r.assigneeId === userId,
+        reason: r.reason,
+        suggestedPid: r.suggestedPid,
+        note: r.note,
+        createdAt: r.createdAt,
+        waitingHours: Math.floor((now - r.createdAt.getTime()) / 3_600_000),
+        remindedAt: r.remindedAt,
+        reminderCount: r.reminderCount,
+      }))
+      .sort((x, y) => Number(y.askedYou) - Number(x.askedYou) || x.createdAt.getTime() - y.createdAt.getTime());
+  }
+
+  /** The open request on one client, for its page: what is being waited for, since when, by whom. */
+  async openPidRequestFor(projectId: string) {
+    const r = await this.prisma.pidRequest.findFirst({
+      where: { projectId, status: 'PENDING' },
+      select: { id: true, kind: true, createdAt: true, assigneeId: true, requestedById: true, reason: true, suggestedPid: true, remindedAt: true, reminderCount: true },
+    });
+    if (!r) return null;
+    const names = await this.nameMap([r.assigneeId, r.requestedById]);
+    return {
+      id: r.id, kind: r.kind as 'NEW' | 'CHANGE', createdAt: r.createdAt,
+      askedFirst: r.assigneeId ? names.get(r.assigneeId) ?? null : null,
+      requestedBy: names.get(r.requestedById) ?? null,
+      reason: r.reason, suggestedPid: r.suggestedPid,
+      remindedAt: r.remindedAt, reminderCount: r.reminderCount,
+    };
+  }
+
+  /** A request that can be acted on: this org, still open, client not deleted. */
+  private async openRequest(organizationId: string, requestId: string) {
+    const req = await this.prisma.pidRequest.findFirst({
+      where: { id: requestId, organizationId },
+      select: {
+        id: true, kind: true, projectId: true, assigneeId: true, requestedById: true, status: true,
+        project: { select: { id: true, title: true, code: true, deletedAt: true } },
+      },
+    });
+    if (!req) throw new NotFoundException('PID request not found.');
+    if (req.status !== 'PENDING') throw new BadRequestException('This PID request has already been resolved.');
+    if (req.project.deletedAt) {
+      await this.prisma.pidRequest.updateMany({
+        where: { id: req.id, status: 'PENDING' },
+        data: { status: 'CANCELLED', resolvedAt: new Date(), resolutionNote: 'The client was deleted.' },
+      });
+      throw new BadRequestException('That client has been deleted, so its request is closed.');
+    }
+    return req;
   }
 
   /**
-   * Let the PID authority who received a request VERIFY and EDIT the pending project's details
-   * before assigning the PID. Access is via the request (assignee), not project membership —
-   * the authority is deliberately not a member. Only a PENDING request's project is editable.
+   * Let a PID authority VERIFY and EDIT a pending client's details before assigning the PID.
+   * Any authority in the organisation may — the queue is shared. Only a NEW request's client is
+   * editable here; a change request is answered with the Change PID dialog on the client's page.
    */
   async editPidRequestProject(organizationId: string, userId: string, requestId: string, dto: ReviewPidProjectDto) {
-    const req = await this.prisma.pidRequest.findFirst({
-      where: { id: requestId, organizationId },
-      select: { id: true, projectId: true, assigneeId: true, status: true },
-    });
-    if (!req) throw new NotFoundException('PID request not found.');
-    if (req.assigneeId !== userId) throw new ForbiddenException('This PID request is assigned to someone else.');
-    if (req.status !== 'PENDING') throw new BadRequestException('This PID request has already been resolved.');
+    const req = await this.openRequest(organizationId, requestId);
+    if (req.kind !== 'NEW') throw new BadRequestException('A PID change is made from the client’s page, with Change PID.');
 
     const before = await this.prisma.project.findFirst({
       where: { id: req.projectId, deletedAt: null }, select: { startDate: true, dueDate: true },
@@ -1838,10 +1961,9 @@ export class ProjectsService {
       throw new BadRequestException('Due date cannot be before the start date.');
     }
 
-    // The reviewer may set the project TYPE (rejecting a "coming soon" one).
     if (dto.projectType) {
       const t = PROJECT_TYPES.find(pt => pt.value === dto.projectType);
-      if (t?.comingSoon) throw new BadRequestException(`Work of type "${t.label}" aren't available yet.`);
+      if (t?.comingSoon) throw new BadRequestException(`Work of type "${t.label}" isn't available yet.`);
     }
 
     const updated = await this.prisma.$transaction(async tx => {
@@ -1856,10 +1978,8 @@ export class ProjectsService {
           ...(dueDate === undefined ? {} : { dueDate }),
         },
       });
-      // The PID reviewer can move the deadline while verifying the project, and that is a real
-      // shift like any other. Left unrecorded it would be the one route through which a date
-      // could change without the ledger noticing — which is how a shift count silently
-      // under-reports: not by being wrong, but by having a path nobody wired up.
+      // The reviewer can move the deadline while verifying, and that is a real shift like any
+      // other — recorded, so the shift count cannot silently under-report.
       if (dueDate !== undefined) {
         await this.deadlineChanges.record({
           entityType: 'PROJECT', entityId: req.projectId, projectId: req.projectId,
@@ -1869,8 +1989,6 @@ export class ProjectsService {
       return p;
     });
 
-    // The reviewer may (re)assign the project MANAGER: demote the current one, promote the chosen
-    // person (added as an active member if not already on the project).
     if (dto.managerId) {
       const mgr = await this.prisma.user.findFirst({
         where: { id: dto.managerId, organizationId, deletedAt: null, status: 'ACTIVE' }, select: { id: true },
@@ -1894,45 +2012,187 @@ export class ProjectsService {
     return updated;
   }
 
-  /** Assign a PID to a pending-request project (the authority pastes or generates the PID). */
+  /**
+   * Assign a PID to a client whose NEW request is open. Any authority may. If the client got a
+   * PID some other way in the meantime (attached from its page, by a colleague), the request is
+   * closed with THAT number and nothing is overwritten — before, fulfilling a stale request put a
+   * second PID on a client that already had one.
+   */
   async fulfillPidRequest(organizationId: string, userId: string, requestId: string, rawPid: string) {
-    const req = await this.prisma.pidRequest.findFirst({
-      where: { id: requestId, organizationId },
-      select: { id: true, projectId: true, assigneeId: true, requestedById: true, status: true },
-    });
-    if (!req) throw new NotFoundException('PID request not found.');
-    if (req.assigneeId !== userId) throw new ForbiddenException('This PID request is assigned to someone else.');
-    if (req.status !== 'PENDING') throw new BadRequestException('This PID request has already been resolved.');
+    const req = await this.openRequest(organizationId, requestId);
+    if (req.kind !== 'NEW') throw new BadRequestException('A PID change is made from the client’s page, with Change PID.');
+    if (req.project.code) {
+      await this.prisma.pidRequest.updateMany({
+        where: { id: req.id, status: 'PENDING' },
+        data: { status: 'FULFILLED', pid: req.project.code, resolvedAt: new Date(), resolvedById: userId, resolutionNote: 'The client already had this PID.' },
+      });
+      return { pid: req.project.code, projectId: req.projectId, alreadyHad: true };
+    }
 
-    // Reserve the PID (the authority's generated one, a typed one, or an auto-assigned serial),
-    // then attach it atomically to the project.
     const { pid, reservationId } = await this.ensureReservation(organizationId, userId, rawPid);
-    // Atomic: only the first concurrent fulfil flips PENDING → FULFILLED and sets the code;
-    // a P2002 (another project claimed this exact PID in a race) surfaces as a friendly error.
+    let outcome: 'ok' | 'resolved' | 'has-code';
     try {
-      const ok = await this.prisma.$transaction(async (tx) => {
+      outcome = await this.prisma.$transaction(async (tx) => {
         const claimed = await tx.pidRequest.updateMany({
           where: { id: req.id, status: 'PENDING' },
-          data: { status: 'FULFILLED', pid, resolvedAt: new Date() },
+          data: { status: 'FULFILLED', pid, resolvedAt: new Date(), resolvedById: userId },
         });
-        if (claimed.count === 0) return false;
-        await tx.project.update({ where: { id: req.projectId }, data: { code: pid } });
-        return true;
+        if (claimed.count === 0) return 'resolved' as const;
+        // Only a client that still has NO number takes this one.
+        const set = await tx.project.updateMany({ where: { id: req.projectId, code: null, deletedAt: null }, data: { code: pid } });
+        if (set.count === 0) throw new PidRaceAbort();
+        return 'ok' as const;
       });
-      if (!ok) throw new BadRequestException('This PID request has already been resolved.');
     } catch (e: any) {
-      if (e instanceof BadRequestException) throw e;
-      if (e?.code === 'P2002') throw new BadRequestException(`PID ${pid} is already in use.`);
-      throw e;
+      if (e instanceof PidRaceAbort) outcome = 'has-code';
+      else if (e?.code === 'P2002') {
+        await this.prisma.pidReservation.deleteMany({ where: { id: reservationId, status: 'RESERVED' } });
+        throw new BadRequestException(`PID ${pid} is already in use.`);
+      } else throw e;
+    }
+    if (outcome !== 'ok') {
+      // Nothing was attached: give the reserved serial back rather than hold it for five minutes.
+      await this.prisma.pidReservation.deleteMany({ where: { id: reservationId, status: 'RESERVED' } });
+      if (outcome === 'resolved') throw new BadRequestException('This PID request has already been resolved.');
+      const now = await this.prisma.project.findUnique({ where: { id: req.projectId }, select: { code: true } });
+      await this.prisma.pidRequest.updateMany({
+        where: { id: req.id, status: 'PENDING' },
+        data: { status: 'FULFILLED', pid: now?.code ?? null, resolvedAt: new Date(), resolvedById: userId, resolutionNote: 'The client already had a PID.' },
+      });
+      return { pid: now?.code ?? null, projectId: req.projectId, alreadyHad: true };
     }
     await this.markAttached(reservationId, req.projectId);
+    await this.events.emit({
+      action: EVENTS.PROJECT_UPDATED, entityType: 'PROJECT', entityId: req.projectId,
+      metadata: { pidAttached: pid, title: req.project.title, via: 'pid-request' },
+    });
     await this.notifications.notify(req.requestedById, {
       type: 'project.pid_assigned',
       title: 'PID assigned',
-      message: `Your client has been assigned PID ${pid}.`,
+      message: `"${req.project.title}" has been assigned PID ${pid}.`,
       link: `/projects/${req.projectId}`,
     });
     return { pid, projectId: req.projectId };
+  }
+
+  /**
+   * Ask for a PID for a client that has none and no open request — a client restored from the
+   * bin, or one from before every PID-less client carried a request.
+   */
+  async requestPid(projectId: string, dto: { assigneeId?: string; note?: string }) {
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, projectId);
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true, title: true, code: true } });
+    if (!project) throw new NotFoundException('Client not found.');
+    if (project.code) throw new BadRequestException('This client already has a PID. To correct it, request a PID change.');
+    const actor = await this.prisma.user.findUnique({ where: { id: actorId ?? '' }, select: { organizationId: true, firstName: true, lastName: true } });
+    if (!actor) throw new ForbiddenException('You must be signed in.');
+    const assigneeId = dto.assigneeId?.trim() || null;
+    if (assigneeId && !(await this.permissions.check(assigneeId, 'project.generate_pid'))) {
+      throw new BadRequestException('The selected person cannot assign a PID. Choose someone with PID authority.');
+    }
+    try {
+      await this.prisma.pidRequest.create({
+        data: { organizationId: actor.organizationId, projectId, requestedById: actorId!, assigneeId, kind: 'NEW', note: dto.note?.trim() || null },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') throw new BadRequestException('There is already an open PID request for this client.');
+      throw e;
+    }
+    const message = `${actor.firstName} ${actor.lastName} needs a PID for the client "${project.title}".`;
+    if (assigneeId) await this.notifications.notify(assigneeId, { type: 'project.pid_requested', title: 'PID requested', message, link: '/projects?pidRequests=1' });
+    else await this.notifyPidAuthorities(actor.organizationId, actorId ?? null, { title: 'PID requested', message });
+    return this.openPidRequestFor(projectId);
+  }
+
+  /**
+   * Ask for a client's PID to be CHANGED — the people who notice a wrong number are usually the
+   * team on the client, and before this they had no way to say so. The request joins the shared
+   * queue; an authority answers it with Change PID (which closes it) or declines it with a reason.
+   */
+  async requestPidChange(projectId: string, dto: { reason: string; suggestedPid?: string }) {
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, projectId);
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true, title: true, code: true } });
+    if (!project) throw new NotFoundException('Client not found.');
+    if (!project.code) throw new BadRequestException('This client has no PID yet — request one instead.');
+    const reason = dto.reason?.trim();
+    if (!reason) throw new BadRequestException('Say why the PID should change.');
+    const actor = await this.prisma.user.findUnique({ where: { id: actorId ?? '' }, select: { organizationId: true, firstName: true, lastName: true } });
+    if (!actor) throw new ForbiddenException('You must be signed in.');
+    let suggestedPid: string | null = null;
+    if (dto.suggestedPid?.trim()) {
+      // parsePid refuses anything not in this organisation's format, in words.
+      suggestedPid = this.parsePid(dto.suggestedPid.trim(), await this.orgCodeOf(actor.organizationId)).pid;
+      if (suggestedPid === project.code) throw new BadRequestException('That is already this client’s PID.');
+    }
+    try {
+      await this.prisma.pidRequest.create({
+        data: { organizationId: actor.organizationId, projectId, requestedById: actorId!, kind: 'CHANGE', reason, suggestedPid },
+      });
+    } catch (e: any) {
+      if (e?.code === 'P2002') throw new BadRequestException('There is already an open PID request for this client.');
+      throw e;
+    }
+    await this.events.emit({
+      action: EVENTS.PROJECT_UPDATED, entityType: 'PROJECT', entityId: projectId,
+      metadata: { projectId, title: project.title, pidChangeRequested: true, currentPid: project.code, suggestedPid },
+    });
+    await this.notifyPidAuthorities(actor.organizationId, actorId ?? null, {
+      title: 'PID change requested',
+      message: `${actor.firstName} ${actor.lastName} asks to change the PID of "${project.title}" (${project.code})${suggestedPid ? ` to ${suggestedPid}` : ''}: ${reason}`,
+    });
+    return this.openPidRequestFor(projectId);
+  }
+
+  /** Decline a CHANGE request, with a reason the requester is told. A NEW request is never declined
+   *  — a client always needs a PID; a client that should not exist is deleted instead. */
+  async declinePidRequest(organizationId: string, userId: string, requestId: string, reason: string) {
+    const req = await this.openRequest(organizationId, requestId);
+    if (req.kind !== 'CHANGE') throw new BadRequestException('A request for a new PID is answered by assigning one. If the client should not exist, delete it.');
+    const why = reason?.trim();
+    if (!why) throw new BadRequestException('Say why the change is declined — the requester is told.');
+    const done = await this.prisma.pidRequest.updateMany({
+      where: { id: req.id, status: 'PENDING' },
+      data: { status: 'DECLINED', resolvedAt: new Date(), resolvedById: userId, resolutionNote: why },
+    });
+    if (!done.count) throw new BadRequestException('This PID request has already been resolved.');
+    await this.notifications.notify(req.requestedById, {
+      type: 'project.pid_change_declined',
+      title: 'PID change declined',
+      message: `The PID of "${req.project.title}" stays ${req.project.code ?? 'as it is'}: ${why}`,
+      link: `/projects/${req.projectId}`,
+    });
+    return { declined: true };
+  }
+
+  /**
+   * Remind every authority about a client's open request, from the client's page. At most once an
+   * hour per request — a nudge is a reminder, not a way to flood the people who are already busy.
+   */
+  async nudgePidRequest(projectId: string) {
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, projectId);
+    const req = await this.prisma.pidRequest.findFirst({
+      where: { projectId, status: 'PENDING', project: { deletedAt: null } },
+      select: { id: true, kind: true, organizationId: true, remindedAt: true, createdAt: true, project: { select: { title: true, code: true } } },
+    });
+    if (!req) throw new BadRequestException('There is no open PID request for this client.');
+    const last = req.remindedAt ?? req.createdAt;
+    if (Date.now() - last.getTime() < 3_600_000) {
+      // Raising the request told them, and so does every reminder; either resets the hour.
+      throw new BadRequestException('The PID authorities were told less than an hour ago — nudge again later.');
+    }
+    const days = Math.max(0, Math.floor((Date.now() - req.createdAt.getTime()) / 86_400_000));
+    const waited = days === 0 ? 'today' : days === 1 ? 'a day ago' : `${days} days ago`;
+    const told = await this.notifyPidAuthorities(req.organizationId, actorId ?? null, {
+      title: req.kind === 'CHANGE' ? 'Reminder: PID change waiting' : 'Reminder: PID waiting',
+      message: req.kind === 'CHANGE'
+        ? `"${req.project.title}" (${req.project.code}) is still waiting on a PID change requested ${waited}.`
+        : `"${req.project.title}" is still waiting for a PID — requested ${waited}.`,
+    });
+    await this.prisma.pidRequest.update({ where: { id: req.id }, data: { remindedAt: new Date(), reminderCount: { increment: 1 } } });
+    return { reminded: told };
   }
 
   /** The catalog of project types — built-ins + the org's saved custom templates. Drives the
@@ -2305,6 +2565,9 @@ export class ProjectsService {
     await this.access.assertProjectAccess(actorId, id);
     const project = await this.getRaw(id);
     const redacted: any = this.deadlines.redactProject(project, await this.deadlines.scope());
+    // CLIENTS-FLOW (PID rework): what the client is waiting on, so its page can say so and offer
+    // the right next step (attach, nudge, or request a change).
+    redacted.openPidRequest = await this.openPidRequestFor(id);
     // Patent HANDLES are visible to patent.view holders (any project creator); CLIENT details
     // are stricter — patent.manage (Super Admin) only. The PID stays visible to everyone.
     // CLIENTS-FLOW: commented out — no patent handles while patent IDs are switched off.
@@ -2987,6 +3250,12 @@ export class ProjectsService {
       const project = await tx.project.update({
         where: { id },
         data: { deletedAt: now, projectPhase: 'ARCHIVED' },
+      });
+      // CLIENTS-FLOW (PID rework): a deleted client's open PID request is cancelled, so an
+      // authority working the queue cannot burn a serial on a client that is gone.
+      await tx.pidRequest.updateMany({
+        where: { projectId: id, status: 'PENDING' },
+        data: { status: 'CANCELLED', resolvedAt: now, resolvedById: getActorId() ?? null, resolutionNote: 'The client was deleted.' },
       });
       // Cascade so children stop surfacing in cross-project reads (My Tasks, issues, perf).
       await tx.issue.updateMany({ where: { projectId: id, deletedAt: null }, data: { deletedAt: now } });

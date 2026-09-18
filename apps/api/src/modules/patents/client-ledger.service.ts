@@ -373,7 +373,8 @@ export class ClientLedgerService {
           // authority, or created and never given one at all. The ledger showed both as a bare
           // dash, which says "no data" when the truth is either "waiting on Ritik" or "nobody
           // ever asked". Those need different actions, so they need different words.
-          pidRequest: { select: { status: true, assigneeId: true, createdAt: true } },
+          // CLIENTS-FLOW: a client may have several requests over time now; the latest decides.
+          pidRequests: { orderBy: { createdAt: 'desc' }, take: 1, select: { status: true, assigneeId: true, createdAt: true } },
         },
         orderBy: [{ code: 'asc' }, { roundSeq: 'asc' }],
       }),
@@ -407,7 +408,8 @@ export class ClientLedgerService {
       effective: this.effective(d, o, client),
       projects: projects.map(p => {
         const h = hoursByProject.get(p.id) ?? { billable: 0, nonBillable: 0 };
-        const { pidRequest, ...rest } = p;
+        const { pidRequests, ...rest } = p;
+        const pidRequest = pidRequests[0];
         return {
           ...rest,
           /**

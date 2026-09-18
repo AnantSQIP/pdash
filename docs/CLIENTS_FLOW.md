@@ -94,18 +94,75 @@ can be restored by uncommenting the marked lines. Every site carries the marker
   `/client-ledger` page and sidebar item, `PUT /projects/:id/client`, client columns in reports,
   the PID ledger and the digest, and the client-code parts of the BD pipeline's "won" dialog.
 
+## The PID flow, reworked (phase 6)
+
+The owner's questions, and what the code actually did:
+
+| Question | What happened before | Why it was a flaw |
+|---|---|---|
+| What if the Super Admins are busy? | A request went to ONE named authority. Only that person could see, edit or fulfil it. | One busy or absent person stalled a client indefinitely, and nobody else could even see it. |
+| What if we don't assign the PID? | An authority could create a client with no PID and nothing tracked it. No request, no reminder. | PID-less clients were silently forgotten until invoicing. |
+| What if we want to change the PID? | Only an authority, with the passcode, through a dialog built around "rounds". Nobody else could even ask. | The people who notice a wrong PID (the team on the client) had no way to say so. |
+| (found while reading) | Attaching a PID from the client page left its request open; fulfilling it later **overwrote** the PID. Deleting a client left its request in the queue. | A client could get two PIDs, and a deleted client could burn a serial. |
+
+The flow now:
+
+1. **Every PID-less client has an open request.** Whoever creates it — authority or not — the
+   client appears in the PID queue until it has a number.
+2. **The queue is a pool.** Every PID authority sees every open request in the organisation and
+   any of them can fulfil it. The requester may name who to ask first (optional); that person is
+   told straight away, and if nobody is named, all authorities are.
+3. **Nothing waits silently.** Requests show how long they have waited. Once a day, anything open
+   longer than a day reminds every authority again. The client's team can nudge (at most hourly).
+4. **Work never waits for the PID.** Tasks, staffing, capacity and time all work on a PID-pending
+   client; the PID is how the work is filed, not permission to do it.
+5. **Changing a PID can be asked for.** A client's manager can request a change with a reason
+   (and the number they believe is right). It lands in the same pool; an authority makes the change
+   with the existing, audited Change PID dialog, which closes the request, or declines it with a
+   reason the requester is told.
+6. **One number, one request.** Attaching a PID by any route closes the open request; a request for
+   a client that already has a PID closes instead of overwriting it; deleting a client cancels it.
+   At most one request per client is open at a time (a partial unique index).
+
+Considered and **not** done without the owner: letting Managers mint PIDs when authorities are
+slow, or minting automatically after a timeout. Both would widen who can create a billing number,
+which the permission matrix of 12 Aug deliberately narrowed.
+
+## Deadlines (phase 7)
+
+| Where | Internal deadline | Client deadline | Why |
+|---|---|---|---|
+| Client | — | — | A client is a relationship, not a delivery. Existing clients keep what they had, read-only in spirit. |
+| **Task group** | **yes** — the team's target | **yes** — the date promised to the client | The group is the piece of work that is delivered. The promise and the buffer before it belong here. |
+| Task | yes — its milestone inside the group | no (removed in PR #17, stays removed) | Steps toward the group's date. |
+| One person on a task | yes — the existing "extend for one person" | no | A private extension; it may run past the task's date by design. |
+
+Rules the server keeps:
+
+- A group's internal deadline is never after its client deadline, and never before its start.
+- A task in a group with a deadline is never due after it — create and edit are refused in words
+  ("move the group's deadline first"); a task created with no date takes the group's.
+- Moving a group's deadline later carries the tasks that were due on the old date with it; moving
+  it earlier pulls any task due after the new date in to it. Each task move is recorded in the
+  deadline ledger, and so is the group's own move (as the client-facing commitment it now is).
+- The client deadline is visible and settable only by people who hold the client-deadline
+  permission or manage that client — the rule it always had.
+- On the capacity board, "extend" offers: only this person, the whole task, or the whole task group.
+
 ## Phases
 
 | # | Phase | Status |
 |---|---|---|
-| 1 | Schema + API: client groups, enriched task groups, templates per group, assignment at creation, move task, completion rules, capacity/My Tasks carry the group | ☐ |
-| 2 | Comment out patents and client IDs (web + API routes) | ☐ |
-| 3 | UI: Clients page grouped by client group, New client dialog, client screen, Task Groups tab, New/Edit task group, assign, move | ☐ |
-| 4 | Everywhere else: capacity, My Tasks, timesheets, PID ledger, home, search, notifications, sidebar wording | ☐ |
+| 1 | Schema + API: client groups, enriched task groups, templates per group, assignment at creation, move task, completion rules, capacity/My Tasks carry the group | ✅ |
+| 2 | Comment out patents and client IDs (web + API routes) | ✅ |
+| 3 | UI: Clients page grouped by client group, New client dialog, client screen, Task Groups tab, New/Edit task group, assign, move | ✅ |
+| 4 | Everywhere else: capacity, My Tasks, timesheets, PID ledger, home, search, notifications, sidebar wording | ✅ |
 | 5 | Demo data, preview on its own tunnel, end-to-end tests, browser walkthrough, adversarial review, fix loop | ☐ |
+| 6 | PID flow: pool queue, a request for every PID-less client, reminders, nudges, change requests, one-number rules | ☐ |
+| 7 | Deadlines: client deadline on task groups, task-within-group rule, cascading group deadline moves, capacity extend by group | ☐ |
 
 ## Deploying later (when the owner asks)
 
-One additive migration (`20261017090000_clients_flow`). No new permission codes, so **no
+Additive migrations (`20261017090000_clients_flow`, plus the PID-flow and deadline ones listed below). No new permission codes, so **no
 regrant**. Existing projects appear as clients in the "Ungrouped" section until someone files them
 into groups.
