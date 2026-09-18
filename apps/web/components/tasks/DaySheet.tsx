@@ -9,6 +9,7 @@ import { warningsForSheet, sheetSummary } from '@/lib/day-plan';
 import { useToast } from '@/components/ui/Toast';
 import { todayIST, formatDate } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
+import { NonBillableChip } from '@/components/tasks/BillableToggle';
 
 /** Nobody may book more than this against one calendar day — the server's rule, said here first. */
 const MAX_HOURS_PER_DAY = 16;
@@ -164,7 +165,10 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[13.5px] font-medium text-gray-900" title={r.title}>{r.title}</p>
+            <p className="flex items-center gap-1.5 text-[13.5px] font-medium text-gray-900" title={r.title}>
+              <span className="truncate">{r.title}</span>
+              {r.billable === false && <NonBillableChip className="shrink-0" />}
+            </p>
             <p className="mt-0.5 truncate text-[11px] text-gray-500">
               {r.projectPid ? `${pidLabel(r.projectPid, r.projectRound)} · ` : ''}{r.project ?? 'No client'}
               {r.taskGroup && <span className="text-gray-400"> · {r.taskGroup}</span>}

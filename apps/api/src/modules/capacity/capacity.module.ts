@@ -1100,6 +1100,7 @@ export class CapacityService {
         // The board only lists OPEN work, so anything here is open by construction. Carried
         // explicitly so the sheet does not have to infer it.
         closed: false,
+        billable: undefined as boolean | undefined,
         finishedOn: null as string | null,
         when,
       };
@@ -1119,7 +1120,7 @@ export class CapacityService {
         ...(listed.size ? { id: { notIn: [...listed] } } : {}),
       },
       select: {
-        id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true,
+        id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true, billable: true,
         assignees: { where: { userId }, select: { estimatedHours: true } },
         projectTasks: {
           take: 1,
@@ -1158,10 +1159,21 @@ export class CapacityService {
         loggedToday: r1(loggedByTask.get(t.id) ?? 0),
         plannedHours: 0,
         closed: true,
+        billable: t.billable,
         // The IST calendar day it was finished on — the day people mean.
         finishedOn: t.completedAt ? dayKey(startOfIstDay(t.completedAt)) : null,
         when: 'OTHER' as const,
       });
+    }
+
+    // Whether each open task's time is billable — the task decides (Task.billable), and the sheet
+    // says so on the line so nobody is surprised when the entry comes out non-billable.
+    const openIds = rows.filter(r => r.billable === undefined).map(r => r.taskId);
+    if (openIds.length) {
+      const flags = new Map((await this.prisma.task.findMany({
+        where: { id: { in: openIds } }, select: { id: true, billable: true },
+      })).map(t => [t.id, t.billable]));
+      for (const r of rows) if (r.billable === undefined) r.billable = flags.get(r.taskId) ?? true;
     }
 
     // Planned first, then tomorrow's, then the rest — the order somebody fills a day in.

@@ -1,5 +1,6 @@
 'use client';
 
+import { NonBillableChip } from '@/components/tasks/BillableToggle';
 import { useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
@@ -109,6 +110,7 @@ export function TaskListView({
             <span className={clsx('flex-1 text-sm min-w-0 truncate', closed ? 'line-through text-gray-400' : 'text-gray-800')}>
               {task.title}
             </span>
+            {task.billable === false && <NonBillableChip className="shrink-0" />}
 
             {/* Status control */}
             <div className="hidden sm:block w-32 shrink-0" onClick={e => e.stopPropagation()}>

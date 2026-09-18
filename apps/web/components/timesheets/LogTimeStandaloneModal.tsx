@@ -381,30 +381,44 @@ export function LogTimeStandaloneModal({ onClose, onSuccess, defaultDate }: { on
           />
         </div>
 
-        {/* Billable — a fixed "non-billable" note for Other, a toggle otherwise. */}
-        {isOther ? (
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-gray-700">Billable</span>
-              <p className="text-xs text-gray-400">Other (non-client) time can’t be billed</p>
+        {/* Billable. Task time follows the TASK (set on the task, by anybody on its client or
+            staffed on it) — so for a task this is a statement, not a choice. Other time is never
+            billable, team-space time never is either, and a client call keeps its own switch. */}
+        {(() => {
+          const pickedTask = isTask && !pickedTeam ? allTasks.find(t => t.id === taskId) : undefined;
+          const fixed: { label: string; why: string } | null =
+            isOther ? { label: 'Non-billable', why: 'Other (non-client) time can’t be billed' }
+              : isTask && pickedTeam ? { label: 'Non-billable', why: 'Internal team work is never billed' }
+                : isTask && pickedTask ? { label: pickedTask.billable === false ? 'Non-billable' : 'Billable', why: 'Set on the task — change it on the task if it is wrong' }
+                  : isTask ? { label: 'Set by the task', why: 'Pick the task — its time is billable unless the task is marked otherwise' }
+                    : null;
+          if (fixed) {
+            return (
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-gray-700">Billable</span>
+                  <p className="text-xs text-gray-400">{fixed.why}</p>
+                </div>
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${fixed.label === 'Billable' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{fixed.label}</span>
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-gray-700">Billable</span>
+                <p className="text-xs text-gray-400">Whether this call is billable to the client</p>
+              </div>
+              <button
+                type="button" role="switch" aria-checked={billable} aria-label="Billable"
+                onClick={() => setBillable(prev => !prev)}
+                className={`relative h-5 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 ${billable ? 'bg-brand-600' : 'bg-gray-300'}`}
+              >
+                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${billable ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
             </div>
-            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">Non-billable</span>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-gray-700">Billable</span>
-              <p className="text-xs text-gray-400">You decide whether this time is billable</p>
-            </div>
-            <button
-              type="button" role="switch" aria-checked={billable} aria-label="Billable"
-              onClick={() => setBillable(prev => !prev)}
-              className={`relative h-5 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 ${billable ? 'bg-brand-600' : 'bg-gray-300'}`}
-            >
-              <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${billable ? 'left-[22px]' : 'left-0.5'}`} />
-            </button>
-          </div>
-        )}
+          );
+        })()}
       </form>
     </Modal>
   );

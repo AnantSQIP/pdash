@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import {
   Plus, MessageCircle, RefreshCw, Flag, CheckCircle, Trash2, FolderKanban, Clock, Download, Activity as ActivityIcon,
   Play, Pause, RotateCcw, Hash, Layers, Pencil, ArrowRightLeft, FolderInput, FolderPlus, Archive,
+  BadgeIndianRupee,
 } from 'lucide-react';
 import { api, type ActivityItem } from '@/lib/api';
 import { fullName } from '@/lib/avatar';
@@ -22,6 +23,7 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'task.paused':          { verb: 'paused work on',        cat: 'Tasks',    icon: <Pause className="w-3.5 h-3.5" />,       color: 'bg-gray-100 text-gray-500' },
   'task.finished':        { verb: 'finished task',         cat: 'Tasks',    icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
   'task.reopened':        { verb: 'reopened task',         cat: 'Tasks',    icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
+  'task.billable_changed': { verb: 'changed billing on',   cat: 'Tasks',    icon: <BadgeIndianRupee className="w-3.5 h-3.5" />, color: 'bg-emerald-100 text-emerald-700' },
   'task.moved':           { verb: 'moved task',            cat: 'Tasks',    icon: <ArrowRightLeft className="w-3.5 h-3.5" />, color: 'bg-blue-100 text-blue-600' },
   // CLIENTS-FLOW: the task groups inside a client.
   'taskgroup.created':    { verb: 'created the task group',   cat: 'Task groups', icon: <Layers className="w-3.5 h-3.5" />,      color: 'bg-brand-100 text-brand-600' },
@@ -29,6 +31,7 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'taskgroup.completed':  { verb: 'completed the task group', cat: 'Task groups', icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
   'taskgroup.reopened':   { verb: 'reopened the task group',  cat: 'Task groups', icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
   'taskgroup.deleted':    { verb: 'deleted the task group',   cat: 'Task groups', icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'taskgroup.billable_changed': { verb: 'changed billing on the task group', cat: 'Task groups', icon: <BadgeIndianRupee className="w-3.5 h-3.5" />, color: 'bg-emerald-100 text-emerald-700' },
   'comment.created':      { verb: 'commented',             cat: 'Comments', icon: <MessageCircle className="w-3.5 h-3.5" />, color: 'bg-purple-100 text-purple-600' },
   'issue.created':        { verb: 'reported issue',        cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },
   'issue.updated':        { verb: 'updated issue',         cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },

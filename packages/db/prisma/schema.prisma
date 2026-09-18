@@ -1102,6 +1102,14 @@ model Task {
   // figure derived from them understate what the task cost.
   startedAt               DateTime?
   reopenedCount           Int       @default(0)
+  // CLIENTS FLOW: whether the work on this task is billable. Every task starts billable; anybody
+  // associated with it (on its client, or staffed on it) may mark it non-billable. The task is the
+  // authority: every timesheet entry on it carries the task's flag (set when the entry is logged,
+  // and re-set on every existing entry when the flag changes), so reports never disagree with it.
+  // Team-space work is never billable.
+  billable                Boolean   @default(true)
+  billableChangedAt       DateTime?
+  billableChangedById     String?
   completionPercentage    Int       @default(0)
   workflowId              String?
   currentWorkflowStatusId String?

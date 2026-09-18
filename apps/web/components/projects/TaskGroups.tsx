@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Plus, Pencil, Loader, Trash2, ChevronDown, Layers, CheckCircle2, RotateCcw, UserPlus, ArrowRightLeft,
-  CalendarDays, Clock, ChevronsDownUp, ChevronsUpDown, Lock,
+  CalendarDays, Clock, ChevronsDownUp, ChevronsUpDown, Lock, BadgeIndianRupee,
 } from 'lucide-react';
 import { api, type ApiTask, type TaskGroup, type UserSummary, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
@@ -13,6 +13,7 @@ import { TaskListView } from './views';
 import { TaskGroupModal } from './TaskGroupModal';
 import { domainLabelOf, useTechnologyDomains } from './TechnologyDomainPicker';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 import { byGroupOrder, byPriorityThenDeadline, isTaskClosed, taskAssigneeUsers } from '@/lib/tasks';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { AvatarStack } from '@/components/ui/AvatarStack';
@@ -137,6 +138,25 @@ export function TaskGroups({
     setCollapsed(Object.fromEntries(shown.map(g => [g.id, fold])));
   }
 
+  async function setGroupBilling(g: TaskGroup, billable: boolean, count: number) {
+    const ok = await confirmDialog({
+      title: billable ? `Make every task in “${g.name}” billable?` : `Make every task in “${g.name}” non-billable?`,
+      body: `All ${count} task${count === 1 ? '' : 's'} in the group, and the time already logged on them, will be marked ${billable ? 'billable' : 'non-billable'}. Single tasks can still be changed on their own afterwards.`,
+      confirmLabel: billable ? 'Make billable' : 'Make non-billable',
+    });
+    if (!ok) return;
+    setBusyId(g.id);
+    try {
+      const r = await api.tasks.setGroupBillable(g.id, billable);
+      refresh();
+      invalidateTimesheetCaches(qc);
+      toast(r.tasksChanged
+        ? `${r.tasksChanged} task${r.tasksChanged === 1 ? '' : 's'} now ${billable ? 'billable' : 'non-billable'}${r.entriesUpdated ? `, ${r.entriesUpdated} logged ${r.entriesUpdated === 1 ? 'entry' : 'entries'} re-marked` : ''}.`
+        : `Every task was already ${billable ? 'billable' : 'non-billable'}.`, 'success');
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not change billing for the group', 'error'); }
+    finally { setBusyId(null); }
+  }
+
   async function removeGroup(g: TaskGroup, count: number) {
     const target = groups.find(x => x.isDefault && x.id !== g.id);
     const ok = await confirmDialog({
@@ -212,6 +232,8 @@ export function TaskGroups({
         const openCount = list.length - done;
         const late = !completed && openCount > 0 && !!g.dueDate && isPastDue(g.dueDate);
         const others = groups.filter(x => x.id !== g.id && (x.status !== 'COMPLETED'));
+        const nonBillable = list.filter(t => t.billable === false).length;
+        const billing: 'ALL' | 'NONE' | 'SOME' = !list.length || nonBillable === 0 ? 'ALL' : nonBillable === list.length ? 'NONE' : 'SOME';
         return (
           <div key={g.id} className={clsx('rounded-xl border bg-white overflow-hidden', completed ? 'border-green-200' : late ? 'border-red-200' : 'border-gray-200')}>
             <div className={clsx('px-4 py-3 border-b', completed ? 'bg-green-50/50 border-green-100' : 'bg-gray-50/70 border-gray-100')}>
@@ -257,6 +279,23 @@ export function TaskGroups({
                       disabled={!!busyId}
                       className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-brand-700 border border-brand-200 bg-white rounded-lg hover:bg-brand-50">
                       <RotateCcw size={12} /> Reopen
+                    </button>
+                  )}
+                  {/* Billable is per task; this sets every task in the group at once. Anybody on
+                      the client may — the server checks, and re-marks the time already logged. */}
+                  {!locked && list.length > 0 && (
+                    <button
+                      onClick={() => setGroupBilling(g, billing === 'NONE', list.length)}
+                      disabled={!!busyId}
+                      title={billing === 'NONE' ? 'Every task here is non-billable — click to make them all billable'
+                        : billing === 'SOME' ? `${nonBillable} of ${list.length} tasks are non-billable — click to make them all non-billable`
+                          : 'Every task here is billable — click to make them all non-billable'}
+                      className={clsx('inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg border',
+                        billing === 'ALL' ? 'text-emerald-700 border-emerald-200 bg-white hover:bg-emerald-50'
+                          : billing === 'NONE' ? 'text-gray-600 border-gray-300 bg-gray-50 hover:bg-gray-100'
+                            : 'text-amber-700 border-amber-200 bg-white hover:bg-amber-50')}>
+                      <BadgeIndianRupee size={12} />
+                      {billing === 'ALL' ? 'Billable' : billing === 'NONE' ? 'Non-billable' : 'Partly billable'}
                     </button>
                   )}
                   {manage && (

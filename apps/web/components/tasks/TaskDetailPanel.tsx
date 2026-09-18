@@ -19,6 +19,7 @@ import { formatDate, toUtcDay, isPastDue, formatDateTimeIST } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 import { TaskStaffing } from './TaskStaffing';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { BillableToggle } from '@/components/tasks/BillableToggle';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // 'staffing' replaces the old 'assignees' tab. 'subtasks' | 'comments' | 'activity' remain in the
@@ -748,6 +749,24 @@ function TaskDetailPanelInner({
                   {task.estimatedHours != null ? `${task.estimatedHours}h` : '0h'}
                 </div>
               </div>
+
+              {/* Billable is decided per task, by anybody on its client or staffed on it. The time
+                  already logged on the task follows the switch. Team-space work never bills. */}
+              {task.projectTasks?.length ? (
+                <div>
+                  <div className="mb-1 text-gray-400">
+                    <span className="text-xs uppercase tracking-wide">Billing</span>
+                    <p className="text-[10px] leading-tight text-gray-300">time logged on it follows this</p>
+                  </div>
+                  <BillableToggle
+                    key={`${task.id}:${task.billable !== false}`}
+                    taskId={task.id}
+                    billable={task.billable !== false}
+                    disabled={readOnly}
+                    onChanged={b => emitUpdated(task.id, { ...task, billable: b })}
+                  />
+                </div>
+              ) : null}
 
               {isPastDue(task.dueDate) && !closed && (
                 <p className="text-xs text-red-600">Past its deadline — move the date forward to re-arm the overdue alert.</p>

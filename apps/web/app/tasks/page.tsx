@@ -13,6 +13,7 @@ import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYP
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
 import { FinishButton } from '@/components/tasks/TaskWork';
+import { NonBillableChip } from '@/components/tasks/BillableToggle';
 import { DaySheet } from '@/components/tasks/DaySheet';
 import { TaskStateMark } from '@/components/tasks/TaskStateMark';
 import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
@@ -330,6 +331,7 @@ export default function TasksPage() {
                     <span className={clsx('text-sm font-medium text-gray-900', closed && 'line-through text-gray-400')}>
                       {task.title}
                     </span>
+                    {task.billable === false && <NonBillableChip className="ml-2 align-middle" />}
                   </td>
                   <td className="px-4 py-3">
                     {project ? (
@@ -475,6 +477,7 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
         <div className="min-w-0 flex-1">
           <p className={clsx('text-sm font-medium leading-snug', closed ? 'line-through text-gray-400' : 'text-gray-900')}>
             {task.title}
+            {task.billable === false && <NonBillableChip className="ml-1.5 align-middle" />}
           </p>
           {project && (
             <p className="text-xs text-gray-500 mt-0.5 truncate">

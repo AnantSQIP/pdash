@@ -19,6 +19,10 @@ export const EVENTS = {
   TASK_PAUSED: 'task.paused',
   TASK_FINISHED: 'task.finished',
   TASK_REOPENED: 'task.reopened',
+  // A task (or a whole task group) marked billable / non-billable. The metadata says from → to and
+  // how many existing timesheet entries were re-marked to match.
+  TASK_BILLABLE_CHANGED: 'task.billable_changed',
+  TASKGROUP_BILLABLE_CHANGED: 'taskgroup.billable_changed',
   SUBTASK_CREATED: 'subtask.created',
   SUBTASK_UPDATED: 'subtask.updated',
   SUBTASK_CLOSED: 'subtask.closed',

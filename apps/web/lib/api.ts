@@ -231,6 +231,9 @@ export type ApiTask = {
   /** The task's single deadline; drives "overdue". Tasks have no client deadline. */
   dueDate?: string | null;
   estimatedHours?: number | null; actualHours?: number;
+  /** Whether the work is billable. Every task starts billable; time logged on it follows it. */
+  billable?: boolean;
+  billableChangedAt?: string | null;
   completionPercentage: number; workflowId?: string; currentWorkflowStatusId?: string;
   createdBy: string; createdAt: string; updatedAt: string;
   currentStatus?: WorkflowStatus;
@@ -1505,6 +1508,8 @@ export type DayPlanRow = {
   /** Hours the plan puts here for the day. 0 = not planned for it. */
   plannedHours: number;
   closed: boolean;
+  /** Whether time on this task is billable — the task decides. */
+  billable?: boolean;
   /** A closed task's finishing day — the sheet offers work finished in the last two weeks. */
   finishedOn?: string | null;
   when: 'TODAY' | 'TOMORROW' | 'OTHER';
@@ -2279,6 +2284,14 @@ export const api = {
     /** Finish the task: one click. Hours are logged separately, with Log time. */
     finishTask: (id: string, closedStatusId?: string) =>
       req<ApiTask & { settle: FinishSettle }>(`/tasks/${id}/finish`, { method: 'POST', body: JSON.stringify({ closedStatusId }) }),
+    /** Mark a task billable / non-billable; its existing time entries follow. */
+    setBillable: (id: string, billable: boolean) =>
+      req<{ id: string; billable: boolean; changed: boolean; entriesUpdated: number }>(
+        `/tasks/${id}/billable`, { method: 'PATCH', body: JSON.stringify({ billable }) }),
+    /** Every task in a task group at once. */
+    setGroupBillable: (taskListId: string, billable: boolean) =>
+      req<{ taskListId: string; billable: boolean; tasksChanged: number; entriesUpdated: number; tasksInGroup: number }>(
+        `/tasks/groups/${taskListId}/billable`, { method: 'PATCH', body: JSON.stringify({ billable }) }),
     reopenTask: (id: string, openStatusId?: string) =>
       req<{ id: string; reopenedCount: number }>(`/tasks/${id}/reopen`, { method: 'POST', body: JSON.stringify({ openStatusId }) }),
   },
