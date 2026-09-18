@@ -10,6 +10,7 @@ import { ForcePasswordReset } from './ForcePasswordReset';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { NotificationToaster } from '@/components/layout/NotificationToaster';
 import { TopBar } from './TopBar';
+import { AwayDetectionPrompt } from './AwayDetectionPrompt';
 
 const PUBLIC_ROUTES = ['/login', '/signup'];
 
@@ -98,6 +99,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <div className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">{children}</div>
       </div>
+      <AwayDetectionPrompt />
       <GlobalSearch />
       <NotificationToaster />
     </>

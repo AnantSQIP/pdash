@@ -1163,9 +1163,16 @@ export type NotificationPrefs = {
   soundEnabled: boolean;
 };
 // Effective presence for one person (computed server-side).
-export type PresenceEntry = { userId: string; status: string; statusMessage?: string | null };
+export type PresenceEntry = {
+  userId: string; status: string; statusMessage?: string | null;
+  /** For AWAY / OFFLINE: when their activity stopped ("inactive since", "last seen"). */
+  inactiveSince?: string | null;
+};
 // The signed-in user's own presence (manual choice + resolved effective).
-export type MyPresence = { status: string | null; statusMessage: string | null; statusExpiresAt: string | null; effective: string };
+export type MyPresence = {
+  status: string | null; statusMessage: string | null; statusExpiresAt: string | null; effective: string;
+  idle?: boolean; inactiveSince?: string | null;
+};
 export type MessageReaction = { emoji: string; userId: string };
 // A poll carried on its own message (message.content is the question).
 export type MessagePoll = {
@@ -2570,7 +2577,8 @@ export const api = {
   presence: {
     org: () => req<PresenceEntry[]>('/presence/org'),
     me: () => req<MyPresence>('/presence/me'),
-    heartbeat: () => req<{ ok: boolean }>('/presence/heartbeat', { method: 'POST', body: JSON.stringify({}) }),
+    /** `idle`: five minutes without keyboard or mouse — on the PC where the browser can see it. */
+    heartbeat: (idle = false) => req<{ ok: boolean }>('/presence/heartbeat', { method: 'POST', body: JSON.stringify({ idle }) }),
     setStatus: (data: { status: string; message?: string; expiryMinutes?: number }) =>
       req<MyPresence>('/presence', { method: 'POST', body: JSON.stringify(data) }),
     clearStatus: () => req<MyPresence>('/presence/clear', { method: 'POST' }),

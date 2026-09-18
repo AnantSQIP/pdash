@@ -2,12 +2,10 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, Injecta
 import { PrismaService } from '../../prisma/prisma.service';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
+import { IDLE_MS, MANUAL, inactiveSince, resolvePresence, type PresenceFacts } from './presence-rules';
 
-// Windows for deriving activity from the last heartbeat.
-const ONLINE_MS = 3 * 60_000;   // seen within 3 min → online
-const AWAY_MS = 10 * 60_000;    // seen within 10 min → away; older → offline
-// Availability values a user may set manually. OFFLINE = "appear offline".
-const MANUAL = new Set(['AVAILABLE', 'BUSY', 'DND', 'BRB', 'OFFLINE']);
+/** A meeting with no end time is taken to last this long — the calendar's own assumption. */
+const DEFAULT_MEETING_MS = 30 * 60_000;
 
 /**
  * Today, as the IST calendar day — the firm's timezone, not the server's.
@@ -22,7 +20,7 @@ function istToday(): Date {
   return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()));
 }
 
-type PresenceRow = { status: string | null; statusMessage: string | null; statusExpiresAt: Date | null; lastSeenAt: Date } | null;
+type PresenceRow = (NonNullable<PresenceFacts> & { statusMessage: string | null }) | null;
 
 @Injectable()
 export class PresenceService {
@@ -34,24 +32,31 @@ export class PresenceService {
   }
 
   /**
-   * The presence shown to others, resolved on read:
-   *   1. "Appear offline" always wins (privacy).
-   *   2. An unexpired manual status is respected WHILE the person is active.
-   *   3. Otherwise: on approved leave today → On leave; active → Available;
-   *      recently active → Away; else Offline.
+   * Who of these people is in a meeting right now, by the calendar: a MEETING that has started and
+   * not ended, which they organised or were invited to and did not decline. Timed meetings only —
+   * an all-day entry is a day's plan, not a person in a room.
    */
-  private effective(nowMs: number, p: PresenceRow, onLeave: boolean): string {
-    const age = p?.lastSeenAt ? nowMs - p.lastSeenAt.getTime() : Number.MAX_SAFE_INTEGER;
-    const active = age < ONLINE_MS;
-    const recent = age < AWAY_MS;
-    const manualValid = !!p?.status && MANUAL.has(p.status) && (!p.statusExpiresAt || p.statusExpiresAt.getTime() > nowMs);
-    const manual = manualValid ? p!.status : null;
-    if (manual === 'OFFLINE') return 'OFFLINE';
-    if (manual && active) return manual;
-    if (onLeave) return 'ON_LEAVE';
-    if (active) return 'AVAILABLE';
-    if (recent) return 'AWAY';
-    return 'OFFLINE';
+  private async inMeetingNow(organizationId: string, userIds: string[]): Promise<Set<string>> {
+    if (!userIds.length) return new Set();
+    const now = new Date();
+    const events = await this.prisma.calendarEvent.findMany({
+      where: {
+        organizationId, deletedAt: null, type: 'MEETING', allDay: false,
+        startDate: { lte: now, gt: new Date(now.getTime() - 24 * 3_600_000) },
+        OR: [
+          { endDate: { gt: now } },
+          { endDate: null, startDate: { gt: new Date(now.getTime() - DEFAULT_MEETING_MS) } },
+        ],
+      },
+      select: { createdBy: true, attendees: { select: { userId: true, response: true } } },
+    });
+    const wanted = new Set(userIds);
+    const busy = new Set<string>();
+    for (const e of events) {
+      if (wanted.has(e.createdBy)) busy.add(e.createdBy);
+      for (const a of e.attendees) if (a.response !== 'DECLINED' && wanted.has(a.userId)) busy.add(a.userId);
+    }
+    return busy;
   }
 
   private validMessage(nowMs: number, p: PresenceRow): string | null {
@@ -60,15 +65,32 @@ export class PresenceService {
     return p.statusMessage;
   }
 
-  /** Record that the actor is active right now (keeps any manual status). */
-  async heartbeat(userId: string) {
+  /**
+   * The browser is still here — and, with `idle`, whether its person has gone five minutes without
+   * touching the keyboard or mouse. Keeps any manual status.
+   *
+   * `idle` absent (a browser still running the previous build) reads as active, which is what that
+   * build meant by a heartbeat. The idle clock starts when inactivity BEGAN — five minutes before
+   * it was reported — and is not restarted by later idle heartbeats.
+   */
+  async heartbeat(userId: string, idle = false) {
     const now = new Date();
+    if (!idle) {
+      await this.prisma.presence.upsert({
+        where: { userId },
+        create: { userId, lastSeenAt: now },
+        update: { lastSeenAt: now, idleSince: null },
+      });
+      return { ok: true, idle: false };
+    }
+    const since = new Date(now.getTime() - IDLE_MS);
     await this.prisma.presence.upsert({
       where: { userId },
-      create: { userId, lastSeenAt: now },
+      create: { userId, lastSeenAt: now, idleSince: since },
       update: { lastSeenAt: now },
     });
-    return { ok: true };
+    await this.prisma.presence.updateMany({ where: { userId, idleSince: null }, data: { idleSince: since } });
+    return { ok: true, idle: true };
   }
 
   async setStatus(userId: string, data: { status: string; message?: string; expiryMinutes?: number }) {
@@ -97,20 +119,28 @@ export class PresenceService {
 
   async myPresence(userId: string) {
     const today = istToday();
-    const [p, leave] = await Promise.all([
+    const orgId = await this.orgOf(userId);
+    const [p, leave, meeting] = await Promise.all([
       this.prisma.presence.findUnique({ where: { userId } }),
       this.prisma.leaveRequest.findFirst({ where: { userId, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { id: true } }),
+      orgId ? this.inMeetingNow(orgId, [userId]) : Promise.resolve(new Set<string>()),
     ]);
     const nowMs = Date.now();
+    const effective = resolvePresence(nowMs, p, { onLeave: !!leave, inMeeting: meeting.has(userId) });
     return {
       status: p?.status ?? null,
       statusMessage: this.validMessage(nowMs, p),
       statusExpiresAt: p?.statusExpiresAt ?? null,
-      effective: this.effective(nowMs, p, !!leave),
+      effective,
+      idle: !!p?.idleSince,
+      inactiveSince: inactiveSince(effective, p),
     };
   }
 
-  /** Effective presence for every active member of the actor's org. */
+  /**
+   * Effective presence for every active member of the actor's org — readable by everyone in it.
+   * That is deliberate: who is around right now is the point of the dot.
+   */
   async orgPresence(organizationId: string) {
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
@@ -119,19 +149,22 @@ export class PresenceService {
     const ids = users.map(u => u.id);
     if (!ids.length) return [];
     const today = istToday();
-    const [pres, leaves] = await Promise.all([
+    const [pres, leaves, meeting] = await Promise.all([
       this.prisma.presence.findMany({ where: { userId: { in: ids } } }),
       this.prisma.leaveRequest.findMany({ where: { userId: { in: ids }, status: 'APPROVED', startDate: { lte: today }, endDate: { gte: today } }, select: { userId: true } }),
+      this.inMeetingNow(organizationId, ids),
     ]);
     const pByU = new Map(pres.map(p => [p.userId, p]));
     const onLeave = new Set(leaves.map(l => l.userId));
     const nowMs = Date.now();
     return ids.map(id => {
       const p = pByU.get(id) ?? null;
+      const status = resolvePresence(nowMs, p, { onLeave: onLeave.has(id), inMeeting: meeting.has(id) });
       return {
         userId: id,
-        status: this.effective(nowMs, p, onLeave.has(id)),
+        status,
         statusMessage: this.validMessage(nowMs, p),
+        inactiveSince: inactiveSince(status, p),
       };
     });
   }
@@ -145,9 +178,9 @@ class PresenceController {
   ) {}
 
   @Post('heartbeat')
-  heartbeat(@Actor() actorId: string | null) {
+  heartbeat(@Actor() actorId: string | null, @Body() body: { idle?: unknown } = {}) {
     if (!actorId) throw new ForbiddenException('Not authenticated');
-    return this.svc.heartbeat(actorId);
+    return this.svc.heartbeat(actorId, body?.idle === true);
   }
 
   @Get('me')
