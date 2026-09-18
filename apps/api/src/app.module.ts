@@ -50,6 +50,7 @@ import { TagsModule } from './modules/tags/tags.module';
 import { CompanyModule } from './modules/company/company.module';
 import { AppraisalsModule } from './modules/appraisals/appraisals.module';
 import { SequenceModule } from './common/sequence/sequence.module';
+import { CidModule } from './common/cid/cid.service';
 // CLIENTS-FLOW: commented out — the patent portal, patent IDs, client codes and the client ledger
 // (all in this one module) are switched off. See common/features.ts.
 // import { PatentsModule } from './modules/patents/patents.module';
@@ -122,6 +123,7 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     LifecycleModule,
     // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
     SequenceModule,
+    CidModule, // the CID registry + ledger — every client write that touches a CID goes through it
     // PatentsModule, // CLIENTS-FLOW: commented out
     TeamsModule,
     DealsModule,

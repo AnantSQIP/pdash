@@ -6,6 +6,42 @@ import { PERMISSIONS, ROLE_PRESETS, ALL_PERMISSION_CODES } from './permissions-c
 
 const prisma = new PrismaClient();
 
+// ── CIDs ─────────────────────────────────────────────────────────────────────────────────────
+// Every client carries a CID from the moment it exists — the database refuses a live client
+// without one — so the seed issues them the way the API does (apps/api/src/common/cid): the org
+// code made safe as a prefix (letters and digits, upper-cased: 'pdash-demo' → 'PDASHDEMO'), the
+// Indian financial year read in IST, the next serial; a registry row and a MINTED ledger event.
+const seedCidPrefix = (code: string) => code.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 16) || 'SQ';
+function seedFyLabel(instant: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric' }).formatToParts(instant);
+  const y = Number(parts.find(p => p.type === 'year')!.value);
+  const m = Number(parts.find(p => p.type === 'month')!.value);
+  const start = m >= 4 ? y : y - 1;
+  return `${String(start % 100).padStart(2, '0')}_${String((start + 1) % 100).padStart(2, '0')}`;
+}
+let seedSerial = 0;
+async function createSeedClient(org: { id: string; code: string }, data: Omit<Prisma.ProjectUncheckedCreateInput, 'code'>) {
+  const fyLabel = seedFyLabel(new Date());
+  const serial = ++seedSerial;
+  const cid = `${seedCidPrefix(org.code)}_${fyLabel}_${String(serial).padStart(3, '0')}`;
+  return prisma.$transaction(async tx => {
+    const project = await tx.project.create({ data: { ...data, code: cid, roundSeq: 1 } });
+    await tx.pidReservation.create({
+      data: {
+        organizationId: org.id, fyLabel, serial, pid: cid, generatedById: data.createdBy,
+        status: 'ATTACHED', projectId: project.id, resolvedAt: new Date(),
+      },
+    });
+    await tx.cidEvent.create({
+      data: {
+        organizationId: org.id, cid, projectId: project.id, clientTitle: project.title, type: 'MINTED',
+        toCid: cid, actorId: null, actorName: 'System (seed)', metadata: { fyLabel, serial, seeded: true },
+      },
+    });
+    return project;
+  });
+}
+
 async function main() {
   // SAFETY: this seed DELETES all data. Refuse to run against a production database
   // unless explicitly overridden, so a stray `db:seed` can never wipe live data.
@@ -40,6 +76,9 @@ async function main() {
   await prisma.taskList.deleteMany();
   await prisma.projectMember.deleteMany();
   await prisma.project.deleteMany();
+  // The CID registry and ledger describe the clients just wiped; they go with them.
+  await prisma.cidEvent.deleteMany();
+  await prisma.pidReservation.deleteMany();
   await prisma.automationRule.deleteMany();
   await prisma.workflowStatus.deleteMany();
   await prisma.workflow.deleteMany();
@@ -242,8 +281,7 @@ async function main() {
   // ══════════════════════════════════════════════════════════════════════════
   // PROJECT 1 — Prior Art & Invalidation — Wireless SEP Portfolio
   // ══════════════════════════════════════════════════════════════════════════
-  const p1 = await prisma.project.create({
-    data: {
+  const p1 = await createSeedClient(org, {
       title: 'Prior Art & Invalidation — Wireless SEP Portfolio',
       description: 'Invalidity search and claim charting against a portfolio of standard-essential patents (5G/Wi-Fi) for an IPR proceeding.',
       projectPhase: 'ACTIVE', priority: 'HIGH', completionPercentage: 62,
@@ -255,7 +293,6 @@ async function main() {
         { userId: carol.id, projectRole: 'DESIGNER'  },
         { userId: dave.id,  projectRole: 'TESTER'    },
       ]},
-    },
   });
   const gl1 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'General', isDefault: true, sequence: 0 } });
   const sl1 = await prisma.taskList.create({ data: { projectId: p1.id, name: 'Sprint 1 — Search', sequence: 1 } });
@@ -286,8 +323,7 @@ async function main() {
   // ══════════════════════════════════════════════════════════════════════════
   // PROJECT 2 — FTO Analysis — MedTech Wearable
   // ══════════════════════════════════════════════════════════════════════════
-  const p2 = await prisma.project.create({
-    data: {
+  const p2 = await createSeedClient(org, {
       title: 'FTO Analysis — MedTech Wearable',
       description: 'Freedom-to-operate study for a continuous glucose-monitoring wearable ahead of US/EU launch.',
       projectPhase: 'ACTIVE', priority: 'CRITICAL', completionPercentage: 18,
@@ -299,7 +335,6 @@ async function main() {
         { userId: dave.id,  projectRole: 'TESTER'    },
         { userId: alice.id, projectRole: 'REVIEWER'  },
       ]},
-    },
   });
   const gl2 = await prisma.taskList.create({ data: { projectId: p2.id, name: 'General', isDefault: true, sequence: 0 } });
   const sl3 = await prisma.taskList.create({ data: { projectId: p2.id, name: 'Scoping Sprint', sequence: 1 } });
@@ -325,8 +360,7 @@ async function main() {
   // ══════════════════════════════════════════════════════════════════════════
   // PROJECT 3 — Patent Drafting — AI Accelerator Chipset
   // ══════════════════════════════════════════════════════════════════════════
-  const p3 = await prisma.project.create({
-    data: {
+  const p3 = await createSeedClient(org, {
       title: 'Patent Drafting — AI Accelerator Chipset',
       description: 'Drafting and prosecuting a family of patent applications covering a novel AI inference accelerator architecture.',
       projectPhase: 'ACTIVE', priority: 'HIGH', completionPercentage: 35,
@@ -338,7 +372,6 @@ async function main() {
         { userId: alice.id, projectRole: 'REVIEWER'  },
         { userId: dave.id,  projectRole: 'TESTER'    },
       ]},
-    },
   });
   const gl3 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Backlog', isDefault: true, sequence: 0 } });
   const sl4 = await prisma.taskList.create({ data: { projectId: p3.id, name: 'Sprint A — Drafting', sequence: 1 } });
@@ -364,8 +397,7 @@ async function main() {
   // ══════════════════════════════════════════════════════════════════════════
   // PROJECT 4 — Trademark Watch & Filing — Q3 Brand Portfolio
   // ══════════════════════════════════════════════════════════════════════════
-  const p4 = await prisma.project.create({
-    data: {
+  const p4 = await createSeedClient(org, {
       title: 'Trademark Watch & Filing — Q3 Brand Portfolio',
       description: 'Trademark clearance, watch service, and new filings across US/EU/IN for a client’s Q3 brand launches.',
       projectPhase: 'ACTIVE', priority: 'MEDIUM', completionPercentage: 55,
@@ -376,7 +408,6 @@ async function main() {
         { userId: carol.id, projectRole: 'DESIGNER' },
         { userId: admin.id, projectRole: 'REVIEWER' },
       ]},
-    },
   });
   const gl4 = await prisma.taskList.create({ data: { projectId: p4.id, name: 'Filings', isDefault: true, sequence: 0 } });
 
@@ -397,8 +428,7 @@ async function main() {
   // ══════════════════════════════════════════════════════════════════════════
   // PROJECT 5 — Patent Landscape — EV Battery Chemistry
   // ══════════════════════════════════════════════════════════════════════════
-  const p5 = await prisma.project.create({
-    data: {
+  const p5 = await createSeedClient(org, {
       title: 'Patent Landscape — EV Battery Chemistry',
       description: 'Technology landscape and white-space analysis of solid-state and Li-metal battery chemistry patents for R&D strategy.',
       projectPhase: 'ON_HOLD', priority: 'MEDIUM', completionPercentage: 20,
@@ -408,7 +438,6 @@ async function main() {
         { userId: admin.id, projectRole: 'MANAGER'   },
         { userId: bob.id,   projectRole: 'DEVELOPER' },
       ]},
-    },
   });
   const gl5 = await prisma.taskList.create({ data: { projectId: p5.id, name: 'Landscape Tasks', isDefault: true, sequence: 0 } });
 

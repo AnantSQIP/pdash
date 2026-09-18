@@ -668,13 +668,17 @@ model WorkflowTransition {
 
 model Project {
   id                      String    @id @default(cuid())
-  // Human project code = the PID "SQ_<FY>_<serial>" (e.g. SQ_26_27_001). Also matched by
-  // global search. Backfilled for legacy rows, then always set on new projects.
+  // The client's CID (Client ID, formerly "PID"): "<PREFIX>_<FY>_<serial>", e.g. SQ_26_27_001.
+  // The column keeps its historical name `code`; everything a person sees calls it the CID.
   //
-  // NOT unique. A returning client keeps the same PID, and each new piece of work for them is a
-  // new Project row sharing that code — so one PID groups many projects ("rounds"). PID
-  // uniqueness itself is still enforced where it belongs, on PidReservation(organizationId, pid);
-  // the reservation remains the single authority for which serials exist.
+  // MINTED AUTOMATICALLY, in the same transaction that creates the client (CidService.mintInTx),
+  // so a live client can never be without one — a CHECK constraint in the migration
+  // 20261020120000_cid_auto_mint_and_ledger enforces it: `deletedAt IS NOT NULL OR code IS NOT NULL`.
+  //
+  // NOT unique. A returning client may keep the same CID for another piece of work (a "round"), so
+  // one CID can group several client rows. CID uniqueness itself is enforced where it belongs, on
+  // PidReservation(organizationId, pid) — the CID registry — which is the single authority for
+  // which numbers have ever been issued.
   code                    String?
   // Which round this project is under its PID: 1 for the first, 2 for the next, and so on.
   // Always 1 for a single-round (Gurgaon) project.
@@ -749,7 +753,6 @@ model Project {
   clientGroup        ClientGroup?        @relation(fields: [clientGroupId], references: [id], onDelete: SetNull)
   patents            ProjectPatent[]
   timesheets         Timesheet[]
-  pidRequests        PidRequest[]
 
   @@index([deletedAt])
   @@index([clientId])
@@ -929,8 +932,10 @@ model ProjectPatent {
   @@map("project_patent")
 }
 
-// Atomic, gap-tolerant serial allocator (PIDs + patent handles). One row per scope,
-// incremented via INSERT … ON CONFLICT … RETURNING so concurrent creates never collide.
+// Atomic, gap-tolerant serial allocator for patent handles. One row per scope, incremented via
+// INSERT … ON CONFLICT … RETURNING so concurrent creates never collide. (CIDs are NOT allocated
+// here — CidService locks and reads the CID registry — but a legacy "pid:<org>:<fy>" row, if one
+// exists, is still honoured as a floor so no number it once handed out can come back.)
 model SequenceCounter {
   scope String @id
   value Int    @default(0)
@@ -938,64 +943,45 @@ model SequenceCounter {
   @@map("sequence_counter")
 }
 
-// A request to have a PID minted for a PID-pending client (project.code = null) — or, since the
-// CLIENTS-FLOW PID rework, to have a client's PID CHANGED (kind CHANGE).
+
+// THE CID REGISTRY — one row per Client ID ever issued in an organisation. The table and model
+// keep their historical names (pid_reservation / PidReservation: CIDs were called PIDs until the
+// clients flow), but every screen and message calls the number a CID.
 //
-// Every PID authority in the organisation sees every open request and any of them may resolve it
-// (the pool). assigneeId is now only WHO TO ASK FIRST — optional, told straight away. A client
-// may have many requests over its life (history is kept), but at most ONE open at a time: a
-// partial unique index on (projectId) WHERE status = 'PENDING' in the migration.
-// requestedById / assigneeId / resolvedById are plain user ids (same convention as Project.createdBy).
-model PidRequest {
-  id             String    @id @default(cuid())
-  organizationId String
-  projectId      String
-  requestedById  String
-  assigneeId     String? // who to ask first; null = every authority
-  status         String    @default("PENDING") // PENDING | FULFILLED | CANCELLED | DECLINED
-  kind           String    @default("NEW") // NEW (mint one) | CHANGE (correct the one it has)
-  reason         String? // why a change is asked for
-  suggestedPid   String? // the number the requester believes is right (CHANGE only)
-  pid            String? // the minted PID, once fulfilled
-  note           String?
-  remindedAt     DateTime? // last time every authority was reminded
-  reminderCount  Int       @default(0)
-  resolvedById   String?
-  resolutionNote String? // e.g. why a change was declined
-  createdAt      DateTime  @default(now())
-  resolvedAt     DateTime?
-
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  @@index([projectId])
-  @@index([assigneeId, status])
-  @@index([requestedById])
-  @@index([organizationId, status])
-  @@map("pid_request")
-}
-
-// Every Project ID an authority generates. The lifecycle enforces the 5-minute allocation
-// window, the "one un-attached PID per user" rule, serial reclaim vs. discontinuation, and
-// the discontinue-on-close rule — with a full, auditable history for admins.
+// A number is issued exactly once, by CidService.mintInTx inside the transaction that creates the
+// client, under a transaction-scoped advisory lock; the UNIQUE (organizationId, pid) index is the
+// backstop. Rows are never deleted by the application — a retired number stays here forever, which
+// is what guarantees it is never issued again.
 //
-// status:
-//   RESERVED     — generated, un-attached, inside the 5-min window (blocks the serial + the user)
-//   ATTACHED     — attached to a project (a "working" PID; blocks the serial)
-//   RELEASED     — manually given back within 1 min; serial is RECLAIMABLE (reused next)
-//   EXPIRED      — auto-expired after 5 min unattached; serial is RECLAIMABLE
-//   DISCONTINUED — permanently retired (a higher serial was live at release/expiry, OR its
-//                  attached project was closed); the serial is NEVER reused (a permanent gap)
+// status (a CHECK constraint in the migration holds the list):
+//   ATTACHED     — at least one live client carries this CID.
+//   DELETED      — only soft-deleted clients carry it (they sit in Admin → Data, restorable). The
+//                  number stays reserved to them.
+//   PURGED       — every client that carried it has been permanently deleted. Retired forever.
+//   MERGED       — its client was merged under another CID; `mergedIntoCid` names the survivor.
+//                  Retired forever.
+//   DISCONTINUED — vacated by a Change CID reassign/split, or retired before the ledger existed.
+//                  Retired forever.
+//
+// What happened to each number, and when, and by whom, is in CidEvent (cid_event).
 model PidReservation {
   id             String    @id @default(cuid())
   organizationId String
   fyLabel        String
   serial         Int
+  /// The CID itself, e.g. SQ_26_27_001.
   pid            String
+  /// Who caused the number to be issued (the client's creator; "system" for seeded rows).
   generatedById  String
-  status         String    @default("RESERVED")
+  status         String    @default("ATTACHED")
+  /// The client this number points at: the newest live round (or the newest deleted one while
+  /// status is DELETED). Null once nothing carries it.
   projectId      String?
+  /// Set only when status is MERGED: the CID its client moved under.
+  mergedIntoCid  String?
   createdAt      DateTime  @default(now())
-  expiresAt      DateTime
+  /// Legacy: the end of the old 5-minute generation hold. Unused since CIDs are minted on create.
+  expiresAt      DateTime?
   resolvedAt     DateTime?
 
   @@unique([organizationId, pid])
@@ -1003,6 +989,44 @@ model PidReservation {
   @@index([generatedById, status])
   @@index([projectId])
   @@map("pid_reservation")
+}
+
+// THE CID LEDGER — an append-only record of everything that ever happened to a client's CID or to
+// the client under it: minted, backfilled, renamed, re-grouped, manager changed, phase changed,
+// deleted, restored, completed, reopened, re-initialized, reassigned, split, merged, purged.
+//
+// Written in the SAME transaction as the change it records, so the ledger and the data cannot
+// disagree. Snapshots (client title, actor name) are copied in, and `projectId` is a plain string
+// with NO foreign key, so a row outlives a permanently deleted client — which is the point: the
+// ledger is where a purged client is still visible. A trigger in the migration refuses UPDATEs.
+model CidEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  /// The CID the event is filed under (for a move: the CID the client ends up with).
+  cid            String
+  /// The client row it concerns. No FK: survives a permanent delete.
+  projectId      String?
+  /// The client's title when the event happened.
+  clientTitle    String?
+  /// MINTED | BACKFILLED | IMPORTED | ROUND_ADDED | RENAMED | CLIENT_GROUP_CHANGED |
+  /// MANAGER_CHANGED | PHASE_CHANGED | DELETED | RESTORED | COMPLETED | REOPENED | REINITIALIZED |
+  /// REASSIGNED | SPLIT | MERGED | PURGED  (CHECK constraint in the migration)
+  type           String
+  fromCid        String?
+  toCid          String?
+  fromTitle      String?
+  toTitle        String?
+  /// Null for the system (migration backfill, seed).
+  actorId        String?
+  actorName      String?
+  /// Whatever else the change carried: from/to group, from/to manager, phase before, hours at purge…
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, cid, createdAt])
+  @@index([projectId])
+  @@index([organizationId, createdAt])
+  @@map("cid_event")
 }
 
 // A custom project-type template saved by an Admin/Manager/PM — org-wide, reusable by anyone.
