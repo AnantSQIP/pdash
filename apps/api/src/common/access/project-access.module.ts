@@ -18,6 +18,15 @@ import { PermissionService } from '../../modules/permissions/permission.service'
  * Everyone else is denied. Reads and writes use the SAME rule; the permission decorator
  * still gates the action type on top of it.
  */
+/**
+ * How a caller is acting. `oversight: true` says the caller has ALREADY been authorised to act on
+ * every matter in its organisation by some other means — the Team Capacity routes, whose
+ * capacity.manage permission is exactly "assign anyone to anything, any time". It widens WHICH
+ * matters the actor may touch to the whole organisation, the way project.approve does; it never
+ * crosses the tenant boundary, and it changes nothing about what may be done to them.
+ */
+export interface AccessOpts { oversight?: boolean }
+
 @Global()
 @Injectable()
 export class ProjectAccessService {
@@ -76,15 +85,15 @@ export class ProjectAccessService {
     return !actor || actor.organizationId === projectOrg;
   }
 
-  async canAccessProject(actorId: string, projectId: string): Promise<boolean> {
-    if (await this.hasOversight(actorId)) return this.withinTenant(actorId, await this.projectOrg(projectId));
+  async canAccessProject(actorId: string, projectId: string, opts: AccessOpts = {}): Promise<boolean> {
+    if (opts.oversight || await this.hasOversight(actorId)) return this.withinTenant(actorId, await this.projectOrg(projectId));
     // A member is same-org by construction (addMember validates org), so no extra tenant check.
     return this.isMember(actorId, projectId);
   }
 
-  async assertProjectAccess(actorId: string | null, projectId: string): Promise<void> {
+  async assertProjectAccess(actorId: string | null, projectId: string, opts: AccessOpts = {}): Promise<void> {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
-    if (!(await this.canAccessProject(actorId, projectId))) {
+    if (!(await this.canAccessProject(actorId, projectId, opts))) {
       throw new ForbiddenException('You do not have access to this client.');
     }
   }
@@ -101,9 +110,9 @@ export class ProjectAccessService {
   }
 
   /** Access to a task via the project(s) it is linked to (ProjectTask join). */
-  async canAccessTask(actorId: string, taskId: string): Promise<boolean> {
+  async canAccessTask(actorId: string, taskId: string, opts: AccessOpts = {}): Promise<boolean> {
     const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
-    if (await this.hasOversight(actorId)) {
+    if (opts.oversight || await this.hasOversight(actorId)) {
       // Oversight is still bounded to the actor's own org — check each linked project's tenant.
       for (const l of links) {
         if (await this.withinTenant(actorId, await this.projectOrg(l.projectId))) return true;
@@ -116,9 +125,9 @@ export class ProjectAccessService {
     return false;
   }
 
-  async assertTaskAccess(actorId: string | null, taskId: string): Promise<void> {
+  async assertTaskAccess(actorId: string | null, taskId: string, opts: AccessOpts = {}): Promise<void> {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
-    if (!(await this.canAccessTask(actorId, taskId))) {
+    if (!(await this.canAccessTask(actorId, taskId, opts))) {
       throw new ForbiddenException('You do not have access to this task.');
     }
   }
