@@ -200,6 +200,25 @@ check('Admin is everything else bar deleting a role',
 check('Super Admin is stored as the implicit-all sentinel, not as a list',
   ROLE_PRESETS['Super Admin'], '*');
 
+// ── Team Capacity: Senior Consultant and above, and nobody else ────────────
+// Owner, Sep 2026: "the Team Capacity module is only visible to [people whose role is above or
+// equal to Senior Consultant]", and those same people get task CRUD from it (capacity.manage).
+// HR is people-ops, not the delivery ladder, and is deliberately left out.
+const holds = (role: string, c: string) => {
+  const p = ROLE_PRESETS[role];
+  return p === '*' || (p as string[]).includes(c);
+};
+const LADDER = ['Super Admin', 'Admin', 'Manager', 'Senior Consultant'];
+const BELOW = ['Consultant', 'Senior Research Associate', 'HR', 'Business Development', 'Employee'];
+check('capacity.manage is a real, grantable code', ALL_PERMISSION_CODES.includes('capacity.manage'), true);
+check('it reads as what it hands out', CODE_NOTES['capacity.manage']?.includes('Create, edit, assign and delete'), true);
+check('the ladder sees the board', LADDER.map(r => holds(r, 'capacity.view')), [true, true, true, true]);
+check('…and manages tasks from it', LADDER.map(r => holds(r, 'capacity.manage')), [true, true, true, true]);
+check('nobody below Senior Consultant sees the board — HR included',
+  BELOW.map(r => holds(r, 'capacity.view')), [false, false, false, false, false]);
+check('…or manages tasks from it', BELOW.map(r => holds(r, 'capacity.manage')), [false, false, false, false, false]);
+check('every preset is accounted for by the two lists', Object.keys(ROLE_PRESETS).sort(), [...LADDER, ...BELOW].sort());
+
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length) {
   console.error(`\n✗ ${failures.length} failed, ${passed} passed\n`);

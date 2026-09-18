@@ -91,8 +91,12 @@ async function main() {
   const employeeRole    = await prisma.role.create({ data: { id: 'role-employee',   organizationId: org.id, name: 'Employee',    description: 'Team member' } });
 
   // ─── Permission catalog + Role→Permission presets ───────────────────────────
+  // skipDuplicates: a migration may already have written a code (20261021090000_capacity_access
+  // inserts capacity.manage so a deployed database gets it without a regrant). Migrations run
+  // before the seed on a fresh database, and a duplicate code would otherwise abort the seed.
   await prisma.permission.createMany({
     data: PERMISSIONS.map(p => ({ code: p.code, name: p.name, description: p.description })),
+    skipDuplicates: true,
   });
   const allPerms = await prisma.permission.findMany();
   const permIdByCode = new Map(allPerms.map(p => [p.code, p.id]));
