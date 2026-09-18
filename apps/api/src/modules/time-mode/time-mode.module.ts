@@ -54,16 +54,25 @@ export class TimeModeService {
     private readonly events: EventService,
   ) {}
 
-  async modeOf(organizationId: string): Promise<TimeTrackingMode> {
+  /**
+   * CLIENTS FLOW: time is recorded ONE way — Finish / Reopen on the task and a Log time sheet for
+   * the day. The stopwatch was retired (owner's decision, Sep 2026), so every guard that asks
+   * "which flow is this?" gets the same answer without a database read. The organisation column
+   * is kept, and migrated to MANUAL, only so the switch history keeps reading correctly.
+   */
+  async modeOf(_organizationId: string): Promise<TimeTrackingMode> {
+    return 'MANUAL';
+  }
+
+  /** What the organisation row still says — only the one-off settlement of a legacy TIMER org reads it. */
+  private async storedModeOf(organizationId: string): Promise<TimeTrackingMode> {
     const hit = this.cache.get(organizationId);
     if (hit && Date.now() - hit.at < TimeModeService.TTL_MS) return hit.mode;
     const org = await this.prisma.organization.findUnique({
       where: { id: organizationId },
       select: { timeTrackingMode: true },
     });
-    // An unknown value means somebody wrote to the column by hand. Falling back to TIMER keeps a
-    // working product rather than an org that cannot record time at all.
-    const mode: TimeTrackingMode = org?.timeTrackingMode === 'MANUAL' ? 'MANUAL' : 'TIMER';
+    const mode: TimeTrackingMode = org?.timeTrackingMode === 'TIMER' ? 'TIMER' : 'MANUAL';
     this.cache.set(organizationId, { mode, at: Date.now() });
     return mode;
   }
@@ -81,7 +90,7 @@ export class TimeModeService {
   async assertTimerFlow(organizationId: string): Promise<void> {
     if (await this.isTimer(organizationId)) return;
     throw new ForbiddenException(
-      'This organisation records time by filling in the day, not with a timer. Finish the task when it is done, and log your hours from My Tasks.',
+      'There is no timer any more. Finish the task when it is done, and log your hours from My Tasks with Log time.',
     );
   }
 
@@ -98,9 +107,16 @@ export class TimeModeService {
     note?: string,
   ): Promise<{ from: TimeTrackingMode; to: TimeTrackingMode; timersClosed: number; minutesClosed: number; changed: boolean }> {
     if (!TIME_TRACKING_MODES.includes(toMode)) {
-      throw new BadRequestException('Time can be recorded either with a timer (TIMER) or by filling in the day (MANUAL).');
+      throw new BadRequestException('Time is recorded by logging it (MANUAL).');
     }
-    const from = await this.modeOf(organizationId);
+    if (toMode === 'TIMER') {
+      throw new BadRequestException(
+        'The timer has been retired. Tasks are finished or reopened, and hours are logged from My Tasks with Log time.',
+      );
+    }
+    // What the row says, not what modeOf answers: settling a legacy TIMER org still has to close
+    // its running clocks and record the switch.
+    const from = await this.storedModeOf(organizationId);
     if (from === toMode) {
       // Not an error — an admin confirming the mode it is already in has got what they asked for.
       return { from, to: toMode, timersClosed: 0, minutesClosed: 0, changed: false };

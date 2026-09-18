@@ -3,12 +3,15 @@
  *
  *   node tools/time-mode-gaps.e2e.mjs      # expects the API on :4011, a SCRATCH database
  *
- * The first suite tested the feature as an administrator, on the happy paths, one request at a
- * time. That is the shape of test that passes while a product is quietly broken for everybody who
- * is not an administrator, or who does two things at once. These are the rest.
+ * The first suite (manual-time.e2e.mjs) tested the flow as an administrator, on the happy paths,
+ * one request at a time. That is the shape of test that passes while a product is quietly broken
+ * for everybody who is not an administrator, or who does two things at once. These are the rest.
+ *
+ * CLIENTS FLOW: the stopwatch was retired, so what used to be "TIMER vs MANUAL" is now "the timer
+ * is gone for everybody": the parts about switching mid-clock became checks that it stays gone.
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:4011';
-const PASSCODE = process.env.PASSCODE || 'mode-e2e-Q7rk-2026';
+const PASSCODE = process.env.PASSCODE || 'cf-scratch-7713';
 const ADMIN = 'mohit@squarkip.com';
 const STAFF = 'divyanshu.saxena@squarkip.com'; // Employee with real work — the ordinary case
 const PW = 'sqip@1234';
@@ -53,7 +56,6 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   const staffHistory = await staff(`/organizations/${org.id}/time-mode/history`);
   ok('cannot read the switch log either', staffHistory.status === 403, `status ${staffHistory.status}`);
 
-  await setMode('MANUAL');
   const staffTasks = ((await staff(`/tasks?userId=${STAFF_ID}`)).data ?? []).filter(t => t.currentStatus?.type !== 'CLOSED');
   ok('has tasks to work with', staffTasks.length > 0, `${staffTasks.length} open tasks`);
   let staffTaskId = null;
@@ -61,7 +63,7 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
     const S = staffTasks[0];
     staffTaskId = S.id;
     const blocked = await staff(`/tasks/${S.id}/start`, { method: 'POST' });
-    eq('is refused a stopwatch, exactly as an administrator is', blocked.status, 403);
+    eq('has no stopwatch either, exactly as an administrator has none', blocked.status, 404);
     // The duplicate guard refuses the same task, day AND duration — including the row this
     // suite wrote last time it ran. Clear it, so the assertion is about the day sheet.
     for (const t of ((await staff(`/timesheets?userId=${STAFF_ID}`)).data ?? [])
@@ -83,7 +85,6 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
 
   // ── provenance now covers BOTH flows, not just one ───────────────────────
   console.log('\n— every new row says which flow wrote it —');
-  await setMode('TIMER');
   const adminMe = (await admin('/auth/me')).data; const ADMIN_ID = adminMe.user?.id ?? adminMe.id;
   const mine = ((await admin(`/tasks?userId=${ADMIN_ID}`)).data ?? []).filter(t => t.currentStatus?.type !== 'CLOSED');
   const A = mine[0];
@@ -96,12 +97,10 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
     await admin(`/timesheets/${t.id}`, { method: 'DELETE' });
   }
   const typed = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 0.25, notes: 'typed' } });
-  // Deliberately NULL. Labelling every entry would have meant editing the stopwatch flow, which
-  // the owner asked to be left exactly as it was — so only the day sheet, which is the manual
-  // flow's own screen, stamps what it writes.
+  // Only the day sheet stamps what it writes; a bare entry from another screen stays unlabelled.
   eq('an entry with nothing said about it stays unlabelled, as it always was', typed.data?.source, null);
-  const clocked = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 0.75, notes: 'clocked', source: 'TIMER' } });
-  eq('but a caller that states its provenance is recorded', clocked.data?.source, 'TIMER');
+  const stated = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 0.75, notes: 'stated', source: 'MANUAL' } });
+  eq('but a caller that states its provenance is recorded', stated.data?.source, 'MANUAL');
   const bogus = await admin('/timesheets', { method: 'POST', body: { taskId: A.id, date: today(), hoursLogged: 1.75, source: 'NONSENSE' } });
   eq('an invented provenance is refused', bogus.status, 400);
 
@@ -135,26 +134,19 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
      afterCount - beforeCount === both.filter(r => (r.data?.savedCount ?? 0) > 0).reduce((s, r) => s + r.data.savedCount, 0),
      `added ${afterCount - beforeCount}, reported ${both.map(r => r.data?.savedCount).join('+')}`);
 
-  // ── what a person mid-clock experiences when the firm switches ───────────
-  console.log('\n— somebody with a clock running when the admin switches —');
-  await setMode('TIMER');
-  await admin(`/tasks/${A.id}/start`, { method: 'POST' });
-  const runBefore = ((await admin('/tasks/timer/running')).data ?? []).length;
-  ok('their clock is running', runBefore >= 1, `${runBefore} running`);
-  const sw = await setMode('MANUAL');
-  const runAfter = ((await admin('/tasks/timer/running')).data ?? []).length;
-  eq('it is stopped for them, not left to grow', runAfter, 0);
-  ok('and the minutes were kept, not thrown away', (sw.data?.timersClosed ?? 0) >= 1, JSON.stringify(sw.data));
-  const stalePause = await admin(`/tasks/${A.id}/pause`, { method: 'POST' });
-  ok('their stale tab pressing Pause gets an answer, not an error', stalePause.status === 200 || stalePause.status === 201, `status ${stalePause.status}`);
-  const staleStart = await admin(`/tasks/${A.id}/start`, { method: 'POST' });
-  eq('their stale tab pressing Start is told plainly', staleStart.status, 403);
+  // ── the timer stays gone ─────────────────────────────────────────────────
+  console.log('\n— the timer cannot be brought back —');
+  const back = await setMode('TIMER');
+  eq('an administrator cannot switch the timer back on', back.status, 400);
+  eq('a stale tab pressing Start finds nothing there', (await admin(`/tasks/${A.id}/start`, { method: 'POST' })).status, 404);
+  eq('nor Pause', (await admin(`/tasks/${A.id}/pause`, { method: 'POST' })).status, 404);
+  eq('and the firm is still logging time by hand', ((await admin('/organizations')).data ?? []).find(o => o.id === org.id)?.timeTrackingMode, 'MANUAL');
 
   // ── performance and reports across a switch ──────────────────────────────
-  console.log('\n— reports spanning a switch —');
+  console.log('\n— reports over logged time —');
   const perf = await admin(`/performance/users/${ADMIN_ID}?days=30`);
   ok('a person\'s performance still computes', perf.status === 200, `status ${perf.status} ${msg(perf).slice(0, 120)}`);
-  ok('and counts hours logged under BOTH flows', (perf.data?.kpis?.hoursLogged ?? 0) > 0, `hoursLogged=${perf.data?.kpis?.hoursLogged}`);
+  ok('and counts the hours logged', (perf.data?.kpis?.hoursLogged ?? 0) > 0, `hoursLogged=${perf.data?.kpis?.hoursLogged}`);
   const orgPerf = await admin('/performance/org?days=30');
   ok('the organisation view still computes', orgPerf.status === 200, `status ${orgPerf.status}`);
   const cal = await admin(`/timesheets/calendar?year=${new Date().getUTCFullYear()}&month=${new Date().getUTCMonth() + 1}`);
@@ -177,11 +169,9 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   eq('and no tracked tasks to list', (pday.tracked ?? []).length, 0);
   ok('while still measuring the day itself', (pday.target ?? 0) > 0, JSON.stringify({ target: pday.target, logged: pday.logged }));
 
-  const gate = await admin('/tasks/timer/today');
-  ok('the day status still answers', gate.status === 200, `status ${gate.status}`);
-  eq('with nothing on the clock', gate.data?.trackedMinutes ?? 0, 0);
-
-  await setMode('TIMER');
+  const sheet = await admin(`/capacity/my-plan?date=${today()}`);
+  ok('the Log time sheet answers', sheet.status === 200, `status ${sheet.status}`);
+  ok('and measures the day it is for', (sheet.data?.target ?? 0) > 0, JSON.stringify({ target: sheet.data?.target, logged: sheet.data?.logged }));
 
   // ── cover is visible on the board, not merely computed ───────────────────
   //
@@ -228,8 +218,6 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
     ok('and clears the marking', !restored?.coveredAway, JSON.stringify({ coveredAway: restored?.coveredAway }));
     await admin(`/tasks/${ct.data.id}`, { method: 'DELETE' });
   }
-
-  await setMode('TIMER');
 
   console.log(`\n${fails.length ? '✗' : '✓'} ${passed} passed, ${fails.length} failed\n`);
   fails.forEach(f => console.error('  ✗ ' + f + '\n'));

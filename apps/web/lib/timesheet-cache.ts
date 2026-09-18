@@ -19,11 +19,12 @@ export const TIMESHEET_INVALIDATES = [
   'timesheets',           // per-project Timesheets tab
   'ts-backdates-mine',    // backfill approvals (an entry in a locked window)
   'ts-backdates-pending',
-  'running-timer',        // the My Tasks clock
   'closing-summary',      // the close dialog's "already logged" hint
   'capacity-history',     // the past-30-days board infers presence from logged days
   'coverage-risks',       // remaining hours on at-risk tasks
   'perf-me',              // performance: hours logged
+  'my-plan',              // the Log time sheet: hours already logged per task
+  'catch-up',             // short days on the catch-up banner
   ...TASK_INVALIDATES,    // tasks-me, task lists, project progress, capacity, analytics, activity
 ] as const;
 

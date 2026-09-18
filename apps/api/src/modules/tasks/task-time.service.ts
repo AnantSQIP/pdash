@@ -609,15 +609,29 @@ export class TaskTimeService {
     // always had. Its own Reopen button passes an explicit status, so it never relied on this;
     // the manual flow's does not, and there Reopen is one of only two things a person can do.
     const landing = openStatusId ?? (await this.manualFlow(taskId) ? await this.openStatusFor(taskId) : undefined);
-    const updated = await this.prisma.task.update({
-      where: { id: taskId },
-      data: {
-        completedAt: null,
-        reopenedCount: { increment: 1 },
-        completionPercentage: 99,
-        ...(landing ? { currentWorkflowStatusId: landing } : {}),
-      },
-      select: { id: true, reopenedCount: true, completedAt: true },
+    // Check-and-reopen under a row lock. Reopen is one of only two buttons a task has, so a double
+    // click, two tabs, or two colleagues pressing it together is ordinary — and without the lock
+    // every one of them passed the "is it closed?" test before any had written, so ten presses
+    // recorded ten reopenings of one task. The loser of the race is told it is already open.
+    const updated = await this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "task" WHERE "id" = ${taskId} FOR UPDATE`;
+      const now = await tx.task.findUnique({
+        where: { id: taskId },
+        select: { completedAt: true, currentStatus: { select: { type: true } } },
+      });
+      if (!now || !(now.completedAt || now.currentStatus?.type === 'CLOSED')) {
+        throw new BadRequestException('That task is not closed.');
+      }
+      return tx.task.update({
+        where: { id: taskId },
+        data: {
+          completedAt: null,
+          reopenedCount: { increment: 1 },
+          completionPercentage: 99,
+          ...(landing ? { currentWorkflowStatusId: landing } : {}),
+        },
+        select: { id: true, reopenedCount: true, completedAt: true },
+      });
     });
     // This path writes the task row directly rather than going through setStatus, so without
     // this the reopen left no trace at all — the count went up and nothing said who did it.

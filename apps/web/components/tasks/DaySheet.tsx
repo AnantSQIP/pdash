@@ -46,13 +46,15 @@ type PlanRow = DayPlanRow & { taskGroup?: string | null };
  * things that are genuinely impossible (a task you are not staffed on, a closed matter, the 16h
  * cap, the backdating window) are refused by the server whatever this file believes.
  */
-export function DaySheet({ onClose, onSaved }: {
+export function DaySheet({ onClose, onSaved, initialDate }: {
   onClose: () => void;
   onSaved: () => void;
+  /** Open on this day instead of today — the catch-up banner and the punch-out gate use it. */
+  initialDate?: string;
 }) {
   const { toast } = useToast();
   const today = todayIST();
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(initialDate ?? today);
   const [hours, setHours] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -69,7 +71,10 @@ export function DaySheet({ onClose, onSaved }: {
   const groups = useMemo(() => ({
     TODAY: rows.filter(r => r.when === 'TODAY'),
     TOMORROW: rows.filter(r => r.when === 'TOMORROW'),
-    OTHER: rows.filter(r => r.when === 'OTHER'),
+    OTHER: rows.filter(r => r.when === 'OTHER' && !r.closed),
+    // Finished recently: Finish closes a task the moment it is done, and its hours are often
+    // logged afterwards — so the sheet keeps offering it for two weeks.
+    FINISHED: rows.filter(r => r.closed),
   }), [rows]);
 
   /** The leftovers, gathered under the client they belong to so the list reads like the work. */
@@ -92,7 +97,7 @@ export function DaySheet({ onClose, onSaved }: {
     return out;
   }, [hours]);
 
-  const warnings = useMemo(() => warningsForSheet(rows, hoursByTask), [rows, hoursByTask]);
+  const warnings = useMemo(() => warningsForSheet(rows, hoursByTask, date), [rows, hoursByTask, date]);
   const summary = useMemo(() => sheetSummary(warnings), [warnings]);
 
   const filled = rows.filter(r => (hoursByTask[r.taskId] ?? 0) > 0);
@@ -165,7 +170,9 @@ export function DaySheet({ onClose, onSaved }: {
               {r.taskGroup && <span className="text-gray-400"> · {r.taskGroup}</span>}
               {r.plannedHours > 0 && <span className="text-gray-400"> · planned {r.plannedHours}h</span>}
               {r.loggedToday > 0 && <span className="text-gray-400"> · {r.loggedToday}h already logged</span>}
-              {r.dueDate && <span className={r.overdue ? 'text-red-500' : 'text-gray-400'}> · {r.overdue ? 'overdue' : 'due'} {formatDate(r.dueDate)}</span>}
+              {r.closed
+                ? <span className="text-emerald-700"> · finished{r.finishedOn ? ` ${formatDate(r.finishedOn)}` : ''}</span>
+                : r.dueDate && <span className={r.overdue ? 'text-red-500' : 'text-gray-400'}> · {r.overdue ? 'overdue' : 'due'} {formatDate(r.dueDate)}</span>}
             </p>
           </div>
           <div className="relative w-[88px] shrink-0">
@@ -284,9 +291,13 @@ export function DaySheet({ onClose, onSaved }: {
                 </div>
               )}
 
+              <div className="mt-3">
+                <Section label="Finished recently" list={groups.FINISHED} />
+              </div>
+
               {rows.length === 0 && (
                 <p className="rounded-lg bg-gray-50 px-3 py-2.5 text-[12.5px] text-gray-500">
-                  You have no open work on a live client, so there is nothing to log against yet.
+                  You have no open or recently finished work on a live client, so there is nothing to log against yet.
                 </p>
               )}
             </>

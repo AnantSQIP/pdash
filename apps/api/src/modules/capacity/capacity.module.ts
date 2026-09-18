@@ -36,6 +36,8 @@ const LIGHT_THRESHOLD = 0.75;
 const MIN_DAYS = 5;
 const MAX_DAYS = 60;
 const DEFAULT_DAYS = 14;
+/** How far back a day sheet still offers work that was FINISHED — it may still be owed hours. */
+const FINISHED_LOOKBACK_DAYS = 14;
 
 /**
  * Coerce the `days` query parameter to a sane horizon. `parseInt('abc')` is NaN, and an
@@ -1098,9 +1100,69 @@ export class CapacityService {
         // The board only lists OPEN work, so anything here is open by construction. Carried
         // explicitly so the sheet does not have to infer it.
         closed: false,
+        finishedOn: null as string | null,
         when,
       };
     });
+
+    // Work FINISHED recently still needs its hours. Finish closes a task the moment it is done and
+    // the hours are usually logged afterwards — that evening, or the next morning — so a task
+    // that vanished from the sheet on Finish could only be logged by hunting for it elsewhere.
+    // Offered at the end, marked as finished, never planned.
+    const listed = new Set(rows.map(r => r.taskId));
+    const finished = await this.prisma.task.findMany({
+      where: {
+        deletedAt: null,
+        assignees: { some: { userId } },
+        currentStatus: { type: 'CLOSED' },
+        completedAt: { gte: addDays(day, -FINISHED_LOOKBACK_DAYS) },
+        ...(listed.size ? { id: { notIn: [...listed] } } : {}),
+      },
+      select: {
+        id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true,
+        assignees: { where: { userId }, select: { estimatedHours: true } },
+        projectTasks: {
+          take: 1,
+          select: {
+            taskList: { select: { name: true, deletedAt: true } },
+            project: { select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true, projectPhase: true } },
+          },
+        },
+        teamTasks: { take: 1, select: { team: { select: { id: true, name: true, deletedAt: true } } } },
+      },
+      orderBy: { completedAt: 'desc' },
+      take: 50,
+    });
+    for (const t of finished) {
+      const project = t.projectTasks[0]?.project;
+      const team = t.teamTasks[0]?.team;
+      // A deleted or completed client refuses time anyway; offering it would only produce a
+      // refusal after the person has typed the hours.
+      if (project && (project.deletedAt || project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED')) continue;
+      if (team?.deletedAt) continue;
+      const group = t.projectTasks[0]?.taskList;
+      const seatHours = t.assignees.reduce((s, a) => s + (a.estimatedHours ?? 0), 0);
+      rows.push({
+        taskId: t.id,
+        title: t.title,
+        projectId: project?.id ?? team?.id ?? null,
+        project: project?.title ?? team?.name ?? null,
+        taskGroup: project && group && !group.deletedAt ? group.name : null,
+        projectPid: project?.code ?? null,
+        projectRound: project?.roundSeq,
+        priority: t.priority,
+        dueDate: t.dueDate ? dayKey(t.dueDate) : null,
+        overdue: false,
+        estimatedHours: r1(seatHours || (t.estimatedHours ?? 0)),
+        remainingHours: 0,
+        loggedToday: r1(loggedByTask.get(t.id) ?? 0),
+        plannedHours: 0,
+        closed: true,
+        // The IST calendar day it was finished on — the day people mean.
+        finishedOn: t.completedAt ? dayKey(startOfIstDay(t.completedAt)) : null,
+        when: 'OTHER' as const,
+      });
+    }
 
     // Planned first, then tomorrow's, then the rest — the order somebody fills a day in.
     const rank = { TODAY: 0, TOMORROW: 1, OTHER: 2 } as const;

@@ -34,22 +34,12 @@ model Organization {
   logo                 String?
   // Hour (IST, 0–23) at which the daily admin digest is sent. Admin-editable. Default 10pm.
   digestHourIst        Int      @default(22)
-  // HOW THIS FIRM RECORDS TIME. One of two flows, switched by an admin:
-  //
-  //   TIMER  — a stopwatch per task. Start / Pause / Resume, and finishing a task settles the
-  //            clock, learns how long that kind of task takes, and files today's share to the
-  //            timesheet. What the product has always done.
-  //   MANUAL — no stopwatch anywhere. A task can only be finished or reopened, and time is
-  //            filled in once for the whole day: pick the tasks worked on, type the hours.
-  //
-  // Defaulting to TIMER is what makes this safe to ship: every existing organisation keeps the
-  // flow it already has until somebody deliberately changes it.
-  //
-  // The two flows share ONE ledger. A Timesheet row is a Timesheet row whichever produced it, so
-  // switching does not strand history and reports spanning a switch need no special case —
-  // `Timesheet.source` records which flow wrote each row, and TimeTrackingModeChange records when
-  // the firm changed its mind.
-  timeTrackingMode     String   @default("TIMER")
+  // HOW THIS FIRM RECORDS TIME. CLIENTS FLOW: always MANUAL — a task is finished or reopened and
+  // the day's hours are logged with Log time. The stopwatch (TIMER) was retired in Sep 2026
+  // (migration 20261103090000_manual_time_only closed the running clocks and moved every org);
+  // the column stays so TimeTrackingModeChange history and old TaskWorkSession rows still read
+  // correctly, and TimeModeService.modeOf answers MANUAL without consulting it.
+  timeTrackingMode     String   @default("MANUAL")
   // Step-up "big change" passcode — argon2id hash of the org-wide passcode required
   // (on top of RBAC) for sensitive org/people/RBAC mutations. Null = feature not yet
   // configured (guard is a no-op). Updatable via POST /auth/passcode.

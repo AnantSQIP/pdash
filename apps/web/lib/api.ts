@@ -897,15 +897,7 @@ export type ApiCommentPage = { items: ApiComment[]; total: number; hasMore: bool
 /** How many comments a thread loads at a time. Widening asks for one more window's worth. */
 export const COMMENT_PAGE_SIZE = 100;
 
-// ── Task timing ──────────────────────────────────────────────────────────────
-/** One running clock. A person may hold several at once. */
-export type RunningTimer = {
-  id: string; taskId: string; startedAt: string;
-  task: { id: string; title: string };
-  /** Your finished sittings on this task before the clock now running — so Resume counts on. */
-  priorMinutes: number;
-};
-
+// ── A person's day ──────────────────────────────────────────────────────────────
 /** One task's share of a day: what the clock recorded, and how much of it is filed. */
 export type TrackedTask = {
   taskId: string; title: string;
@@ -1513,6 +1505,8 @@ export type DayPlanRow = {
   /** Hours the plan puts here for the day. 0 = not planned for it. */
   plannedHours: number;
   closed: boolean;
+  /** A closed task's finishing day — the sheet offers work finished in the last two weeks. */
+  finishedOn?: string | null;
   when: 'TODAY' | 'TOMORROW' | 'OTHER';
 };
 export type DayPlan = {
@@ -1751,13 +1745,7 @@ export const api = {
     // An empty string for `logo` REMOVES it; omitting the key leaves it alone.
     update: (id: string, data: { name?: string; timezone?: string; brandColor?: string; logo?: string }) =>
       req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    /**
-     * Switch how the firm records time. Leaving the stopwatch closes every clock still running,
-     * so the reply says how many were stopped and how much they were holding.
-     */
-    setTimeMode: (id: string, mode: TimeTrackingMode, note?: string) =>
-      req<{ from: TimeTrackingMode; to: TimeTrackingMode; changed: boolean; timersClosed: number; minutesClosed: number }>(
-        `/organizations/${id}/time-mode`, { method: 'PATCH', body: JSON.stringify({ mode, note }) }),
+    /** When the firm's time flow changed (the timer was retired in Sep 2026). */
     timeModeHistory: (id: string) =>
       req<TimeModeChange[]>(`/organizations/${id}/time-mode/history`),
   },
@@ -2285,28 +2273,10 @@ export const api = {
     deleteSubtask: (taskId: string, subtaskId: string) =>
       req<void>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' }),
 
-    // ── Timing ────────────────────────────────────────────────────────────────
-    /** The task whose clock is running for me, if any. */
-    /** Every clock this person has running — several at once is allowed. */
-    runningTimers: () => req<RunningTimer[]>('/tasks/timer/running'),
-    /** Today: tracked per task, what is filed, and what the day still owes. */
-    today: () => req<DayStatus>('/tasks/timer/today'),
+    // ── Finish / Reopen (the timer was retired: time is logged, not clocked) ──────
     /** What each standard task has actually taken, per role. */
     standards: () => req<TaskStandardGroup[]>('/tasks/standards'),
-    /** Start the clock. Starting a second task stops the first — one thing at a time. */
-    startTimer: (id: string) =>
-      req<{ id: string; taskId: string; startedAt: string; resumed: boolean }>(`/tasks/${id}/start`, { method: 'POST' }),
-    /** Pause the clock. Resuming is Start again. */
-    pauseTimer: (id: string) =>
-      req<{
-        paused: boolean;
-        /** THIS sitting's minutes. */ minutes: number;
-        /** Everybody's minutes on the task. */ totalMinutes: number;
-        /** YOUR minutes on the task — the figure to quote back to the person. */ myMinutes: number;
-        todayMinutes: number;
-      }>(
-        `/tasks/${id}/pause`, { method: 'POST' }),
-    /** Finish the task: one click. The clock stops and today's tracked time is filed. */
+    /** Finish the task: one click. Hours are logged separately, with Log time. */
     finishTask: (id: string, closedStatusId?: string) =>
       req<ApiTask & { settle: FinishSettle }>(`/tasks/${id}/finish`, { method: 'POST', body: JSON.stringify({ closedStatusId }) }),
     reopenTask: (id: string, openStatusId?: string) =>

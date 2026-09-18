@@ -9,7 +9,7 @@
  * setting that closes everybody's clocks) are exactly where that goes wrong.
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:4011';
-const PASSCODE = process.env.PASSCODE || 'mode-e2e-Q7rk-2026';
+const PASSCODE = process.env.PASSCODE || 'cf-scratch-7713';
 const PW = 'sqip@1234';
 
 let passed = 0; const fails = [];
@@ -37,7 +37,6 @@ const sum = a => a.reduce((s, x) => s + x, 0);
   const meA = (await admin('/auth/me')).data; const AID = (meA.user ?? meA).id;
   const MY_ORG = (meA.user ?? meA).organizationId;
   const org = ((await admin('/organizations')).data ?? []).find(o => o.id === MY_ORG);
-  const setMode = m => admin(`/organizations/${org.id}/time-mode`, { method: 'PATCH', body: { mode: m }, passcode: PASSCODE });
 
   const mine = ((await admin(`/tasks?userId=${AID}`)).data ?? []).filter(t => t.currentStatus?.type !== 'CLOSED');
   const A = mine[0];
@@ -51,11 +50,12 @@ const sum = a => a.reduce((s, x) => s + x, 0);
   for (const t of ((await admin(`/timesheets?userId=${AID}`)).data ?? []).filter(t => String(t.date).slice(0, 10) === today())) {
     await admin(`/timesheets/${t.id}`, { method: 'DELETE' });
   }
-  const before = (await admin('/tasks/timer/today')).data?.logged ?? 0;
+  const dayLogged = async () => (await admin(`/capacity/my-plan?date=${today()}`)).data?.logged ?? 0;
+  const before = await dayLogged();
   const saves = await Promise.all(Array.from({ length: 10 }, () =>
     admin('/timesheets/day', { method: 'POST', body: { date: today(), entries: [{ taskId: A.id, hoursLogged: 2, notes: 'stampede' }] } })));
   const acceptedHours = sum(saves.filter(r => (r.data?.savedCount ?? 0) > 0).map(r => r.data.savedCount * 2));
-  const after = (await admin('/tasks/timer/today')).data?.logged ?? 0;
+  const after = await dayLogged();
 
   ok('the day cap is never breached', after <= 16.001, `day now ${after}h`);
   ok('nothing accepted went missing', Math.abs((after - before) - acceptedHours) < 0.01,
@@ -70,31 +70,24 @@ const sum = a => a.reduce((s, x) => s + x, 0);
      saves.filter(r => (r.data?.savedCount ?? 0) === 0).every(r => (r.data?.failed ?? []).every(f => !!f.message)),
      JSON.stringify(saves.find(r => (r.data?.savedCount ?? 0) === 0)?.data?.failed ?? null).slice(0, 160));
 
-  // ── one clock per person per task ────────────────────────────────────────
-  console.log('\n— ten Start presses on the same task at once —');
-  await setMode('TIMER');
-  await admin(`/tasks/${A.id}/pause`, { method: 'POST' });
-  const starts = await Promise.all(Array.from({ length: 10 }, () => admin(`/tasks/${A.id}/start`, { method: 'POST' })));
-  const running = (await admin('/tasks/timer/running')).data ?? [];
-  eq('exactly one clock is running on it, not ten', running.filter(r => r.taskId === A.id).length, 1);
-  ok('every press got an answer', starts.every(r => r.status < 500), starts.map(r => r.status).join(' '));
-  const ids = new Set(starts.filter(r => r.data?.id).map(r => r.data.id));
-  eq('and they all describe the SAME session', ids.size, 1);
-
-  // ── a mode switch landing while people are working ───────────────────────
-  console.log('\n— the admin switches while the firm is mid-request —');
-  const [sw, ...inFlight] = await Promise.all([
-    setMode('MANUAL'),
-    admin(`/tasks/${A.id}/start`, { method: 'POST' }),
-    admin('/timesheets/day', { method: 'POST', body: { date: today(), entries: [{ taskId: A.id, hoursLogged: 0.25, notes: 'mid-switch' }] } }),
-    admin('/capacity/team?days=14'),
-    admin('/tasks/timer/today'),
-  ]);
-  ok('the switch itself succeeds', sw.status < 400, `status ${sw.status}`);
-  ok('nothing in flight returned a server error', inFlight.every(r => r.status < 500),
-     inFlight.map(r => r.status).join(' '));
-  const leftRunning = (await admin('/tasks/timer/running')).data ?? [];
-  eq('and no clock survived the switch', leftRunning.length, 0);
+  // ── Finish and Reopen pressed at once ─────────────────────────────────────
+  //
+  // The timer is gone (clients flow), so the race worth having is the two buttons a task has
+  // left: ten Finish presses on one task, then ten Reopen presses. Each must end in ONE state,
+  // with no server error, and the reopen count must move by exactly one.
+  console.log('\n— ten Finish presses, then ten Reopen presses, on one task —');
+  const fins = await Promise.all(Array.from({ length: 10 }, () => admin(`/tasks/${A.id}/finish`, { method: 'POST' })));
+  ok('every Finish press got an answer, none a server error', fins.every(r => r.status < 500), fins.map(r => r.status).join(' '));
+  const closedA = (await admin(`/tasks/${A.id}`)).data;
+  ok('the task is closed once', closedA.currentStatus?.type === 'CLOSED' && !!closedA.completedAt,
+     JSON.stringify({ type: closedA.currentStatus?.type, completedAt: closedA.completedAt }));
+  const reopenedBefore = closedA.reopenedCount ?? 0;
+  const reopens = await Promise.all(Array.from({ length: 10 }, () => admin(`/tasks/${A.id}/reopen`, { method: 'POST' })));
+  ok('every Reopen press got an answer, none a server error', reopens.every(r => r.status < 500), reopens.map(r => r.status).join(' '));
+  const openA = (await admin(`/tasks/${A.id}`)).data;
+  ok('the task is open again', openA.currentStatus?.type !== 'CLOSED' && !openA.completedAt,
+     JSON.stringify({ type: openA.currentStatus?.type, completedAt: openA.completedAt }));
+  eq('and it was reopened once, not ten times', (openA.reopenedCount ?? 0) - reopenedBefore, 1);
 
   // ── the board stays coherent while being hammered ────────────────────────
   console.log('\n— twenty boards read at once —');
@@ -106,7 +99,6 @@ const sum = a => a.reduce((s, x) => s + x, 0);
   eq('and they all agree on how many people there are', shapes.size, 1);
   ok('twenty concurrent boards stay under 10s in total', ms < 10000, `${ms}ms`);
 
-  await setMode('TIMER');
   console.log(`\n${fails.length ? '✗' : '✓'} ${passed} passed, ${fails.length} failed\n`);
   fails.forEach(f => console.error('  ✗ ' + f + '\n'));
   process.exit(fails.length ? 1 : 0);
