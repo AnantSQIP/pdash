@@ -12,7 +12,7 @@
  * reopening in particular wrote the task row directly, so the count went up and nothing recorded
  * who had done it.
  */
-const BASE='http://127.0.0.1:4011';
+const BASE = process.env.BASE || 'http://127.0.0.1:4011';
 function sess(){let c='';return async(p,{method='GET',body}={})=>{const r=await fetch(BASE+'/api/v1'+p,{method,headers:{'content-type':'application/json',...(c?{cookie:c}:{})},body:body===undefined?undefined:JSON.stringify(body)});const sc=r.headers.getSetCookie?.()??[];if(sc.length)c=sc.map(x=>x.split(';')[0]).join('; ');const t=await r.text();let d=null;try{d=t?JSON.parse(t):null}catch{d=t}return{status:r.status,data:d}};}
 let pass=0;const fail=[];
 const ok=(n,c,d='')=>{if(c){pass++;console.log('  ok  '+n)}else{fail.push(n+(d?'\n      '+d:''));console.log('  FAIL '+n+(d?'\n      '+d:''))}};

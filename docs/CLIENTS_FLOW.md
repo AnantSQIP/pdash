@@ -113,7 +113,9 @@ The flow now:
    any of them can fulfil it. The requester may name who to ask first (optional); that person is
    told straight away, and if nobody is named, all authorities are.
 3. **Nothing waits silently.** Requests show how long they have waited. Once a day, anything open
-   longer than a day reminds every authority again. The client's team can nudge (at most hourly).
+   longer than a day reminds every authority again — as ONE notification per organisation naming
+   what waits and for how long, because ten separate reminders a day teach people to dismiss them
+   unread. The client's team can nudge (at most hourly).
 4. **Work never waits for the PID.** Tasks, staffing, capacity and time all work on a PID-pending
    client; the PID is how the work is filed, not permission to do it.
 5. **Changing a PID can be asked for.** A client's manager can request a change with a reason
@@ -123,6 +125,9 @@ The flow now:
 6. **One number, one request.** Attaching a PID by any route closes the open request; a request for
    a client that already has a PID closes instead of overwriting it; deleting a client cancels it.
    At most one request per client is open at a time (a partial unique index).
+7. **Clients that predate the rule join the queue too.** A one-off backfill opens a request for every
+   live, unfinished client that still has no PID — the ones most likely to have been forgotten were
+   otherwise the only ones the queue could not see.
 
 Considered and **not** done without the owner: letting Managers mint PIDs when authorities are
 slow, or minting automatically after a timeout. Both would widen who can create a billing number,
@@ -191,6 +196,8 @@ Three migrations, all additive except one index swap:
   with "at most one OPEN request per client", makes the named authority optional, adds the request's
   kind / reason / reminders, and `task_list.clientDueDate`.
 - `20261018100000_deadline_change_task_group` — lets the deadline ledger record task-group moves.
+- `20261018110000_pid_request_backfill` — data only: opens a PID request for live, unfinished clients
+  that have none, dated at deploy so the first reminder is a day later, and re-runnable.
 
 No new permission codes, so **no regrant**. Existing projects appear as clients in the "Ungrouped" section until someone files them
 into groups.

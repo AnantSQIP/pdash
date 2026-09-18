@@ -37,6 +37,8 @@ const ok = (n, c, d = '') => {
   if (c) { passed++; console.log('  ok  ' + n); }
   else { fails.push(n + (d ? '\n      ' + d : '')); console.log('  FAIL ' + n + (d ? '\n      ' + d : '')); }
 };
+let skipped = 0;
+const skip = (n, why) => { skipped++; console.log(`  --   skipped: ${n} (${why})`); };
 
 function sess() {
   let cookie = '';
@@ -57,8 +59,9 @@ function sess() {
 const login = async (s, email) => s('/auth/login', { method: 'POST', body: { email, password: PW } });
 
 (async () => {
-  const admin = sess(), staff = sess(), consultant = sess(), member = sess();
-  await Promise.all([login(admin, ADMIN), login(staff, STAFF), login(consultant, CONSULTANT), login(member, MEMBER)]);
+  const admin = sess(), staff = sess(), consultant = sess(), member = sess(), hr = sess();
+  await Promise.all([login(admin, ADMIN), login(staff, STAFF), login(consultant, CONSULTANT), login(member, MEMBER),
+    login(hr, 'hr@squarkip.com')]);
 
   // ── A client with patents to resolve ────────────────────────────────────────
   let client = ((await admin('/clients')).data ?? [])[0];
@@ -75,12 +78,20 @@ const login = async (s, email) => s('/auth/login', { method: 'POST', body: { ema
       body: { clientId: client.id, realNumbers: ['US 10,123,456 B2'] },
     })).data ?? [];
   }
-  ok('setup: a client with at least one patent exists', !!client?.name && patents.length > 0);
-
-  // ── 1. Client identity must not reach a non-patent.manage caller ────────────
-  // An Employee holds patent.view, so /patents/options already hands them every patent id.
+  // CLIENTS-FLOW: patents and client codes are switched off (PATENTS_AND_CLIENT_CODES=false).
+  // Claim 1 is about a client identity that no longer exists to leak, so it is SKIPPED, not
+  // deleted — it must run again the day the feature comes back. Claims 2 and 3 below are about
+  // documents and task lists and still hold, so the suite carries on instead of dying at setup,
+  // which is what it did when the flag first went off.
   const options = (await staff('/patents/options')).data ?? [];
-  ok('an Employee can list every patent id (patent.view, by design)', Array.isArray(options) && options.length > 0);
+  const patentsOff = !client?.name || patents.length === 0 || !options.length;
+  if (patentsOff) {
+    skip('claim 1: client identity must not reach a non-patent.manage caller',
+      'patents and client codes are switched off — no client fact exists to leak');
+  } else {
+    ok('setup: a client with at least one patent exists', !!client?.name && patents.length > 0);
+    ok('an Employee can list every patent id (patent.view, by design)', Array.isArray(options) && options.length > 0);
+  }
 
   const authority = ((await staff('/projects/pid-authorities')).data ?? [])[0];
   const managers = ((await staff('/projects/eligible-managers')).data?.managers ?? []);
@@ -88,38 +99,41 @@ const login = async (s, email) => s('/auth/login', { method: 'POST', body: { ema
     method: 'POST',
     body: {
       title: 'authz-holes probe',
-      patentIds: [options[0].id],
+      ...(patentsOff ? {} : { patentIds: [options[0].id] }),
       pidAssigneeId: authority?.id,
       managerId: managers[0]?.id,
     },
   });
   const pid = made.data?.id;
-  ok('an Employee can create a project tagging a patent they chose', made.status === 201 && !!pid,
-    `status ${made.status} ${JSON.stringify(made.data).slice(0, 160)}`);
+  ok(patentsOff ? 'an Employee can create a client' : 'an Employee can create a project tagging a patent they chose',
+    made.status === 201 && !!pid, `status ${made.status} ${JSON.stringify(made.data).slice(0, 160)}`);
 
-  const detail = (await staff(`/projects/${pid}`)).data;
-  ok('GET /projects/:id withholds the client from a non-patent.manage caller',
-    detail?.client == null && detail?.clientId == null,
-    `client=${JSON.stringify(detail?.client)}`);
+  if (patentsOff) {
+    skip('the client fact on /projects/:id, /rounds, /full-report and /pid-ledger', 'no client fact exists');
+  } else {
+    const detail = (await staff(`/projects/${pid}`)).data;
+    ok('GET /projects/:id withholds the client from a non-patent.manage caller',
+      detail?.client == null && detail?.clientId == null,
+      `client=${JSON.stringify(detail?.client)}`);
 
-  const rounds = (await staff(`/projects/${pid}/rounds`)).data;
-  const roundClient = (rounds?.rounds ?? [])[0]?.client;
-  ok('GET /projects/:id/rounds must withhold it too', roundClient == null,
-    `leaked client=${JSON.stringify(roundClient)}`);
+    const rounds = (await staff(`/projects/${pid}/rounds`)).data;
+    const roundClient = (rounds?.rounds ?? [])[0]?.client;
+    ok('GET /projects/:id/rounds must withhold it too', roundClient == null,
+      `leaked client=${JSON.stringify(roundClient)}`);
 
-  const report = (await staff('/projects/full-report')).data ?? [];
-  const mine = report.find(p => p.id === pid);
-  ok('GET /projects/full-report must withhold it too', mine != null && mine.client == null,
-    `leaked client=${JSON.stringify(mine?.client)} on patents ${JSON.stringify(mine?.patents)}`);
+    const report = (await staff('/projects/full-report')).data ?? [];
+    const mine = report.find(p => p.id === pid);
+    ok('GET /projects/full-report must withhold it too', mine != null && mine.client == null,
+      `leaked client=${JSON.stringify(mine?.client)} on patents ${JSON.stringify(mine?.patents)}`);
 
-  // HR holds user.manage_access but no patent permission at all — /patents is 403 for them.
-  const hr = sess(); await login(hr, 'hr@squarkip.com');
-  const hrPatents = await hr('/patents');
-  const ledger = await hr('/projects/pid-ledger');
-  const ledgerClients = JSON.stringify(ledger.data ?? []).includes(client.name);
-  ok('HR is refused the patent portal', hrPatents.status === 403);
-  ok('GET /projects/pid-ledger must not hand HR the client name either', !ledgerClients,
-    `pid-ledger contains "${client.name}"`);
+    // HR holds user.manage_access but no patent permission at all — /patents is 403 for them.
+    const hrPatents = await hr('/patents');
+    const ledger = await hr('/projects/pid-ledger');
+    const ledgerClients = JSON.stringify(ledger.data ?? []).includes(client.name);
+    ok('HR is refused the patent portal', hrPatents.status === 403);
+    ok('GET /projects/pid-ledger must not hand HR the client name either', !ledgerClients,
+      `pid-ledger contains "${client.name}"`);
+  }
 
   // ── 2. A file you may not read is a file you may not destroy ────────────────
   const foreign = ((await member('/projects')).data ?? []).find(p => p.id !== pid);
@@ -173,6 +187,6 @@ const login = async (s, email) => s('/auth/login', { method: 'POST', body: { ema
       `status ${renamed.status}`);
   }
 
-  console.log(`\n${passed} passed, ${fails.length} failed`);
+  console.log(`\n${passed} passed, ${fails.length} failed${skipped ? `, ${skipped} skipped` : ''}`);
   if (fails.length) { console.log('\nFailures:\n  ' + fails.join('\n  ')); process.exit(1); }
 })().catch(e => { console.error(e); process.exit(1); });

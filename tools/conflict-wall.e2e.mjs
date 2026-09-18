@@ -79,7 +79,12 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
     })).data ?? [];
   }
   const options = (await staff('/patents/options')).data ?? [];
-  ok('setup: a client and a patent an Employee can pick', !!client?.name && options.length > 0);
+  // CLIENTS-FLOW: patents and client codes are switched off (PATENTS_AND_CLIENT_CODES=false), so
+  // there is no client fact to leak. The checks that need one are skipped rather than deleted —
+  // they are the proof this suite exists for, and must run again the day the feature comes back.
+  const patentsOff = !client?.name || options.length === 0;
+  if (patentsOff) skip('setup: a client and a patent an Employee can pick', 'patents and client codes are switched off');
+  else ok('setup: a client and a patent an Employee can pick', !!client?.name && options.length > 0);
 
   const authority = ((await staff('/projects/pid-authorities')).data ?? [])[0];
   const managers = ((await staff('/projects/eligible-managers')).data?.managers ?? []);
@@ -87,15 +92,16 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
     method: 'POST',
     body: {
       title: 'conflict-wall probe',
-      patentIds: [options[0]?.id].filter(Boolean),
+      ...(patentsOff ? {} : { patentIds: [options[0]?.id].filter(Boolean) }),
       pidAssigneeId: authority?.id,
       managerId: managers[0]?.id,
     },
   });
   const mine = made.data?.id;
-  ok('setup: the Employee mints a matter tagging that patent', made.status === 201 && !!mine,
-    `status ${made.status} ${JSON.stringify(made.data).slice(0, 160)}`);
-  ok('setup: the Super Admin really can read the client on it',
+  ok(patentsOff ? 'setup: the Employee mints a matter' : 'setup: the Employee mints a matter tagging that patent',
+    made.status === 201 && !!mine, `status ${made.status} ${JSON.stringify(made.data).slice(0, 160)}`);
+  if (patentsOff) skip('setup: the Super Admin really can read the client on it', 'no client to read');
+  else ok('setup: the Super Admin really can read the client on it',
     (await admin(`/projects/${mine}`)).data?.client?.name === client.name);
 
   // Staff the Consultant onto it. Being ON a matter is what makes the leak interesting: a role
@@ -131,9 +137,14 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
   const adminDetail = (await admin(`/projects/${mine}`)).data;
   const adminRound = ((await admin(`/projects/${mine}/rounds`)).data?.rounds ?? [])[0];
   const adminRow = ((await admin('/projects/full-report')).data ?? []).find(p => p.id === mine);
-  ok('a Super Admin still sees the client on /projects/:id', adminDetail?.client?.name === client.name);
-  ok('a Super Admin still sees it on /rounds', clientOf(adminRound?.client) === client.name);
-  ok('a Super Admin still sees it on /full-report', clientOf(adminRow?.client) === client.name);
+  if (patentsOff) {
+    skip('a Super Admin still sees the client on /projects/:id, /rounds and /full-report',
+      'patents and client codes are switched off — nobody sees a client, which the checks above assert');
+  } else {
+    ok('a Super Admin still sees the client on /projects/:id', adminDetail?.client?.name === client.name);
+    ok('a Super Admin still sees it on /rounds', clientOf(adminRound?.client) === client.name);
+    ok('a Super Admin still sees it on /full-report', clientOf(adminRow?.client) === client.name);
+  }
 
   // ── 2. The PID ledger — checked against what the Super Admin can actually see ──
   const adminLedger = (await admin('/projects/pid-ledger')).data ?? [];
@@ -186,7 +197,8 @@ const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, pa
   ok('a non-member cannot DELETE one',
     (await consultant(`/projects/${foreign.id}/tasklists/${def?.id}`, { method: 'DELETE' })).status === 403);
   ok('the refusal reads like every other delivery route',
-    (await staff(`/projects/${foreign.id}/tasklists`)).data?.message === 'You do not have access to this project.');
+    // CLIENTS-FLOW: a project row IS a client now, and the shared refusal says so.
+    (await staff(`/projects/${foreign.id}/tasklists`)).data?.message === 'You do not have access to this client.');
 
   // The other side of the wall.
   ok('the Employee still reads the lists of their OWN matter',
