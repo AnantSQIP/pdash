@@ -75,7 +75,7 @@ export class ProjectsController {
   /**
    * The CID ledger: every CID the organisation has ever issued — live, completed, deleted, merged,
    * retired or permanently deleted — with its clients, hours and full event timeline.
-   * Admin, Super Admin and HR (user.manage_access), as the PID ledger it replaces was.
+   * Admin, Super Admin and HR (user.manage_access), as the CID ledger it replaces was.
    */
   @Get('cid-ledger') @RequirePermission('user.manage_access')
   async cidLedger() {

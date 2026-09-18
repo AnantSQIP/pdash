@@ -21,23 +21,23 @@ export class CreateTimesheetDto {
   @IsString()
   userId?: string;
 
-  // OPTIONAL: the task determines the project (PID) + type. Omitting it logs a "buffer" entry
-  // that must have its PID (task) assigned within a week.
+  // OPTIONAL: the task determines the project (CID) + type. Omitting it logs a "buffer" entry
+  // that must have its CID (task) assigned within a week.
   @IsString()
   @IsOptional()
   taskId?: string;
 
   // OPTIONAL entry kinds. Omitted for a normal task entry.
   //   OTHER       — miscellaneous non-project time (admin, internal meetings, training).
-  //                 Always non-billable, never a PID buffer to assign.
-  //   CLIENT_CALL — a call with a client, booked straight to a PID. It needs no task, no
+  //                 Always non-billable, never a CID buffer to assign.
+  //   CLIENT_CALL — a call with a client, booked straight to a CID. It needs no task, no
   //                 assignment to one, and works whether the matter is open or finished:
   //                 clients ring about work that closed last month, and that time is real.
   @IsIn(['OTHER', 'CLIENT_CALL'])
   @IsOptional()
   category?: string;
 
-  // Required for CLIENT_CALL: which PID the call was about. A call belongs to a matter even
+  // Required for CLIENT_CALL: which CID the call was about. A call belongs to a matter even
   // though it belongs to no task within it.
   @IsString()
   @IsOptional()
@@ -69,7 +69,7 @@ export class CreateTimesheetDto {
 }
 
 export class AssignTimesheetDto {
-  // The task whose project (PID) + type this buffer entry should be assigned to.
+  // The task whose project (CID) + type this buffer entry should be assigned to.
   @IsString()
   taskId!: string;
 }
@@ -91,7 +91,7 @@ export class UpdateTimesheetDto {
   notes?: string;
 }
 
-/** One line of a day sheet: a task (or a PID for a client call), and how long it took. */
+/** One line of a day sheet: a task (or a CID for a client call), and how long it took. */
 export class DayEntryDto {
   @IsOptional() @IsString() taskId?: string;
   @IsOptional() @IsString() projectId?: string;

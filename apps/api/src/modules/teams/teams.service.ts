@@ -17,8 +17,8 @@ import {
  * model to reason about, and a space grants nobody any capability over work they did not already
  * have — creating and editing tasks inside one still needs the ordinary `task.*` permissions.
  *
- * What a team space never does is behave like a project. It has no PID, no client, no billability
- * decision and no client deadline, and nothing here writes to the client ledger, the PID ledger or
+ * What a team space never does is behave like a project. It has no CID, no client, no billability
+ * decision and no client deadline, and nothing here writes to the client ledger, the CID ledger or
  * delivery reporting. That separation is the entire point: HR and BD work stopped having to
  * masquerade as a patent matter in order to exist.
  */

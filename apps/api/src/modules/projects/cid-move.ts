@@ -217,7 +217,7 @@ export function planMove(input: MoveInput): MoveDecision {
   if (targetCid && targetCid === project.code) {
     return refuse(
       'SAME_CID',
-      `This project is already under ${project.code}. Choose a different CID, or a fresh one.`,
+      `This project is already under ${project.code}. Choose a different CID, or leave it empty to issue the next one.`,
     );
   }
 
@@ -233,7 +233,7 @@ export function planMove(input: MoveInput): MoveDecision {
       return refuse(
         'CROSS_FY',
         `${targetCid} belongs to financial year ${to.replace('_', '–')} and this project is filed under `
-        + `${from.replace('_', '–')}. A CID cannot be moved across financial years — mint a fresh one instead.`,
+        + `${from.replace('_', '–')}. A CID cannot be moved across financial years — issue the next one instead.`,
       );
     }
   }
@@ -259,12 +259,12 @@ export function planMove(input: MoveInput): MoveDecision {
     // that is the difference between a correction and a lost afternoon.
     const explain: Record<MoveMode, string> = {
       MERGE: `${targetCid ?? 'That CID'} holds no work, so there is nothing to merge into. `
-        + 'Reassign this project to that number instead.',
+        + 'Reassign this client instead — it is issued the next CID.',
       SPLIT: `${project.code} holds only this project, so there is nothing to split it from. `
         + 'Reassign it to a different CID instead.',
       REASSIGN: mode === 'MERGE'
         ? `${targetCid} already holds work, so this would put this project under it rather than giving it a number of its own. `
-          + 'Merge it instead, or choose a number nothing is filed under.'
+          + 'Merge it instead, or leave the destination empty to issue the next CID.'
         : `${project.code} is shared with ${sourceGroup.length - 1} other project`
           + `${sourceGroup.length === 2 ? '' : 's'}, so moving this one off it is a split, not a reassignment.`,
     };

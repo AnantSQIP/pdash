@@ -88,13 +88,13 @@ export class ProjectsService {
   // ── The client fact ───────────────────────────────────────────────────────────────
   //
   // For an IP firm the confidential thing about a matter is WHICH CLIENT it belongs to.
-  // Everything else — the PID, the title, the phase, the hours — is org-readable by design;
+  // Everything else — the CID, the title, the phase, the hours — is org-readable by design;
   // knowing that SQ_26_27_004 is Mailike's is precisely what a conflict wall exists to stop,
   // which is why naming a client requires `patent.manage` (Super Admin) rather than any of
   // the delivery permissions.
   //
   // `get()` has always enforced that, with a `delete` of its own. Every other route reading
-  // the same rows — full-report, the PID ledger, the rounds stack, the PID-merge picker, and
+  // the same rows — full-report, the CID ledger, the rounds stack, the CID-merge picker, and
   // the project row every mutation hands back — did not, so the name a Consultant is refused
   // on the project page still arrived in their reports export, and HR, who is 403 on the
   // patent portal, read it out of the ledger. One rule kept in five places is a rule that
@@ -165,7 +165,7 @@ export class ProjectsService {
    * Holders of `project.approve` (Super Admin, Admin, Manager, Senior Consultant per the matrix),
    * read from the permission rather than from designation seniority, so this list and the matrix
    * cannot disagree. The caller is ALWAYS in the list: keeping a client you created is not an
-   * escalation, and leaving the field blank means "me" for everybody now that no PID authority has
+   * escalation, and leaving the field blank means "me" for everybody now that no CID authority has
    * to be asked for a number — every client is given its CID automatically when it is created.
    */
   async eligibleManagers(organizationId: string) {
@@ -558,7 +558,7 @@ export class ProjectsService {
     const created = await this.prisma.$transaction(async (tx) => {
       const project = await tx.project.create({
         data: {
-          // The PID, the client and the office all carry over — that is the point of a round.
+          // The CID, the client and the office all carry over — that is the point of a round.
           code: source.code,
           clientId: source.clientId,
           office: source.office,
@@ -580,10 +580,10 @@ export class ProjectsService {
             : { taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } } }),
         },
       });
-      // The PID's patents carry over with the client. A round is the SAME matter for the same
+      // The CID's patents carry over with the client. A round is the SAME matter for the same
       // client, so inheriting the client but not the patents left the two rounds disagreeing
       // about what the work is about: round 1 read "client from patents" and locked, round 2 read
-      // as directly-set and editable — and editing it silently split one PID across two clients.
+      // as directly-set and editable — and editing it silently split one CID across two clients.
       const sourcePatents = await tx.projectPatent.findMany({
         where: { projectId: source.id }, select: { patentId: true },
       });
@@ -1482,7 +1482,7 @@ export class ProjectsService {
           ],
         } : {}),
       },
-      // Newest first by default: a PID's later rounds are what somebody is looking for, and a
+      // Newest first by default: a CID's later rounds are what somebody is looking for, and a
       // long-running client's first engagement is rarely the one being asked about. The other
       // orders are offered because "what is due next" and "what is this client called" are
       // different questions from "what happened most recently".
@@ -1490,7 +1490,7 @@ export class ProjectsService {
       select: {
         id: true,
         code: true, // P1: the CID (SQ_26_27_nnn) — so cards/rows/search can show & match it
-        // A PID can hold several projects; the round distinguishes them in every list.
+        // A CID can hold several projects; the round distinguishes them in every list.
         roundSeq: true,
         office: true,
         title: true,
@@ -2303,18 +2303,18 @@ export class ProjectsService {
    */
 
   /**
-   * A PID identifies ONE matter for ONE client. Refuse anything that would make it mean two.
+   * A CID identifies ONE matter for ONE client. Refuse anything that would make it mean two.
    *
-   * `Project.code` is the PID, and it is deliberately not unique: a returning client's next piece
+   * `Project.code` is the CID, and it is deliberately not unique: a returning client's next piece
    * of work is a new Project row under the same code — "round 2". Every round is therefore the
-   * same engagement for the same client, and the PID is what the firm quotes on reports and
+   * same engagement for the same client, and the CID is what the firm quotes on reports and
    * invoices to identify it.
    *
    * `addRound` copies the client and the patent links, so a round starts out correct. Nothing
    * stopped it being changed AFTERWARDS. Re-tagging round 2 to another client's patent, or naming
-   * a different client directly, silently left one PID spanning two clients — the ledger then
+   * a different client directly, silently left one CID spanning two clients — the ledger then
    * attributed round 1's hours to one and round 2's to another under a single identifier, and two
-   * people quoting the same PID meant different matters.
+   * people quoting the same CID meant different matters.
    *
    * Checked against the OTHER live rounds only. A single-round project has nothing to disagree
    * with, and soft-deleted rounds are excluded: a round that has been removed should not veto a
@@ -2325,7 +2325,7 @@ export class ProjectsService {
     code: string | null,
     nextClientId: string | null,
   ): Promise<void> {
-    // No PID, or no client being set, means there is nothing a sibling could contradict.
+    // No CID, or no client being set, means there is nothing a sibling could contradict.
     if (!code || !nextClientId) return;
 
     const siblings = await this.prisma.project.findMany({

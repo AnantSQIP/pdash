@@ -468,7 +468,7 @@ export class TasksService {
       include: {
         ...this.taskInclude(),
         // Override projectTasks from taskInclude() to also bring the project name — and the
-        // PID, round, type and phase, so a My Tasks row can label its project and log time
+        // CID, round, type and phase, so a My Tasks row can label its project and log time
         // against it without a second fetch.
         projectTasks: {
           select: {
