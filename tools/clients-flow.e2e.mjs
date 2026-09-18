@@ -7,10 +7,10 @@
  * split, as the repo's other suites are, into what must work and what must be refused — a guard
  * that also stops the legitimate case is a different bug, not a fix.
  *
- * Roles used (the seeded roster): mohit = Super Admin (mints PIDs), ankit.verma = Manager
+ * Roles used (the seeded roster): mohit = Super Admin (may change CIDs), ankit.verma = Manager
  * (runs clients, assigns), ketan.dagar = Senior Research Associate (makes groups, cannot assign),
- * meetu.singh = Consultant (never put on the fixture client), ajay.sharma = Employee (cannot make
- * groups), hr = HR (no delivery access at all).
+ * meetu.singh = Consultant (never put on the fixture client), an Employee picked by permission
+ * (cannot make groups), hr = HR (no delivery access at all).
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:4011';
 const PW = process.env.PW || 'sqip@1234';
@@ -39,16 +39,31 @@ function sess() {
 const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); d.setUTCDate(d.getUTCDate() + offset); return d.toISOString().slice(0, 10); };
 
 (async () => {
-  const su = sess(), mgr = sess(), sra = sess(), con = sess(), emp = sess(), hr = sess();
+  const su = sess(), mgr = sess(), sra = sess(), con = sess(), hr = sess();
+  let emp = sess(), empSess = null;
   const who = {};
   for (const [s, email, key] of [
     [su, 'mohit@squarkip.com', 'su'], [mgr, 'ankit.verma@squarkip.com', 'mgr'], [sra, 'ketan.dagar@squarkip.com', 'sra'],
-    [con, 'meetu.singh@squarkip.com', 'con'], [emp, 'ajay.sharma@squarkip.com', 'emp'], [hr, 'hr@squarkip.com', 'hr'],
+    [con, 'meetu.singh@squarkip.com', 'con'], [hr, 'hr@squarkip.com', 'hr'],
   ]) {
     const r = await s('/auth/login', { method: 'POST', body: { email, password: PW } });
     who[key] = r.data?.user?.id;
     if (!who[key]) { console.log(`cannot log in as ${email}: ${brief(r)}`); process.exit(2); }
   }
+  // The Employee is picked by what they may do, not by name: ajay.sharma, the Employee this suite
+  // was written against, is now a Senior Consultant. The first candidate who can read clients but
+  // cannot make task groups or run clients plays the part.
+  for (const email of ['aman.sharma@squarkip.com', 'drishti.jain@squarkip.com', 'rajesh.joshi@squarkip.com', 'ajay.sharma@squarkip.com']) {
+    const s = sess();
+    const r = await s('/auth/login', { method: 'POST', body: { email, password: PW } });
+    if (!r.data?.user?.id) continue;
+    const c = new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+    if (c.has('project.view') && !c.has('tasklist.create') && !c.has('project.approve')) {
+      who.emp = r.data.user.id; empSess = s; break;
+    }
+  }
+  if (!who.emp) { console.log('FIXTURE DRIFT — nobody in the roster is a plain Employee'); process.exit(2); }
+  emp = empSess;
 
   // The suite leans on each person's ROLE. Other suites elevate people mid-run (meeting-changes
   // makes basant.goyal an Admin, and leaves it if it fails), so check the fixture rather than
@@ -285,8 +300,8 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   const suView = (await su(`/projects/${client.id}`)).data ?? {};
   ok('a client carries no patents and no client code, even for a Super Admin', !('patents' in suView) && !('client' in suView) && !('clientId' in suView),
     Object.keys(suView).filter(k => /client|patent/i.test(k)).join(','));
-  const ledger = await su('/projects/pid-ledger');
-  ok('the PID ledger carries no client code or patents', ledger.status === 200 && !/"client"|"patents"/.test(JSON.stringify(ledger.data)), brief(ledger));
+  const ledger = await su('/projects/cid-ledger');
+  ok('the CID ledger carries no client code or patents', ledger.status === 200 && !/"client"|"patents"/.test(JSON.stringify(ledger.data)), brief(ledger));
 
   console.log(`\n${passed} passed, ${fails.length} failed`);
   if (fails.length) { console.log('\nFailures:\n  ' + fails.join('\n  ')); process.exit(1); }

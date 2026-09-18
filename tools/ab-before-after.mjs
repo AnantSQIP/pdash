@@ -130,7 +130,7 @@ const UNCHANGED = [
   ['the running timer', '/tasks/timer/running'],
   ['what the timer has today', '/tasks/timer/today'],
   ['the task standards', '/tasks/standards'],
-  ['the PID ledger', '/patents/pid-ledger'],
+  ['the CID ledger', '/projects/cid-ledger'],
   ['the appraisal cycles', '/appraisals/cycles'],
   ['the company feed', '/company/announcements'],
   ['the HR policies', '/company/policies'],

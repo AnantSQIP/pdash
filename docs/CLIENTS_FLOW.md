@@ -10,6 +10,14 @@ Branch `clients-flow`, cut from `fix-data-destruction` (bb5728b) so it carries t
 > Capacity. Change the UI, the logic and the PID to suit. Comment out — only comment out — the
 > patent portal, the patent ID and the client ID. Work out how creating a new project changes.
 
+And later (phase 8):
+
+> In the client workflow remove the request PID feature completely, rename the PID to CID, and the
+> CID will be automatically attached to the client when it is created, but make sure to maintain
+> the consistency of the system: if a client is deleted or removed or renamed or merged or
+> something like this happens, there should be a proper structure to maintain the CID, and there
+> should be a CID ledger that has all the data in complete detail.
+
 ## The model
 
 | What people see | What stores it | Status |
@@ -23,7 +31,7 @@ Branch `clients-flow`, cut from `fix-data-destruction` (bb5728b) so it carries t
 ### Why the project row becomes the client, rather than a new table
 
 The owner said it in so many words: *what we now call projects will be considered clients*. Every
-piece of machinery that makes a project work — its team, its access wall, its PID, its files,
+piece of machinery that makes a project work — its team, its access wall, its CID, its files,
 discussion, activity, timesheets, capacity tab, completion and deletion — is what a client
 workspace needs. Moving all of that onto a different table would rewrite the most tested part of
 the system for no gain the owner can see. Relabelling the row keeps every existing guarantee.
@@ -35,19 +43,16 @@ Projects already had "task groups" (`TaskList`) with a name, a default group and
 group of tasks needs: a **type of work** (whose standard tasks are created with it), a
 **technology domain**, **start and deadline**, a **status**, and a description.
 
-### The PID
+### The CID
 
-**The PID stays on the client.** It is minted and requested exactly as before; the PID ledger,
-timesheets-by-PID, PID correction and every PID invariant are untouched.
+**Every client carries a CID (Client ID), issued automatically when it is created.** It was called the
+PID until phase 8; the number format is unchanged (`SQ_26_27_001`), and so is everything keyed on it —
+timesheets, the ledger, billing. See "The CID (phase 8)" below for how it is issued and kept.
 
-What changes is the thing that sat *under* a PID. A PID could hold several projects ("rounds").
-In a client-centred world, another piece of work for the same client is **another task group**,
-not another project under the same number — so "New project under this PID" is taken out of the
-client screen and "New task group" takes its place. Existing rounds still display.
-
-The alternative — a PID per task group — was considered and rejected for now: it would move the
-number off the row that timesheets, the ledger, billing and the PID-invariant tests all key on,
-for a change the owner did not ask for. It remains possible later.
+A CID could hold several projects ("rounds"). In a client-centred world, another piece of work for the
+same client is **another task group**, not another client under the same number — so "New project under
+this PID" was taken out of the client screen and "New task group" took its place. Existing rounds
+still display, and the rounds API (`POST /projects/:id/rounds`) still works and is ledgered.
 
 ### Creating a client (what "creating a new project" becomes)
 
@@ -59,8 +64,8 @@ for a change the owner did not ask for. It remains possible later.
 | Technology domain | on the project | moved to the **first task group** |
 | Client picker (client code) | shown | **commented out** |
 | Patent IDs | shown | **commented out** |
-| PID: generate / request from | shown | unchanged |
-| Manager | shown | unchanged ("client manager") |
+| PID: generate / request from | shown | **gone** — the CID is issued automatically (phase 8) |
+| Manager | shown | "client manager", optional for everyone — blank means the creator |
 | Priority, start, deadline, client deadline | on the project | deadlines move to task groups |
 | First task group | — | optional: name, type, domain, start, deadline |
 
@@ -88,50 +93,119 @@ can be restored by uncommenting the marked lines. Every site carries the marker
 - **Patent portal** — `/patents` page and sidebar item; the patents API module (which also carries
   the client-ledger routes).
 - **Patent IDs** — patent picker in creation, patent chips and "show numbers" in the header,
-  `/patent-lookup` page and sidebar item, patent columns in reports and the PID ledger,
+  `/patent-lookup` page and sidebar item, patent columns in reports and the CID ledger,
   `PUT /projects/:id/patents`.
-- **Client ID** — the client-code picker in creation, the client line in the header,
+- **Client code** (called "client ID" at the time — the patent portal's code such as `MLK`, **not**
+  the CID of phase 8) — the client-code picker in creation, the client line in the header,
   `/client-ledger` page and sidebar item, `PUT /projects/:id/client`, client columns in reports,
-  the PID ledger and the digest, and the client-code parts of the BD pipeline's "won" dialog.
+  the CID ledger and the digest, and the client-code parts of the BD pipeline's "won" dialog.
 
-## The PID flow, reworked (phase 6)
+## The CID (phase 8) — replaces the PID request flow of phase 6
 
-The owner's questions, and what the code actually did:
+Phase 6 made PID requests a pool with reminders, nudges and change requests. Phase 8 removes the need
+for any of it: **a client is given its CID in the same database transaction that creates it**, so
+there is nothing to request, attach, generate, wait for or chase. Everything a person reads says CID;
+the database keeps its historical names (`project.code`, table `pid_reservation`) with schema comments
+saying so, and the permission code stays `project.generate_pid` (labelled "Change CID"), so no grant
+moved and **no regrant is needed**.
 
-| Question | What happened before | Why it was a flaw |
+### Removed
+
+- The request pool: the `pid_request` table (dropped by migration), `/projects/pid-requests*`,
+  `/projects/:id/pid-request(/nudge)`, `/projects/:id/pid-change-request`, `/projects/pid-authorities`,
+  the hourly PID-request monitor and its notifications, the queue dialog, the home card, the badge and
+  every `?pidRequests=1` / `?changePid=1` link.
+- Manual numbers: `/projects/generate-pid`, `/projects/pid-reservation`, `/projects/next-pid`,
+  `/projects/:id/attach-pid`, the 5-minute RESERVED hold and its expiry sweep, and `pid` /
+  `pidAssigneeId` on create (now refused by validation, not silently ignored).
+- The timesheet "Assign PID later" switch — it existed only because a client could be created without
+  a number. The separate assign-later buffer, for entries logged without a task, stays ("Assign to client").
+- `GET /projects/pid-ledger` → `GET /projects/cid-ledger`; `/projects/:id/pid/{reassign,split,merge}` and
+  `/projects/:id/pid-move(/targets)` → the same under `cid`.
+
+### How a CID is issued
+
+`CidService.mintInTx` (`apps/api/src/common/cid/`), inside the create transaction:
+
+1. `pg_advisory_xact_lock(hashtext('cid:<org>:<fy>'))` — held until the create commits, so concurrent
+   creates queue for a moment and never read the same "highest serial".
+2. Next serial = one past the highest this organisation has EVER used in the financial year: the
+   registry (every status — a purged or merged number is still a row), any client code with the
+   prefix, and a legacy sequence-counter row if one exists.
+3. Register it (ATTACHED), insert the client row carrying it, write the ledger's MINTED event. The
+   UNIQUE (organizationId, pid) index is the backstop, not the mechanism.
+
+Format `<PREFIX>_<FY>_<serial3+>`, FY the Indian financial year read in IST. The prefix is the
+organisation code **sanitised** — letters and digits, upper-cased, at most 16 characters, `SQ` if
+nothing is left — so the seed's `pdash-demo` gives `PDASHDEMO_26_27_001`, a number the parser accepts
+(before, it minted numbers that could never be typed back in). The SQL backfill applies the same rule.
+
+A CHECK constraint (`project_live_client_has_cid`) makes a live client without a CID impossible, and
+ten parallel creates come out as ten consecutive numbers with no errors (tested).
+
+### The registry (`pid_reservation`) — what each number is
+
+| Status | Meaning | Can it come back? |
 |---|---|---|
-| What if the Super Admins are busy? | A request went to ONE named authority. Only that person could see, edit or fulfil it. | One busy or absent person stalled a client indefinitely, and nobody else could even see it. |
-| What if we don't assign the PID? | An authority could create a client with no PID and nothing tracked it. No request, no reminder. | PID-less clients were silently forgotten until invoicing. |
-| What if we want to change the PID? | Only an authority, with the passcode, through a dialog built around "rounds". Nobody else could even ask. | The people who notice a wrong PID (the team on the client) had no way to say so. |
-| (found while reading) | Attaching a PID from the client page left its request open; fulfilling it later **overwrote** the PID. Deleting a client left its request in the queue. | A client could get two PIDs, and a deleted client could burn a serial. |
+| ATTACHED | at least one live client carries it | — |
+| DELETED | only soft-deleted clients carry it; the number stays reserved to them | yes, by restoring the client |
+| PURGED | every client that carried it was permanently deleted | never |
+| MERGED | its client moved under another CID; `mergedIntoCid` names the survivor | never |
+| DISCONTINUED | vacated by a reassign/split, or retired before the ledger | never |
 
-The flow now:
+Registry rows are never deleted by the application (only by the workspace-reset scripts, together with
+the clients). CHECKs hold the status list and that a MERGED row always names its target.
+`CidService.syncRegistryInTx` re-reads the clients carrying a number after every change and sets its
+status and pointer; a retired number is never un-retired.
 
-1. **Every PID-less client has an open request.** Whoever creates it — authority or not — the
-   client appears in the PID queue until it has a number.
-2. **The queue is a pool.** Every PID authority sees every open request in the organisation and
-   any of them can fulfil it. The requester may name who to ask first (optional); that person is
-   told straight away, and if nobody is named, all authorities are.
-3. **Nothing waits silently.** Requests show how long they have waited. Once a day, anything open
-   longer than a day reminds every authority again — as ONE notification per organisation naming
-   what waits and for how long, because ten separate reminders a day teach people to dismiss them
-   unread. The client's team can nudge (at most hourly).
-4. **Work never waits for the PID.** Tasks, staffing, capacity and time all work on a PID-pending
-   client; the PID is how the work is filed, not permission to do it.
-5. **Changing a PID can be asked for.** A client's manager can request a change with a reason
-   (and the number they believe is right). It lands in the same pool; an authority makes the change
-   with the existing, audited Change PID dialog, which closes the request, or declines it with a
-   reason the requester is told.
-6. **One number, one request.** Attaching a PID by any route closes the open request; a request for
-   a client that already has a PID closes instead of overwriting it; deleting a client cancels it.
-   At most one request per client is open at a time (a partial unique index).
-7. **Clients that predate the rule join the queue too.** A one-off backfill opens a request for every
-   live, unfinished client that still has no PID — the ones most likely to have been forgotten were
-   otherwise the only ones the queue could not see.
+### The ledger (`cid_event`) — stored and append-only
 
-Considered and **not** done without the owner: letting Managers mint PIDs when authorities are
-slow, or minting automatically after a timeout. Both would widen who can create a billing number,
-which the permission matrix of 12 Aug deliberately narrowed.
+One row per change, written **in the same transaction as the change**, with snapshots (client title,
+actor name) and a `projectId` with no foreign key, so a purged client stays visible. A trigger refuses
+UPDATE. Events:
+
+| Event | When |
+|---|---|
+| MINTED | a client is created (or restored with a new CID — then `fromCid` names the retired one) |
+| BACKFILLED / IMPORTED | the migration gave an existing client a CID / recorded a number that already existed |
+| ROUND_ADDED | a client was started under an existing CID |
+| RENAMED | title, from → to |
+| CLIENT_GROUP_CHANGED | filed under another group, taken out of one, or un-filed because its group was archived |
+| MANAGER_CHANGED | who manages it, from → to (staffing someone as MANAGER, or re-roling the manager) |
+| PHASE_CHANGED | Active ↔ On hold, by edit or by the approval flow |
+| COMPLETED / REOPENED / REINITIALIZED | the lifecycle actions |
+| DELETED | soft delete, recording the phase it held |
+| RESTORED | restored from Admin → Data |
+| REASSIGNED / SPLIT / MERGED | Change CID, with `fromCid` / `toCid` (it appears on both numbers' timelines) |
+| PURGED | permanent delete — the tombstone keeps title, hours logged and allotted, task groups, managers, group |
+
+### What happens to the number when…
+
+- **Renamed, re-grouped, re-managed, paused, completed, reopened, re-initialized** — the CID does not
+  change; the ledger records the change.
+- **Deleted (soft)** — the CID stays reserved to the client (registry DELETED once no live client
+  carries it); the ledger shows it as Deleted, under its last name.
+- **Restored** — back under the same CID, **in the phase it held before the delete** (read from the
+  DELETED event; before, a restore always came back Active). If the number was retired while the client
+  sat in the bin (merged away, reassigned off), it is never revived: the client is issued the next CID
+  and the ledger says which it had.
+- **Permanently deleted** — the number is PURGED and taken forever; the ledger keeps the client.
+- **Merged** (Change CID → under another client's CID) — the client becomes the next round of the
+  target; its old number, once no live client carries it, is MERGED with a pointer to the survivor.
+- **Split / Reassigned** — the client is issued the NEXT CID; a named destination must hold live work
+  (a retired, merged, purged or bin-only number is never taken over). A vacated number is DISCONTINUED.
+  Change CID stays Admin / Super Admin plus the org passcode.
+
+### The CID Ledger — `/cid-ledger` (sidebar "CID Ledger"; `/pid-ledger` redirects)
+
+`GET /projects/cid-ledger`, gated on `user.manage_access` as the PID ledger was (Admin, Super Admin,
+HR). One row per CID ever issued: the CID, its status (Active / On hold / Completed / Deleted / Merged →
+target / Retired / Purged), the current client name (or the last one recorded), past names, client
+group, manager, created by / at, every client that has carried it (live, deleted and purged), logged vs
+allotted hours, task-group count, and an expandable timeline of every event (who, when, what changed
+from → to). Filters by status; search by CID, client name or any past name; two CSV exports — one row
+per CID, and one row per event. The confidential client fact (`client` / `clientId`, patents) is still
+stripped by the same redaction pass every other route uses; HR reads the rest of the row.
 
 ## Deadlines (phase 7)
 
@@ -176,15 +250,20 @@ What the screens do with it:
 | 1 | Schema + API: client groups, enriched task groups, templates per group, assignment at creation, move task, completion rules, capacity/My Tasks carry the group | ✅ |
 | 2 | Comment out patents and client IDs (web + API routes) | ✅ |
 | 3 | UI: Clients page grouped by client group, New client dialog, client screen, Task Groups tab, New/Edit task group, assign, move | ✅ |
-| 4 | Everywhere else: capacity, My Tasks, timesheets, PID ledger, home, search, notifications, sidebar wording | ✅ |
+| 4 | Everywhere else: capacity, My Tasks, timesheets, PID (now CID) ledger, home, search, notifications, sidebar wording | ✅ |
 | 5 | Demo data, preview on its own tunnel, end-to-end tests, browser walkthrough, adversarial review, fix loop | ✅ |
-| 6 | PID flow: pool queue, a request for every PID-less client, reminders, nudges, change requests, one-number rules | ✅ |
+| 6 | PID flow: pool queue, a request for every PID-less client, reminders, nudges, change requests, one-number rules (superseded by phase 8) | ✅ |
 | 7 | Deadlines: client deadline on task groups, task-within-group rule, cascading group deadline moves, capacity extend by group | ✅ |
+| 8 | PID → CID: request pool and manual generation removed, CID issued on create, registry states, stored append-only CID ledger, CID Ledger screen | ✅ |
 
-Tests: `tools/clients-flow.e2e.mjs` (75), `tools/clients-pid-deadlines.e2e.mjs` (54, needs `PASSCODE`),
-`tools/pid-reminder.spec.ts`, and a group-order case in `tools/task-order.spec.ts`. Run the e2e
-suites against a scratch copy of the database, never the one being demonstrated — they create
-clients, mint PIDs and file requests.
+Tests: `tools/clients-flow.e2e.mjs`, `tools/clients-cid-deadlines.e2e.mjs` (was
+clients-pid-deadlines; needs `PASSCODE`), `tools/cid-ledger.e2e.mjs` (the whole CID lifecycle: auto
+CID, 10 parallel creates, rename/group/manager/phase/complete/reopen/re-initialize, delete/restore,
+purge, merge/split/reassign, restore after the number was retired, HR access and redaction, CSV
+fields, organisation-wide invariants; needs `PASSCODE`), `tools/cid-format.spec.ts` (prefix rule and
+parser), `tools/cid-move.spec.ts` (was pid-move), and a group-order case in `tools/task-order.spec.ts`.
+`tools/pid-reminder.spec.ts` went with the reminders. Run the e2e suites against a scratch copy of the
+database, never the one being demonstrated — they create, merge and permanently delete clients.
 
 ## What was reviewed, and what was not
 
@@ -199,19 +278,20 @@ from the actor, never the request body); every task-group route's redaction; the
 across the new routes (HR, Employee, SRA and Manager each refused what they should be); concurrent
 fulfilment of one PID request; attach closing the request; a stale request never overwriting a PID;
 deleting a client cancelling it; the switched-off patent pages being redirects with their original
-components kept.
+components kept. (Phase 8 removed the request pool those findings were about.)
 
 Thin cover, stated plainly:
 
-- The hourly reminder sweep is unit-tested (`tools/pid-reminder.spec.ts`) but never observed
-  running end to end — background jobs are off in the preview.
+- The CID backfill runs inside the migration. It was run against a fresh copy of the preview data
+  (6 clients with numbers, 6 without) and against an empty database — not against production data.
 - The deadlock that lock ordering fixed is timing, not logic: it was demonstrated at the database
   level, not reproduced through the API on demand.
-- The backfill has only been run against scratch databases whose clients all had a real creator.
+- A client's organisation is still derived (creator → earliest member → the one organisation), as
+  `Project` has no organisation column; the CID backfill and the ledger both depend on that rule.
 
 ## Deploying later (when the owner asks)
 
-Three migrations, all additive except one index swap:
+Five migrations; all additive except one index swap and phase 8 dropping `pid_request`:
 
 - `20261017090000_clients_flow` — the `client_group` table, `project.clientGroupId`, and the task
   group columns on `task_list`.
@@ -220,7 +300,14 @@ Three migrations, all additive except one index swap:
   kind / reason / reminders, and `task_list.clientDueDate`.
 - `20261018100000_deadline_change_task_group` — lets the deadline ledger record task-group moves.
 - `20261018110000_pid_request_backfill` — data only: opens a PID request for live, unfinished clients
-  that have none, dated at deploy so the first reminder is a day later, and re-runnable.
+  that have none (superseded: the next migration drops the table).
+- `20261020120000_cid_auto_mint_and_ledger` — phase 8: drops `pid_request`; the registry loses the
+  RESERVED hold (old RESERVED/RELEASED/EXPIRED rows become DISCONTINUED — shown, never re-issued), gains
+  `mergedIntoCid` and status CHECKs, and has every status re-read from the clients carrying it; creates
+  the append-only `cid_event` table; records every existing number as IMPORTED; gives every live
+  client without a CID the next one (createdAt, then id; the FY it was created in) as BACKFILLED; then
+  adds the CHECK that a live client always has a CID. No manual step; a no-op on the data of a
+  database with no code-less clients.
 
 No new permission codes, so **no regrant**. Existing projects appear as clients in the "Ungrouped" section until someone files them
 into groups.

@@ -26,10 +26,18 @@
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:4011';
 const PW = 'sqip@1234';
-const ADMIN = 'mohit@squarkip.com';        // Super Admin — patent.manage
-const STAFF = 'ajay.sharma@squarkip.com';  // Employee — on no project
-const CONSULTANT = 'meetu.singh@squarkip.com';
-const MEMBER = 'basant.goyal@squarkip.com'; // staffed on a seeded matter
+// Actors are chosen by what they may DO (/me/effective-permissions), not by name — the roster
+// moves (ajay.sharma, once the Employee here, is now a Senior Consultant with oversight of every
+// matter, and every "refused" check below then read 200):
+//   ADMIN      — patent.manage (a Super Admin)
+//   STAFF      — project.create, no project.approve (no oversight), no tasklist.create
+//   CONSULTANT — tasklist.create, no project.approve
+//   MEMBER     — anyone else without oversight who is staffed on some matter (uploads the file)
+const CANDIDATES = [
+  'mohit@squarkip.com', 'aman.sharma@squarkip.com', 'meetu.singh@squarkip.com', 'basant.goyal@squarkip.com',
+  'ketan.dagar@squarkip.com', 'khushi.gupta@squarkip.com', 'amritpal.kaur@squarkip.com', 'vijay.mishra@squarkip.com',
+  'drishti.jain@squarkip.com', 'rajesh.joshi@squarkip.com', 'ritik.sharma@squarkip.com',
+];
 const PASSCODE = process.env.ORG_PASSCODE || 'Hunt-Passcode-4419';
 
 let passed = 0; const fails = [];
@@ -59,9 +67,21 @@ function sess() {
 const login = async (s, email) => s('/auth/login', { method: 'POST', body: { email, password: PW } });
 
 (async () => {
-  const admin = sess(), staff = sess(), consultant = sess(), member = sess(), hr = sess();
-  await Promise.all([login(admin, ADMIN), login(staff, STAFF), login(consultant, CONSULTANT), login(member, MEMBER),
-    login(hr, 'hr@squarkip.com')]);
+  const picked = {};
+  for (const email of CANDIDATES) {
+    if (picked.ADMIN && picked.STAFF && picked.CONSULTANT && picked.MEMBER) break;
+    const s = sess();
+    if ((await login(s, email)).status >= 300) continue;
+    const c = new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+    if (!picked.ADMIN && c.has('patent.manage')) picked.ADMIN = s;
+    else if (!picked.STAFF && c.has('project.create') && !c.has('project.approve') && !c.has('tasklist.create')) picked.STAFF = s;
+    else if (!picked.CONSULTANT && c.has('tasklist.create') && !c.has('project.approve')) picked.CONSULTANT = s;
+    else if (!picked.MEMBER && !c.has('project.approve') && ((await s('/projects')).data ?? []).length > 0) picked.MEMBER = s;
+  }
+  const missing = ['ADMIN', 'STAFF', 'CONSULTANT', 'MEMBER'].filter(k => !picked[k]);
+  if (missing.length) { console.log(`FIXTURE: nobody in the roster fits ${missing.join(', ')} — reseed the scratch database`); process.exit(2); }
+  const admin = picked.ADMIN, staff = picked.STAFF, consultant = picked.CONSULTANT, member = picked.MEMBER, hr = sess();
+  await login(hr, 'hr@squarkip.com');
 
   // ── A client with patents to resolve ────────────────────────────────────────
   let client = ((await admin('/clients')).data ?? [])[0];
@@ -93,50 +113,54 @@ const login = async (s, email) => s('/auth/login', { method: 'POST', body: { ema
     ok('an Employee can list every patent id (patent.view, by design)', Array.isArray(options) && options.length > 0);
   }
 
-  const authority = ((await staff('/projects/pid-authorities')).data ?? [])[0];
   const managers = ((await staff('/projects/eligible-managers')).data?.managers ?? []);
   const made = await staff('/projects', {
     method: 'POST',
     body: {
       title: 'authz-holes probe',
       ...(patentsOff ? {} : { patentIds: [options[0].id] }),
-      pidAssigneeId: authority?.id,
       managerId: managers[0]?.id,
     },
   });
-  const pid = made.data?.id;
+  const mineId = made.data?.id;
   ok(patentsOff ? 'an Employee can create a client' : 'an Employee can create a project tagging a patent they chose',
-    made.status === 201 && !!pid, `status ${made.status} ${JSON.stringify(made.data).slice(0, 160)}`);
+    made.status === 201 && !!mineId && !!made.data?.code, `status ${made.status} ${JSON.stringify(made.data).slice(0, 160)}`);
 
   if (patentsOff) {
-    skip('the client fact on /projects/:id, /rounds, /full-report and /pid-ledger', 'no client fact exists');
+    skip('the client fact on /projects/:id, /rounds, /full-report and /cid-ledger', 'no client fact exists');
   } else {
-    const detail = (await staff(`/projects/${pid}`)).data;
+    const detail = (await staff(`/projects/${mineId}`)).data;
     ok('GET /projects/:id withholds the client from a non-patent.manage caller',
       detail?.client == null && detail?.clientId == null,
       `client=${JSON.stringify(detail?.client)}`);
 
-    const rounds = (await staff(`/projects/${pid}/rounds`)).data;
+    const rounds = (await staff(`/projects/${mineId}/rounds`)).data;
     const roundClient = (rounds?.rounds ?? [])[0]?.client;
     ok('GET /projects/:id/rounds must withhold it too', roundClient == null,
       `leaked client=${JSON.stringify(roundClient)}`);
 
     const report = (await staff('/projects/full-report')).data ?? [];
-    const mine = report.find(p => p.id === pid);
+    const mine = report.find(p => p.id === mineId);
     ok('GET /projects/full-report must withhold it too', mine != null && mine.client == null,
       `leaked client=${JSON.stringify(mine?.client)} on patents ${JSON.stringify(mine?.patents)}`);
 
     // HR holds user.manage_access but no patent permission at all — /patents is 403 for them.
     const hrPatents = await hr('/patents');
-    const ledger = await hr('/projects/pid-ledger');
+    const ledger = await hr('/projects/cid-ledger');
     const ledgerClients = JSON.stringify(ledger.data ?? []).includes(client.name);
     ok('HR is refused the patent portal', hrPatents.status === 403);
-    ok('GET /projects/pid-ledger must not hand HR the client name either', !ledgerClients,
-      `pid-ledger contains "${client.name}"`);
+    ok('GET /projects/cid-ledger must not hand HR the client name either', !ledgerClients,
+      `cid-ledger contains "${client.name}"`);
   }
 
   // ── 2. A file you may not read is a file you may not destroy ────────────────
-  const foreign = ((await member('/projects')).data ?? []).find(p => p.id !== pid);
+  // A matter the member is on and neither the Employee nor the Consultant is — every refusal below
+  // is asserted for one or the other, and a matter they ARE on would prove nothing.
+  const outsiders = new Set([
+    ...((await staff('/projects')).data ?? []).map(p => p.id),
+    ...((await consultant('/projects')).data ?? []).map(p => p.id),
+  ]);
+  const foreign = ((await member('/projects')).data ?? []).find(p => p.id !== mineId && !outsiders.has(p.id));
   ok('setup: a matter the Employee is not staffed on', !!foreign);
 
   const fd = new FormData();

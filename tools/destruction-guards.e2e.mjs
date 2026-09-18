@@ -47,10 +47,21 @@ const upload = async (s, projectId, name, text) => {
 };
 
 (async () => {
-  const su = sess(), other = sess(), emp = sess();
+  const su = sess(), other = sess();
   await su('/auth/login', { method: 'POST', body: { email: 'mohit@squarkip.com', password: PW } });
   await other('/auth/login', { method: 'POST', body: { email: 'yash@squarkip.com', password: PW } });
-  await emp('/auth/login', { method: 'POST', body: { email: 'ajay.sharma@squarkip.com', password: PW } });
+  // The "ordinary employee" is picked by what they may do, not by name: ajay.sharma, who this suite
+  // was written against, became a Senior Consultant — with oversight of every matter — and the
+  // walled-matter setup below then found nothing.
+  let emp = null;
+  for (const email of ['aman.sharma@squarkip.com', 'drishti.jain@squarkip.com', 'rajesh.joshi@squarkip.com', 'ajay.sharma@squarkip.com']) {
+    const s = sess();
+    const r = await s('/auth/login', { method: 'POST', body: { email, password: PW } });
+    if (!r.data?.user?.id) continue;
+    const c = new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+    if (!c.has('project.approve') && !c.has('project.delete') && !c.has('user.manage_access')) { emp = s; break; }
+  }
+  if (!emp) { console.log('FIXTURE: nobody in the roster is an ordinary employee — reseed the scratch database'); process.exit(2); }
 
   // A matter the employee genuinely cannot reach. Found rather than assumed: the seed changes.
   const all = (await su('/projects')).data ?? [];
