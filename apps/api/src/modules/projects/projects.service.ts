@@ -15,7 +15,7 @@ import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineScope, DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
-import { resolveDate, startOfUtcDay } from '../../common/dates';
+import { resolveDate, startOfIstDay, startOfUtcDay } from '../../common/dates';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import { PROJECT_TYPES, templateFor } from './project-templates';
@@ -1003,7 +1003,12 @@ export class ProjectsService {
         });
       }
 
-      return created;
+      // Re-read the groups: `include` above ran BEFORE the type's group and the first task group
+      // were created in this same transaction, so the create response said the client had none.
+      return { ...created, taskLists: await tx.taskList.findMany({
+        where: { projectId: created.id, deletedAt: null },
+        orderBy: { sequence: 'asc' },
+      }) };
     });
     } catch (e: any) {
       // A concurrent create claiming the same PID (or any unique-code race) → friendly message,
@@ -2347,7 +2352,9 @@ export class ProjectsService {
     // CLIENTS-FLOW: open and overdue task counts per client, two grouped queries for the whole
     // page rather than one per card. "Open" is the capacity board's definition, shared.
     const ids = ordered.map(p => p.id);
-    const today = startOfUtcDay(new Date());
+    // The firm's day, not UTC's: between midnight and 05:30 IST a UTC "today" is yesterday, so a
+    // task due yesterday was left out of the overdue count while the screen already called it late.
+    const today = startOfIstDay(new Date());
     const [openRows, overdueRows] = ids.length ? await Promise.all([
       this.prisma.projectTask.groupBy({
         by: ['projectId'], _count: { _all: true },
@@ -2552,7 +2559,18 @@ export class ProjectsService {
             user: { select: { id: true, firstName: true, lastName: true, email: true, profilePhoto: true } },
           },
         },
-        taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
+        // Named columns, not the whole row: an unbounded include is how clientDueDate — the date
+        // promised to the client — reached members who may not see it. It is selected here and
+        // stripped by redactProject below for anyone outside the deadline scope.
+        taskLists: {
+          where: { deletedAt: null },
+          orderBy: { sequence: 'asc' },
+          select: {
+            id: true, name: true, description: true, isDefault: true, sequence: true,
+            groupType: true, technologyDomain: true, status: true, completedAt: true,
+            startDate: true, dueDate: true, clientDueDate: true, createdBy: true, createdAt: true,
+          },
+        },
         clientGroup: { select: { id: true, name: true } },
         client: { select: { id: true, name: true, code: true } },
         // Linked patents — HANDLES ONLY. clientId is omitted too, so a member without

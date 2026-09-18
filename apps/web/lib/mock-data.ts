@@ -29,6 +29,8 @@ export interface MockProject {
   /** Live task groups — every one, and the ones still active. */
   taskGroupCount?: number;
   activeTaskGroups?: { id: string; name: string; groupType?: string | null; dueDate?: string | null }[];
+  /** Every open group, including a default "General" the card's preview leaves out. */
+  activeTaskGroupCount?: number;
   /** Task-group domains, so a domain filter can find a client by the work inside it. */
   taskGroupDomains?: string[];
   openTaskCount?: number;

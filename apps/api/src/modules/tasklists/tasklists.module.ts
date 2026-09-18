@@ -325,13 +325,21 @@ export class TaskListsService {
         if (due) {
           const open = await tx.task.findMany({
             where: { deletedAt: null, projectTasks: { some: { projectId, taskListId: id } }, ...OPEN_TASK_WHERE },
-            select: { id: true, dueDate: true },
+            select: { id: true, dueDate: true, startDate: true },
           });
           for (const t of open) {
             const rides = sameDay(t.dueDate, existing.dueDate);
             const overruns = !!t.dueDate && t.dueDate > due;
             if (!rides && !overruns) continue;
-            await tx.task.update({ where: { id: t.id }, data: { dueDate: due, overdueNotifiedAt: null } });
+            // A task cannot start after it is due. Pulling a group's deadline IN can land in front
+            // of a task's start date, and the row it left behind was refused by every later edit
+            // ("The due date cannot be before the start date") — the task was effectively frozen,
+            // by an action nobody took on it. The start comes with it.
+            const startsLate = !!t.startDate && t.startDate > due;
+            await tx.task.update({
+              where: { id: t.id },
+              data: { dueDate: due, overdueNotifiedAt: null, ...(startsLate ? { startDate: due } : {}) },
+            });
             await this.deadlineChanges.record({
               entityType: 'TASK', entityId: t.id, projectId,
               previous: t.dueDate, next: due, changedById: actorId, tx,

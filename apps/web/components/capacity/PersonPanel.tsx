@@ -81,13 +81,23 @@ export function ExtendMenu({ task, person, canGroup, disabled, onExtend }: {
   const [scope, setScope] = useState<ExtendScope>(person ? 'person' : 'task');
   const first = person?.name.split(' ')[0] ?? '';
   const [custom, setCustom] = useState('');
-  const offerGroup = canGroup && !!task.projectId && !!task.taskGroupId;
   const groupDue = task.taskGroupDueDate ?? null;
+  // Only a group that HAS a deadline can be extended. Offering it for one with none turned
+  // "+1 day" into "invent a deadline from this task's date" — and the server then pulls every
+  // later task in the group in to it, dragging colleagues' work backwards by weeks.
+  const offerGroup = canGroup && !!task.projectId && !!task.taskGroupId && !!groupDue;
   // Where the presets count from: the thing being moved.
-  const base = scope === 'group' ? (groupDue ?? task.taskDueDate ?? task.dueDate) : scope === 'task' ? (task.taskDueDate ?? task.dueDate) : task.dueDate;
+  const base = scope === 'group' ? groupDue : scope === 'task' ? (task.taskDueDate ?? task.dueDate) : task.dueDate;
   // A task cannot be due after its group — say so here rather than let the save be refused.
   const pastGroup = (day: string) => scope === 'task' && !!groupDue && day > groupDue;
-  const apply = (day: string) => { if (pastGroup(day)) return; onExtend(scope, day); setOpen(false); setCustom(''); };
+  // "Extend" only ever moves a deadline outwards. Pulling a GROUP's deadline in from here would
+  // drag every later task in it forward, which is not what the word says; that is an edit on the
+  // task group itself, where the dialog spells out what moves.
+  const earlierGroup = (day: string) => scope === 'group' && !!groupDue && day < groupDue;
+  const apply = (day: string) => {
+    if (pastGroup(day) || earlierGroup(day)) return;
+    onExtend(scope, day); setOpen(false); setCustom('');
+  };
   const tab = (s: ExtendScope, label: string) => (
     <button onClick={() => setScope(s)} className={clsx('flex-1 py-1 rounded', scope === s ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{label}</button>
   );
@@ -114,7 +124,7 @@ export function ExtendMenu({ task, person, canGroup, disabled, onExtend }: {
             )}
             <p className="text-[11px] text-gray-400 mb-1.5">
               {scope === 'person' ? `Give ${first} more time on this task — nobody else's deadline moves`
-                : scope === 'group' ? `Move “${task.taskGroup}”${groupDue ? ` (due ${formatDate(groupDue)})` : ''} — its tasks due on that date move with it`
+                : scope === 'group' ? `Move “${task.taskGroup}” (due ${formatDate(groupDue!)}) — every task due on that date moves with it`
                   : 'Push this task’s deadline for everyone on it'}
             </p>
             <div className="flex gap-1 mb-2">
@@ -133,8 +143,11 @@ export function ExtendMenu({ task, person, canGroup, disabled, onExtend }: {
             <div className="flex items-center gap-1">
               <input type="date" value={custom} onChange={e => setCustom(e.target.value)}
                 max={scope === 'task' && groupDue ? groupDue : undefined}
+                // Extending never moves a deadline EARLIER: on a task group that pulls other
+                // people's tasks in with it.
+                min={scope === 'group' && groupDue ? groupDue : undefined}
                 className="flex-1 min-w-0 text-xs border border-gray-200 rounded-md px-2 py-1.5" />
-              <button onClick={() => custom && apply(custom)} disabled={!custom || pastGroup(custom)}
+              <button onClick={() => custom && apply(custom)} disabled={!custom || pastGroup(custom) || earlierGroup(custom)}
                 className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-gray-800 text-white hover:bg-black disabled:opacity-40">Set</button>
             </div>
             {scope === 'task' && groupDue && (

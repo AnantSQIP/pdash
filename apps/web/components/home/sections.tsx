@@ -719,9 +719,15 @@ export function AdminShortcutsCard() {
   );
 }
 
-// ── Incoming PID requests awaiting me (project.generate_pid) ─────────────────
+// ── The PID queue (project.generate_pid) ────────────────────────────────────
 // Replaces the old (dead) client-approval card: client approval was removed, but
 // juniors still RAISE PID requests that an authority mints & assigns here.
+//
+// CLIENTS-FLOW: the queue is a POOL now — every open request in the organisation, and two kinds
+// of them. A CHANGE request cannot be fulfilled from here (the server refuses it: a change is
+// made from the client's page, where the move is audited). Offering "Assign PID" on one both
+// failed AND reserved a serial that was never released, locking that authority out of minting
+// for five minutes. A change row links to the client instead.
 export function PidRequestsCard() {
   const { org } = useOrg();
   const { can } = usePermissions();
@@ -746,13 +752,13 @@ export function PidRequestsCard() {
   const pendingId = fulfill.isPending ? fulfill.variables : null;
   return (
     <Card>
-      <CardHeader title="PID Requests" icon={Hash} badge={<CountBadge n={pending.length} />} href="/projects" linkLabel="All clients" />
+      <CardHeader title="PID Requests" icon={Hash} badge={<CountBadge n={pending.length} />} href="/projects?pidRequests=1" linkLabel="Open the queue" />
       {isError ? (
         <ErrorState onRetry={() => refetch()} />
       ) : isLoading ? (
         <SkeletonRows n={3} />
       ) : pending.length === 0 ? (
-        <EmptyHint>No PID requests awaiting you.</EmptyHint>
+        <EmptyHint>Nothing is waiting for a PID.</EmptyHint>
       ) : (
         pending.slice(0, 5).map(p => {
           const busy = p.id === pendingId;
@@ -761,13 +767,22 @@ export function PidRequestsCard() {
               <div className="flex-1 min-w-0">
                 <Link href={`/projects/${p.projectId}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 truncate block">{p.projectTitle}</Link>
                 <p className="text-xs text-gray-500 truncate">
-                  requested {relativePast(p.createdAt)}{p.note ? ` · ${p.note}` : ''}
+                  {p.kind === 'CHANGE' ? 'change' : 'PID'} requested {relativePast(p.createdAt)}
+                  {p.kind === 'CHANGE' && p.currentPid ? ` · now ${p.currentPid}` : ''}
+                  {p.reason ? ` · ${p.reason}` : p.note ? ` · ${p.note}` : ''}
                 </p>
               </div>
-              <button disabled={busy} onClick={() => fulfill.mutate(p.id)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 shrink-0" title="Generate and assign a PID">
-                <Hash size={13} /> {busy ? 'Assigning…' : 'Assign PID'}
-              </button>
+              {p.kind === 'CHANGE' ? (
+                <Link href={`/projects/${p.projectId}?changePid=1`} title="A PID change is made on the client, where the move is recorded"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-brand-200 bg-brand-50 text-brand-700 text-xs font-semibold hover:bg-brand-100 shrink-0">
+                  <Hash size={13} /> Change PID
+                </Link>
+              ) : (
+                <button disabled={busy} onClick={() => fulfill.mutate(p.id)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 shrink-0" title="Generate and assign a PID">
+                  <Hash size={13} /> {busy ? 'Assigning…' : 'Assign PID'}
+                </button>
+              )}
             </div>
           );
         })

@@ -403,7 +403,9 @@ export class TasksService {
     if (!target) throw new BadRequestException('That task group is not part of this client.');
     if (link.taskListId === target.id) return this.get(taskId);
     const moving = await this.prisma.task.findUnique({ where: { id: taskId }, select: { dueDate: true } });
-    if (target.dueDate && moving?.dueDate && moving.dueDate > target.dueDate
+    // By CALENDAR DAY, like assertWithinGroup — comparing raw timestamps refused a task due at
+    // 10:00 on the group's own deadline day, which task-create accepts into the same group.
+    if (target.dueDate && moving?.dueDate && startOfUtcDay(moving.dueDate) > target.dueDate
         && (await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } }))) {
       const when = target.dueDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
       throw new BadRequestException(`“${target.name}” is due ${when} and this task is due later. Bring the task's deadline in first.`);

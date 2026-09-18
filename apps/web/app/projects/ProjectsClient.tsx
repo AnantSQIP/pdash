@@ -52,7 +52,9 @@ function toDisplay(p: ApiProject): MockProject {
   }));
   const groups = p.taskLists ?? [];
   const active = groups.filter(g => g.status !== 'COMPLETED');
-  // An empty default group ("General") on a client that has real groups is scaffolding, not work.
+  // A default "General" on a client that has real groups is scaffolding, not work — it is left
+  // out of the card's PREVIEW, but still counted, because the client's own page lists it and two
+  // screens disagreeing about how many groups a client has is worse than one extra chip.
   const meaningful = active.filter(g => !(g.isDefault && g.name === 'General' && active.length > 1));
   const deadlines = active.map(g => g.dueDate).filter((d): d is string => !!d).sort();
   return {
@@ -76,6 +78,8 @@ function toDisplay(p: ApiProject): MockProject {
     clientGroupName: p.clientGroup?.name ?? null,
     taskGroupCount: groups.length,
     activeTaskGroups: meaningful.map(g => ({ id: g.id, name: g.name, groupType: g.groupType ?? null, dueDate: g.dueDate ?? null })),
+    // What the client's own page counts, so the two never disagree.
+    activeTaskGroupCount: active.length,
     taskGroupDomains: groups.map(g => g.technologyDomain).filter((d): d is string => !!d),
     openTaskCount: p.openTaskCount ?? 0,
     overdueTaskCount: p.overdueTaskCount ?? 0,
@@ -224,7 +228,7 @@ export function ProjectsClient() {
     active: clients.filter(p => p.projectPhase === 'ACTIVE').length,
     completed: clients.filter(p => p.projectPhase === 'COMPLETED').length,
     onHold: clients.filter(p => p.projectPhase === 'ON_HOLD').length,
-    taskGroups: clients.reduce((n, c) => n + (c.activeTaskGroups?.length ?? 0), 0),
+    taskGroups: clients.reduce((n, c) => n + (c.activeTaskGroupCount ?? c.activeTaskGroups?.length ?? 0), 0),
   };
 
   function invalidate() {

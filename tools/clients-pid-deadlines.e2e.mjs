@@ -51,6 +51,15 @@ function sess() {
   if (!suC.has('project.generate_pid') || mgrC.has('project.generate_pid') || !mgrC.has('deadline.view.client') || sraC.has('deadline.view.client')) {
     console.log('FIXTURE DRIFT — reseed the scratch database'); process.exit(2);
   }
+  // A reserved PID lives for five minutes and an authority may hold only ONE, so a run that ends
+  // holding one breaks the next. Mint, or take back the one already held.
+  const mint = async s => {
+    const gen = await s('/projects/generate-pid', { method: 'POST' });
+    if (gen.data?.pid) return gen.data.pid;
+    const held = (await s('/projects/pid-reservation')).data?.reservation?.pid;
+    if (!held) { console.log('cannot mint a PID: ' + brief(gen)); process.exit(2); }
+    return held;
+  };
   const queue = async s => (await s('/projects/pid-requests')).data ?? [];
   const inQueue = async (s, projectId) => (await queue(s)).find(r => r.projectId === projectId);
 
@@ -70,10 +79,10 @@ function sess() {
   ok('the named authority sees it marked as theirs, first in their queue',
     bForYash?.askedYou === true && (await queue(yash))[0]?.askedYou === true, JSON.stringify(bForYash)?.slice(0, 160));
   ok('the other authority sees it too, and who was asked', bForSu?.askedYou === false && bForSu?.askedFirst?.startsWith('Yash'), JSON.stringify(bForSu)?.slice(0, 160));
-  const gen = await su('/projects/generate-pid', { method: 'POST' });
-  const fb = await su(`/projects/pid-requests/${bForSu.id}/fulfill`, { method: 'POST', body: { pid: gen.data.pid } });
-  ok('a DIFFERENT authority than the one asked can fulfil it', (fb.status === 201 || fb.status === 200) && fb.data?.pid === gen.data.pid, brief(fb));
-  ok('…the client carries the PID', (await mgr(`/projects/${b.data.id}`)).data?.code === gen.data.pid);
+  const genPid = await mint(su);
+  const fb = await su(`/projects/pid-requests/${bForSu.id}/fulfill`, { method: 'POST', body: { pid: genPid } });
+  ok('a DIFFERENT authority than the one asked can fulfil it', (fb.status === 201 || fb.status === 200) && fb.data?.pid === genPid, brief(fb));
+  ok('…the client carries the PID', (await mgr(`/projects/${b.data.id}`)).data?.code === genPid);
   ok('…and the request is gone from every queue', !(await inQueue(yash, b.data.id)) && !(await inQueue(su, b.data.id)));
 
   // ── Two authorities, one client, at the same moment ─────────────────────────────────────────
@@ -90,10 +99,10 @@ function sess() {
   for (let i = 0; i < 4; i++) {
     const race = await mgr('/projects', { method: 'POST', body: { title: `Race ${RUN}-${i}`, managerId: who.mgr } });
     const raceReq = await inQueue(su, race.data.id);
-    const reserved = await yash('/projects/generate-pid', { method: 'POST' });   // held, not attached
+    const reserved = await mint(yash);   // held, not attached
     const [viaPage, viaQueue] = await Promise.all([
       su(`/projects/${race.data.id}/attach-pid`, { method: 'POST', body: {} }),
-      yash(`/projects/pid-requests/${raceReq.id}/fulfill`, { method: 'POST', body: { pid: reserved.data.pid } }),
+      yash(`/projects/pid-requests/${raceReq.id}/fulfill`, { method: 'POST', body: { pid: reserved } }),
     ]);
     for (const r of [viaPage, viaQueue]) if (r.status >= 500) { raceFailures++; console.log(`      round ${i}: ${r.status} ${JSON.stringify(r.data)?.slice(0, 150)}`); }
     const after = (await mgr(`/projects/${race.data.id}`)).data;
@@ -111,16 +120,28 @@ function sess() {
   const att = await su(`/projects/${c.data.id}/attach-pid`, { method: 'POST', body: {} });
   ok('attaching a PID from the client page works', (att.status === 201 || att.status === 200) && !!att.data?.pid, brief(att));
   ok('…and closes the open request', !(await inQueue(su, c.data.id)));
-  const stale = await yash(`/projects/pid-requests/${cReq.id}/fulfill`, { method: 'POST', body: {} });
-  ok('fulfilling that stale request is refused, and the PID is NOT overwritten',
-    stale.status === 400 && (await su(`/projects/${c.data.id}`)).data?.code === att.data.pid, brief(stale));
+  // With a REAL PID: sending {} was refused by the validation pipe, so this said 400 without ever
+  // reaching the rule it claims to test.
+  const staleGen = await mint(yash);
+  const stale = await yash(`/projects/pid-requests/${cReq.id}/fulfill`, { method: 'POST', body: { pid: staleGen } });
+  ok('fulfilling that stale request is refused in words, and the PID is NOT overwritten',
+    stale.status === 400 && /already been resolved/i.test(stale.data?.message ?? '')
+    && (await su(`/projects/${c.data.id}`)).data?.code === att.data.pid, brief(stale));
 
   const d = await mgr('/projects', { method: 'POST', body: { title: `Doomed ${RUN}`, managerId: who.mgr } });
   const dReq = await inQueue(su, d.data.id);
   await su(`/projects/${d.data.id}`, { method: 'DELETE' });
   ok('deleting a client takes its request out of the queue', !(await inQueue(su, d.data.id)));
-  const dead = await su(`/projects/pid-requests/${dReq.id}/fulfill`, { method: 'POST', body: {} });
-  ok('…and it cannot be fulfilled (no serial is burned on a deleted client)', dead.status === 400, brief(dead));
+  const deadGen = await mint(su);
+  const dead = await su(`/projects/pid-requests/${dReq.id}/fulfill`, { method: 'POST', body: { pid: deadGen } });
+  ok('…and it cannot be fulfilled (no serial is burned on a deleted client)',
+    dead.status === 400 || dead.status === 404, brief(dead));
+  // The serial is still the authority's: spend it on a live client, which proves it was not burned
+  // and leaves this run holding nothing.
+  const spend = await mgr('/projects', { method: 'POST', body: { title: `Spend ${RUN}`, managerId: who.mgr } });
+  const spent = await su(`/projects/${spend.data.id}/attach-pid`, { method: 'POST', body: { pid: deadGen } });
+  ok('…and the serial it reserved is still the authority\'s to spend',
+    (spent.status === 200 || spent.status === 201) && spent.data?.pid === deadGen, brief(spent));
 
   ok('asking again for a client that already has an open request is refused',
     (await mgr(`/projects/${a.data.id}/pid-request`, { method: 'POST', body: {} })).status === 400);
@@ -140,7 +161,7 @@ function sess() {
   step('asking for a PID change');
   const bad = await mgr(`/projects/${b.data.id}/pid-change-request`, { method: 'POST', body: { reason: 'Wrong number', suggestedPid: 'NOT-A-PID' } });
   ok('a suggested PID in the wrong format is refused', bad.status === 400, brief(bad));
-  const same = await mgr(`/projects/${b.data.id}/pid-change-request`, { method: 'POST', body: { reason: 'Wrong number', suggestedPid: gen.data.pid } });
+  const same = await mgr(`/projects/${b.data.id}/pid-change-request`, { method: 'POST', body: { reason: 'Wrong number', suggestedPid: genPid } });
   ok('suggesting the PID it already has is refused', same.status === 400, brief(same));
   ok('an employee cannot ask for a change', (await emp(`/projects/${b.data.id}/pid-change-request`, { method: 'POST', body: { reason: 'x yz' } })).status === 403);
   ok('a client without a PID cannot ask for a CHANGE',
@@ -149,11 +170,12 @@ function sess() {
   ok("the client's manager asks for a change, with a reason", (ch.status === 201 || ch.status === 200) && ch.data?.kind === 'CHANGE', brief(ch));
   const chReq = await inQueue(yash, b.data.id);
   ok('it lands in the shared queue as a change, with the reason and current PID',
-    chReq?.kind === 'CHANGE' && chReq.reason === 'Invoiced under the wrong financial year' && chReq.currentPid === gen.data.pid, JSON.stringify(chReq)?.slice(0, 200));
+    chReq?.kind === 'CHANGE' && chReq.reason === 'Invoiced under the wrong financial year' && chReq.currentPid === genPid, JSON.stringify(chReq)?.slice(0, 200));
   ok('a second request while one is open is refused',
     (await mgr(`/projects/${b.data.id}/pid-change-request`, { method: 'POST', body: { reason: 'Again please' } })).status === 400);
+  const chFulfil = await yash(`/projects/pid-requests/${chReq.id}/fulfill`, { method: 'POST', body: { pid: await mint(yash) } });
   ok('a change request cannot be "fulfilled" like a new PID — it is made with Change PID',
-    (await yash(`/projects/pid-requests/${chReq.id}/fulfill`, { method: 'POST', body: {} })).status === 400);
+    chFulfil.status === 400 && /Change PID/.test(chFulfil.data?.message ?? ''), brief(chFulfil));
   ok('declining needs a reason', (await yash(`/projects/pid-requests/${chReq.id}/decline`, { method: 'POST', body: { reason: '' } })).status === 400);
   const dec = await yash(`/projects/pid-requests/${chReq.id}/decline`, { method: 'POST', body: { reason: 'The FY is correct for this engagement' } });
   ok('an authority declines it with a reason', (dec.status === 201 || dec.status === 200) && dec.data?.declined, brief(dec));
@@ -161,12 +183,13 @@ function sess() {
   const newReq = (await mgr('/projects/pid-requests')).status; // (manager cannot see the queue — asserted above)
   const ch2 = await mgr(`/projects/${b.data.id}/pid-change-request`, { method: 'POST', body: { reason: 'Client asked for a fresh number' } });
   ok('after a decline, the team may ask again', ch2.status === 201 || ch2.status === 200, brief(ch2));
-  const next = await su('/projects/generate-pid', { method: 'POST' });
+  const next = await mint(su);
   // Give the reservation back: the move will reserve the number itself.
-  const move = await su(`/projects/${b.data.id}/pid/reassign`, { method: 'POST', headers: { 'x-org-passcode': PASSCODE }, body: { pid: next.data.pid } });
+  const move = await su(`/projects/${b.data.id}/pid/reassign`, { method: 'POST', headers: { 'x-org-passcode': PASSCODE }, body: { pid: next } });
   ok('an authority changes the PID with the existing Change PID route', move.status === 201 || move.status === 200, brief(move));
   ok('…which closes the open change request', !(await inQueue(su, b.data.id)));
-  ok('…and the client carries the new number', (await mgr(`/projects/${b.data.id}`)).data?.code === next.data.pid);
+  ok('…and the client carries the new number', (await mgr(`/projects/${b.data.id}`)).data?.code === next,
+    `wanted ${next}, got ${(await mgr(`/projects/${b.data.id}`)).data?.code}`);
   void newReq;
 
   // ─────────────────────────────────────────────────────────────────────────────────────────
@@ -220,6 +243,43 @@ function sess() {
   const t2 = (await mgr('/tasks', { method: 'POST', body: { title: 'Due late', projectId: cl.id, taskListId: g2.id, dueDate: day(25) } })).data;
   const mv = await mgr(`/tasks/${t2.id}/task-group`, { method: 'PUT', body: { projectId: cl.id, taskListId: g.data.id } });
   ok('an open task due after the target group is refused, saying what to do', mv.status === 400 && /deadline/i.test(mv.data?.message ?? ''), brief(mv));
+
+  // ── What the review found, held down ────────────────────────────────────────────────────────
+  step('the promise is not in the payload either');
+  const leakR = await mgr('/projects', { method: 'POST', body: {
+    title: `Leak ${RUN}`, managerId: who.mgr,
+    taskGroup: { name: 'Promise', startDate: day(0), dueDate: day(10), clientDueDate: day(14) },
+  } });
+  ok('a client created with a first task group reports it back (the include ran before it existed)',
+    (leakR.data?.taskLists ?? []).length === 1, JSON.stringify(leakR.data?.taskLists)?.slice(0, 120));
+  await mgr(`/projects/${leakR.data.id}/members`, { method: 'POST', body: { userId: who.emp, projectRole: 'MEMBER' } });
+  const leakMgrR = (await mgr(`/projects/${leakR.data.id}`)).data;
+  const leakEmpR = (await emp(`/projects/${leakR.data.id}`)).data;
+  ok('the manager reads the client deadline on the task group', !!leakMgrR?.taskLists?.[0]?.clientDueDate);
+  ok('an employee ON the client does not — not even in the client payload',
+    (leakEmpR?.taskLists ?? []).length > 0 && !('clientDueDate' in leakEmpR.taskLists[0]),
+    JSON.stringify(leakEmpR?.taskLists?.[0])?.slice(0, 160));
+
+  step('pulling a group deadline in leaves every task workable');
+  const pullGroupR = (await mgr(`/projects/${leakR.data.id}/tasklists`)).data[0];
+  const lateStarterR = await mgr('/tasks', { method: 'POST', body: {
+    title: `Late starter ${RUN}`, projectId: leakR.data.id, taskListId: pullGroupR.id, startDate: day(8), dueDate: day(10),
+  } });
+  await mgr(`/projects/${leakR.data.id}/tasklists/${pullGroupR.id}`, { method: 'PATCH', body: { dueDate: day(3) } });
+  const pulledR = (await mgr(`/tasks/${lateStarterR.data.id}`)).data;
+  ok('the task comes in with the group', pulledR?.dueDate?.slice(0, 10) === day(3), JSON.stringify(pulledR?.dueDate));
+  ok('…and never starts after it is due — the row stayed editable', pulledR?.startDate?.slice(0, 10) <= day(3)
+    && (await mgr(`/tasks/${lateStarterR.data.id}`, { method: 'PATCH', body: { priority: 'HIGH' } })).status === 200,
+    `start ${pulledR?.startDate} due ${pulledR?.dueDate}`);
+
+  step('the same day means the same thing on both doors');
+  const noonR = await mgr('/tasks', { method: 'POST', body: {
+    title: `Noon ${RUN}`, projectId: leakR.data.id, taskListId: pullGroupR.id, dueDate: `${day(3)}T10:00:00.000Z`,
+  } });
+  ok('a task due mid-morning ON the group deadline is accepted', noonR.status === 201, brief(noonR));
+  const sameDayTargetR = await mgr(`/projects/${leakR.data.id}/tasklists`, { method: 'POST', body: { name: `Same day ${RUN}`, dueDate: day(3) } });
+  const moveNoonR = await mgr(`/tasks/${noonR.data.id}/task-group`, { method: 'PUT', body: { projectId: leakR.data.id, taskListId: sameDayTargetR.data.id } });
+  ok('…and moving it into a group due that same day is allowed too', moveNoonR.status === 200, brief(moveNoonR));
 
   console.log(`\n${passed} passed, ${fails.length} failed`);
   if (fails.length) { console.log('\nFailures:\n  ' + fails.join('\n  ')); process.exit(1); }

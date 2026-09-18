@@ -52,11 +52,25 @@ export class DeadlineVisibilityService {
     return scope.global || projectIds.some(pid => scope.managed.has(pid));
   }
 
-  /** Strip clientDueDate from a project payload unless the actor may see it. */
+  /**
+   * Strip clientDueDate from a project payload unless the actor may see it — including from any
+   * TASK GROUPS carried with it.
+   *
+   * CLIENTS-FLOW: the date promised to the client moved down to the task group, and a client's
+   * payload carries its groups. Stripping only the client's own column left the promise sitting
+   * in the same response for anyone who could open the client, which is the whole thing this
+   * pass exists to prevent.
+   */
   redactProject<T extends WithClientDue & { id: string }>(project: T, scope: DeadlineScope): T {
     if (this.canSee(scope, [project.id])) return project;
-    const { clientDueDate: _hidden, ...rest } = project;
-    return rest as T;
+    const { clientDueDate: _hidden, ...rest } = project as WithClientDue & { taskLists?: unknown };
+    if (Array.isArray(rest.taskLists)) {
+      rest.taskLists = rest.taskLists.map(g =>
+        g && typeof g === 'object' && 'clientDueDate' in g
+          ? (({ clientDueDate: _groupHidden, ...group }: Record<string, unknown>) => group)(g as Record<string, unknown>)
+          : g);
+    }
+    return rest as unknown as T;
   }
 
   redactProjects<T extends WithClientDue & { id: string }>(projects: T[], scope: DeadlineScope): T[] {

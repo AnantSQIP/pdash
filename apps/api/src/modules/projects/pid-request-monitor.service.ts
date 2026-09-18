@@ -84,14 +84,25 @@ export class PidRequestMonitorService implements OnModuleInit, OnModuleDestroy {
       const byOrg = new Map<string, typeof due>();
       for (const r of due) (byOrg.get(r.organizationId) ?? byOrg.set(r.organizationId, []).get(r.organizationId)!).push(r);
       for (const [organizationId, rows] of byOrg) {
-        await this.projects.notifyPidAuthorities(organizationId, null, reminderDigest(
-          rows.map(r => ({ kind: r.kind, title: r.project.title, code: r.project.code, createdAt: r.createdAt })), now,
-        ));
-        await this.prisma.pidRequest.updateMany({
-          where: { id: { in: rows.map(r => r.id) } },
-          data: { remindedAt: now, reminderCount: { increment: 1 } },
-        });
-        reminded += rows.length;
+        // One organisation's failure must not silence every organisation after it in the loop.
+        try {
+          const told = await this.projects.notifyPidAuthorities(organizationId, null, reminderDigest(
+            rows.map(r => ({ kind: r.kind, title: r.project.title, code: r.project.code, createdAt: r.createdAt })), now,
+          ));
+          // An organisation with no PID authority was told nothing; marking the requests reminded
+          // would spend today's reminder on a message that reached nobody and leave them silent
+          // for another day.
+          if (!told) continue;
+          await this.prisma.pidRequest.updateMany({
+            // Still PENDING: one of these may have been fulfilled between the read and now, and
+            // bumping a resolved request's reminder count says it was chased when it was not.
+            where: { id: { in: rows.map(r => r.id) }, status: 'PENDING' },
+            data: { remindedAt: now, reminderCount: { increment: 1 } },
+          });
+          reminded += rows.length;
+        } catch (e) {
+          this.logger.warn(`PID reminder for org ${organizationId} failed: ${String(e)}`);
+        }
       }
     } catch (e) {
       this.logger.warn(`PID reminder sweep failed: ${String(e)}`);

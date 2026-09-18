@@ -13,7 +13,7 @@ import { TaskListView } from './views';
 import { TaskGroupModal } from './TaskGroupModal';
 import { domainLabelOf, useTechnologyDomains } from './TechnologyDomainPicker';
 import { invalidateTaskCaches } from '@/lib/task-cache';
-import { byPriorityThenDeadline, isTaskClosed, taskAssigneeUsers } from '@/lib/tasks';
+import { byGroupOrder, byPriorityThenDeadline, isTaskClosed, taskAssigneeUsers } from '@/lib/tasks';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { Modal } from '@/components/ui/Modal';
@@ -114,7 +114,10 @@ export function TaskGroups({
       const key = link?.taskListId && known.has(link.taskListId) ? link.taskListId : '__ungrouped__';
       (m.get(key) ?? m.set(key, []).get(key)!).push(t);
     }
-    for (const list of m.values()) list.sort(byPriorityThenDeadline);
+    // Inside a group, tasks alike in priority and date keep the group's own order; the loose
+    // "Ungrouped" bucket has no shared order to keep, so it takes the general one.
+    const inGroup = byGroupOrder(projectId);
+    for (const [key, list] of m) list.sort(key === '__ungrouped__' ? byPriorityThenDeadline : inGroup);
     return m;
   }, [tasks, groups, projectId]);
 

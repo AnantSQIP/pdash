@@ -134,13 +134,24 @@ export class PurgeService {
         // Same-instant match: these are the tasks the project's own delete archived.
         tasks = (await tx.task.updateMany({ where: { id: { in: taskIds }, deletedAt }, data: { deletedAt: null } })).count;
       }
-      return { project: p, tasks };
+      // CLIENTS-FLOW (PID rework): deleting a client CANCELS its open PID request so no serial is
+      // burned on a client that is gone. Restoring it has to put the request back, or the client
+      // comes back with no PID and nothing tracking that — the one state the queue exists to
+      // prevent. Same-instant match again: only the request this delete cancelled.
+      let pidRequeued = 0;
+      if (!project.code) {
+        pidRequeued = (await tx.pidRequest.updateMany({
+          where: { projectId: id, status: 'CANCELLED', resolvedAt: deletedAt },
+          data: { status: 'PENDING', resolvedAt: null, resolvedById: null, resolutionNote: null, remindedAt: null },
+        })).count;
+      }
+      return { project: p, tasks, pidRequeued };
     });
     await this.events.emit({
       action: 'project.restored', entityType: 'PROJECT', entityId: id,
-      metadata: { title: project.title, code: project.code, tasksRestored: restored.tasks },
+      metadata: { title: project.title, code: project.code, tasksRestored: restored.tasks, pidRequeued: restored.pidRequeued },
     });
-    return { id, title: project.title, tasksRestored: restored.tasks };
+    return { id, title: project.title, tasksRestored: restored.tasks, pidRequeued: restored.pidRequeued };
   }
 
   async restoreTask(id: string) {
