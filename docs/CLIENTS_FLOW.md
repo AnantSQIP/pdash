@@ -186,6 +186,29 @@ Tests: `tools/clients-flow.e2e.mjs` (75), `tools/clients-pid-deadlines.e2e.mjs` 
 suites against a scratch copy of the database, never the one being demonstrated — they create
 clients, mint PIDs and file requests.
 
+## What was reviewed, and what was not
+
+Two adversarial reviews (API, screens) read the whole diff against this document and probed a
+scratch copy of the database. Twelve findings, all fixed, the two that mattered being: the date
+promised to the client leaked through `GET /projects/:id` (it is stripped from a client's task
+groups now), and pulling a group's deadline in left tasks starting after they were due, which the
+task editor then refused — freezing work nobody had touched.
+
+Found sound, and not worth re-auditing: client-group tenant scoping (the organisation always comes
+from the actor, never the request body); every task-group route's redaction; the permission matrix
+across the new routes (HR, Employee, SRA and Manager each refused what they should be); concurrent
+fulfilment of one PID request; attach closing the request; a stale request never overwriting a PID;
+deleting a client cancelling it; the switched-off patent pages being redirects with their original
+components kept.
+
+Thin cover, stated plainly:
+
+- The hourly reminder sweep is unit-tested (`tools/pid-reminder.spec.ts`) but never observed
+  running end to end — background jobs are off in the preview.
+- The deadlock that lock ordering fixed is timing, not logic: it was demonstrated at the database
+  level, not reproduced through the API on demand.
+- The backfill has only been run against scratch databases whose clients all had a real creator.
+
 ## Deploying later (when the owner asks)
 
 Three migrations, all additive except one index swap:
