@@ -474,10 +474,25 @@ export type PidLedgerEntry = {
 
 export type PidRequestItem = {
   id: string; projectId: string; projectTitle: string;
+  /** CLIENTS-FLOW: NEW = mint one; CHANGE = correct the one the client has. */
+  kind: 'NEW' | 'CHANGE';
+  currentPid?: string | null;
   description?: string | null; priority?: string | null;
   projectType?: string | null; managerId?: string | null;
   startDate?: string | null; dueDate?: string | null;
-  requestedBy: string; note: string | null; createdAt: string;
+  requestedBy: string; requestedById?: string; note: string | null; createdAt: string;
+  /** Who the requester asked first (null = everyone), and whether that is the reader. */
+  askedFirst?: string | null; askedYou?: boolean;
+  reason?: string | null; suggestedPid?: string | null;
+  waitingHours?: number; remindedAt?: string | null; reminderCount?: number;
+};
+
+/** CLIENTS-FLOW: what a client is waiting on, on its own page. */
+export type OpenPidRequest = {
+  id: string; kind: 'NEW' | 'CHANGE'; createdAt: string;
+  askedFirst: string | null; requestedBy: string | null;
+  reason: string | null; suggestedPid: string | null;
+  remindedAt: string | null; reminderCount: number;
 };
 
 /**
@@ -493,6 +508,8 @@ export type TaskGroup = {
   dueDate?: string | null;
   status: 'ACTIVE' | 'COMPLETED';
   completedAt?: string | null;
+  /** The date promised to the client. ABSENT when the reader may not see it. */
+  clientDueDate?: string | null;
   createdBy?: string | null;
   createdAt?: string;
   _count?: { projectTasks: number };
@@ -518,6 +535,8 @@ export type TaskGroupInput = {
   customDomain?: { label: string; save?: boolean };
   startDate?: string;
   dueDate?: string;
+  /** The date promised to the client (needs the client-deadline right). */
+  clientDueDate?: string;
   /** Who does the group's standard tasks (needs task.assign). */
   assigneeId?: string;
   hoursPerTask?: number;
@@ -570,6 +589,8 @@ export type ApiProject = {
   /** CLIENTS-FLOW: on the list projection — tasks still open, and those past their deadline. */
   openTaskCount?: number;
   overdueTaskCount?: number;
+  /** CLIENTS-FLOW: the open PID request, on the single-client read. */
+  openPidRequest?: OpenPidRequest | null;
 };
 
 // ─── Patent-analysis client codes + confidential coded patents ────────────────
@@ -1414,6 +1435,8 @@ export type CapacityOpenTask = {
   id: string; title: string; projectId?: string; project?: string;
   /** CLIENTS-FLOW: the task group inside the client (null for team-space work). */
   taskGroupId?: string | null; taskGroup?: string | null;
+  /** The task group's own (team) deadline, YYYY-MM-DD. */
+  taskGroupDueDate?: string | null;
   /** The project's PID and which round it is — two rounds of one PID share a code. */
   projectPid?: string | null; projectRound?: number;
   /** Team-space work: no PID, labelled by the space. */
@@ -1463,6 +1486,7 @@ export type TeamHistory = { from: string; to: string; mode: 'history'; rows: His
 export type CoverageRiskTask = {
   id: string; title: string; priority: string; dueDate: string;
   projectId?: string; project?: string; projectPriority?: string;
+  taskGroupId?: string | null; taskGroup?: string | null; taskGroupDueDate?: string | null;
   remainingHours: number; overdue: boolean;
 };
 export type CoverageRisk = {
@@ -1823,8 +1847,20 @@ export const api = {
     editPidRequestProject: (id: string, data: { title?: string; description?: string; priority?: string; projectType?: string | null; managerId?: string; startDate?: string | null; dueDate?: string | null }) =>
       req<ApiProject>(`/projects/pid-requests/${id}/project`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Assign a PID to a pending-request project. */
+    /** CLIENTS-FLOW: decline a PID-change request, with a reason the requester is told. */
+    declinePidRequest: (id: string, reason: string) =>
+      req<{ declined: boolean }>(`/projects/pid-requests/${id}/decline`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    /** CLIENTS-FLOW: ask for a PID for a client with none and no open request. */
+    requestPid: (projectId: string, data: { assigneeId?: string; note?: string } = {}) =>
+      req<OpenPidRequest>(`/projects/${projectId}/pid-request`, { method: 'POST', body: JSON.stringify(data) }),
+    /** CLIENTS-FLOW: remind every PID authority (hourly at most). */
+    nudgePidRequest: (projectId: string) =>
+      req<{ reminded: number }>(`/projects/${projectId}/pid-request/nudge`, { method: 'POST' }),
+    /** CLIENTS-FLOW: ask for this client's PID to be changed. */
+    requestPidChange: (projectId: string, data: { reason: string; suggestedPid?: string }) =>
+      req<OpenPidRequest>(`/projects/${projectId}/pid-change-request`, { method: 'POST', body: JSON.stringify(data) }),
     fulfillPidRequest: (id: string, pid: string) =>
-      req<{ pid: string; projectId: string }>(`/projects/pid-requests/${id}/fulfill`,
+      req<{ pid: string | null; projectId: string; alreadyHad?: boolean }>(`/projects/pid-requests/${id}/fulfill`,
         { method: 'POST', body: JSON.stringify({ pid }) }),
     update: (id: string, data: Partial<Pick<ApiProject, 'title' | 'description' | 'priority' | 'projectPhase' | 'startDate' | 'dueDate' | 'clientDueDate' | 'completionPercentage' | 'clientGroupId'>>) =>
       req<ApiProject>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -2166,8 +2202,8 @@ export const api = {
     update: (projectId: string, id: string, data: {
       name?: string; sequence?: number; description?: string | null; groupType?: string | null;
       technologyDomain?: string | null; customDomain?: { label: string; save?: boolean };
-      startDate?: string | null; dueDate?: string | null;
-    }) => req<TaskGroup>(`/projects/${projectId}/tasklists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+      startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+    }) => req<TaskGroup & { movedTasks?: number }>(`/projects/${projectId}/tasklists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     /** Mark complete — refused while any task in the group is open. */
     complete: (projectId: string, id: string) =>
       req<TaskGroup>(`/projects/${projectId}/tasklists/${id}/complete`, { method: 'POST' }),

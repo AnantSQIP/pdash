@@ -150,6 +150,7 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   ok('the assigned work appears on Team Capacity for that person', onBoard.length === invGroup.createdTaskCount, `found ${onBoard.length}`);
   ok('…labelled with its client and its task group', onBoard.every(t => t.project === client.title && t.taskGroup === invGroup.name));
   ok('…with the planned hours, placed from the start date', onBoard.every(t => t.estimatedHours === 3 && t.scheduled === true));
+  ok('…and its task group\'s deadline, which "extend the task group" counts from', onBoard.every(t => t.taskGroupDueDate === dayKey(10)), JSON.stringify(onBoard[0] ?? null)?.slice(0, 200));
   const mine = (await sra(`/tasks?userId=${who.sra}`)).data ?? [];
   ok('My Tasks carries the group name', mine.filter(t => t.projectTasks?.[0]?.taskList?.name === invGroup.name).length === invGroup.createdTaskCount);
 

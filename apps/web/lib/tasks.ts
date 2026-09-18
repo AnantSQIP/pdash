@@ -103,7 +103,9 @@ export function nextUpFirst(a: ApiTask, b: ApiTask): number {
  *   2. priority, highest first
  *   3. SAME PRIORITY → the nearest deadline is the higher priority
  *   4. a task with no deadline sorts after every dated one — no date is not "due today"
- *   5. title, so the order is total and never shuffles between renders
+ *   5. two tasks in the SAME task group keep the group's own order — a type's standard tasks are
+ *      laid out as the work runs (Proposal … Report, QC), and tasks added later come after them
+ *   6. title, so the order is total and never shuffles between renders
  */
 export function byPriorityThenDeadline(a: ApiTask, b: ApiTask): number {
   const closed = (t: ApiTask) => (isTaskClosed(t) ? 1 : 0);
@@ -114,6 +116,9 @@ export function byPriorityThenDeadline(a: ApiTask, b: ApiTask): number {
 
   const due = (t: ApiTask) => (t.dueDate ? new Date(t.dueDate).getTime() : Number.POSITIVE_INFINITY);
   if (due(a) !== due(b)) return due(a) - due(b);
+
+  const la = a.projectTasks?.[0], lb = b.projectTasks?.[0];
+  if (la?.taskListId && la.taskListId === lb?.taskListId && la.sequence !== lb.sequence) return la.sequence - lb.sequence;
 
   return (a.title ?? '').localeCompare(b.title ?? '');
 }

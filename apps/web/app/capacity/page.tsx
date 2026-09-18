@@ -17,7 +17,7 @@ import {
   ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type TaskGroup, type CoverageRisks, type CoverageRisk, type TeamHistory, type HistoryRow } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type TaskGroup, type CoverageRisks, type CoverageRisk, type CoverageRiskTask, type TeamHistory, type HistoryRow } from '@/lib/api';
 
 /** How often the board re-reads the server while it is on screen. */
 const POLL_MS = 30_000;
@@ -25,7 +25,7 @@ const POLL_MS = 30_000;
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
-import { PersonPanel, ExtendMenu, type ExtendScope } from '@/components/capacity/PersonPanel';
+import { PersonPanel, ExtendMenu, applyExtend, type ExtendScope } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, projectsOf, holidaysOf } from '@/components/capacity/grid';
@@ -571,7 +571,7 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
   const { toast } = useToast();
   const canAssign = can('task.assign');
   const canTask = can('task.update');
-  const canProject = can('project.update');
+  const canGroup = can('tasklist.update');
   const [busy, setBusy] = useState('');
 
   function refresh() {
@@ -614,23 +614,17 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
     } finally { setBusy(''); }
   }
 
-  async function extend(scope: ExtendScope, task: { id: string; projectId?: string }, iso: string, userId: string) {
+  async function extend(scope: ExtendScope, task: CoverageRiskTask, day: string, person: { userId: string; name: string }) {
     setBusy(task.id);
     try {
-      if (scope === 'project') {
-        if (!task.projectId) throw new Error('This task has no client.');
-        await api.projects.update(task.projectId, { dueDate: iso });
-      } else if (scope === 'task') {
-        await api.tasks.update(task.id, { dueDate: iso });
-      } else {
-        await api.tasks.setAssigneeDeadline(task.id, userId, iso);
-      }
+      const said = await applyExtend(scope, task, day, person);
       refresh();
-      toast(scope === 'person' ? `Their deadline on this task moved to ${formatDate(iso)} — nobody else's changed` : `Deadline extended to ${formatDate(iso)}`, 'success');
+      toast(said, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
     } finally { setBusy(''); }
   }
+
 
   return (
     <div className="bg-white rounded-xl border border-amber-200 overflow-hidden">
@@ -666,8 +660,8 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {canTask && (
-                      <ExtendMenu task={t} person={{ userId: risk.userId, name: risk.name }} canProject={canProject} disabled={busy === t.id}
-                        onExtend={(scope, iso) => extend(scope, t, iso, risk.userId)} />
+                      <ExtendMenu task={t} person={{ userId: risk.userId, name: risk.name }} canGroup={canGroup} disabled={busy === t.id}
+                        onExtend={(scope, day) => extend(scope, t, day, { userId: risk.userId, name: risk.name })} />
                     )}
                     {canAssign && (
                       <select

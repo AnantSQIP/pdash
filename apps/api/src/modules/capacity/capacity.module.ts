@@ -203,6 +203,8 @@ export interface CapacityRow {
      * for team-space work and for a task whose group was deleted.
      */
     taskGroupId?: string | null; taskGroup?: string | null;
+    /** The group's own (team) deadline — "extend the whole task group" starts from it. */
+    taskGroupDueDate?: string | null;
     /** The project's PID and which round it is — two rounds of one PID share a code. */
     projectPid?: string | null; projectRound?: number;
     /** Internal team-space work rather than a client matter — no PID, never billable. */
@@ -412,7 +414,7 @@ export class CapacityService {
             // CLIENTS-FLOW: and the task group inside the client, so the board can say which piece
             // of the client's work somebody is on, not only which client.
             select: {
-              taskList: { select: { id: true, name: true, deletedAt: true } },
+              taskList: { select: { id: true, name: true, deletedAt: true, dueDate: true } },
               project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } },
             },
             take: 1,
@@ -602,6 +604,7 @@ export class CapacityService {
           project: project?.title ?? team?.name,
           taskGroupId: project ? liveGroup?.id ?? null : null,
           taskGroup: project ? liveGroup?.name ?? null : null,
+          taskGroupDueDate: project && liveGroup?.dueDate ? dayKey(liveGroup.dueDate) : null,
           projectPid: project?.code ?? null,
           projectRound: project?.roundSeq,
           isTeamWork: !project && !!team,
@@ -1315,7 +1318,10 @@ export class CapacityService {
         assignees: { select: { userId: true, dueDate: true } },
         projectTasks: {
           where: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } },
-          select: { project: { select: { id: true, title: true, priority: true } } },
+          select: {
+            project: { select: { id: true, title: true, priority: true } },
+            taskList: { select: { id: true, name: true, dueDate: true, deletedAt: true } },
+          },
           take: 1,
         },
       },
@@ -1323,6 +1329,8 @@ export class CapacityService {
     const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     return tasks.map(t => {
       const project = t.projectTasks[0]?.project;
+      const group = t.projectTasks[0]?.taskList;
+      const liveGroup = group && !group.deletedAt ? group : null;
       const estimate = t.estimatedHours ?? DEFAULT_TASK_HOURS;
       const remaining = Math.max(0, estimate * (1 - (t.completionPercentage ?? 0) / 100));
       // Each person's deadline on the task: their own seat's date when one was set, else the task's.
@@ -1333,6 +1341,8 @@ export class CapacityService {
         dueDate: t.dueDate,
         dueByUser,
         projectId: project?.id, project: project?.title, projectPriority: project?.priority,
+        taskGroupId: liveGroup?.id ?? null, taskGroup: liveGroup?.name ?? null,
+        taskGroupDueDate: liveGroup?.dueDate ? dayKey(liveGroup.dueDate) : null,
         remainingHours: r1(remaining),
         overdue: !!t.dueDate && startOfUtcDay(t.dueDate) < today,
         userIds: t.assignees.map(a => a.userId),

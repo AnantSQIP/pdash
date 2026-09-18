@@ -9,6 +9,7 @@ import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 import { OPEN_TYPE } from '@/lib/tasks';
+import { formatDate } from '@/lib/date';
 
 interface AddTaskModalProps {
   projectId: string;
@@ -60,6 +61,15 @@ export function AddTaskModal({
     if (fallback) setGroupId(fallback.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups]);
+  // CLIENTS-FLOW (deadlines): a task inside a group is due no later than the group. Until somebody
+  // picks a date, the task takes the group's deadline — the server does the same when none is sent.
+  const groupDue = (() => {
+    const g = groups.find(x => x.id === groupId);
+    return g?.dueDate ? String(g.dueDate).slice(0, 10) : '';
+  })();
+  const [dueTouched, setDueTouched] = useState(!!initialDueDate);
+  useEffect(() => { if (!dueTouched) setDueDate(groupDue); }, [groupDue, dueTouched]);
+  const dueAfterGroup = !!groupDue && !!dueDate && dueDate > groupDue;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -109,6 +119,7 @@ export function AddTaskModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (dueAfterGroup) { setError(`The deadline cannot be after the task group’s (${formatDate(groupDue)}).`); return; }
     setLoading(true);
     setError('');
     try {
@@ -249,12 +260,22 @@ export function AddTaskModal({
             </div>
           </div>
 
-          {/* A task has a single deadline. Client-facing dates live on the project only. */}
+          {/* A task has a single deadline — the team's. The date promised to the client lives on its
+              task group, and the task's must fall inside the group's. */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Deadline</label>
-            <DateField type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+            <DateField type="date" value={dueDate} max={groupDue || undefined}
+              onChange={e => { setDueDate(e.target.value); setDueTouched(true); }}
+              className={clsx('w-full px-3.5 py-2.5 text-sm border rounded-lg focus:outline-none focus:border-brand-500 transition',
+                dueAfterGroup ? 'border-red-300' : 'border-gray-300')}
             />
+            {groupDue && (
+              <p className={clsx('text-[11px] mt-1', dueAfterGroup ? 'text-red-600' : 'text-gray-400')}>
+                {dueAfterGroup
+                  ? `After the task group’s deadline (${formatDate(groupDue)}) — pick that date or earlier.`
+                  : `The task group is due ${formatDate(groupDue)}; the task can be due then or earlier.`}
+              </p>
+            )}
           </div>
 
 

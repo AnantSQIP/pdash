@@ -121,6 +121,15 @@ export function ProjectsClient() {
   const [groupFilter, setGroupFilter] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
+  // CLIENTS-FLOW (PID rework): notifications about PID requests link to /projects?pidRequests=1,
+  // which opens the queue. Read from the URL in an effect: this page is statically rendered, and
+  // useSearchParams would force a Suspense boundary on it.
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get('pidRequests') === '1') setShowPidRequests(true);
+    } catch { /* no window */ }
+  }, []);
+
   // The fold survives a reload — somebody who parks "Archived work" out of the way wants it to stay there.
   useEffect(() => {
     try { const raw = localStorage.getItem(COLLAPSE_KEY); if (raw) setCollapsed(JSON.parse(raw)); } catch { /* unavailable */ }

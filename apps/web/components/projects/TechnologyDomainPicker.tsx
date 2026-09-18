@@ -97,7 +97,7 @@ export function TechnologyDomainPicker({
         </div>
       ) : (
         <p className="text-[11px] text-gray-400 mt-1">
-          The field the work is about — separate from the project type, which is the kind of study it is.
+          The field the work is about — separate from the type of work, which is the kind of study it is.
         </p>
       )}
     </div>

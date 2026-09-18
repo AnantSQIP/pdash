@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { X, Plus, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock, Layers, Building2 } from 'lucide-react';
+import { X, Plus, Info, Search, KeyRound, Copy, RefreshCw, Check, Clock, Layers, Building2, Lock } from 'lucide-react';
 import clsx from 'clsx';
 
 import { api, type ApiProject, type ProjectTypeDef, type PatentOption, type ClientSummary } from '@/lib/api';
@@ -73,6 +73,10 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
   const [saveDomain, setSaveDomain] = useState(false);
   const [groupStart, setGroupStart] = useState('');
   const [groupDue, setGroupDue] = useState('');
+  // The date promised to the client, for someone allowed to set one (a new client has no manager
+  // relationship yet, so only the global permission qualifies — the server says the same).
+  const canSetClientDue = can('deadline.view.client');
+  const [groupClientDue, setGroupClientDue] = useState('');
 
   // ── CLIENTS-FLOW: commented out — client codes and patent IDs (kept, switched off) ─────
   const [patentIds, setPatentIds] = useState<string[]>([]);
@@ -184,17 +188,19 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
   }, [groupType, customLabel, selectedType, isCustom, groupNameTouched]);
 
   const groupDatesInverted = !!groupStart && !!groupDue && groupDue < groupStart;
-  const groupIncomplete = withGroup && (!groupName.trim() || (isCustom && !customLabel.trim()) || groupDatesInverted);
-  const requestIncomplete = !canGeneratePid && (!managerId || !pidAssigneeId);
+  const clientBeforeInternal = !!groupClientDue && !!groupDue && groupClientDue < groupDue;
+  const groupIncomplete = withGroup && (!groupName.trim() || (isCustom && !customLabel.trim()) || groupDatesInverted || clientBeforeInternal);
+  // CLIENTS-FLOW (PID rework): naming who assigns the PID is optional — every authority sees it.
+  const requestIncomplete = !canGeneratePid && !managerId;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) { setError('Give the client a name.'); return; }
     if (!canGeneratePid && !managerId) { setError('Choose who manages this client.'); return; }
-    if (!canGeneratePid && !pidAssigneeId) { setError('Choose who should assign the PID.'); return; }
     if (withGroup && !groupName.trim()) { setError('Give the first task group a name, or untick “Start with a task group”.'); return; }
     if (withGroup && isCustom && !customLabel.trim()) { setError('Give the new type of work a name.'); return; }
     if (groupDatesInverted) { setError('The task group’s deadline cannot be before its start.'); return; }
+    if (clientBeforeInternal) { setError('The team’s deadline cannot be after the date promised to the client.'); return; }
     setLoading(true);
     setError('');
     try {
@@ -220,6 +226,7 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
           ...domainPayload(techDomain, customDomainLabel, saveDomain),
           startDate: groupStart || undefined,
           dueDate: groupDue || undefined,
+          clientDueDate: canSetClientDue && groupClientDue ? groupClientDue : undefined,
         } : undefined,
         // CLIENTS-FLOW: commented out — only ever sent while the feature is on.
         ...(PATENTS_AND_CLIENT_CODES ? {
@@ -266,7 +273,8 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
               <Info size={14} className="mt-0.5 shrink-0 text-brand-500" />
               <span>
                 You don&apos;t have PID authority, so the client is created with its <b>PID pending</b>.
-                The person you choose below is asked to assign it — you&apos;ll be told once it&apos;s set.
+                Every PID authority sees the request and any of them can assign it — you&apos;ll be told once
+                it&apos;s set. Work on the client can start straight away.
               </span>
             </div>
           )}
@@ -383,7 +391,7 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
                     <p className="text-sm font-medium text-brand-800">PID</p>
                     {pid
                       ? <p className="text-sm font-semibold text-brand-700 font-mono truncate">{pid}</p>
-                      : <p className="text-[11px] text-gray-500">Generate one now (held for 5 minutes), or attach it later from the client’s page.</p>}
+                      : <p className="text-[11px] text-gray-500">Generate one now (held for 5 minutes), or leave it — the client waits in the PID queue until one is attached.</p>}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     {pid && (
@@ -428,9 +436,9 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
               </div>
               {!canGeneratePid && (
                 <div>
-                  <label htmlFor="nc-pid-from" className={label}>Request PID from <span className="text-red-500">*</span></label>
-                  <select id="nc-pid-from" required value={pidAssigneeId} onChange={e => setPidAssigneeId(e.target.value)} className={field}>
-                    <option value="">Select who assigns it…</option>
+                  <label htmlFor="nc-pid-from" className={label}>Ask first for the PID <span className="text-gray-400 font-normal">(optional)</span></label>
+                  <select id="nc-pid-from" value={pidAssigneeId} onChange={e => setPidAssigneeId(e.target.value)} className={field}>
+                    <option value="">Any PID authority</option>
                     {authorityOptions.map(u => (
                       <option key={u.id} value={u.id}>{fullName(u)}{u.designation ? ` — ${u.designation}` : ''}</option>
                     ))}
@@ -510,17 +518,25 @@ export function NewClientModal({ onClose, onSuccess, createdBy = 'system', defau
                   save={saveDomain} onSave={setSaveDomain}
                 />
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className={clsx('grid gap-4', canSetClientDue ? 'grid-cols-3' : 'grid-cols-2')}>
                   <div>
                     <label className={label}>Start</label>
                     <DateField type="date" value={groupStart} onChange={e => setGroupStart(e.target.value)} className={field} />
                   </div>
                   <div>
-                    <label className={label}>Deadline</label>
-                    <DateField type="date" value={groupDue} min={groupStart || undefined} onChange={e => setGroupDue(e.target.value)} className={field} />
+                    <label className={label}>Deadline <span className="text-gray-400 font-normal">· team</span></label>
+                    <DateField type="date" value={groupDue} min={groupStart || undefined} max={groupClientDue || undefined} onChange={e => setGroupDue(e.target.value)} className={field} />
                   </div>
+                  {canSetClientDue && (
+                    <div>
+                      <label className="flex items-center gap-1 text-sm font-medium text-amber-700 mb-1.5"><Lock size={11} /> Client deadline</label>
+                      <DateField type="date" value={groupClientDue} min={groupDue || groupStart || undefined} onChange={e => setGroupClientDue(e.target.value)}
+                        className="w-full px-3.5 py-2.5 text-sm border border-amber-300 bg-amber-50/40 rounded-lg focus:outline-none focus:border-amber-500 transition" />
+                    </div>
+                  )}
                 </div>
                 {groupDatesInverted && <p className="-mt-2 text-xs text-red-600">The deadline cannot be before the start.</p>}
+                {clientBeforeInternal && <p className="-mt-2 text-xs text-red-600">The team’s deadline cannot be after the date promised to the client.</p>}
               </div>
             )}
           </section>

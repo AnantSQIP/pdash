@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader, Check, Info, Layers, Users } from 'lucide-react';
+import { Loader, Check, Info, Layers, Users, Lock } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type ProjectTypeDef, type TaskGroup, type UserSummary } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
@@ -27,10 +27,17 @@ const day = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
  *
  * Editing changes the group's own facts. It never adds or removes tasks — changing the type
  * relabels the work, it does not re-template it, and the dialog says so.
+ *
+ * Deadlines (see docs/CLIENTS_FLOW.md, phase 7): the group carries the TEAM's deadline and — for
+ * whoever may see it — the date promised to the CLIENT, which the team's must not pass. Moving the
+ * team's deadline carries the tasks that were due on it, and pulls in any task due after it.
  */
-export function TaskGroupModal({ projectId, clientName, group, members, onClose, onSaved }: {
+export function TaskGroupModal({ projectId, clientName, group, members, canSetClientDue: canSetClientDueProp, onClose, onSaved }: {
   projectId: string;
   clientName?: string;
+  /** May this reader set the client deadline? Defaults to the global permission; the client's
+   *  manager may too, which only the page knows. */
+  canSetClientDue?: boolean;
   /** Present when editing. */
   group?: TaskGroup;
   /** The client's team, offered first when choosing who does the work. */
@@ -44,6 +51,7 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
   const editing = !!group;
   const canAssign = can('task.assign');
   const canStaffOutsiders = can('project.approve');
+  const canSetClientDue = canSetClientDueProp ?? can('deadline.view.client');
 
   const [name, setName] = useState(group?.name ?? '');
   const [nameTouched, setNameTouched] = useState(editing);
@@ -56,6 +64,7 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
   const [saveDomain, setSaveDomain] = useState(false);
   const [startDate, setStartDate] = useState(day(group?.startDate));
   const [dueDate, setDueDate] = useState(day(group?.dueDate));
+  const [clientDueDate, setClientDueDate] = useState(day(group?.clientDueDate));
   const [description, setDescription] = useState(group?.description ?? '');
   const [assigneeId, setAssigneeId] = useState('');
   const [hoursPerTask, setHoursPerTask] = useState('4');
@@ -84,6 +93,8 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
   const others = useMemo(() => users.filter(u => !memberIds.has(u.id) && u.status !== 'INACTIVE').sort(byName), [users, memberIds]);
 
   const datesInverted = !!startDate && !!dueDate && dueDate < startDate;
+  const clientBeforeTeam = canSetClientDue && !!clientDueDate && !!dueDate && clientDueDate < dueDate;
+  const dueChanged = editing && day(group?.dueDate) !== dueDate;
   const hours = hoursPerTask.trim() === '' ? undefined : Number(hoursPerTask);
   const hoursInvalid = hours !== undefined && (!Number.isFinite(hours) || hours < 0 || hours > 200);
 
@@ -109,6 +120,8 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
             : { technologyDomain: techDomain || null }),
           startDate: startDate || null,
           dueDate: dueDate || null,
+          // Sent only by someone who may set it — for anyone else the server would refuse it.
+          ...(canSetClientDue ? { clientDueDate: clientDueDate || null } : {}),
         });
       }
       return api.taskLists.create(projectId, {
@@ -123,13 +136,17 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
         ...domainPayload(techDomain, customDomainLabel, saveDomain),
         startDate: startDate || undefined,
         dueDate: dueDate || undefined,
+        ...(canSetClientDue && clientDueDate ? { clientDueDate } : {}),
         ...(assigneeId && taskCount > 0 ? { assigneeId, hoursPerTask: hours } : {}),
       });
     },
     onSuccess: g => {
       refresh();
       if (editing) {
-        toast('Task group saved', 'success');
+        const moved = (g as any).movedTasks ?? 0;
+        toast(moved
+          ? `Task group saved — ${moved} task${moved === 1 ? '' : 's'} moved to the new deadline`
+          : 'Task group saved', 'success');
       } else {
         const made = (g as any).createdTaskCount ?? 0;
         const assigned = (g as any).assigned ?? 0;
@@ -149,6 +166,7 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
     if (!name.trim()) { setError('Give the task group a name.'); return; }
     if (!editing && isCustom && !customLabel.trim()) { setError('Give the new type of work a name.'); return; }
     if (datesInverted) { setError('The deadline cannot be before the start.'); return; }
+    if (clientBeforeTeam) { setError('The team’s deadline cannot be after the date promised to the client.'); return; }
     if (hoursInvalid) { setError('Hours per task must be between 0 and 200.'); return; }
     save.mutate();
   }
@@ -168,7 +186,7 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
             <button onClick={submit}
-              disabled={save.isPending || !name.trim() || datesInverted || hoursInvalid || (!editing && isCustom && !customLabel.trim())}
+              disabled={save.isPending || !name.trim() || datesInverted || clientBeforeTeam || hoursInvalid || (!editing && isCustom && !customLabel.trim())}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
               {save.isPending ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
               {editing ? 'Save' : 'Create task group'}
@@ -239,17 +257,36 @@ export function TaskGroupModal({ projectId, clientName, group, members, onClose,
           save={saveDomain} onSave={setSaveDomain}
         />
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className={clsx('grid gap-4', canSetClientDue ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2')}>
           <div>
             <label className={label}>Start</label>
             <DateField type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className={field} />
           </div>
           <div>
-            <label className={label}>Deadline</label>
-            <DateField type="date" value={dueDate} min={startDate || undefined} onChange={e => setDueDate(e.target.value)} className={field} />
+            <label className={label}>Deadline <span className="text-gray-400 font-normal">· team</span></label>
+            <DateField type="date" value={dueDate} min={startDate || undefined} max={(canSetClientDue && clientDueDate) || undefined}
+              onChange={e => setDueDate(e.target.value)} className={field} />
           </div>
+          {canSetClientDue && (
+            <div>
+              <label className="flex items-center gap-1 text-sm font-medium text-amber-700 mb-1.5" title="Seen only by managers and people allowed to see client deadlines">
+                <Lock size={11} /> Client deadline
+              </label>
+              <DateField type="date" value={clientDueDate} min={dueDate || startDate || undefined} onChange={e => setClientDueDate(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-amber-300 bg-amber-50/40 rounded-lg focus:outline-none focus:border-amber-500 transition" />
+            </div>
+          )}
         </div>
         {datesInverted && <p className="-mt-2 text-xs text-red-600">The deadline cannot be before the start.</p>}
+        {clientBeforeTeam && <p className="-mt-2 text-xs text-red-600">The team’s deadline cannot be after the date promised to the client.</p>}
+        {dueChanged && !datesInverted && (
+          <p className="-mt-2 flex items-start gap-1.5 text-[11px] text-gray-500">
+            <Info size={12} className="mt-px shrink-0 text-gray-400" />
+            {dueDate
+              ? 'Open tasks due on the old deadline move with it, and any open task due after the new one is pulled in to it. Each move is recorded.'
+              : 'Clearing the deadline leaves every task’s own date as it is.'}
+          </p>
+        )}
         {!editing && taskCount > 0 && (dueDate || startDate) && (
           <p className="-mt-2 text-[11px] text-gray-400">Each of the {taskCount} tasks takes the group’s dates; change any task on its own later.</p>
         )}

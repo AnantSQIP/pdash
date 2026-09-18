@@ -2,7 +2,9 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, KeyRound, RefreshCw, Check, Loader, Inbox, ChevronDown, ChevronUp, Save } from 'lucide-react';
+import { X, KeyRound, RefreshCw, Check, Loader, Inbox, ChevronDown, ChevronUp, Save, ArrowRightLeft, Clock, BellRing, ExternalLink, XCircle } from 'lucide-react';
+import Link from 'next/link';
+import clsx from 'clsx';
 import { api, type PidRequestItem, type ProjectTypeDef } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
@@ -10,9 +12,25 @@ import { DateField } from '@/components/ui/DateField';
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.');
 const toDay = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
 
-/** The authority's queue of pending PID requests. Each expands to a full review/edit of the
- *  project — the authority verifies (and can correct) the details, then attaches a PID, which
- *  sets the project's code and notifies the requester. */
+/** How long a request has waited, the way people say it. */
+function waited(hours?: number) {
+  if (hours == null) return '';
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${hours}h`;
+  const d = Math.floor(hours / 24);
+  return `${d} day${d === 1 ? '' : 's'}`;
+}
+
+/**
+ * CLIENTS-FLOW: the PID request POOL. Every open request in the organisation — new PIDs and PID
+ * changes — for any authority to act on; the ones addressed to the reader come first, then the
+ * longest-waiting. Before, each authority saw only the requests addressed to them, so one busy
+ * person held a client up for as long as they were busy.
+ *
+ * A NEW request expands to a review of the client and a PID to attach. A CHANGE request says what
+ * is wrong and what the team believes is right; it is made with Change PID on the client's page
+ * (the audited route, passcode and all) or declined with a reason the requester is told.
+ */
 export function PidRequestsModal({ onClose, onAssigned }: { onClose: () => void; onAssigned?: () => void }) {
   const qc = useQueryClient();
   const { data: requests = [], isLoading, isError, refetch } = useQuery({
@@ -27,8 +45,8 @@ export function PidRequestsModal({ onClose, onAssigned }: { onClose: () => void;
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">PID Requests</h2>
-            <p className="text-sm text-gray-500 mt-0.5">Review the details, then assign a Project ID.</p>
+            <h2 className="text-lg font-semibold text-gray-900">PID requests</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Every open request — any PID authority can act on any of them.</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
         </div>
@@ -46,13 +64,16 @@ export function PidRequestsModal({ onClose, onAssigned }: { onClose: () => void;
               <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center mb-3">
                 <Inbox size={22} className="text-gray-400" />
               </div>
-              <p className="text-gray-500 font-medium">No pending PID requests</p>
-              <p className="text-sm text-gray-400 mt-1">You&apos;re all caught up.</p>
+              <p className="text-gray-500 font-medium">No open PID requests</p>
+              <p className="text-sm text-gray-400 mt-1">Every client has its PID.</p>
             </div>
           )}
-          {requests.map(r => (
-            <RequestRow key={r.id} req={r} onDone={() => { qc.invalidateQueries({ queryKey: ['pid-requests'] }); onAssigned?.(); }} />
-          ))}
+          {requests.map(r => {
+            const done = () => { qc.invalidateQueries({ queryKey: ['pid-requests'] }); qc.invalidateQueries({ queryKey: ['project', r.projectId] }); onAssigned?.(); };
+            return r.kind === 'CHANGE'
+              ? <ChangeRow key={r.id} req={r} onDone={done} onClose={onClose} />
+              : <RequestRow key={r.id} req={r} onDone={done} />;
+          })}
         </div>
       </div>
     </div>
@@ -69,6 +90,83 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 const inputCls = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition';
+
+function Meta({ req }: { req: PidRequestItem }) {
+  const long = (req.waitingHours ?? 0) >= 24;
+  return (
+    <p className="flex items-center gap-x-2 gap-y-0.5 flex-wrap text-[11px] text-gray-400 mt-0.5">
+      <span>by {req.requestedBy}</span>
+      <span className={clsx('inline-flex items-center gap-0.5', long && 'text-amber-600 font-medium')}>
+        <Clock size={10} /> waiting {waited(req.waitingHours)}
+      </span>
+      {req.askedYou
+        ? <span className="px-1.5 py-px rounded bg-brand-50 text-brand-700 font-medium">asked you</span>
+        : req.askedFirst ? <span>asked {req.askedFirst} first</span> : <span>asked every authority</span>}
+      {(req.reminderCount ?? 0) > 0 && (
+        <span className="inline-flex items-center gap-0.5"><BellRing size={10} /> reminded {req.reminderCount}×</span>
+      )}
+    </p>
+  );
+}
+
+/** A request to CHANGE a client's PID. */
+function ChangeRow({ req, onDone, onClose }: { req: PidRequestItem; onDone: () => void; onClose: () => void }) {
+  const [declining, setDeclining] = useState(false);
+  const [reason, setReason] = useState('');
+  const [err, setErr] = useState('');
+  const decline = useMutation({
+    mutationFn: () => api.projects.declinePidRequest(req.id, reason.trim()),
+    onSuccess: () => { setErr(''); onDone(); },
+    onError: e => setErr(msg(e)),
+  });
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/30 p-3.5 space-y-2.5">
+      <div className="flex items-start gap-2">
+        <ArrowRightLeft size={15} className="text-amber-600 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-gray-900 truncate">
+            Change the PID of {req.projectTitle}
+          </p>
+          <Meta req={req} />
+        </div>
+      </div>
+      <div className="flex items-center gap-2 text-xs font-mono pl-6">
+        <span className="px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-700">{req.currentPid ?? '—'}</span>
+        <span className="text-gray-400">→</span>
+        <span className="px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-700">{req.suggestedPid ?? 'the next free number'}</span>
+      </div>
+      {req.reason && <p className="text-xs text-gray-700 pl-6">“{req.reason}”</p>}
+      {declining ? (
+        <div className="pl-6 space-y-2">
+          <input value={reason} onChange={e => setReason(e.target.value)} autoFocus maxLength={500}
+            placeholder="Why the PID stays as it is — the requester is told"
+            className={inputCls} />
+          <div className="flex items-center gap-2">
+            <button onClick={() => decline.mutate()} disabled={decline.isPending || reason.trim().length < 3}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-gray-800 text-white rounded-lg hover:bg-gray-900 disabled:opacity-50">
+              {decline.isPending ? <Loader size={13} className="animate-spin" /> : <XCircle size={13} />} Decline
+            </button>
+            <button onClick={() => setDeclining(false)} className="px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div className="pl-6 flex items-center gap-2">
+          {/* The change itself is made where it always was: Change PID on the client's page — the
+              audited route with its preview and passcode. Making it closes this request. */}
+          <Link href={`/projects/${req.projectId}?changePid=1`} onClick={onClose}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700">
+            <ExternalLink size={13} /> Open client to change it
+          </Link>
+          <button onClick={() => setDeclining(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 bg-white rounded-lg hover:bg-gray-50">
+            Decline…
+          </button>
+        </div>
+      )}
+      {err && <p className="text-[11px] text-red-500 pl-6">{err}</p>}
+    </div>
+  );
+}
 
 function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }) {
   const { users } = useOrg();
@@ -107,6 +205,8 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
 
   const assign = useMutation({
     mutationFn: () => api.projects.fulfillPidRequest(req.id, pid.trim()),
+    // A colleague may have attached a PID in the meantime; the request then closes with THEIR
+    // number and nothing is overwritten — the list simply loses the row.
     onSuccess: () => { setErr(''); onDone(); },
     onError: e => setErr(msg(e)),
   });
@@ -123,30 +223,32 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between gap-3 p-3.5 text-left">
         <div className="min-w-0">
           <p className="text-sm font-medium text-gray-900 truncate">{title || req.projectTitle}</p>
-          <p className="text-[11px] text-gray-400 truncate">
-            requested by {req.requestedBy}
-          </p>
+          <Meta req={req} />
         </div>
         {open ? <ChevronUp size={16} className="text-gray-400 shrink-0" /> : <ChevronDown size={16} className="text-gray-400 shrink-0" />}
       </button>
 
       {open && (
         <div className="border-t border-gray-100 p-3.5 space-y-3">
-          <Field label="Project Title">
+          <Field label="Client name">
             <input value={title} onChange={e => setTitle(e.target.value)} className={inputCls} />
           </Field>
           <Field label="Description">
             <textarea rows={2} value={description} onChange={e => setDescription(e.target.value)} className={`${inputCls} resize-none`} />
           </Field>
           <div className="grid grid-cols-2 gap-2.5">
-            <Field label="Project Type">
-              <select value={projectType} onChange={e => setProjectType(e.target.value)} className={`${inputCls} bg-white`}>
-                <option value="">None</option>
-                {types.map(t => (
-                  <option key={t.value} value={t.value} disabled={t.comingSoon}>{t.label}{t.comingSoon ? ' — coming soon' : ''}</option>
-                ))}
-              </select>
-            </Field>
+            {/* CLIENTS-FLOW: the type of work and its dates live on task groups now, so a client's
+                review no longer asks for them. A client that still carries a legacy type keeps it. */}
+            {req.projectType && (
+              <Field label="Type (legacy)">
+                <select value={projectType} onChange={e => setProjectType(e.target.value)} className={`${inputCls} bg-white`}>
+                  <option value="">None</option>
+                  {types.map(t => (
+                    <option key={t.value} value={t.value} disabled={t.comingSoon}>{t.label}{t.comingSoon ? ' — coming soon' : ''}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Client manager">
               <select value={managerId} onChange={e => setManagerId(e.target.value)} className={`${inputCls} bg-white`}>
                 <option value="">Unassigned</option>
@@ -156,7 +258,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
               </select>
             </Field>
           </div>
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className={clsx('grid gap-2.5', req.startDate || req.dueDate ? 'grid-cols-3' : 'grid-cols-1')}>
             <Field label="Priority">
               <select value={priority} onChange={e => setPriority(e.target.value)} className={`${inputCls} bg-white`}>
                 <option value="LOW">Low</option>
@@ -165,12 +267,16 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
                 <option value="CRITICAL">Critical</option>
               </select>
             </Field>
-            <Field label="Start">
-              <DateField type="date" value={startDate} max={dueDate || undefined} onChange={e => setStartDate(e.target.value)} className={inputCls} />
-            </Field>
-            <Field label="Deadline">
-              <DateField type="date" value={dueDate} min={startDate || undefined} onChange={e => setDueDate(e.target.value)} className={inputCls} />
-            </Field>
+            {(req.startDate || req.dueDate) && (
+              <>
+                <Field label="Start">
+                  <DateField type="date" value={startDate} max={dueDate || undefined} onChange={e => setStartDate(e.target.value)} className={inputCls} />
+                </Field>
+                <Field label="Deadline">
+                  <DateField type="date" value={dueDate} min={startDate || undefined} onChange={e => setDueDate(e.target.value)} className={inputCls} />
+                </Field>
+              </>
+            )}
           </div>
           {req.note && <p className="text-[11px] text-gray-500">Requester note: “{req.note}”</p>}
 
@@ -183,7 +289,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
           </div>
 
           <div className="border-t border-gray-100 pt-3">
-            <label className="block text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5">Assign Project ID</label>
+            <label className="block text-[11px] font-medium text-gray-500 uppercase tracking-wide mb-1.5">Assign the PID</label>
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <KeyRound size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -201,7 +307,7 @@ function RequestRow({ req, onDone }: { req: PidRequestItem; onDone: () => void }
               </button>
               <button type="button" onClick={() => assign.mutate()} disabled={assign.isPending || !pid.trim()}
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 shrink-0">
-                {assign.isPending ? <Loader size={13} className="animate-spin" /> : <Check size={13} />} Attach &amp; Create
+                {assign.isPending ? <Loader size={13} className="animate-spin" /> : <Check size={13} />} Assign PID
               </button>
             </div>
           </div>

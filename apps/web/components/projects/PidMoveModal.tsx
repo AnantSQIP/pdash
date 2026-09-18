@@ -37,11 +37,13 @@ import { useToast } from '@/components/ui/Toast';
  * The preview comes from the SAME plan the move itself runs, so what is shown and what happens
  * cannot drift apart.
  */
-export function PidMoveModal({ projectId, projectTitle, currentPid, onClose, onMoved }: {
+export function PidMoveModal({ projectId, projectTitle, currentPid, suggestedPid, onClose, onMoved }: {
   projectId: string;
   projectTitle: string;
   /** The PID the project carries now — shown before the preview lands. */
   currentPid: string | null;
+  /** CLIENTS-FLOW: the number the client's team asked for in a change request — pre-filled. */
+  suggestedPid?: string | null;
   onClose: () => void;
   onMoved?: (toPid: string) => void;
 }) {
@@ -51,14 +53,14 @@ export function PidMoveModal({ projectId, projectTitle, currentPid, onClose, onM
   /** OWN = take a number of its own; MERGE = move under another project's. */
   const [intent, setIntent] = useState<'OWN' | 'MERGE'>('OWN');
   /** For OWN: mint the next number, or use one typed by hand. */
-  const [source, setSource] = useState<'MINT' | 'TYPED'>('MINT');
-  const [typed, setTyped] = useState('');
+  const [source, setSource] = useState<'MINT' | 'TYPED'>(suggestedPid ? 'TYPED' : 'MINT');
+  const [typed, setTyped] = useState(suggestedPid ?? '');
   const [intoProjectId, setIntoProjectId] = useState('');
 
   // The typed PID is debounced before it is previewed: every keystroke of "SQ_26_27_0" is a
   // different, mostly nonsensical number, and previewing each one turns a considered decision into
   // a flicker of red error messages.
-  const [debouncedTyped, setDebouncedTyped] = useState('');
+  const [debouncedTyped, setDebouncedTyped] = useState(suggestedPid ?? '');
   useEffect(() => {
     const t = setTimeout(() => setDebouncedTyped(typed.trim()), 400);
     return () => clearTimeout(t);

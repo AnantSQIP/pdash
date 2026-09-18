@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Plus, Pencil, Loader, Trash2, ChevronDown, Layers, CheckCircle2, RotateCcw, UserPlus, ArrowRightLeft,
-  CalendarDays, Clock, ChevronsDownUp, ChevronsUpDown,
+  CalendarDays, Clock, ChevronsDownUp, ChevronsUpDown, Lock,
 } from 'lucide-react';
 import { api, type ApiTask, type TaskGroup, type UserSummary, type WorkflowStatus } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
@@ -36,7 +36,7 @@ type Filter = 'ACTIVE' | 'COMPLETED' | 'ALL';
  */
 export function TaskGroups({
   projectId, tasks, loading, statuses, canEdit, onTaskClick, onAddTask, onStatusChange,
-  clientName, members, managerId, locked, canManageGroups, canDeleteGroups, canAssign, canMoveTasks,
+  clientName, members, managerId, locked, canManageGroups, canDeleteGroups, canAssign, canMoveTasks, canSetClientDue,
 }: {
   projectId: string;
   tasks: ApiTask[];
@@ -60,6 +60,8 @@ export function TaskGroups({
   canAssign?: boolean;
   /** task.update — move a task to another group. */
   canMoveTasks?: boolean;
+  /** May set a group's client deadline (deadline.view.client, or this client's manager). */
+  canSetClientDue?: boolean;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -277,6 +279,12 @@ export function TaskGroups({
                     {g.startDate ? formatDate(g.startDate) : '…'} → {g.dueDate ? formatDate(g.dueDate) : 'no deadline'}
                   </span>
                 )}
+                {/* Present only for a reader allowed to see it — the server strips it for everyone else. */}
+                {g.clientDueDate && (
+                  <span className="inline-flex items-center gap-1 text-amber-700" title="The date promised to the client — seen only by managers and people allowed to see client deadlines">
+                    <Lock size={11} /> Client {formatDate(g.clientDueDate)}
+                  </span>
+                )}
                 <span className="inline-flex items-center gap-2" title={`${done} of ${list.length} tasks closed`}>
                   <span className="w-20 h-1.5 bg-gray-200 rounded-full overflow-hidden">
                     <span className={clsx('block h-full rounded-full', completed ? 'bg-green-500' : 'bg-brand-500')} style={{ width: `${pct}%` }} />
@@ -317,7 +325,7 @@ export function TaskGroups({
                       </button>
                     )}
                     {canMoveTasks && others.length > 0 && (
-                      <MoveMenu groups={others} busy={move.isPending} onPick={to => move.mutate({ task, to })} />
+                      <MoveMenu groups={others} task={task} busy={move.isPending} onPick={to => move.mutate({ task, to })} />
                     )}
                   </>
                 ) : undefined}
@@ -340,7 +348,7 @@ export function TaskGroups({
           <TaskListView tasks={ungrouped} loading={loading} statuses={statuses} canAddTask={false} showHours
             onTaskClick={onTaskClick} onAddTask={() => {}} onStatusChange={onStatusChange}
             rowActions={canMoveTasks && !locked && activeGroups.length > 0 ? task => (
-              <MoveMenu groups={activeGroups} busy={move.isPending} onPick={to => move.mutate({ task, to })} />
+              <MoveMenu groups={activeGroups} task={task} busy={move.isPending} onPick={to => move.mutate({ task, to })} />
             ) : undefined} />
         </div>
       )}
@@ -354,10 +362,10 @@ export function TaskGroups({
       )}
 
       {creating && (
-        <TaskGroupModal projectId={projectId} clientName={clientName} members={members} onClose={() => setCreating(false)} />
+        <TaskGroupModal projectId={projectId} clientName={clientName} members={members} canSetClientDue={canSetClientDue} onClose={() => setCreating(false)} />
       )}
       {editing && (
-        <TaskGroupModal projectId={projectId} clientName={clientName} members={members} group={editing} onClose={() => setEditing(null)} />
+        <TaskGroupModal projectId={projectId} clientName={clientName} members={members} group={editing} canSetClientDue={canSetClientDue} onClose={() => setEditing(null)} />
       )}
       {assigning && (
         <Modal title="Assign" subtitle={assigning.title} size="xl" onClose={() => setAssigning(null)}>
@@ -373,8 +381,13 @@ export function TaskGroups({
   );
 }
 
-/** Move a task to another group: a small menu, closed by clicking anywhere else. */
-function MoveMenu({ groups, busy, onPick }: { groups: TaskGroup[]; busy: boolean; onPick: (g: TaskGroup) => void }) {
+/**
+ * Move a task to another group: a small menu, closed by clicking anywhere else. A group due
+ * before the task is offered but disabled — the server refuses it, because a task inside a group
+ * cannot be due after the group; the task's own date has to come in first.
+ */
+function MoveMenu({ groups, task, busy, onPick }: { groups: TaskGroup[]; task: ApiTask; busy: boolean; onPick: (g: TaskGroup) => void }) {
+  const taskDue = task.dueDate ? String(task.dueDate).slice(0, 10) : '';
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -394,13 +407,19 @@ function MoveMenu({ groups, busy, onPick }: { groups: TaskGroup[]; busy: boolean
       {open && (
         <div role="menu" className="absolute right-0 top-full mt-1 z-30 w-56 bg-white border border-gray-200 rounded-xl shadow-lg py-1">
           <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Move to</p>
-          {groups.map(g => (
-            <button key={g.id} role="menuitem" onClick={() => { setOpen(false); onPick(g); }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-brand-50">
-              <Layers size={13} className="text-brand-400 shrink-0" />
-              <span className="truncate">{g.name}</span>
-            </button>
-          ))}
+          {groups.map(g => {
+            const groupDue = g.dueDate ? String(g.dueDate).slice(0, 10) : '';
+            const tooEarly = !!groupDue && !!taskDue && groupDue < taskDue;
+            return (
+              <button key={g.id} role="menuitem" disabled={tooEarly} onClick={() => { setOpen(false); onPick(g); }}
+                title={tooEarly ? `Due ${formatDate(g.dueDate!)} — before this task (${formatDate(task.dueDate!)}). Bring the task's date in first.` : undefined}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-brand-50 disabled:opacity-40 disabled:hover:bg-white disabled:cursor-not-allowed">
+                <Layers size={13} className="text-brand-400 shrink-0" />
+                <span className="truncate">{g.name}</span>
+                {groupDue && <span className="ml-auto text-[11px] text-gray-400 shrink-0">{formatDate(g.dueDate!)}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

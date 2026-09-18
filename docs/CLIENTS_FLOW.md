@@ -148,6 +148,21 @@ Rules the server keeps:
 - The client deadline is visible and settable only by people who hold the client-deadline
   permission or manage that client — the rule it always had.
 - On the capacity board, "extend" offers: only this person, the whole task, or the whole task group.
+  "Whole task" will not go past the group's deadline — the menu says so and points at "Task group"
+  instead of letting the save be refused. "Client" is gone: a client has no deadline to push.
+
+What the screens do with it:
+
+- **New client** and **New / Edit task group** ask for the start, the team's deadline and — for
+  whoever may set it — the client deadline (amber, with a lock). The team's deadline cannot be picked
+  past the client's.
+- Editing a group's deadline says, before saving, that tasks due on it will move; after saving, how
+  many did.
+- **Add task** starts on the group's deadline and will not accept a later one.
+- **Edit client** no longer offers dates for a client that has none; a client that already had
+  them (made before this change) keeps them editable so they can be cleared.
+- Within a group, tasks of equal priority and date keep the group's own order, so a type's standard
+  tasks read Proposal → … → QC rather than alphabetically.
 
 ## Phases
 
@@ -157,12 +172,25 @@ Rules the server keeps:
 | 2 | Comment out patents and client IDs (web + API routes) | ✅ |
 | 3 | UI: Clients page grouped by client group, New client dialog, client screen, Task Groups tab, New/Edit task group, assign, move | ✅ |
 | 4 | Everywhere else: capacity, My Tasks, timesheets, PID ledger, home, search, notifications, sidebar wording | ✅ |
-| 5 | Demo data, preview on its own tunnel, end-to-end tests, browser walkthrough, adversarial review, fix loop | ☐ |
-| 6 | PID flow: pool queue, a request for every PID-less client, reminders, nudges, change requests, one-number rules | ☐ |
-| 7 | Deadlines: client deadline on task groups, task-within-group rule, cascading group deadline moves, capacity extend by group | ☐ |
+| 5 | Demo data, preview on its own tunnel, end-to-end tests, browser walkthrough, adversarial review, fix loop | ✅ |
+| 6 | PID flow: pool queue, a request for every PID-less client, reminders, nudges, change requests, one-number rules | ✅ |
+| 7 | Deadlines: client deadline on task groups, task-within-group rule, cascading group deadline moves, capacity extend by group | ✅ |
+
+Tests: `tools/clients-flow.e2e.mjs` (75), `tools/clients-pid-deadlines.e2e.mjs` (54, needs `PASSCODE`),
+`tools/pid-reminder.spec.ts`, and a group-order case in `tools/task-order.spec.ts`. Run the e2e
+suites against a scratch copy of the database, never the one being demonstrated — they create
+clients, mint PIDs and file requests.
 
 ## Deploying later (when the owner asks)
 
-Additive migrations (`20261017090000_clients_flow`, plus the PID-flow and deadline ones listed below). No new permission codes, so **no
-regrant**. Existing projects appear as clients in the "Ungrouped" section until someone files them
+Three migrations, all additive except one index swap:
+
+- `20261017090000_clients_flow` — the `client_group` table, `project.clientGroupId`, and the task
+  group columns on `task_list`.
+- `20261018090000_pid_flow_and_group_deadlines` — replaces the one-request-per-client UNIQUE index
+  with "at most one OPEN request per client", makes the named authority optional, adds the request's
+  kind / reason / reminders, and `task_list.clientDueDate`.
+- `20261018100000_deadline_change_task_group` — lets the deadline ledger record task-group moves.
+
+No new permission codes, so **no regrant**. Existing projects appear as clients in the "Ungrouped" section until someone files them
 into groups.

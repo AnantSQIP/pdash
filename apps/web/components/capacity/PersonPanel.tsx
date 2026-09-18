@@ -1,7 +1,7 @@
 'use client';
 
 // The per-person capacity drill-down drawer — shows what someone is working on and lets
-// you extend a task's or client's deadline to relieve their load. Shared by the full
+// you extend a task's or its task group's deadline to relieve their load. Shared by the full
 // Team Capacity board and the per-client Capacity tab so the two never drift apart.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -14,7 +14,7 @@ import { usePermissions } from '@/lib/permissions-context';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
-import { formatDate } from '@/lib/date';
+import { formatDate, shiftDay, toUtcDay, todayIST } from '@/lib/date';
 import { pidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { type ProjectHue, NO_PROJECT_HUE, segmentFill, textureStyle, deadlineState, railStyle, urgencyOrder } from '@/lib/project-colors';
@@ -27,36 +27,70 @@ const EXTEND_PRESETS: { label: string; days: number }[] = [
   { label: '+1 day', days: 1 }, { label: '+3 days', days: 3 }, { label: '+1 week', days: 7 },
 ];
 
-/** newDeadline = max(currentDue, today) + days, as an ISO string. Never moves a deadline
- *  into the past even if the current one is already overdue. */
-function extendedISO(currentDue: string | null | undefined, days: number): string {
-  const from = currentDue ? new Date(currentDue) : new Date();
-  const base = new Date(Math.max(from.getTime(), Date.now()));
-  base.setDate(base.getDate() + days);
-  return base.toISOString();
+/** newDeadline = max(currentDue, today) + days, as a calendar day (YYYY-MM-DD). Never moves a
+ *  deadline into the past even if the current one is already overdue. A day, not an instant: an
+ *  instant built from local midnight lands on the previous UTC day in IST. */
+function extendedDay(currentDue: string | null | undefined, days: number): string {
+  const today = todayIST();
+  const from = currentDue ? toUtcDay(currentDue) : today;
+  return shiftDay(from > today ? from : today, days);
 }
 
-type ExtendTarget = { id: string; dueDate?: string | null; projectId?: string | null };
-export type ExtendScope = 'person' | 'task' | 'project';
+type ExtendTarget = {
+  id: string; dueDate?: string | null; projectId?: string | null;
+  /** The task's own deadline, when `dueDate` is one person's. */
+  taskDueDate?: string | null;
+  taskGroupId?: string | null; taskGroup?: string | null; taskGroupDueDate?: string | null;
+};
+/**
+ * CLIENTS-FLOW (deadlines): what an extension moves.
+ *   person — one person's own deadline on the task; may run past the task and its group by design.
+ *   task   — the task's deadline for everyone; it cannot pass its task group's.
+ *   group  — the task group's deadline; open tasks due on the old date move with it.
+ * "Client" used to be here and pushed a project-wide date; a client has no deadline of its own now.
+ */
+export type ExtendScope = 'person' | 'task' | 'group';
 
-export function ExtendMenu({ task, person, canProject, disabled, onExtend }: {
+/** Apply an extension and say, in words, what moved. Shared by every Extend menu. */
+export async function applyExtend(scope: ExtendScope, task: ExtendTarget, day: string, person?: { userId: string; name: string }): Promise<string> {
+  if (scope === 'group') {
+    if (!task.projectId || !task.taskGroupId) throw new Error('This task is not in a task group.');
+    const r = await api.taskLists.update(task.projectId, task.taskGroupId, { dueDate: day });
+    const moved = r.movedTasks ?? 0;
+    return `“${task.taskGroup ?? 'The task group'}” is now due ${formatDate(day)}${moved ? ` — ${moved} task${moved === 1 ? '' : 's'} moved with it` : ''}`;
+  }
+  if (scope === 'task') {
+    await api.tasks.update(task.id, { dueDate: day });
+    return `Deadline extended to ${formatDate(day)}`;
+  }
+  if (!person) throw new Error('Whose deadline?');
+  await api.tasks.setAssigneeDeadline(task.id, person.userId, day);
+  return `${person.name.split(' ')[0]}'s deadline on this task moved to ${formatDate(day)} — nobody else's changed`;
+}
+
+export function ExtendMenu({ task, person, canGroup, disabled, onExtend }: {
   task: ExtendTarget;
   /** The person whose plan is on screen: the default scope moves THEIR deadline only. */
   person?: { userId: string; name: string };
-  canProject: boolean;
+  /** May move a task group's deadline (tasklist.update). */
+  canGroup: boolean;
   disabled: boolean;
-  onExtend: (scope: ExtendScope, iso: string) => void;
+  onExtend: (scope: ExtendScope, day: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState<ExtendScope>(person ? 'person' : 'task');
   const first = person?.name.split(' ')[0] ?? '';
   const [custom, setCustom] = useState('');
-  const applyPreset = (days: number) => { onExtend(scope, extendedISO(task.dueDate, days)); setOpen(false); };
-  const applyCustom = () => {
-    if (!custom) return;
-    onExtend(scope, new Date(`${custom}T00:00:00`).toISOString());
-    setOpen(false); setCustom('');
-  };
+  const offerGroup = canGroup && !!task.projectId && !!task.taskGroupId;
+  const groupDue = task.taskGroupDueDate ?? null;
+  // Where the presets count from: the thing being moved.
+  const base = scope === 'group' ? (groupDue ?? task.taskDueDate ?? task.dueDate) : scope === 'task' ? (task.taskDueDate ?? task.dueDate) : task.dueDate;
+  // A task cannot be due after its group — say so here rather than let the save be refused.
+  const pastGroup = (day: string) => scope === 'task' && !!groupDue && day > groupDue;
+  const apply = (day: string) => { if (pastGroup(day)) return; onExtend(scope, day); setOpen(false); setCustom(''); };
+  const tab = (s: ExtendScope, label: string) => (
+    <button onClick={() => setScope(s)} className={clsx('flex-1 py-1 rounded', scope === s ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{label}</button>
+  );
   return (
     <div className="relative">
       <button
@@ -70,33 +104,44 @@ export function ExtendMenu({ task, person, canProject, disabled, onExtend }: {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-1 z-50 w-56 bg-white rounded-lg border border-gray-200 shadow-lg p-3">
-            {(person || (canProject && task.projectId)) && (
+          <div className="absolute right-0 mt-1 z-50 w-64 bg-white rounded-lg border border-gray-200 shadow-lg p-3">
+            {(person || offerGroup) && (
               <div className="flex gap-0.5 mb-2 bg-gray-100 rounded-md p-0.5 text-[11px] font-medium">
-                {person && <button onClick={() => setScope('person')} className={clsx('flex-1 py-1 rounded', scope === 'person' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Only {first}</button>}
-                <button onClick={() => setScope('task')} className={clsx('flex-1 py-1 rounded', scope === 'task' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Whole task</button>
-                {canProject && task.projectId && <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Client</button>}
+                {person && tab('person', `Only ${first}`)}
+                {tab('task', 'Whole task')}
+                {offerGroup && tab('group', 'Task group')}
               </div>
             )}
             <p className="text-[11px] text-gray-400 mb-1.5">
               {scope === 'person' ? `Give ${first} more time on this task — nobody else's deadline moves`
-                : scope === 'project' ? 'Push the client’s overall deadline'
+                : scope === 'group' ? `Move “${task.taskGroup}”${groupDue ? ` (due ${formatDate(groupDue)})` : ''} — its tasks due on that date move with it`
                   : 'Push this task’s deadline for everyone on it'}
             </p>
             <div className="flex gap-1 mb-2">
-              {EXTEND_PRESETS.map(p => (
-                <button key={p.days} onClick={() => applyPreset(p.days)}
-                  className="flex-1 text-[11px] font-medium px-1.5 py-1.5 rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100">
-                  {p.label}
-                </button>
-              ))}
+              {EXTEND_PRESETS.map(p => {
+                const day = extendedDay(base, p.days);
+                const blocked = pastGroup(day);
+                return (
+                  <button key={p.days} onClick={() => apply(day)} disabled={blocked}
+                    title={blocked ? `After the task group’s deadline (${formatDate(groupDue!)})` : formatDate(day)}
+                    className="flex-1 text-[11px] font-medium px-1.5 py-1.5 rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100 disabled:opacity-40 disabled:hover:bg-brand-50">
+                    {p.label}
+                  </button>
+                );
+              })}
             </div>
             <div className="flex items-center gap-1">
               <input type="date" value={custom} onChange={e => setCustom(e.target.value)}
+                max={scope === 'task' && groupDue ? groupDue : undefined}
                 className="flex-1 min-w-0 text-xs border border-gray-200 rounded-md px-2 py-1.5" />
-              <button onClick={applyCustom} disabled={!custom}
+              <button onClick={() => custom && apply(custom)} disabled={!custom || pastGroup(custom)}
                 className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-gray-800 text-white hover:bg-black disabled:opacity-40">Set</button>
             </div>
+            {scope === 'task' && groupDue && (
+              <p className="mt-2 text-[11px] text-amber-700">
+                Its task group is due {formatDate(groupDue)}.{offerGroup ? ' To go past that, extend the task group.' : ''}
+              </p>
+            )}
           </div>
         </>
       )}
@@ -154,7 +199,7 @@ export function PersonPanel({
   const [focus, setFocus] = useState<string | undefined>(focusDate);
   useEffect(() => { setFocus(focusDate); }, [focusDate]);
   const canTask = can('task.update');
-  const canProject = can('project.update');
+  const canGroup = can('tasklist.update');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -234,27 +279,21 @@ export function PersonPanel({
     return () => clearTimeout(t);
   }, [focusIds]);
 
-  async function extend(scope: ExtendScope, task: CapacityRow['openTasks'][number], iso: string) {
+  async function extend(scope: ExtendScope, task: CapacityRow['openTasks'][number], day: string) {
     setBusyTaskId(task.id);
     try {
-      if (scope === 'project') {
-        if (!task.projectId) throw new Error('This task has no client.');
-        await api.projects.update(task.projectId, { dueDate: iso });
-      } else if (scope === 'task') {
-        await api.tasks.update(task.id, { dueDate: iso });
-      } else {
-        // This person's seat only: the task's deadline and everyone else's stay where they are.
-        await api.tasks.setAssigneeDeadline(task.id, row.userId, iso);
-      }
+      const said = await applyExtend(scope, task, day, { userId: row.userId, name: row.name });
       invalidateTaskCaches(qc);
       qc.invalidateQueries({ queryKey: ['coverage-risks'] });
-      toast(scope === 'person' ? `${row.name.split(' ')[0]}'s deadline on this task moved to ${formatDate(iso)} — nobody else's changed` : `Deadline extended to ${formatDate(iso)}`, 'success');
+      if (scope === 'group') qc.invalidateQueries({ queryKey: ['task-groups'] });
+      toast(said, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
     } finally {
       setBusyTaskId('');
     }
   }
+
 
   const over = row.overCommittedHours > 0.05;
   let firstFocusAssigned = false;
@@ -333,7 +372,7 @@ export function PersonPanel({
         </div>
         {canTask && (
           <div className="shrink-0 opacity-0 transition-opacity group-hover/task:opacity-100 focus-within:opacity-100">
-            <ExtendMenu task={t} person={{ userId: row.userId, name: row.name }} canProject={canProject} disabled={busyTaskId === t.id} onExtend={(scope, iso) => extend(scope, t, iso)} />
+            <ExtendMenu task={t} person={{ userId: row.userId, name: row.name }} canGroup={canGroup} disabled={busyTaskId === t.id} onExtend={(scope, day) => extend(scope, t, day)} />
           </div>
         )}
       </div>

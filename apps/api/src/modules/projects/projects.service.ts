@@ -1017,7 +1017,7 @@ export class ProjectsService {
       organizationId,
       actorId: creator.id,
       metadata: {
-        projectId: project.id, title: project.title, pidPending: !!pidAssigneeId,
+        projectId: project.id, title: project.title, pidPending: !pid,
         ...(clientGroup ? { clientGroup: clientGroup.name } : {}),
         ...(firstGroup ? { firstTaskGroup: firstGroup.name } : {}),
       },

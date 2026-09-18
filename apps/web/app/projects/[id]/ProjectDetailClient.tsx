@@ -26,6 +26,8 @@ import { RoundTabContent } from '@/components/projects/RoundTabContent';
 import { TaskGroups } from '@/components/projects/TaskGroups';
 import { TaskGroupModal } from '@/components/projects/TaskGroupModal';
 import { ClientGroupChip } from '@/components/projects/ClientGroups';
+import { PidStatus } from '@/components/projects/PidStatus';
+import { useSearchParams } from 'next/navigation';
 import { AddRoundModal } from '@/components/projects/AddRoundModal';
 import { PidMoveModal } from '@/components/projects/PidMoveModal';
 import { PatentTagsEditor } from '@/components/projects/PatentTagsEditor';
@@ -77,6 +79,9 @@ export function ProjectDetailClient({ projectId }: Props) {
   const [addingRound, setAddingRound] = useState(false); // "new project under this PID"
   const [movingPid, setMovingPid] = useState(false); // "this project's PID is wrong" — reassign/split/merge
   const [creatingGroup, setCreatingGroup] = useState(false); // CLIENTS-FLOW: "New task group" from the header
+  // CLIENTS-FLOW (PID rework): the number a change request suggested, pre-filled into Change PID.
+  const [moveSuggestion, setMoveSuggestion] = useState<string | null>(null);
+  const searchParams = useSearchParams();
   // Which project a task came from, so the detail panel edits the right one on a multi-project PID.
   const [taskProjectId, setTaskProjectId] = useState(projectId);
 
@@ -317,6 +322,11 @@ export function ProjectDetailClient({ projectId }: Props) {
   }
 
 
+  // Arriving from the PID queue ("Open client to change it") lands straight in Change PID, with
+  // the number the client's team suggested already typed in.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useChangePidFromLink(searchParams?.get('changePid') === '1', project, can('project.generate_pid'), s => { setMoveSuggestion(s); setMovingPid(true); });
+
   if (projLoading) {
     return (
       <div className="flex flex-col h-full overflow-hidden animate-pulse">
@@ -395,7 +405,13 @@ export function ProjectDetailClient({ projectId }: Props) {
   // administrators (audit.view) and this project's own manager, nobody else. Being a member of
   // the project is not enough. The API enforces exactly the same rule — hiding the tab only
   // avoids offering a door that would not open.
+  const taskCount = project._count?.projectTasks ?? tasks.length;
+  const memberCount = project._count?.members ?? project.members?.length ?? 0;
   const canSeeActivity = can('audit.view') || (!!currentUser && projectManagerId === currentUser.id);
+  // CLIENTS-FLOW (deadlines): the date promised to the client is set by whoever may see client
+  // deadlines, or by a manager of this client — the rule DeadlineVisibilityService enforces.
+  const canSetClientDue = can('deadline.view.client')
+    || (!!currentUser && !!project.members?.some(m => m.userId === currentUser.id && m.projectRole === 'MANAGER' && m.isActive));
   // Capacity is a manager-grade view, so the tab only appears for capacity.view holders —
   // and the API enforces it regardless (the tab is a convenience, not the gate).
   const TABS: Tab[] = (can('capacity.view')
@@ -427,32 +443,15 @@ export function ProjectDetailClient({ projectId }: Props) {
             </Link>
             <span className="w-px h-3.5 bg-gray-200 shrink-0" aria-hidden />
             <div className="flex items-center gap-2 flex-wrap min-w-0">
-                {project.code ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 font-mono ring-1 ring-gray-200">
-                    {project.code}
-                    {multiRound && (
-                      <span className="font-sans font-medium text-gray-500">
-                        · {rounds.length} under this PID
-                      </span>
-                    )}
-                  </span>
-                ) : (
-                  <>
-                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 font-mono ring-1 ring-amber-200" title="A PID authority will assign the PID">
-                      PID pending
-                    </span>
-                    {can('project.generate_pid') && (
-                      <button
-                        onClick={handleAttachPid}
-                        disabled={attachingPid}
-                        title="Attach a fresh PID to this client"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium text-brand-700 border border-brand-200 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 transition-colors"
-                      >
-                        <KeyRound size={12} /> {attachingPid ? 'Attaching…' : 'Attach PID'}
-                      </button>
-                    )}
-                  </>
-                )}
+                {/* CLIENTS-FLOW (PID rework): the PID and what the client is waiting on. */}
+                <PidStatus
+                  project={project}
+                  multiRound={multiRound}
+                  roundsCount={rounds.length}
+                  attaching={attachingPid}
+                  onAttach={handleAttachPid}
+                  onChangePid={suggested => { setMoveSuggestion(suggested ?? null); setMovingPid(true); }}
+                />
                 {/* CLIENTS-FLOW: which client group this client is filed under — changeable in place. */}
                 <ClientGroupChip
                   projectId={projectId}
@@ -614,11 +613,11 @@ export function ProjectDetailClient({ projectId }: Props) {
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <CheckSquare size={14} />
-              <span><span className="font-medium text-gray-900">{project._count?.projectTasks ?? tasks.length}</span> tasks</span>
+              <span><span className="font-medium text-gray-900">{taskCount}</span> task{taskCount === 1 ? '' : 's'}</span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <Users size={14} />
-              <span><span className="font-medium text-gray-900">{project._count?.members ?? project.members?.length ?? 0}</span> members</span>
+              <span><span className="font-medium text-gray-900">{memberCount}</span> member{memberCount === 1 ? '' : 's'}</span>
             </div>
             {/* The client date is only present when the actor may see it; the team's own
                 deadline is always just "Deadline". */}
@@ -757,6 +756,7 @@ export function ProjectDetailClient({ projectId }: Props) {
             canDeleteGroups={can('tasklist.delete')}
             canAssign={can('task.assign')}
             canMoveTasks={can('task.update')}
+            canSetClientDue={canSetClientDue}
           />
         )}
         {activeTab === 'Board' && (
@@ -823,6 +823,7 @@ export function ProjectDetailClient({ projectId }: Props) {
           projectId={projectId}
           clientName={project.title}
           members={project.members}
+          canSetClientDue={canSetClientDue}
           onClose={() => setCreatingGroup(false)}
           onSaved={() => setActiveTab('Task List')}
         />
@@ -847,10 +848,13 @@ export function ProjectDetailClient({ projectId }: Props) {
           projectId={projectId}
           projectTitle={project.title}
           currentPid={project.code}
+          suggestedPid={moveSuggestion}
           onClose={() => setMovingPid(false)}
           onMoved={() => {
             qc.invalidateQueries({ queryKey: ['project', projectId] });
             qc.invalidateQueries({ queryKey: ['project-rounds', projectId] });
+            qc.invalidateQueries({ queryKey: ['pid-requests'] });
+            setMoveSuggestion(null);
           }}
         />
       )}
@@ -868,4 +872,18 @@ export function ProjectDetailClient({ projectId }: Props) {
       )}
     </div>
   );
+}
+
+
+/** Open Change PID once, when the page was reached from the PID queue's "Open client to change it". */
+function useChangePidFromLink(
+  wanted: boolean, project: ApiProject | undefined, isAuthority: boolean, open: (suggested: string | null) => void,
+) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (done || !wanted || !project?.code || !isAuthority) return;
+    setDone(true);
+    open(project.openPidRequest?.kind === 'CHANGE' ? project.openPidRequest.suggestedPid : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted, project?.code, project?.openPidRequest, isAuthority, done]);
 }
