@@ -238,6 +238,25 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   ok('an unknown field is refused', (await sc('/capacity/tasks', { method: 'POST', body: { projectId: client.id, title: 'x', seats: [], organizationId: 'x' } })).status === 400);
   ok('an empty title is refused', (await sc('/capacity/tasks', { method: 'POST', body: { projectId: client.id, title: '   ', seats: [] } })).status === 400);
 
+  // A team space's task has no client. The board edits client work only — and the access rule lets
+  // an overseer through for a task with no client link at all, so this must be refused by the route.
+  const team = await su('/teams', { method: 'POST', body: { name: `Ops ${RUN}` } });
+  if (team.status === 201 && team.data?.id) {
+    const detail = (await su(`/teams/${team.data.id}`)).data;
+    let listId = (detail?.taskLists ?? detail?.lists ?? [])[0]?.id;
+    if (!listId) listId = (await su(`/teams/${team.data.id}/lists`, { method: 'POST', body: { name: 'To do' } })).data?.id;
+    const tt = await su(`/teams/${team.data.id}/tasks`, { method: 'POST', body: { title: `Team chore ${RUN}`, taskListId: listId } });
+    // The route answers with the space's task list rather than the one task.
+    if (Array.isArray(tt.data)) tt.data = tt.data.find(t => t.title === `Team chore ${RUN}`);
+    if (tt.data?.id) {
+      ok('a team-space task is not the board’s to read', (await sc(`/capacity/tasks/${tt.data.id}`)).status === 404);
+      ok('…nor to edit', (await sc(`/capacity/tasks/${tt.data.id}`, { method: 'PATCH', body: { title: 'hijacked' } })).status === 404);
+      ok('…nor to delete', (await sc(`/capacity/tasks/${tt.data.id}`, { method: 'DELETE' })).status === 404);
+      await su(`/teams/${team.data.id}/tasks/${tt.data.id}`, { method: 'DELETE' });
+    } else console.log('  (skipped the team-space case: could not make a team task — ' + brief(tt) + ')');
+    await su(`/teams/${team.data.id}/archive`, { method: 'POST' });
+  } else console.log('  (skipped the team-space case: could not make a team — ' + brief(team) + ')');
+
   // ───────────────────────────────────────────────────────────────────────────────────────────
   // Tidy the fixture's tasks away so the board is not left carrying them.
   for (const t of ((await su(`/tasks?projectId=${client.id}`)).data ?? [])) await su(`/tasks/${t.id}`, { method: 'DELETE' });

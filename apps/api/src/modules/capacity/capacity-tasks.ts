@@ -157,6 +157,23 @@ export class CapacityTaskOptionsService {
     return { clients, people };
   }
 
+  /**
+   * A live task on a live client of this organisation, or a 404. The board edits CLIENT work only:
+   * a team-space task has no client, and the task-access rule lets an overseer through for any task
+   * with no client link at all — which, from here, would have reached another organisation's team
+   * work by id.
+   */
+  async assertTaskInOrg(taskId: string, organizationId: string) {
+    const task = await this.prisma.task.findFirst({
+      where: {
+        id: taskId, deletedAt: null,
+        projectTasks: { some: { project: { deletedAt: null, members: { some: { user: { organizationId } } } } } },
+      },
+      select: { id: true },
+    });
+    if (!task) throw new NotFoundException('Task not found.');
+  }
+
   /** A live client of this organisation, or a 404. */
   async assertClientInOrg(projectId: string, organizationId: string) {
     const client = await this.prisma.project.findFirst({
@@ -185,7 +202,8 @@ export class CapacityTasksController {
   /** One task, as the editor needs it: its fields, its seats and where it sits. */
   @Get(':id')
   @RequirePermission('capacity.manage')
-  get(@Param('id') id: string) {
+  async get(@Param('id') id: string) {
+    await this.options.assertTaskInOrg(id, await this.actor.requireOrgId());
     return this.tasks.get(id, AS_CAPACITY_MANAGER);
   }
 
@@ -204,7 +222,8 @@ export class CapacityTasksController {
   /** Edit the task's own fields, and optionally move it to another group of the same client. */
   @Patch(':id')
   @RequirePermission('capacity.manage')
-  update(@Param('id') id: string, @Body() dto: CapacityUpdateTaskDto) {
+  async update(@Param('id') id: string, @Body() dto: CapacityUpdateTaskDto) {
+    await this.options.assertTaskInOrg(id, await this.actor.requireOrgId());
     const { taskListId, ...fields } = dto;
     return this.tasks.update(id, fields, { ...AS_CAPACITY_MANAGER, moveToTaskListId: taskListId });
   }
@@ -212,14 +231,16 @@ export class CapacityTasksController {
   /** Replace the task's seats: assign, unassign, reassign, hours, start, deadline, hours a day. */
   @Put(':id/seats')
   @RequirePermission('capacity.manage')
-  setSeats(@Param('id') id: string, @Body() dto: CapacitySeatsDto) {
+  async setSeats(@Param('id') id: string, @Body() dto: CapacitySeatsDto) {
+    await this.options.assertTaskInOrg(id, await this.actor.requireOrgId());
     return this.tasks.setStaffing(id, { assignees: toSeats(dto.seats) }, AS_CAPACITY_MANAGER);
   }
 
   /** The ordinary soft delete. */
   @Delete(':id')
   @RequirePermission('capacity.manage')
-  remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string) {
+    await this.options.assertTaskInOrg(id, await this.actor.requireOrgId());
     return this.tasks.softDelete(id, AS_CAPACITY_MANAGER);
   }
 }
