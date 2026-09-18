@@ -140,13 +140,13 @@ async function main() {
   checkThat('the finished task is still on the sheet', !!rowA, `${(plan1?.rows ?? []).length} rows`);
   checkThat('marked finished, and when', rowA?.closed === true && rowA?.finishedOn === today(), JSON.stringify(rowA ?? null));
   check('with what is already logged on it today', rowA?.loggedToday, 3);
+  const actualBefore = (await api(`/tasks/${A.id}`)).data?.actualHours ?? 0;
   const late = await api('/timesheets/day', { method: 'POST', body: { date: today(), entries: [{ taskId: A.id, hoursLogged: 0.5, notes: 'wrap-up' }] } });
   check('and it takes hours after it was finished', late.data?.savedCount, 1);
-  const taskA = (await api(`/tasks/${A.id}`)).data;
-  const ledgerA = ((await api(`/timesheets?userId=${MY_ID}`)).data ?? []).filter(t => t.taskId === A.id && !t.deletedAt)
-    .reduce((s, t) => s + (t.hoursLogged ?? 0), 0);
-  checkThat('the task carries the ledger total', Math.abs((taskA?.actualHours ?? 0) - ledgerA) < 0.05,
-    `actualHours=${taskA?.actualHours} ledger=${ledgerA}`);
+  // The task's total is everybody's time on it, so compare the MOVE, not the whole figure.
+  const actualAfter = (await api(`/tasks/${A.id}`)).data?.actualHours ?? 0;
+  checkThat('the task total moves by exactly what was logged', Math.abs(actualAfter - actualBefore - 0.5) < 0.01,
+    `before=${actualBefore} after=${actualAfter}`);
 
   // ── Reopen ────────────────────────────────────────────────────────────────
   console.log('\n— Reopen —');
