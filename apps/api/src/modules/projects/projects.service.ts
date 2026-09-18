@@ -1331,7 +1331,6 @@ export class ProjectsService {
       metadata: e.metadata ?? null,
     });
 
-    const TERMINAL = ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
     const ledger = registry.map(r => {
       const rounds = roundsByCid.get(r.pid) ?? [];
       const timeline = eventsByCid.get(r.pid) ?? [];
@@ -1358,9 +1357,11 @@ export class ProjectsService {
         });
 
       const live = rounds.filter(x => !x.deleted);
-      const newestFirst = <T extends { round: number | null }>(xs: T[]) => [...xs].sort((a, b) => (b.round ?? 0) - (a.round ?? 0));
-      const head = newestFirst(live).find(x => !TERMINAL.includes(x.phase)) ?? newestFirst(live)[0]
-        ?? newestFirst(rounds)[0] ?? null;
+      const byRound = <T extends { round: number | null }>(xs: T[]) => [...xs].sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
+      // Whose CID this is: its FIRST live client (round 1 is the client the number was issued to;
+      // later rounds are more work for the same client, or a client merged in). With nobody live,
+      // the newest one in the bin.
+      const head = byRound(live)[0] ?? byRound(rounds).reverse()[0] ?? null;
 
       let status: 'ACTIVE' | 'ON_HOLD' | 'COMPLETED' | 'DELETED' | 'MERGED' | 'PURGED' | 'RETIRED';
       if (r.status === 'MERGED') status = 'MERGED';
@@ -1372,8 +1373,9 @@ export class ProjectsService {
       else if (live.every(x => x.phase === 'COMPLETED' || x.phase === 'CLOSED')) status = 'COMPLETED';
       else status = 'ACTIVE';
 
-      // The name: the live client's title, else the newest one in the bin, else the last title the
-      // ledger recorded for this number (a purged or moved-away client).
+      // The name: the client's title (see `head`), else the last title the ledger recorded for this
+      // number (a purged or moved-away client). `pastNames` is every OTHER name recorded under the
+      // number — earlier titles, other clients that carried it — so a search by any of them finds it.
       const lastKnown = [...timeline].reverse().find(e => e.cid === r.pid && (e.toTitle || e.clientTitle));
       const clientName = head?.title ?? lastKnown?.toTitle ?? lastKnown?.clientTitle ?? null;
       const pastNames = [...new Set([

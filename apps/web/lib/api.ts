@@ -468,7 +468,7 @@ export type CidLedgerEntry = {
   mergedIntoCid: string | null;
   /** The current client's name — or the last one recorded, for a deleted/purged/moved client. */
   clientName: string | null;
-  /** Every other title this CID's clients have had, for search. */
+  /** Every other name recorded under this CID (earlier titles, other clients that carried it), for search. */
   pastNames: string[];
   clientGroup: string | null;
   managers: string[];

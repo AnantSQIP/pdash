@@ -288,10 +288,10 @@ export function CidLedgerView() {
                         </td>
                         <td className="px-3 py-2.5 text-sm text-gray-700 max-w-[220px]">
                           <span className={clsx('block truncate', r.status !== 'ACTIVE' && r.status !== 'ON_HOLD' && r.status !== 'COMPLETED' && 'text-gray-500')}
-                            title={r.pastNames.length ? `Also known as: ${r.pastNames.join(', ')}` : (r.clientName ?? '')}>
+                            title={r.pastNames.length ? `Also recorded under this CID: ${r.pastNames.join(', ')}` : (r.clientName ?? '')}>
                             {r.clientName ?? '—'}
                           </span>
-                          {r.pastNames.length > 0 && <span className="block text-[10px] text-gray-400 truncate">was {r.pastNames.join(', ')}</span>}
+                          {r.pastNames.length > 0 && <span className="block text-[10px] text-gray-400 truncate">also {r.pastNames.join(', ')}</span>}
                         </td>
                         <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{r.clientGroup ?? <span className="text-gray-300">—</span>}</td>
                         <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">{r.managers.length ? r.managers.join(', ') : <span className="text-gray-300">—</span>}</td>
