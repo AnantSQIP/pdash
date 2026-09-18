@@ -217,8 +217,16 @@ export function PersonPanel({
   const canTask = can('task.update');
   const canGroup = can('tasklist.update');
 
+  const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // Escape belongs to whatever is on top: with the task editor or a confirmation open over the
+    // panel, it closes THAT, not the panel underneath as well.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')];
+      if (dialogs.some(d => d !== panelRef.current)) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -412,7 +420,7 @@ export function PersonPanel({
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[460px]" role="dialog" aria-modal="true" aria-label={`${row.name}'s plan`}>
+      <div ref={panelRef} className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[460px]" role="dialog" aria-modal="true" aria-label={`${row.name}'s plan`}>
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={40} />
