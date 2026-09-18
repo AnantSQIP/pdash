@@ -22,6 +22,7 @@ import { formatDate, todayIST } from '@/lib/date';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { useToast } from '@/components/ui/Toast';
+import { useCapacityTaskActions } from '@/components/capacity/TaskEditor';
 
 const RANGES = [7, 14, 30] as const;
 const POLL_MS = 30_000;
@@ -51,6 +52,9 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const [focusProjectId, setFocusProjectId] = useState<string | null>(projectId);
   const [focusDate, setFocusDate] = useState<string | undefined>();
   const today = todayIST();
+  // capacity.manage: the full board's task editor, pinned to this client. Without it, adding work
+  // falls back to the ordinary add-task flow (task.create) and existing tasks are read-only here.
+  const { actions: taskActions, dialogs: taskDialogs } = useCapacityTaskActions({ projectId });
 
   const { data, isLoading, isError, dataUpdatedAt, isFetching, refetch } = useQuery({
     queryKey: ['capacity', 'project', projectId, days],
@@ -80,6 +84,11 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const targetListId = openGroup === undefined ? defaultTaskList?.id : openGroup?.id;
   /** Open the add-task flow for that person and day — or say why there is nowhere to put it. */
   function startAssign(userId: string, date: string) {
+    if (taskActions) {
+      const r = rows.find(x => x.userId === userId);
+      taskActions.create({ person: { userId, name: r?.name ?? '' }, start: date });
+      return;
+    }
     if (openGroup === null) {
       toast('This client has no open task group — create or reopen one in the task list first.', 'error');
       return;
@@ -179,7 +188,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
       {rows.length > 0 && (
         // The deadline against the hours: what is left, what the team can give it before then.
         <div className={clsx('rounded-xl border px-4 py-3 text-sm',
-          verdict?.tone === 'bad' ? 'border-gray-900/20 bg-gray-50' : verdict?.tone === 'ok' ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-white')}>
+          verdict?.tone === 'bad' ? 'border-rose-200 bg-rose-50/50' : verdict?.tone === 'ok' ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-white')}>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
             <span className={clsx('inline-flex items-center gap-1.5 font-medium', summary.state === 'overdue' || summary.state === 'today' ? 'text-red-700' : summary.state === 'soon' ? 'text-amber-700' : 'text-gray-800')}>
               <Flag size={14} /> {dueWords}
@@ -197,7 +206,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
             {summary.overdueTasks > 0 && <span className="text-red-700">{summary.overdueTasks} overdue {summary.overdueTasks === 1 ? 'task' : 'tasks'}</span>}
           </div>
           {verdict && (
-            <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[12.5px]', verdict.tone === 'bad' ? 'font-medium text-gray-900' : verdict.tone === 'ok' ? 'text-emerald-800' : 'text-gray-600')}>
+            <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[12.5px]', verdict.tone === 'bad' ? 'font-medium text-rose-800' : verdict.tone === 'ok' ? 'text-emerald-800' : 'text-gray-600')}>
               {verdict.tone === 'bad' ? <AlertTriangle size={13} /> : verdict.tone === 'ok' ? <CheckCircle2 size={13} /> : null}
               {verdict.text}
             </p>
@@ -223,6 +232,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
           onAssign={row => startAssign(row.userId, row.nextFreeDate ?? today)}
           emptyText="This client has no active members yet."
           hoverSuppressed={!!selected || !!assign}
+          taskActions={taskActions}
         />
       )}
 
@@ -231,9 +241,16 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
         <PersonPanel
           row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
           onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
-          onAssign={() => { const r = selected; setSelectedUserId(null); setFocusDate(undefined); startAssign(r.userId, focusDate ?? r.nextFreeDate ?? today); }}
+          onAssign={() => {
+            const r = selected;
+            // The editor opens over the panel; the old flow needs the panel out of the way.
+            if (!taskActions) { setSelectedUserId(null); setFocusDate(undefined); }
+            startAssign(r.userId, focusDate ?? r.nextFreeDate ?? today);
+          }}
+          taskActions={taskActions}
         />
       )}
+      {taskDialogs}
 
       {/* Add a task into THIS client (its open task group), pre-assigned to that person + day. */}
       {assign && targetListId && (

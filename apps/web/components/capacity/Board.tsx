@@ -17,6 +17,7 @@ import { BoardLegend } from './BoardLegend';
 import { HoverCard, type HoverTarget, type HoverIntent } from './HoverCard';
 import { assignProjectHues } from '@/lib/project-colors';
 import { teamTotals, DayTotalCell, RowSummary, loadBand, windowTotal, windowTotalText, windowTotalHint, type Unit } from './totals';
+import type { TaskActions } from './TaskEditor';
 
 export type BoardGroup = { key: string; label?: string; rows: CapacityRow[] };
 export type Zoom = 'days' | 'weeks';
@@ -72,7 +73,7 @@ function weeksOf(days: CapacityDay[], today: string): CapacityDay[] {
 
 export function Board({
   allRows, groups, days, focusProjectId, onFocus, defaultPinnedProjectId = null, highlightProjectId,
-  onSelectPerson, onAssign, emptyText, fill, hoverSuppressed,
+  onSelectPerson, onAssign, emptyText, fill, hoverSuppressed, taskActions,
 }: {
   /** Every row in the payload: hues, holidays, the team totals and the legend come from ALL of them. */
   allRows: CapacityRow[];
@@ -91,6 +92,8 @@ export function Board({
   fill?: boolean;
   /** A panel or dialog is up: no hover card underneath it. */
   hoverSuppressed?: boolean;
+  /** capacity.manage: Edit / Reassign / Delete on every task the hover card lists. */
+  taskActions?: TaskActions | null;
 }) {
   const today = todayIST();
   const [unit, setUnit] = useState<Unit>('hours');
@@ -145,15 +148,21 @@ export function Board({
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!hover) return;
-    const close = () => setHover(null);
-    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    // A scroll INSIDE the card (a long day's list) is not the board moving under it.
+    const close = (e?: Event) => {
+      const t = e?.target as Element | null;
+      if (t && typeof t.closest === 'function' && t.closest('[data-capacity-hovercard]')) return;
+      setHover(null);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setHover(null); };
     window.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
+    window.addEventListener('resize', close as () => void);
     window.addEventListener('keydown', onKey);
-    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); window.removeEventListener('keydown', onKey); };
+    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close as () => void); window.removeEventListener('keydown', onKey); };
   }, [hover]);
   const beginHover = (t: HoverIntent) => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    cancelClose();
     // The rect is read when the card is about to show, so 120ms of scrolling cannot leave the
     // card beside where the cell used to be.
     hoverTimer.current = setTimeout(() => {
@@ -161,13 +170,25 @@ export function Board({
       setHover({ row: t.row, day: t.day, segments: t.segments, rect: t.el.getBoundingClientRect() });
     }, 120);
   };
+  // An interactive card (task actions) must survive the pointer's trip from the cell into it, so
+  // leaving a cell closes it after a short grace instead of at once; entering the card cancels that.
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelClose = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = null; };
+  const closeNow = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+    cancelClose();
+    setHover(null);
+  };
   const endHover = () => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     hoverTimer.current = null;
-    setHover(null);
+    if (!taskActions) { setHover(null); return; }
+    cancelClose();
+    closeTimer.current = setTimeout(() => setHover(null), 180);
   };
-  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); }, []);
-  useEffect(() => { if (hoverSuppressed) endHover(); }, [hoverSuppressed]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (hoverTimer.current) clearTimeout(hoverTimer.current); cancelClose(); }, []);
+  useEffect(() => { if (hoverSuppressed) closeNow(); }, [hoverSuppressed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Roving tabindex: one cell is the tab stop; the arrow keys move through the grid.
   const flat = useMemo(() => groups.flatMap(g => g.rows), [groups]);
@@ -192,7 +213,7 @@ export function Board({
     e.preventDefault();
     r = Math.max(0, Math.min(flat.length - 1, r)); c = Math.max(0, Math.min(cols - 1, c));
     setTabCell({ r, c });
-    endHover();
+    closeNow();
     const next = rowsRef.current?.querySelector<HTMLButtonElement>(`button[data-row="${r}"][data-col="${c}"]`);
     next?.focus();
     next?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -237,19 +258,19 @@ export function Board({
                     <div key={d.date}
                       title={d.weekOf ? `Week of ${formatDate(d.weekOf, { weekday: 'long', month: 'short', day: 'numeric' })}` : holiday ? `Holiday${d.note ? ` — ${d.note}` : ''}` : weekend ? 'Weekend' : formatDate(d.date, { weekday: 'long', month: 'short', day: 'numeric' })}
                       className={clsx('text-center rounded-md py-0.5',
-                        holiday && 'bg-amber-100',
-                        weekend && 'bg-gray-100',
+                        holiday && 'bg-amber-50',
+                        weekend && 'bg-slate-50',
                         monday && !now && 'border-l border-gray-300',
-                        now && 'bg-gray-900')}>
+                        now && 'bg-brand-100 ring-1 ring-inset ring-brand-300')}>
                       {d.weekOf ? (
                         <>
-                          <div className={clsx('text-[9px] uppercase', now ? 'text-gray-300' : 'text-gray-400')}>week</div>
-                          <div className={clsx('text-[11px] font-medium whitespace-nowrap', now ? 'text-white font-bold' : 'text-gray-600')}>{weekLabel(d)}</div>
+                          <div className={clsx('text-[9px] uppercase', now ? 'text-brand-600' : 'text-gray-400')}>week</div>
+                          <div className={clsx('text-[11px] font-medium whitespace-nowrap', now ? 'text-brand-800 font-bold' : 'text-gray-600')}>{weekLabel(d)}</div>
                         </>
                       ) : (
                         <>
-                          <div className={clsx('text-[9px] uppercase', now ? 'text-gray-300' : holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
-                          <div className={clsx('text-[11px] font-medium', now ? 'text-white font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
+                          <div className={clsx('text-[9px] uppercase', now ? 'text-brand-600' : holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
+                          <div className={clsx('text-[11px] font-medium', now ? 'text-brand-800 font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
                         </>
                       )}
                     </div>
@@ -272,7 +293,7 @@ export function Board({
                   and reading it used to mean doing the division yourself. */}
               <div className="w-44 shrink-0 text-right text-[10px] tabular-nums text-gray-500" title={windowTotalHint(windowLoad)}>
                 {windowTotalText(windowLoad)}
-                <span className={clsx('ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle', loadBand(windowLoad.load, windowLoad.capacity) === 'over' ? 'bg-gray-900' : loadBand(windowLoad.load, windowLoad.capacity) === 'at' ? 'bg-amber-400' : 'bg-emerald-400')} />
+                <span className={clsx('ml-1 inline-block h-1.5 w-1.5 rounded-full align-middle', loadBand(windowLoad.load, windowLoad.capacity) === 'over' ? 'bg-rose-400' : loadBand(windowLoad.load, windowLoad.capacity) === 'at' ? 'bg-amber-300' : 'bg-emerald-300')} />
               </div>
             </div>
           </div>
@@ -320,7 +341,7 @@ export function Board({
                               onLeave={endHover}
                               // A day opens the person's plan at that day. Adding work is the
                               // panel's job, where you can see what is already there first.
-                              onClick={() => { endHover(); setTabCell({ r, c }); onSelectPerson(row.userId, d.date); }}
+                              onClick={() => { closeNow(); setTabCell({ r, c }); onSelectPerson(row.userId, d.date); }}
                             />
                           );
                         })}
@@ -339,7 +360,7 @@ export function Board({
                               <span className="font-medium text-red-500">{row.freeHours > 0 ? 'No free day' : 'Fully booked'}</span>
                             )}
                             {' · '}{row.freeHours}h free
-                            {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-gray-900">· {row.overCommittedHours}h over</span>}
+                            {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-rose-700">· {row.overCommittedHours}h over</span>}
                             {mine != null && <span className="block text-gray-500">{mine}h on this client</span>}
                           </p>
                         </div>
@@ -347,7 +368,7 @@ export function Board({
                           <button
                             onClick={() => onAssign(row)}
                             title={`Assign a task to ${row.name}`}
-                            className="p-1.5 rounded-lg text-gray-300 hover:text-white hover:bg-gray-900 transition-colors shrink-0"
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-brand-700 hover:bg-brand-50 ring-1 ring-inset ring-transparent hover:ring-brand-200 transition-colors shrink-0"
                           >
                             <Plus size={14} />
                           </button>
@@ -364,7 +385,13 @@ export function Board({
 
       <BoardLegend rows={allRows} hues={hues} focusProjectId={focusProjectId} onFocus={onFocus} defaultPinned={defaultPinnedProjectId} />
 
-      {hover && !hoverSuppressed && <HoverCard target={hover} today={today} />}
+      {hover && !hoverSuppressed && (
+        <HoverCard
+          target={hover} today={today} actions={taskActions}
+          onPointerInside={inside => { if (inside) cancelClose(); else endHover(); }}
+          onAction={closeNow}
+        />
+      )}
     </div>
   );
 }
@@ -374,7 +401,7 @@ function Toggle({ value, onChange, options, title }: { value: string; onChange: 
     <div className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-[10.5px] font-medium" role="group" title={title}>
       {options.map(([v, label]) => (
         <button key={v} type="button" onClick={() => onChange(v)} aria-pressed={value === v}
-          className={clsx('rounded px-1.5 py-0.5 transition-colors', value === v ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-800')}>
+          className={clsx('rounded px-1.5 py-0.5 transition-colors', value === v ? 'bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-200' : 'text-gray-500 hover:text-gray-800')}>
           {label}
         </button>
       ))}

@@ -5,9 +5,12 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { PermissionService } from '../permissions/permission.service';
 import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
 import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
+import { TasksModule } from '../tasks/tasks.module';
+import { CapacityTasksController, CapacityTaskOptionsService } from './capacity-tasks';
 import {
   compareScheduled, placeForward, hoursInWindow, daysOutsideWindow, inCoverageWindow,
   type ScheduledSeat, type Placement,
@@ -293,6 +296,7 @@ export class CapacityService {
     private readonly actor: ActorContextService,
     private readonly notifications: NotificationsService,
     private readonly optionalHolidays: OptionalHolidaysService,
+    private readonly permissions: PermissionService,
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
@@ -1424,24 +1428,53 @@ export class CapacityService {
     });
   }
 
-  /** Users who can act on a coverage risk: capacity.view holders + the affected projects' managers. */
-  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<string[]> {
-    const [viewers, managers] = await Promise.all([
+  /**
+   * Who can act on a coverage risk, and WHERE each of them can act on it.
+   *
+   *   board   — everyone who can open Team Capacity (effective capacity.view: role, group, direct
+   *             grant or ALLOW override, less any DENY; Super Admins implicitly). Since Sep 2026
+   *             that is Senior Consultant and above, and only they are sent to the board.
+   *   clients — the affected clients' own managers who CANNOT open the board, each pointed at the
+   *             client instead. Sending them to /capacity would land them on "Access restricted".
+   *
+   * It used to read role grants alone, so a DENY override or a group grant was invisible to it,
+   * and every recipient was told to go to the board whether or not they could open it.
+   */
+  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<{
+    board: string[]; clients: { userId: string; projectId: string }[];
+  }> {
+    const holdsBoard = { permission: { code: 'capacity.view' } };
+    const [candidates, managers] = await Promise.all([
       this.prisma.user.findMany({
         where: {
           organizationId, deletedAt: null, status: 'ACTIVE',
-          userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'capacity.view' } } } } } },
+          OR: [
+            { userRoles: { some: { role: { name: 'Super Admin' } } } },
+            { userRoles: { some: { role: { rolePermissions: { some: holdsBoard } } } } },
+            { permissionGroupMembers: { some: { group: { permissionGroupPermissions: { some: holdsBoard } } } } },
+            { userPermissions: { some: holdsBoard } },
+            { permissionOverrides: { some: { ...holdsBoard, effect: 'ALLOW' } } },
+          ],
         },
         select: { id: true },
       }),
       projectIds.length
         ? this.prisma.projectMember.findMany({
             where: { projectId: { in: projectIds }, projectRole: 'MANAGER', isActive: true },
-            select: { userId: true },
+            select: { userId: true, projectId: true },
           })
-        : Promise.resolve([]),
+        : Promise.resolve([] as { userId: string; projectId: string }[]),
     ]);
-    return [...new Set([...viewers.map(v => v.id), ...managers.map(m => m.userId)])];
+    // The narrowing above is a cheap superset; the resolver has the last word (a DENY wins).
+    const board: string[] = [];
+    for (const c of candidates) if (await this.permissions.check(c.id, 'capacity.view')) board.push(c.id);
+    const onBoard = new Set(board);
+    const clients: { userId: string; projectId: string }[] = [];
+    for (const m of managers) {
+      if (onBoard.has(m.userId) || clients.some(x => x.userId === m.userId)) continue;
+      clients.push({ userId: m.userId, projectId: m.projectId });
+    }
+    return { board, clients };
   }
 
   private emptyCoverage(today: Date, to: Date) {
@@ -1539,13 +1572,28 @@ export class CapacityService {
       });
     if (!tasks.length) return;
     const projectIds = [...new Set(tasks.map(t => t.projectId).filter((x): x is string => !!x))];
-    const reviewers = (await this.coverageReviewers(organizationId, projectIds)).filter(id => id !== userId);
-    if (!reviewers.length) return;
-    await this.notifications.notify(reviewers, {
-      type: 'coverage.at_risk',
-      title: 'Coverage at risk',
-      message: `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out — reassign or extend on the Capacity board.`,
-    });
+    const { board, clients } = await this.coverageReviewers(organizationId, projectIds);
+    const what = `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out`;
+    const toBoard = board.filter(id => id !== userId);
+    if (toBoard.length) {
+      await this.notifications.notify(toBoard, {
+        type: 'coverage.at_risk',
+        title: 'Coverage at risk',
+        message: `${what} — reassign or extend on the Team Capacity board.`,
+        link: '/capacity',
+      });
+    }
+    // A client's own manager who cannot open the board is told the same thing, and sent to the
+    // client — where their tasks are — rather than to a page that would refuse them.
+    for (const { userId: managerId, projectId } of clients) {
+      if (managerId === userId) continue;
+      await this.notifications.notify([managerId], {
+        type: 'coverage.at_risk',
+        title: 'Coverage at risk',
+        message: `${what} — reassign or extend the work on the client.`,
+        link: `/projects/${projectId}`,
+      });
+    }
   }
 }
 
@@ -1656,9 +1704,10 @@ export interface CreateCoverageDto {
 @Module({
   // OptionalHolidaysModule supplies the per-person approved-optional-holiday days, which the
   // board treats exactly like approved leave: off for that person, nobody else.
-  imports: [OptionalHolidaysModule],
-  controllers: [CapacityController],
-  providers: [CapacityService],
+  // TasksModule: the board's task CRUD (capacity-tasks.ts) goes through TasksService's own rules.
+  imports: [OptionalHolidaysModule, TasksModule],
+  controllers: [CapacityController, CapacityTasksController],
+  providers: [CapacityService, CapacityTaskOptionsService],
   exports: [CapacityService],
 })
 export class CapacityModule {}

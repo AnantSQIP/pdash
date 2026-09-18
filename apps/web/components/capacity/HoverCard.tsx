@@ -9,11 +9,13 @@
 // of those problems, and never scrolls with the grid (the owner closes it on scroll instead).
 
 import { useLayoutEffect, useState } from 'react';
+import { Pencil, UserRoundCog, Trash2 } from 'lucide-react';
 import type { CapacityDay, CapacityRow } from '@/lib/api';
 import { Portal } from '@/components/ui/Portal';
 import { formatDate } from '@/lib/date';
-import { daysOverdue, textureStyle } from '@/lib/project-colors';
+import { daysOverdue, segmentRing, textureStyle } from '@/lib/project-colors';
 import { DAILY_CAPACITY, type Segment } from './grid';
+import type { TaskActions } from './TaskEditor';
 import { pidLabel } from '@/lib/mock-data';
 
 const WIDTH = 320;
@@ -42,7 +44,18 @@ export function priorityWord(p: string | null | undefined): string {
   return v.charAt(0) + v.slice(1).toLowerCase();
 }
 
-export function HoverCard({ target, today }: { target: HoverTarget; today: string }) {
+/**
+ * With `actions` (capacity.manage) the card is interactive: each task carries Edit / Reassign /
+ * Delete, and the board keeps the card open while the pointer is on it (`onPointerInside`). Without
+ * them it stays what it always was — a tooltip that ignores the pointer.
+ */
+export function HoverCard({ target, today, actions, onPointerInside, onAction }: {
+  target: HoverTarget; today: string;
+  actions?: TaskActions | null;
+  onPointerInside?: (inside: boolean) => void;
+  /** Called after an action is chosen, so the board can put the card away. */
+  onAction?: () => void;
+}) {
   // A callback ref held in state, not a useRef: Portal renders nothing on its first pass (it
   // waits for mount), so on the first commit the card element does not exist yet and a ref
   // would be null when the layout effect ran — leaving the card parked at -9999px. Putting
@@ -80,16 +93,20 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
     <Portal>
       <div
         ref={setEl}
-        role="tooltip"
-        className="pointer-events-none fixed z-[70] rounded-lg bg-white p-3 text-xs shadow-lg ring-1 ring-gray-200"
-        style={{ width: WIDTH, left: pos?.left ?? -9999, top: pos?.top ?? -9999, maxHeight: pos?.maxH, overflow: 'hidden' }}
+        data-capacity-hovercard=""
+        role={actions ? 'group' : 'tooltip'}
+        aria-label={actions ? `${row.name.split(' ')[0]} · ${when}` : undefined}
+        onMouseEnter={actions ? () => onPointerInside?.(true) : undefined}
+        onMouseLeave={actions ? () => onPointerInside?.(false) : undefined}
+        className={`${actions ? 'pointer-events-auto' : 'pointer-events-none'} fixed z-[70] rounded-lg bg-white p-3 text-xs shadow-lg ring-1 ring-gray-200`}
+        style={{ width: WIDTH, left: pos?.left ?? -9999, top: pos?.top ?? -9999, maxHeight: pos?.maxH, overflow: actions ? 'auto' : 'hidden' }}
       >
         <div className="flex items-baseline justify-between gap-3">
           <span className="font-semibold text-gray-900">{row.name.split(' ')[0]} · {when}</span>
           {working ? (
             over
               // Neutral, not red: red on this board means a task is late; too much on one day is the dark edge.
-              ? <span className="font-semibold text-gray-900 tabular-nums">{day.load}h of {cap}h · over by {Math.round((day.load - cap) * 10) / 10}h</span>
+              ? <span className="font-semibold text-rose-700 tabular-nums">{day.load}h of {cap}h · over by {Math.round((day.load - cap) * 10) / 10}h</span>
               : day.load > 0
                 ? <span className="text-gray-600 tabular-nums">{day.load}h of {cap}h · <span className="text-emerald-700">{Math.round(free * 10) / 10}h free</span></span>
                 : <span className="font-medium text-emerald-700">{day.weekOf ? 'Free all week' : 'Free all day'}</span>
@@ -108,7 +125,7 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
               const pid = seg.task.projectPid ? pidLabel(seg.task.projectPid, seg.task.projectRound) : null;
               return (
                 <li key={seg.taskId} className="flex gap-2">
-                  <span className="relative mt-0.5 h-2.5 w-3.5 shrink-0 rounded-sm" style={{ backgroundColor: seg.fill, ...textureStyle(seg.hue.texture) }}>
+                  <span className="relative mt-0.5 h-2.5 w-3.5 shrink-0 rounded-sm" style={{ backgroundColor: seg.fill, boxShadow: segmentRing(seg.hue), ...textureStyle(seg.hue.texture) }}>
                     {seg.rail && <span className="absolute inset-x-0 bottom-0 h-[2px]" style={{ background: seg.rail }} />}
                   </span>
                   <div className="min-w-0 flex-1">
@@ -132,6 +149,16 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
                         {seg.task.overEstimate && <span className="text-amber-700"> · over the estimate</span>}
                       </p>
                     )}
+                    {actions && !seg.task.isTeamWork && (
+                      <div className="mt-1 flex items-center gap-3 text-[11px] font-medium">
+                        <button type="button" onClick={() => { onAction?.(); actions.edit(seg.task); }}
+                          className="inline-flex items-center gap-1 text-gray-500 hover:text-brand-700"><Pencil size={11} /> Edit</button>
+                        <button type="button" onClick={() => { onAction?.(); actions.reassign(seg.task, row.userId); }}
+                          className="inline-flex items-center gap-1 text-gray-500 hover:text-brand-700"><UserRoundCog size={11} /> Reassign</button>
+                        <button type="button" onClick={() => { onAction?.(); actions.remove(seg.task); }}
+                          className="inline-flex items-center gap-1 text-gray-500 hover:text-rose-600"><Trash2 size={11} /> Delete</button>
+                      </div>
+                    )}
                   </div>
                 </li>
               );
@@ -141,6 +168,12 @@ export function HoverCard({ target, today }: { target: HoverTarget; today: strin
         {more > 0 && <p className="mt-2 text-[11px] text-gray-500">+{more} more — click the name for the full plan</p>}
         {working && shown.length === 0 && segments && (
           <p className="mt-2 text-[11px] text-gray-400">Nothing scheduled — click for the plan; assign from there.</p>
+        )}
+        {actions && working && (
+          <button type="button" onClick={() => { onAction?.(); actions.create({ person: { userId: row.userId, name: row.name }, start: day.weekOf ? undefined : day.date }); }}
+            className="mt-2 w-full rounded-md border border-dashed border-gray-300 py-1 text-[11px] font-medium text-gray-500 hover:border-brand-400 hover:text-brand-700">
+            + New task for {row.name.split(' ')[0]}{day.weekOf ? '' : ` from ${formatDate(day.date, { day: 'numeric', month: 'short' })}`}
+          </button>
         )}
       </div>
     </Portal>

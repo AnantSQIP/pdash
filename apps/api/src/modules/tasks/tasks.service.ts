@@ -3,16 +3,34 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStatusDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
 import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
-import { ProjectAccessService } from '../../common/access/project-access.module';
+import { ProjectAccessService, type AccessOpts } from '../../common/access/project-access.module';
 import { startOfUtcDay, resolveDate } from '../../common/dates';
 import { reactivateGroupsOfTask } from '../../common/task-groups';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { TaskTimeService } from './task-time.service';
+
+/** Who a task's assignment adds to its client, decided before anything is written. */
+type MembershipPlan = { primary: string; outsiders: string[]; reactivate: string[]; create: string[] };
+
+/**
+ * A staffing seat as the service receives it. The same shape arrives from PUT /tasks/:id/staffing
+ * and from the capacity board, so both are held to one set of rules (validateStaffing).
+ */
+export type SeatInput = {
+  userId: string; role: string; estimatedHours?: number | null;
+  dueDate?: string | null; startDate?: string | null; hoursPerDay?: number | null;
+};
+
+/**
+ * How a staffing change is being made. `oversight` — see AccessOpts. `activeOrgUsersOnly` — every
+ * seat must name an active person of the organisation (the capacity board, which offers anyone).
+ */
+export type StaffingOpts = AccessOpts & { activeOrgUsersOnly?: boolean };
 
 
 @Injectable()
@@ -193,27 +211,46 @@ export class TasksService {
    * work just works. Anyone else gets a clear message to have a manager add the person.
    * Only real, ACTIVE, same-org users are added (also fixes assigning a deactivated user).
    */
-  private async ensureAssigneesAreMembers(projectIds: string[], assigneeIds: string[]) {
-    if (!assigneeIds.length || !projectIds.length) return;
+  private async ensureAssigneesAreMembers(projectIds: string[], assigneeIds: string[], opts: AccessOpts = {}) {
+    const plan = await this.planMembershipAdds(projectIds, assigneeIds, opts);
+    if (!plan) return;
+    await this.prisma.$transaction(tx => this.applyMembershipAdds(plan, tx));
+    await this.announceMembershipAdds(plan);
+  }
+
+  /**
+   * The "assign = staff" rule, worked out and VALIDATED but not yet written: who is not on the
+   * client, whether this actor may add them, and whether they are real, active people of the same
+   * organisation. Split from the write so a caller can refuse everything before anything changes,
+   * and then add the members in the SAME transaction as the work that needed them — creating a
+   * task from the capacity board must not leave somebody on a client when the task itself failed.
+   *
+   * `opts.oversight` is the capacity manager's standing: capacity.manage is "assign anyone,
+   * anywhere", so it may add people to a client exactly as project.approve may.
+   */
+  private async planMembershipAdds(projectIds: string[], assigneeIds: string[], opts: AccessOpts = {}): Promise<MembershipPlan | null> {
+    if (!assigneeIds.length || !projectIds.length) return null;
     const rows = await this.prisma.projectMember.findMany({
       where: { projectId: { in: projectIds }, userId: { in: assigneeIds } },
       select: { id: true, userId: true, isActive: true },
     });
     const active = new Set(rows.filter(r => r.isActive).map(r => r.userId));
     const outsiders = [...new Set(assigneeIds.filter(id => !active.has(id)))];
-    if (!outsiders.length) return;
+    if (!outsiders.length) return null;
 
     const actorId = getActorId();
-    if (!actorId || !(await this.access.hasOversight(actorId))) {
+    if (!actorId || !(opts.oversight || await this.access.hasOversight(actorId))) {
       throw new BadRequestException('You can only assign people who are on this client. Ask a manager to add them first.');
     }
 
-    // Add the outsiders to the primary project — validate they are active, same-org users.
+    // Add the outsiders to the primary project — validate they are active, same-org users. The
+    // organisation is the client's (through its members) or, for a client nobody is on yet, the
+    // actor's: never "any organisation", which is what an unresolved one used to mean here.
     const primary = projectIds[0];
     const anchor = await this.prisma.projectMember.findFirst({
       where: { projectId: primary }, select: { user: { select: { organizationId: true } } },
     });
-    const orgId = anchor?.user?.organizationId;
+    const orgId = anchor?.user?.organizationId ?? await this.orgOfActor();
     const valid = new Set((await this.prisma.user.findMany({
       where: { id: { in: outsiders }, deletedAt: null, status: 'ACTIVE', ...(orgId ? { organizationId: orgId } : {}) },
       select: { id: true },
@@ -221,29 +258,62 @@ export class TasksService {
     if (outsiders.some(id => !valid.has(id))) {
       throw new BadRequestException('One or more selected people are not active members of this organization.');
     }
+    const reactivate: string[] = [];
+    const create: string[] = [];
     for (const uid of outsiders) {
       const existing = rows.find(r => r.userId === uid);
-      if (existing) await this.prisma.projectMember.update({ where: { id: existing.id }, data: { isActive: true } });
-      else await this.prisma.projectMember.create({ data: { projectId: primary, userId: uid, projectRole: 'MEMBER' } });
+      if (existing) reactivate.push(existing.id); else create.push(uid);
     }
+    return { primary, outsiders, reactivate, create };
+  }
 
-    // GOVERNANCE: auto-adding someone to a matter via assignment grants them FULL project
-    // access (potentially a confidential client matter). That must be auditable and visible —
-    // record a membership event and tell the person they were added — so a silent enrolment
-    // can't happen. Previously the add left no trace and no notice.
-    const project = await this.prisma.project.findUnique({ where: { id: primary }, select: { title: true } });
+  private async applyMembershipAdds(plan: MembershipPlan, tx: Prisma.TransactionClient) {
+    if (plan.reactivate.length) {
+      await tx.projectMember.updateMany({ where: { id: { in: plan.reactivate } }, data: { isActive: true } });
+    }
+    for (const uid of plan.create) {
+      await tx.projectMember.create({ data: { projectId: plan.primary, userId: uid, projectRole: 'MEMBER' } });
+    }
+  }
+
+  /**
+   * GOVERNANCE: auto-adding someone to a matter via assignment grants them FULL project
+   * access (potentially a confidential client matter). That must be auditable and visible —
+   * record a membership event and tell the person they were added — so a silent enrolment
+   * can't happen. Previously the add left no trace and no notice. Called once the add committed.
+   */
+  private async announceMembershipAdds(plan: MembershipPlan) {
+    const project = await this.prisma.project.findUnique({ where: { id: plan.primary }, select: { title: true } });
     await this.events.emit({
       action: EVENTS.PROJECT_MEMBER_ADDED,
       entityType: 'PROJECT',
-      entityId: primary,
-      metadata: { addedUserIds: outsiders, via: 'task-assignment', projectTitle: project?.title },
+      entityId: plan.primary,
+      metadata: { addedUserIds: plan.outsiders, via: 'task-assignment', projectTitle: project?.title },
     });
-    await this.notifications.notify(outsiders, {
+    await this.notifications.notify(plan.outsiders, {
       type: 'project.member_added',
       title: 'Added to a client',
       message: `You were added to the client "${project?.title ?? 'a client'}" because you were assigned work on it.`,
-      link: `/projects/${primary}`,
+      link: `/projects/${plan.primary}`,
     });
+  }
+
+  /**
+   * Every person named for a seat must be a real, ACTIVE person of the actor's organisation.
+   * The capacity board offers anyone in the organisation, not only a client's members, so this is
+   * checked for every seat there — a deactivated person who is still on a client is not somebody
+   * to hand new work to.
+   */
+  private async assertActiveOrgUsers(userIds: string[]) {
+    const ids = [...new Set(userIds)];
+    if (!ids.length) return;
+    const orgId = await this.orgOfActor();
+    const found = await this.prisma.user.count({
+      where: { id: { in: ids }, deletedAt: null, status: 'ACTIVE', ...(orgId ? { organizationId: orgId } : {}) },
+    });
+    if (found !== ids.length) {
+      throw new BadRequestException('One or more selected people are not active members of this organization.');
+    }
   }
 
   /** Resolve the project(s) a task belongs to (for assignee-membership checks). */
@@ -364,6 +434,105 @@ export class TasksService {
   }
 
   /**
+   * Create a task AND its staffing seats in ONE transaction — the capacity board's "new task".
+   *
+   * The board used to do this as two calls (POST /tasks, then PUT /tasks/:id/staffing), so a
+   * refused seat — a duplicate, a second PM, somebody who is not in the organisation, or an actor
+   * allowed to create but not to assign — left an unassigned task behind that nobody had asked for.
+   * Here every rule is checked first, and then the task, its place in the task group, the people
+   * added to the client and the seats are written together or not at all.
+   *
+   * The rules are create()'s and setStaffing()'s, not copies of them: the group's deadline bounds
+   * the task's (a task with no date takes the group's), a completed group or client takes no new
+   * work, at most one PM, one seat per person per role, a seat's start before its deadline. With
+   * no `taskListId` the task goes into the client's default group — the one the doc keeps for
+   * exactly this — or, if that is complete, it says so rather than guessing.
+   */
+  async createWithSeats(dto: {
+    projectId: string; taskListId?: string; title: string; description?: string; priority?: string;
+    startDate?: string | null; dueDate?: string | null; seats: SeatInput[];
+  }, opts: StaffingOpts = {}) {
+    const actorId = getActorId();
+    await this.access.assertProjectAccess(actorId, dto.projectId, opts);
+    await this.access.assertProjectWritable(dto.projectId);
+
+    const taskList = dto.taskListId
+      ? await this.prisma.taskList.findFirst({ where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null } })
+      : (await this.prisma.taskList.findFirst({ where: { projectId: dto.projectId, deletedAt: null, isDefault: true } }))
+        ?? await this.prisma.taskList.findFirst({ where: { projectId: dto.projectId, deletedAt: null, status: 'ACTIVE' }, orderBy: { sequence: 'asc' } });
+    if (!taskList) {
+      throw new BadRequestException(dto.taskListId
+        ? 'That task group is not part of this client.'
+        : 'This client has no open task group to put the task in — create one first.');
+    }
+    if (taskList.status === 'COMPLETED') {
+      throw new BadRequestException(`The task group "${taskList.name}" is complete. Reopen it to add work to it.`);
+    }
+
+    const start = dto.startDate ? new Date(dto.startDate) : undefined;
+    const internalDue = dto.dueDate ? new Date(dto.dueDate) : (taskList.dueDate ?? undefined);
+    this.assertTaskDateOrder(start, internalDue);
+    this.assertWithinGroup(taskList, internalDue);
+
+    const seats = dto.seats ?? [];
+    this.validateStaffing(seats);
+    if (opts.activeOrgUsersOnly) await this.assertActiveOrgUsers(seats.map(e => e.userId));
+    const people = [...new Set(seats.map(e => e.userId))];
+    const membership = await this.planMembershipAdds([dto.projectId], people, opts);
+
+    const wf = await this.prisma.workflow.findFirst({ where: { type: 'GLOBAL' }, orderBy: { name: 'asc' }, select: { id: true } });
+    const title = dto.title.trim();
+
+    const task = await this.prisma.$transaction(async tx => {
+      if (membership) await this.applyMembershipAdds(membership, tx);
+      const created = await tx.task.create({
+        data: {
+          title,
+          description: dto.description,
+          priority: dto.priority ?? 'MEDIUM',
+          startDate: start,
+          dueDate: internalDue,
+          // As setStaffing: the task's estimate is the sum of its seats' hours.
+          estimatedHours: seats.reduce((s, e) => s + (e.estimatedHours ?? 0), 0),
+          createdBy: actorId ?? 'system',
+          assignedById: seats.length ? actorId : null,
+          workflowId: wf?.id,
+        },
+        select: { id: true },
+      });
+      const sequence = await tx.projectTask.count({ where: { taskListId: taskList.id } });
+      await tx.projectTask.create({
+        data: { projectId: dto.projectId, taskId: created.id, taskListId: taskList.id, sequence },
+      });
+      if (seats.length) await this.reconcileAssignees(created.id, title, this.seatRows(seats), tx);
+      return created;
+    });
+
+    if (membership) await this.announceMembershipAdds(membership);
+    await this.events.emit({
+      action: EVENTS.TASK_CREATED,
+      entityType: 'TASK',
+      entityId: task.id,
+      metadata: { projectId: dto.projectId, title, via: 'capacity' },
+    });
+    if (people.length) {
+      await this.events.emit({
+        action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: task.id,
+        metadata: { projectId: dto.projectId, title, added: people, staffing: true },
+      });
+      await this.notifications.notify(people, {
+        type: 'task.assigned',
+        title: 'New task assigned',
+        message: `You were assigned to "${title}".`,
+        link: `/tasks?taskId=${task.id}`,
+      });
+    }
+    await this.recomputeProjectProgress(dto.projectId); // a new task dilutes/updates progress
+    const full = await this.getRaw(task.id);
+    return Object.assign(full as object, { scheduleWarnings: await this.scheduleWarnings(task.id, seats) });
+  }
+
+  /**
    * CLIENTS-FLOW: re-open any completed task group this task sits in, and say so in the client's
    * activity feed. Called from both paths that re-open a task.
    */
@@ -391,43 +560,67 @@ export class TasksService {
     await this.access.assertTaskAccess(actorId, taskId);
     await this.access.assertProjectAccess(actorId, projectId);
     await this.access.assertProjectWritable(projectId);
-    const link = await this.prisma.projectTask.findUnique({
-      where: { projectId_taskId: { projectId, taskId } },
-      select: { id: true, taskListId: true, task: { select: { title: true, deletedAt: true } } },
+    const moving = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { dueDate: true } });
+    const move = await this.planMove(taskId, taskListId, moving?.dueDate ?? null, projectId);
+    if (!move.noop) {
+      await this.prisma.$transaction(tx => this.applyMove(move, tx));
+      await this.announceMove(taskId, move);
+    }
+    return this.get(taskId);
+  }
+
+  /**
+   * Moving a task into another task group of the SAME client, decided before anything is written:
+   * the target must be a live group of a client the task is in; an open task may not land in a
+   * completed group, nor be due after the group is. `due` is the deadline the task WILL have — the
+   * capacity editor can change the date and the group in one save, and the date it is judged by is
+   * the one it is being given. `projectId`, when given, pins which client (the task-list route
+   * names it); otherwise the group itself says which of the task's clients it belongs to.
+   */
+  private async planMove(taskId: string, taskListId: string, due: Date | null, projectId?: string) {
+    const links = await this.prisma.projectTask.findMany({
+      where: { taskId, ...(projectId ? { projectId } : {}), task: { deletedAt: null } },
+      select: { id: true, projectId: true, taskListId: true, task: { select: { title: true } } },
     });
-    if (!link || link.task.deletedAt) throw new NotFoundException('That task is not in this client.');
+    if (!links.length) throw new NotFoundException('That task is not in this client.');
     const target = await this.prisma.taskList.findFirst({
-      where: { id: taskListId, projectId, deletedAt: null },
-      select: { id: true, name: true, status: true, dueDate: true },
+      where: { id: taskListId, deletedAt: null, projectId: { in: links.map(l => l.projectId) } },
+      select: { id: true, name: true, status: true, dueDate: true, projectId: true },
     });
     if (!target) throw new BadRequestException('That task group is not part of this client.');
-    if (link.taskListId === target.id) return this.get(taskId);
-    const moving = await this.prisma.task.findUnique({ where: { id: taskId }, select: { dueDate: true } });
+    const link = links.find(l => l.projectId === target.projectId)!;
+    const base = { link, target, title: link.task.title, projectId: target.projectId as string };
+    if (link.taskListId === target.id) return { ...base, noop: true, fromName: null as string | null };
+    const open = await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } });
     // By CALENDAR DAY, like assertWithinGroup — comparing raw timestamps refused a task due at
     // 10:00 on the group's own deadline day, which task-create accepts into the same group.
-    if (target.dueDate && moving?.dueDate && startOfUtcDay(moving.dueDate) > target.dueDate
-        && (await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } }))) {
+    if (target.dueDate && due && startOfUtcDay(due) > target.dueDate && open) {
       const when = target.dueDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
       throw new BadRequestException(`“${target.name}” is due ${when} and this task is due later. Bring the task's deadline in first.`);
     }
-    if (target.status === 'COMPLETED') {
-      const open = await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } });
-      if (open) throw new BadRequestException(`"${target.name}" is complete. Reopen it before moving open work into it.`);
+    if (target.status === 'COMPLETED' && open) {
+      throw new BadRequestException(`"${target.name}" is complete. Reopen it before moving open work into it.`);
     }
     const from = link.taskListId
       ? await this.prisma.taskList.findUnique({ where: { id: link.taskListId }, select: { name: true } })
       : null;
-    await this.prisma.$transaction(async tx => {
-      const sequence = await tx.projectTask.count({ where: { taskListId: target.id } });
-      await tx.projectTask.update({ where: { id: link.id }, data: { taskListId: target.id, sequence } });
-    });
+    return { ...base, noop: false, fromName: from?.name ?? null };
+  }
+
+  private async applyMove(move: Awaited<ReturnType<TasksService['planMove']>>, tx: Prisma.TransactionClient) {
+    if (move.noop) return;
+    const sequence = await tx.projectTask.count({ where: { taskListId: move.target.id } });
+    await tx.projectTask.update({ where: { id: move.link.id }, data: { taskListId: move.target.id, sequence } });
+  }
+
+  private async announceMove(taskId: string, move: Awaited<ReturnType<TasksService['planMove']>>) {
+    if (move.noop) return;
     await this.events.emit({
       action: EVENTS.TASK_MOVED,
       entityType: 'TASK',
       entityId: taskId,
-      metadata: { projectId, title: link.task.title, from: from?.name ?? null, to: target.name, taskListId: target.id },
+      metadata: { projectId: move.projectId, title: move.title, from: move.fromName, to: move.target.name, taskListId: move.target.id },
     });
-    return this.get(taskId);
   }
 
   async list(projectId: string, opts: { taskListId?: string } = {}) {
@@ -495,13 +688,19 @@ export class TasksService {
     return task;
   }
 
-  async get(id: string) {
-    await this.access.assertTaskAccess(getActorId(), id);
+  async get(id: string, opts: AccessOpts = {}) {
+    await this.access.assertTaskAccess(getActorId(), id, opts);
     return this.getRaw(id);
   }
 
-  async update(id: string, dto: UpdateTaskDto) {
-    await this.access.assertTaskAccess(getActorId(), id);
+  /**
+   * Edit a task's content. `opts.moveToTaskListId` also moves it to another task group of the same
+   * client IN THE SAME SAVE (the capacity board's task editor): the deadline is then judged against
+   * the group it is going to, and the move and the edit land or fail together — saving "due the
+   * 30th, in the group due the 30th" must not depend on which half happened to be applied first.
+   */
+  async update(id: string, dto: UpdateTaskDto, opts: AccessOpts & { moveToTaskListId?: string } = {}) {
+    await this.access.assertTaskAccess(getActorId(), id, opts);
     await this.access.assertTaskWritable(id); // no edits on a completed/closed matter's tasks
     const before = await this.getRaw(id);
 
@@ -509,8 +708,11 @@ export class TasksService {
     // Validate the effective (post-update) order — a partial edit can't leave due < start.
     const effectiveStart = dto.startDate === undefined ? before.startDate : resolveDate(dto.startDate, null);
     this.assertTaskDateOrder(effectiveStart, internalDue);
+    const move = opts.moveToTaskListId ? await this.planMove(id, opts.moveToTaskListId, internalDue ?? null) : null;
     if (dto.dueDate !== undefined && internalDue) {
-      for (const g of await this.groupsOfTask(id)) this.assertWithinGroup(g, internalDue);
+      let groups: { id: string; name: string; dueDate: Date | null }[] = await this.groupsOfTask(id);
+      if (move && !move.noop) groups = [...groups.filter(g => g.id !== move.link.taskListId), move.target];
+      for (const g of groups) this.assertWithinGroup(g, internalDue);
     }
 
     // Re-arm the overdue alert when the task can no longer be late for the reason it was
@@ -550,6 +752,7 @@ export class TasksService {
           previous: before.dueDate, next: internalDue, tx,
         });
       }
+      if (move) await this.applyMove(move, tx);
       return u;
     });
     // M17: task edits now appear in the audit/activity/analytics feed.
@@ -559,6 +762,7 @@ export class TasksService {
       entityId: id,
       metadata: { projectId: (before.projectTasks ?? [])[0]?.projectId, title: updated.title },
     });
+    if (move) await this.announceMove(id, move);
     return updated;
   }
 
@@ -758,12 +962,11 @@ export class TasksService {
    * reviewer may be added with no estimate, or add a small estimate later); the task's total
    * estimatedHours becomes the SUM. Auto-adds not-yet-members (like setAssignees).
    */
-  async setStaffing(id: string, dto: SetStaffingDto) {
-    await this.access.assertTaskAccess(getActorId(), id);
-    await this.access.assertTaskWritable(id);
-    const before = await this.getRaw(id);
-
-    const entries = dto.assignees ?? [];
+  /**
+   * The rules a set of seats keeps, wherever it comes from (PUT /tasks/:id/staffing, the capacity
+   * board's create and reassign). Throws in words before anything is written.
+   */
+  private validateStaffing(entries: SeatInput[]) {
     // A person may hold MULTIPLE roles on one task, but only once PER ROLE (the unique key is
     // taskId+userId+role). Dedupe by that pair; hours are optional (0 allowed).
     const seen = new Set<string>();
@@ -782,8 +985,38 @@ export class TasksService {
     if (entries.filter(e => e.role === 'PM').length > 1) {
       throw new BadRequestException('A task can have only one manager.');
     }
+  }
 
-    await this.ensureAssigneesAreMembers(await this.projectIdsForTask(id), [...new Set(entries.map(e => e.userId))]);
+  /** Seats in the shape reconcileAssignees writes. */
+  private seatRows(entries: SeatInput[]) {
+    return entries.map(e => ({
+      userId: e.userId, role: e.role,
+      estimatedHours: e.estimatedHours ?? 0,
+      dueDate: e.dueDate ? new Date(e.dueDate) : null,
+      // Truncated to UTC midnight, the encoding every date-only field in this system uses and
+      // the one the capacity board compares against. A date picker already sends exactly that,
+      // but anything carrying a TIME would not: 2026-09-10T20:00Z is the 11th in IST, and the
+      // board would place the work a day early. Normalising here means the stored value cannot
+      // disagree with the day the person chose.
+      startDate: e.startDate ? startOfUtcDay(new Date(e.startDate)) : null,
+      hoursPerDay: e.hoursPerDay != null && e.hoursPerDay > 0 ? e.hoursPerDay : null,
+    }));
+  }
+
+  async setStaffing(id: string, dto: { assignees?: SeatInput[] }, opts: StaffingOpts = {}) {
+    await this.access.assertTaskAccess(getActorId(), id, opts);
+    await this.access.assertTaskWritable(id);
+    const before = await this.getRaw(id);
+
+    const entries = dto.assignees ?? [];
+    this.validateStaffing(entries);
+    if (opts.activeOrgUsersOnly) await this.assertActiveOrgUsers(entries.map(e => e.userId));
+
+    // Worked out (and refused, if it must be) before anything is written; applied inside the
+    // same transaction as the seats, so a staffing change that fails adds nobody to the client.
+    const membership = await this.planMembershipAdds(
+      await this.projectIdsForTask(id), [...new Set(entries.map(e => e.userId))], opts,
+    );
     const prev = new Set((before.assignees ?? []).map((a: any) => a.userId));
     const totalHours = entries.reduce((s, e) => s + (e.estimatedHours ?? 0), 0);
     const assignedById = entries.length ? (getActorId() ?? null) : null;
@@ -791,32 +1024,24 @@ export class TasksService {
     // Seats and the task's summed estimate land together: the capacity board reads both, and a
     // crash between them left a task whose estimate did not match the hours on its seats.
     await this.prisma.$transaction(async tx => {
-      await this.reconcileAssignees(id, before.title, entries.map(e => ({
-        userId: e.userId, role: e.role,
-        estimatedHours: e.estimatedHours ?? 0,
-        dueDate: e.dueDate ? new Date(e.dueDate) : null,
-        // Truncated to UTC midnight, the encoding every date-only field in this system uses and
-        // the one the capacity board compares against. A date picker already sends exactly that,
-        // but anything carrying a TIME would not: 2026-09-10T20:00Z is the 11th in IST, and the
-        // board would place the work a day early. Normalising here means the stored value cannot
-        // disagree with the day the person chose.
-        startDate: e.startDate ? startOfUtcDay(new Date(e.startDate)) : null,
-        hoursPerDay: e.hoursPerDay != null && e.hoursPerDay > 0 ? e.hoursPerDay : null,
-      })), tx);
+      if (membership) await this.applyMembershipAdds(membership, tx);
+      await this.reconcileAssignees(id, before.title, this.seatRows(entries), tx);
       // The task's estimate is the sum of the per-person hours (drives the capacity board).
       await tx.task.update({ where: { id }, data: { assignedById, estimatedHours: totalHours } });
     });
+    if (membership) await this.announceMembershipAdds(membership);
 
     const added = [...new Set(entries.map(e => e.userId))].filter(uid => !prev.has(uid));
     await this.notifications.notify(added, {
       type: 'task.assigned', title: 'New task assigned',
       message: `You were assigned to "${before.title}".`,
+      link: `/tasks?taskId=${id}`,
     });
     await this.events.emit({
       action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: id,
       metadata: { projectId: (before as any).projectTasks?.[0]?.projectId, title: before.title, added, staffing: true },
     });
-    const task = await this.get(id);
+    const task = await this.get(id, opts);
     return Object.assign(task as object, { scheduleWarnings: await this.scheduleWarnings(id, entries) });
   }
 
@@ -854,8 +1079,8 @@ export class TasksService {
     return warnings;
   }
 
-  async softDelete(id: string) {
-    await this.access.assertTaskAccess(getActorId(), id);
+  async softDelete(id: string, opts: AccessOpts = {}) {
+    await this.access.assertTaskAccess(getActorId(), id, opts);
     await this.access.assertTaskWritable(id); // no deleting a completed/closed matter's tasks
     const task = await this.getRaw(id);
     // Take this task's hours back out of the learned averages BEFORE it leaves the books.

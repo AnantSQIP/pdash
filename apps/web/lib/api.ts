@@ -216,6 +216,25 @@ export type StaffingEntry = {
   startDate?: string | null; hoursPerDay?: number | null;
 };
 
+/** A seat as the capacity board sends it. */
+export type CapacitySeat = StaffingEntry;
+export type CapacityTaskInput = {
+  projectId: string; taskListId?: string; title: string; description?: string; priority?: string;
+  startDate?: string | null; dueDate?: string | null; seats: CapacitySeat[];
+};
+export type CapacityTaskPatch = {
+  title?: string; description?: string; priority?: string; startDate?: string | null; dueDate?: string | null;
+  estimatedHours?: number; taskListId?: string;
+};
+/** GET /capacity/tasks/options — what the board's task editor chooses from. */
+export type CapacityTaskOptions = {
+  clients: {
+    id: string; title: string; code: string | null; roundSeq: number; projectPhase: string;
+    taskLists: { id: string; name: string; isDefault: boolean; status: string; sequence: number; startDate: string | null; dueDate: string | null }[];
+  }[];
+  people: { id: string; firstName: string; lastName: string; designation: string | null; profilePhoto: string | null }[];
+};
+
 export type Subtask = {
   id: string; taskId: string; title: string; status: string; priority: string;
   dueDate?: string; deletedAt?: string;
@@ -2755,6 +2774,22 @@ export const api = {
     /** Withdraw a cover — the leave was cancelled, or they came back early. */
     revokeCoverage: (id: string) =>
       req<CoverageRecord>(`/capacity/coverage/${id}/revoke`, { method: 'POST' }),
+
+    // ── Task CRUD from the board (capacity.manage) ─────────────────────────────────────────
+    /** Every client that can take work (with its task groups) and every active person. */
+    taskOptions: () => req<CapacityTaskOptions>('/capacity/tasks/options'),
+    /** One task, for the board's editor. */
+    getTask: (id: string) => req<ApiTask>(`/capacity/tasks/${id}`),
+    /** Create a task and its seats in ONE call — all of it or none of it. */
+    createTask: (body: CapacityTaskInput) =>
+      req<ApiTask & { scheduleWarnings?: string[] }>('/capacity/tasks', { method: 'POST', body: JSON.stringify(body) }),
+    /** Edit fields; `taskListId` moves it to another group of the same client in the same save. */
+    updateTask: (id: string, body: CapacityTaskPatch) =>
+      req<ApiTask>(`/capacity/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    /** Replace the seats: assign, unassign, reassign. People not on the client are added to it. */
+    setSeats: (id: string, seats: CapacitySeat[]) =>
+      req<ApiTask & { scheduleWarnings?: string[] }>(`/capacity/tasks/${id}/seats`, { method: 'PUT', body: JSON.stringify({ seats }) }),
+    deleteTask: (id: string) => req<void>(`/capacity/tasks/${id}`, { method: 'DELETE' }),
   },
 
   overdue: {

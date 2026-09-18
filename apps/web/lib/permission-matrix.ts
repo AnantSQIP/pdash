@@ -63,7 +63,7 @@ export const MODULES: ModuleDef[] = [
   { key: 'report',      label: 'Reports',      actions: ['view', 'export'] },
   { key: 'analytics',   label: 'Analytics',    actions: ['view.own', 'view.organization'] },
   { key: 'performance', label: 'Performance',  actions: ['view.own', 'view.organization'] },
-  { key: 'capacity',    label: 'Team Capacity', actions: ['view'] },
+  { key: 'capacity',    label: 'Team Capacity', actions: ['view', 'manage'] },
   { key: 'deadline',    label: 'Client Deadlines', actions: ['view.client'] },
   { key: 'attendance',  label: 'Attendance',   actions: ['view.own', 'view.organization', 'manage', 'regularize'] },
   { key: 'leave',       label: 'Leave',        actions: ['view.own', 'view.organization', 'request', 'approve'] },
@@ -132,6 +132,8 @@ export const CODE_NOTES: Record<string, string> = {
   'analytics.view.organization': 'Org-wide analytics and reporting. A SEPARATE permission from Performance — View Org-wide: granting one does not grant the other.',
   'patent.manage': 'The confidential portal: real patent numbers and client identities.',
   'profile.view.personal': 'Home addresses, dates of birth and emergency contacts. The server strips these keys for everyone else.',
+  'capacity.view': 'Team Capacity: who is busy, who is free, and what everyone is on — across every client. Also the capacity tab on a client, the availability card on Home and the workload on a profile. Senior Consultant and above by default.',
+  'capacity.manage': 'Create, edit, assign and delete tasks from Team Capacity — for anyone in the organisation, on any client, adding them to the client if they are not on it yet. Senior Consultant and above by default.',
 };
 
 // ── grouping ─────────────────────────────────────────────────────────────────

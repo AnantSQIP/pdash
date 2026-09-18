@@ -5,8 +5,9 @@
 // Capacity tools that people actually use (Float, Jira's capacity view, ClickUp's workload)
 // all put allocated-vs-available directly beside the schedule, in three bands — under, at,
 // over — rather than a single alarm. The bands here are the same three the board already draws
-// in its cells: green while there is room, amber as a day fills, and the black of the line under
-// an over-planned day for "over", never red (red on this board means a task is late).
+// in its cells: green while there is room, amber as a day fills, and the rose of the line under an
+// over-planned day for "over" (not the red of a late task's rail). Light since Sep 2026: -300/-400
+// steps on a pale track with a hairline, and the words beside every bar carry the value too.
 
 import clsx from 'clsx';
 import type { CapacityRow, CapacityDay } from '@/lib/api';
@@ -24,11 +25,15 @@ export function loadBand(load: number, capacity: number): 'under' | 'at' | 'over
 }
 
 const BAND_FILL: Record<ReturnType<typeof loadBand>, string> = {
-  under: '#34d399',       // emerald-400
-  at: '#fbbf24',          // amber-400
-  over: OVER_COMMITTED,   // the cell edge's neutral
+  under: '#6ee7b7',       // emerald-300
+  at: '#fcd34d',          // amber-300
+  over: OVER_COMMITTED,   // rose-400, the over-committed line's colour
   none: '#e5e7eb',
 };
+/** The track a total bar fills: pale, with a hairline so a short pale fill still has an edge. */
+const TRACK = 'bg-gray-100 ring-1 ring-inset ring-gray-900/5';
+/** The over-capacity tail: a deeper rose than the band, so "over by Nh" reads as MORE, not the same. */
+const OVER_TAIL = '#e11d48'; // rose-600
 
 export type DayTotal = {
   date: string;
@@ -116,10 +121,10 @@ export function DayTotalCell({ t, unit, wide }: { t: DayTotal; unit: Unit; wide:
     : `Team · ${t.load}h of ${t.capacity}h planned (${pct(t.load, t.capacity)}%) · ${t.free} of ${t.working} free${t.over ? ` · ${t.over} over` : ''}`;
   return (
     <div className="flex flex-col items-center gap-0.5" title={title} aria-label={title}>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200/80">
+      <div className={clsx('h-1.5 w-full overflow-hidden rounded-full', TRACK)}>
         {t.capacity > 0 && <div className="h-full rounded-full" style={{ width: `${Math.max(ratio > 0 ? 6 : 0, ratio * 100)}%`, backgroundColor: BAND_FILL[band] }} />}
       </div>
-      {wide && <span className={clsx('text-[9px] leading-none tabular-nums', band === 'over' ? 'font-semibold text-gray-900' : 'text-gray-500')}>{label}</span>}
+      {wide && <span className={clsx('text-[9px] leading-none tabular-nums', band === 'over' ? 'font-semibold text-rose-700' : 'text-gray-500')}>{label}</span>}
     </div>
   );
 }
@@ -146,13 +151,13 @@ export function RowSummary({ row, unit, highlightHours }: {
   return (
     <div className="min-w-0">
       <div className="flex items-baseline justify-end gap-1.5">
-        <span className={clsx('text-[11px] font-medium tabular-nums', band === 'over' ? 'text-gray-900' : band === 'at' ? 'text-amber-700' : 'text-gray-600')}>{words}</span>
+        <span className={clsx('text-[11px] font-medium tabular-nums', band === 'over' ? 'text-rose-700' : band === 'at' ? 'text-amber-700' : 'text-gray-600')}>{words}</span>
       </div>
-      <div className="mt-1 flex h-1.5 w-full items-stretch overflow-hidden rounded-full bg-gray-200/80" title={`${row.committedHours}h planned of ${row.capacityHours}h · ${row.freeHours}h free${row.overCommittedHours > 0.05 ? ` · ${row.overCommittedHours}h over on some days` : ''}${highlightHours != null ? ` · ${Math.round(highlightHours * 10) / 10}h on this client` : ''}`}>
+      <div className={clsx('mt-1 flex h-1.5 w-full items-stretch overflow-hidden rounded-full', TRACK)} title={`${row.committedHours}h planned of ${row.capacityHours}h · ${row.freeHours}h free${row.overCommittedHours > 0.05 ? ` · ${row.overCommittedHours}h over on some days` : ''}${highlightHours != null ? ` · ${Math.round(highlightHours * 10) / 10}h on this client` : ''}`}>
         <div className="relative h-full rounded-full" style={{ width: `${shown * 100}%`, backgroundColor: BAND_FILL[band] }}>
-          {hi > 0 && <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(hi / shown) * 100}%`, backgroundColor: 'rgba(17,24,39,0.45)' }} />}
+          {hi > 0 && <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(hi / shown) * 100}%`, backgroundColor: 'rgba(15,23,42,0.28)' }} />}
         </div>
-        {overTail > 0 && <div className="h-full" style={{ width: `${overTail * 100}%`, backgroundColor: OVER_COMMITTED }} />}
+        {overTail > 0 && <div className="h-full" style={{ width: `${overTail * 100}%`, backgroundColor: OVER_TAIL }} />}
       </div>
     </div>
   );

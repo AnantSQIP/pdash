@@ -224,3 +224,25 @@ Three migrations, all additive except one index swap:
 
 No new permission codes, so **no regrant**. Existing projects appear as clients in the "Ungrouped" section until someone files them
 into groups.
+
+## Team Capacity: Senior Consultant and above, light colours, task CRUD (branch `capacity-crud`)
+
+The owner: light colours on the board; create, edit, assign and delete tasks from it for anyone,
+any time; that power — and the board itself — only for people at or above Senior Consultant.
+
+- **Who.** Super Admin, Admin, Manager, Senior Consultant (the delivery ladder) hold
+  `capacity.view` and the new `capacity.manage`. **HR is not on the ladder** and loses the board.
+  Everyone else no longer sees the sidebar item, the page, a client's Capacity tab, the Home
+  availability card or a profile's workload. `/capacity/my-plan` (the My Tasks day sheet) is
+  unchanged for everybody. Coverage-at-risk alerts send board holders to the board and a client's
+  own manager without it to the client.
+- **CRUD.** `POST /capacity/tasks` (task + seats in one transaction), `PATCH /capacity/tasks/:id`
+  (fields, and a move to another group of the same client in the same save), `PUT
+  /capacity/tasks/:id/seats`, `DELETE /capacity/tasks/:id`, plus `GET /capacity/tasks/options` and
+  `GET /capacity/tasks/:id` for the editor — all `capacity.manage`, client tasks of the caller's
+  organisation only, and all through TasksService's own rules.
+- **Deploy.** Migration `20261021090000_capacity_access` is data only: it adds `capacity.manage`,
+  grants both codes to the four ladder roles in every organisation, and removes `capacity.view`
+  from every other role, group, direct grant and ALLOW override — nothing else. **No regrant**
+  (and do not run one: it would wipe the /admin/access edits). Re-runnable.
+- **Tests.** `tools/capacity-crud.e2e.mjs` (86 checks, scratch database only).
