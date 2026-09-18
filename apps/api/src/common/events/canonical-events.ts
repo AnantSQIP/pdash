@@ -40,6 +40,19 @@ export const EVENTS = {
   // question asked of the audit log directly, and it cannot be answered by replaying generic
   // updates. The metadata carries both numbers and every round the move renumbered.
   PROJECT_PID_MOVED: 'project.pid_moved',
+  // CLIENTS-FLOW. A task group is one piece of work for a client; creating, finishing and deleting
+  // one are facts the client's activity feed must show, and none of them is a project.updated.
+  // Every one carries metadata.projectId (the client), or the feed writes it and shows nobody.
+  TASKGROUP_CREATED: 'taskgroup.created',
+  TASKGROUP_UPDATED: 'taskgroup.updated',
+  TASKGROUP_COMPLETED: 'taskgroup.completed',
+  TASKGROUP_REOPENED: 'taskgroup.reopened',
+  TASKGROUP_DELETED: 'taskgroup.deleted',
+  TASK_MOVED: 'task.moved',
+  CLIENT_GROUP_CREATED: 'clientgroup.created',
+  CLIENT_GROUP_UPDATED: 'clientgroup.updated',
+  CLIENT_GROUP_ARCHIVED: 'clientgroup.archived',
+  PROJECT_CLIENT_GROUP_CHANGED: 'project.client_group_changed',
   // Comments / discussion
   COMMENT_CREATED: 'comment.created',
   COMMENT_DELETED: 'comment.deleted',

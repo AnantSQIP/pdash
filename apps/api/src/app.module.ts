@@ -18,6 +18,8 @@ import { HealthModule } from './modules/health/health.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { TaskListsModule } from './modules/tasklists/tasklists.module';
+// CLIENTS-FLOW: groups of clients.
+import { ClientGroupsModule } from './modules/client-groups/client-groups.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { StatusesModule } from './modules/statuses/statuses.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
@@ -79,6 +81,7 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     // Core project management
     ProjectsModule,
     TaskListsModule,
+    ClientGroupsModule,
     TasksModule,
     // Workflow engine
     WorkflowsModule,

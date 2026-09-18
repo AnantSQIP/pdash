@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import { TaskTimeService } from './task-time.service';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, SetProgressDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, MoveTaskGroupDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, SetProgressDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 @Controller('tasks')
@@ -115,6 +115,12 @@ export class TasksController {
   @Put(':id/assignees') @RequirePermission('task.assign')
   setAssignees(@Param('id') id: string, @Body() dto: SetAssigneesDto) {
     return this.tasks.setAssignees(id, dto);
+  }
+
+  /** CLIENTS-FLOW: move a task into another task group of the same client. */
+  @Put(':id/task-group') @RequirePermission('task.update')
+  moveToGroup(@Param('id') id: string, @Body() dto: MoveTaskGroupDto) {
+    return this.tasks.moveToGroup(id, dto.projectId, dto.taskListId);
   }
 
   /** Role-based staffing (PM/Reviewer/Analyst + per-person hours). */

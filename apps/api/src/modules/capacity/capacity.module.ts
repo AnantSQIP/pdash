@@ -198,6 +198,11 @@ export interface CapacityRow {
   /** Open tasks driving the load — what they're actually busy with. */
   openTasks: {
     id: string; title: string; projectId?: string; project?: string;
+    /**
+     * CLIENTS-FLOW: the task group this work belongs to inside its client (the project row). Null
+     * for team-space work and for a task whose group was deleted.
+     */
+    taskGroupId?: string | null; taskGroup?: string | null;
     /** The project's PID and which round it is — two rounds of one PID share a code. */
     projectPid?: string | null; projectRound?: number;
     /** Internal team-space work rather than a client matter — no PID, never billable. */
@@ -404,7 +409,12 @@ export class CapacityService {
             // the code + round do.
             // priority + dueDate (the INTERNAL deadline) so the board can shade by urgency.
             // clientDueDate is deliberately not selected: it is redacted per permission elsewhere.
-            select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } } },
+            // CLIENTS-FLOW: and the task group inside the client, so the board can say which piece
+            // of the client's work somebody is on, not only which client.
+            select: {
+              taskList: { select: { id: true, name: true, deletedAt: true } },
+              project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } },
+            },
             take: 1,
           },
           // Team-space work already counted toward load — this query is by ASSIGNEE, not by
@@ -528,6 +538,8 @@ export class CapacityService {
 
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
+      const group = task.projectTasks[0]?.taskList;
+      const liveGroup = group && !group.deletedAt ? group : null;
       const team = task.teamTasks[0]?.team;
       if (project?.deletedAt) continue; // archived project — not real work any more
       if (team?.deletedAt) continue;    // deleted team space — likewise
@@ -588,6 +600,8 @@ export class CapacityService {
           // Team work has no PID and no round — it is labelled by the space it belongs to, and
           // flagged so the UI can tell a client matter from an internal one.
           project: project?.title ?? team?.name,
+          taskGroupId: project ? liveGroup?.id ?? null : null,
+          taskGroup: project ? liveGroup?.name ?? null : null,
           projectPid: project?.code ?? null,
           projectRound: project?.roundSeq,
           isTeamWork: !project && !!team,
@@ -1068,6 +1082,7 @@ export class CapacityService {
         title: t.title,
         projectId: t.projectId ?? null,
         project: t.project ?? null,
+        taskGroup: t.taskGroup ?? null,
         projectPid: t.projectPid ?? null,
         projectRound: t.projectRound,
         priority: t.priority,

@@ -47,6 +47,54 @@ export class CustomDomainDto {
   save?: boolean;
 }
 
+/**
+ * CLIENTS-FLOW. One piece of work for a client: what to call it, what kind of work it is (whose
+ * standard tasks are created inside it), its field, its dates — and, optionally, who does it.
+ *
+ * Shared by "create a client" (its first group) and "add a task group", so the two doors cannot
+ * accept different things.
+ */
+export class TaskGroupSpecDto {
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(1)
+  @MaxLength(100)
+  name!: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  description?: string;
+
+  /** A project-type value (built-in or saved) — its standard tasks are created in the group. */
+  @IsOptional() @IsString() @MaxLength(60)
+  groupType?: string;
+
+  @IsOptional() @ValidateNested() @Type(() => CustomTypeDto)
+  customType?: CustomTypeDto;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  technologyDomain?: string;
+
+  @IsOptional() @ValidateNested() @Type(() => CustomDomainDto)
+  customDomain?: CustomDomainDto;
+
+  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
+  startDate?: string | null;
+
+  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
+  dueDate?: string | null;
+
+  /**
+   * Who does the group's standard tasks. Needs task.assign; creates a real staffing seat on each
+   * task, which is what makes the work appear on Team Capacity.
+   */
+  @IsOptional() @IsString() @MaxLength(40)
+  assigneeId?: string;
+
+  /** Planned hours per task for that person. Optional — a seat may carry no estimate yet. */
+  @IsOptional() @Type(() => Number) @Min(0) @Max(200)
+  hoursPerTask?: number;
+}
+
 // Task/project priority is a fixed set — free-text used to be stored verbatim.
 export const PROJECT_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 // The project lifecycle phases (free-text before — any string was accepted).
@@ -83,6 +131,14 @@ export class CreateProjectDto {
 
   @IsOptional() @ValidateNested() @Type(() => CustomDomainDto)
   customDomain?: CustomDomainDto;
+
+  /** CLIENTS-FLOW: file the new client under this client group. */
+  @IsOptional() @IsString() @MaxLength(40)
+  clientGroupId?: string;
+
+  /** CLIENTS-FLOW: the client's first task group. When sent, it replaces the project-level type. */
+  @IsOptional() @ValidateNested() @Type(() => TaskGroupSpecDto)
+  taskGroup?: TaskGroupSpecDto;
 
   /** The client/matter (drives the "{Type} - {Client}" title + the confidential patent picker). */
   @IsOptional()
@@ -214,6 +270,10 @@ export class UpdateProjectDto {
   @Min(0)
   @Max(100)
   completionPercentage?: number;
+
+  /** CLIENTS-FLOW: move the client into a group; null takes it out of any group. */
+  @IsOptional() @IsString() @MaxLength(40)
+  clientGroupId?: string | null;
 }
 
 // The PID reviewer's edit — everything they may verify/correct before attaching the PID,

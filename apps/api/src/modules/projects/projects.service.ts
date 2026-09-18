@@ -15,7 +15,8 @@ import { getActorId } from '../../common/context/request-context';
 import { NotificationsService } from '../notifications/notifications.module';
 import { DeadlineScope, DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
-import { resolveDate } from '../../common/dates';
+import { resolveDate, startOfUtcDay } from '../../common/dates';
+import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { PROJECT_TYPES, templateFor } from './project-templates';
 import { TECHNOLOGY_DOMAINS, builtInDomain, slugifyDomain, domainLabel } from './technology-domains';
 
@@ -296,19 +297,155 @@ export class ProjectsService {
     const list = await tx.taskList.create({
       data: { projectId, name: template.taskListName ?? template.label ?? 'Tasks', isDefault: true, sequence: 0 },
     });
+    await this.seedTasksIntoList(tx, projectId, list.id, template.tasks, creatorId, {}, { wf, initialStatusId });
+  }
+
+  /**
+   * Write a list of task titles into one task list, in order, opened in the GLOBAL workflow's
+   * first OPEN status. The half of template seeding that both a project's first list and a
+   * CLIENTS-FLOW task group need — kept in one place so they cannot open tasks differently.
+   *
+   * `dates` are the group's: every standard task inherits them, so the Gantt shows the group's
+   * span and the capacity board has a deadline to plan against from the first minute.
+   */
+  private async seedTasksIntoList(
+    tx: Prisma.TransactionClient,
+    projectId: string,
+    taskListId: string,
+    titles: string[],
+    creatorId: string,
+    dates: { startDate?: Date | null; dueDate?: Date | null } = {},
+    resolved?: { wf: { id: string } | null; initialStatusId?: string },
+  ): Promise<string[]> {
+    let wf = resolved?.wf ?? null;
+    let initialStatusId = resolved?.initialStatusId;
+    if (!resolved) {
+      const found = await tx.workflow.findFirst({
+        where: { type: 'GLOBAL' },
+        orderBy: { name: 'asc' },
+        select: { id: true, statuses: { orderBy: { sequence: 'asc' }, select: { id: true, type: true } } },
+      });
+      wf = found;
+      initialStatusId = found ? (found.statuses.find(s => s.type === 'OPEN') ?? found.statuses[0])?.id : undefined;
+    }
+    const ids: string[] = [];
     // Sequentially, so ProjectTask.sequence reflects the workflow order.
-    for (let i = 0; i < template.tasks.length; i++) {
+    for (let i = 0; i < titles.length; i++) {
       const task = await tx.task.create({
         data: {
-          title: template.tasks[i],
+          title: titles[i],
           priority: 'MEDIUM',
           createdBy: creatorId,
+          ...(dates.startDate ? { startDate: dates.startDate } : {}),
+          ...(dates.dueDate ? { dueDate: dates.dueDate } : {}),
           ...(wf ? { workflowId: wf.id } : {}),
           ...(initialStatusId ? { currentWorkflowStatusId: initialStatusId } : {}),
         },
       });
-      await tx.projectTask.create({ data: { projectId, taskId: task.id, taskListId: list.id, sequence: i } });
+      await tx.projectTask.create({ data: { projectId, taskId: task.id, taskListId, sequence: i } });
+      ids.push(task.id);
     }
+    return ids;
+  }
+
+  // ── CLIENTS-FLOW: task groups and client groups ───────────────────────────────────
+  //
+  // A project row is a CLIENT now; its task lists are TASK GROUPS, one per piece of work. What
+  // follows is shared by "create a client" (its first group rides in the same transaction) and
+  // by the task-list service's "add a task group", so the two doors cannot disagree about what a
+  // group of a given type contains or how its dates are checked.
+
+  /**
+   * Validate and resolve everything about a task group that can be decided BEFORE a transaction
+   * opens: its type (and the standard tasks that come with it), its domain, and its dates.
+   * Upserting a saved custom type or domain happens here, outside the transaction, exactly as it
+   * does for a project — a failed create should not have to roll back an org-wide catalogue.
+   */
+  async prepareTaskGroup(organizationId: string, actorId: string, spec: {
+    name: string; description?: string; groupType?: string;
+    customType?: { label?: string; tasks?: string[]; save?: boolean };
+    technologyDomain?: string; customDomain?: { label?: string; save?: boolean };
+    startDate?: string | null; dueDate?: string | null;
+  }) {
+    const name = (spec.name ?? '').trim();
+    if (!name) throw new BadRequestException('Give the task group a name.');
+    if (spec.groupType) {
+      const t = PROJECT_TYPES.find(pt => pt.value === spec.groupType);
+      if (t?.comingSoon) throw new BadRequestException(`Work of type "${t.label}" isn't available yet.`);
+    }
+    const { template, effectiveType } = await this.resolveTemplate(organizationId, actorId, {
+      projectType: spec.groupType, customType: spec.customType as any,
+    });
+    // A type the org does not have is refused rather than silently stored as a label with no
+    // tasks behind it — the same rule a project's type always had.
+    if (spec.groupType && !spec.customType?.label && !template) {
+      throw new BadRequestException(`"${spec.groupType}" is not a type of work this organisation offers.`);
+    }
+    const technologyDomain = await this.resolveDomain(organizationId, actorId, spec);
+    const startDate = spec.startDate ? startOfUtcDay(new Date(spec.startDate)) : null;
+    const dueDate = spec.dueDate ? startOfUtcDay(new Date(spec.dueDate)) : null;
+    if (startDate && Number.isNaN(startDate.getTime())) throw new BadRequestException('The start date is not a date.');
+    if (dueDate && Number.isNaN(dueDate.getTime())) throw new BadRequestException('The deadline is not a date.');
+    if (startDate && dueDate && dueDate < startDate) {
+      throw new BadRequestException('The deadline cannot be before the start date.');
+    }
+    return {
+      name,
+      description: spec.description?.trim() || null,
+      groupType: effectiveType,
+      titles: (template?.tasks ?? []).map(t => t.trim()).filter(Boolean),
+      technologyDomain,
+      startDate,
+      dueDate,
+    };
+  }
+
+  /**
+   * Create one task group and its standard tasks inside an open transaction. Returns the group
+   * and the ids of the tasks written, in order, so the caller can staff them.
+   */
+  async createTaskGroupTx(
+    tx: Prisma.TransactionClient,
+    args: {
+      projectId: string; actorId: string; isDefault: boolean; sequence: number;
+      group: Awaited<ReturnType<ProjectsService['prepareTaskGroup']>>;
+    },
+  ) {
+    const { group } = args;
+    const list = await tx.taskList.create({
+      data: {
+        projectId: args.projectId,
+        name: group.name,
+        description: group.description,
+        groupType: group.groupType,
+        technologyDomain: group.technologyDomain,
+        startDate: group.startDate,
+        dueDate: group.dueDate,
+        status: 'ACTIVE',
+        createdBy: args.actorId,
+        isDefault: args.isDefault,
+        sequence: args.sequence,
+      },
+    });
+    const taskIds = group.titles.length
+      ? await this.seedTasksIntoList(tx, args.projectId, list.id, group.titles, args.actorId,
+          { startDate: group.startDate, dueDate: group.dueDate })
+      : [];
+    return { list, taskIds };
+  }
+
+  /**
+   * A client group the actor's organisation owns and has not archived — or a clear refusal.
+   * Checked here, not trusted from the form: a group id from another organisation would
+   * otherwise file a client under a name its own firm has never heard of.
+   */
+  async assertClientGroup(organizationId: string, clientGroupId: string) {
+    const group = await this.prisma.clientGroup.findFirst({
+      where: { id: clientGroupId, organizationId, archivedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!group) throw new BadRequestException('That client group does not exist, or has been archived.');
+    return group;
   }
 
   /**
@@ -316,7 +453,7 @@ export class ProjectsService {
    * a built-in type, an inline one-off custom type, or a saved org-wide template.
    * Returns the effective type VALUE to store alongside it.
    */
-  private async resolveTemplate(
+  async resolveTemplate(
     organizationId: string,
     creatorId: string,
     dto: { projectType?: string; customType?: { label?: string; tasks?: string[]; save?: boolean } },
@@ -350,7 +487,7 @@ export class ProjectsService {
    * Saving is opt-in per request (`save`), so a one-off domain does not silently enlarge the
    * list everybody else picks from — the same bargain the custom project type makes.
    */
-  private async resolveDomain(
+  async resolveDomain(
     organizationId: string,
     creatorId: string,
     dto: { technologyDomain?: string; customDomain?: { label?: string; save?: boolean } },
@@ -709,8 +846,20 @@ export class ProjectsService {
     //   2. an INLINE one-off custom type ("+ Create new type") — used for this project, and
     //      persisted as a reusable org-wide ProjectTemplate when `save` is set,
     //   3. a saved org ProjectTemplate value.
-    const { template, effectiveType } = await this.resolveTemplate(organizationId, creator.id, dto);
-    const technologyDomain = await this.resolveDomain(organizationId, creator.id, dto);
+    //
+    // CLIENTS-FLOW: a client's first task group, when one is sent, carries the type and domain
+    // that used to sit on the project. The project-level type is then left empty — a client does
+    // many kinds of work, and stamping one type on the whole client would misdescribe the rest.
+    const firstGroup = dto.taskGroup
+      ? await this.prepareTaskGroup(organizationId, creator.id, dto.taskGroup)
+      : null;
+    const { template, effectiveType } = firstGroup
+      ? { template: null, effectiveType: null }
+      : await this.resolveTemplate(organizationId, creator.id, dto);
+    const technologyDomain = firstGroup ? null : await this.resolveDomain(organizationId, creator.id, dto);
+    const clientGroup = dto.clientGroupId?.trim()
+      ? await this.assertClientGroup(organizationId, dto.clientGroupId.trim())
+      : null;
 
     // ── Patent linkage — TAGGED PATENTS DECIDE THE CLIENT, and nothing else does while any
     // exist. Only patent.view holders (Super Admin by default, or anyone granted it) may attach
@@ -770,6 +919,7 @@ export class ProjectsService {
           projectType: effectiveType,
           technologyDomain,
           clientId: derivedClientId,
+          clientGroupId: clientGroup?.id ?? null,
           projectPhase: 'ACTIVE',
           // The owning office decides whether this PID can later hold more projects. Taken from
           // the creator unless they picked another office on the form.
@@ -783,7 +933,10 @@ export class ProjectsService {
           members: { create: members },
           // "General" is only created when the type brings no group of its own — otherwise the
           // type's group is the default and an empty "General" would just be noise.
-          ...(template?.tasks?.length
+          //
+          // CLIENTS-FLOW: a client created WITH a first task group gets that group as its default
+          // instead — same reasoning, one level down.
+          ...(template?.tasks?.length || firstGroup
             ? {}
             : { taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } } }),
         },
@@ -798,6 +951,11 @@ export class ProjectsService {
       }
 
       if (template) await this.seedTemplateTasks(tx, created.id, template, creator.id);
+      if (firstGroup) {
+        await this.createTaskGroupTx(tx, {
+          projectId: created.id, actorId: creator.id, isDefault: true, sequence: 0, group: firstGroup,
+        });
+      }
 
       // A requester's project carries a pending PID request, routed to the chosen authority.
       if (pidAssigneeId) {
@@ -824,7 +982,11 @@ export class ProjectsService {
       entityId: project.id,
       organizationId,
       actorId: creator.id,
-      metadata: { projectId: project.id, title: project.title, pidPending: !!pidAssigneeId },
+      metadata: {
+        projectId: project.id, title: project.title, pidPending: !!pidAssigneeId,
+        ...(clientGroup ? { clientGroup: clientGroup.name } : {}),
+        ...(firstGroup ? { firstTaskGroup: firstGroup.name } : {}),
+      },
     });
 
     // Route the PID request to the chosen authority (best-effort, outside the tx).
@@ -1863,6 +2025,15 @@ export class ProjectsService {
         // selected, so `createdAt` arrived undefined and the card fell back to an empty string.
         createdAt: true,
         currentStatus: { select: { id: true, name: true, colorHex: true } },
+        // CLIENTS-FLOW: the list page groups clients under their client group, and each card
+        // says how many pieces of work the client has open and when the next one is due.
+        clientGroupId: true,
+        clientGroup: { select: { id: true, name: true, sequence: true } },
+        taskLists: {
+          where: { deletedAt: null },
+          orderBy: { sequence: 'asc' },
+          select: { id: true, name: true, isDefault: true, status: true, dueDate: true, groupType: true },
+        },
         members: {
           where: { isActive: true },
           take: 5,
@@ -1881,7 +2052,26 @@ export class ProjectsService {
     const ordered = opts.sort === 'NAME'
       ? [...projects].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }))
       : projects;
-    return this.deadlines.redactProjects(ordered, await this.deadlines.scope());
+    // CLIENTS-FLOW: open and overdue task counts per client, two grouped queries for the whole
+    // page rather than one per card. "Open" is the capacity board's definition, shared.
+    const ids = ordered.map(p => p.id);
+    const today = startOfUtcDay(new Date());
+    const [openRows, overdueRows] = ids.length ? await Promise.all([
+      this.prisma.projectTask.groupBy({
+        by: ['projectId'], _count: { _all: true },
+        where: { projectId: { in: ids }, task: { deletedAt: null, ...OPEN_TASK_WHERE } },
+      }),
+      this.prisma.projectTask.groupBy({
+        by: ['projectId'], _count: { _all: true },
+        where: { projectId: { in: ids }, task: { deletedAt: null, dueDate: { lt: today }, ...OPEN_TASK_WHERE } },
+      }),
+    ]) : [[], []];
+    const openBy = new Map(openRows.map(r => [r.projectId, r._count._all]));
+    const overdueBy = new Map(overdueRows.map(r => [r.projectId, r._count._all]));
+    const withCounts = ordered.map(p => ({
+      ...p, openTaskCount: openBy.get(p.id) ?? 0, overdueTaskCount: overdueBy.get(p.id) ?? 0,
+    }));
+    return this.deadlines.redactProjects(withCounts, await this.deadlines.scope());
   }
 
   /**
@@ -2071,6 +2261,7 @@ export class ProjectsService {
           },
         },
         taskLists: { where: { deletedAt: null }, orderBy: { sequence: 'asc' } },
+        clientGroup: { select: { id: true, name: true } },
         client: { select: { id: true, name: true, code: true } },
         // Linked patents — HANDLES ONLY. clientId is omitted too, so a member without
         // patent.manage can't correlate the hidden client from the network payload (S2).
@@ -2151,6 +2342,23 @@ export class ProjectsService {
     // projectPhase via this generic edit used to skip completedAt/closedAt entirely (they
     // are set only by complete()/close()), so a project edited straight to COMPLETED/CLOSED
     // had no end-date and a "reopened"-via-edit project kept a stale one.
+    // CLIENTS-FLOW: filing the client under a group. null takes it out of any group. The group
+    // must be this organisation's and live — checked against the ACTOR's org, who has already
+    // passed the project wall above, so a group id from elsewhere cannot be planted.
+    let clientGroupChange: { from: string | null; to: string | null; toName: string | null } | null = null;
+    if (dto.clientGroupId !== undefined) {
+      const wanted = dto.clientGroupId === null ? null : dto.clientGroupId.trim() || null;
+      if (wanted !== existing.clientGroupId) {
+        let toName: string | null = null;
+        if (wanted) {
+          const actor = await this.prisma.user.findUnique({ where: { id: getActorId() ?? '' }, select: { organizationId: true } });
+          if (!actor) throw new ForbiddenException('You must be signed in.');
+          toName = (await this.assertClientGroup(actor.organizationId, wanted)).name;
+        }
+        clientGroupChange = { from: existing.clientGroupId, to: wanted, toName };
+      }
+    }
+
     let lifecycleStamps: { completedAt?: Date | null; closedAt?: Date | null } = {};
     if (dto.projectPhase !== undefined && dto.projectPhase !== existing.projectPhase) {
       if (dto.projectPhase === 'COMPLETED') lifecycleStamps = { completedAt: existing.completedAt ?? new Date(), closedAt: null };
@@ -2171,6 +2379,7 @@ export class ProjectsService {
         priority: dto.priority,
         projectPhase: dto.projectPhase,
         ...lifecycleStamps,
+        ...(clientGroupChange ? { clientGroupId: clientGroupChange.to } : {}),
         // `undefined` leaves the column alone; `null` CLEARS it. Collapsing the two would
         // make a date impossible to remove once set (the update silently no-ops).
         ...(dto.startDate === undefined ? {} : { startDate: start }),
@@ -2198,6 +2407,14 @@ export class ProjectsService {
       entityId: id,
       metadata: { projectId: id, title: project.title },
     });
+    if (clientGroupChange) {
+      await this.events.emit({
+        action: EVENTS.PROJECT_CLIENT_GROUP_CHANGED,
+        entityType: 'PROJECT',
+        entityId: id,
+        metadata: { projectId: id, title: project.title, clientGroupId: clientGroupChange.to, clientGroup: clientGroupChange.toName },
+      });
+    }
     return this.redactProjectOut(project, scope);
   }
 

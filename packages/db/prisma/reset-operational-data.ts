@@ -147,6 +147,9 @@ async function main() {
     ['projectDepartment', () => prisma.projectDepartment.deleteMany()],
     ['projectTeam', () => prisma.projectTeam.deleteMany()],
     ['project', () => prisma.project.deleteMany()],
+    // CLIENTS-FLOW: the shelves clients were filed on. After the clients themselves, so no row is
+    // left pointing at a group mid-clear (the FK would null it anyway, but order says intent).
+    ['clientGroup', () => prisma.clientGroup.deleteMany()],
     // Demo patents (packages/db/prisma/seed-patents-demo.ts writes these, with their demo clients)
     // go with everything else: the patent register starts empty.
     ['patent', () => prisma.patent.deleteMany()],

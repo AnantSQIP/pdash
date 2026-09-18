@@ -10,6 +10,8 @@ import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.serv
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { startOfUtcDay, resolveDate } from '../../common/dates';
+import { reactivateGroupsOfTask } from '../../common/task-groups';
+import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { TaskTimeService } from './task-time.service';
 
 
@@ -242,6 +244,10 @@ export class TasksService {
     if (!taskList) {
       throw new BadRequestException(`TaskList ${dto.taskListId} not found in project ${dto.projectId}`);
     }
+    // CLIENTS-FLOW: a completed task group holds no open work — reopen it to add more.
+    if (taskList.status === 'COMPLETED') {
+      throw new BadRequestException(`The task group "${taskList.name}" is complete. Reopen it to add work to it.`);
+    }
 
     // Resolve the task's home workflow up front. Previously left null, which made the
     // cross-workflow guard in setStatus() dead and forced clients to fall back to the
@@ -333,6 +339,65 @@ export class TasksService {
     return task;
   }
 
+  /**
+   * CLIENTS-FLOW: re-open any completed task group this task sits in, and say so in the client's
+   * activity feed. Called from both paths that re-open a task.
+   */
+  async reopenedGroups(taskId: string, taskTitle: string) {
+    const groups = await reactivateGroupsOfTask(this.prisma, taskId);
+    for (const g of groups) {
+      await this.events.emit({
+        action: EVENTS.TASKGROUP_REOPENED,
+        entityType: 'TASK_GROUP',
+        entityId: g.id,
+        metadata: { projectId: g.projectId, name: g.name, because: `"${taskTitle}" was reopened` },
+      });
+    }
+  }
+
+  /**
+   * CLIENTS-FLOW: move a task to another task group of the SAME client.
+   *
+   * Only the group changes — the task, its seats, its time and its history are untouched. An
+   * open task may not be moved into a completed group (that group would then hold open work);
+   * moving a finished one in is fine.
+   */
+  async moveToGroup(taskId: string, projectId: string, taskListId: string) {
+    const actorId = getActorId();
+    await this.access.assertTaskAccess(actorId, taskId);
+    await this.access.assertProjectAccess(actorId, projectId);
+    await this.access.assertProjectWritable(projectId);
+    const link = await this.prisma.projectTask.findUnique({
+      where: { projectId_taskId: { projectId, taskId } },
+      select: { id: true, taskListId: true, task: { select: { title: true, deletedAt: true } } },
+    });
+    if (!link || link.task.deletedAt) throw new NotFoundException('That task is not in this client.');
+    const target = await this.prisma.taskList.findFirst({
+      where: { id: taskListId, projectId, deletedAt: null },
+      select: { id: true, name: true, status: true },
+    });
+    if (!target) throw new BadRequestException('That task group is not part of this client.');
+    if (link.taskListId === target.id) return this.get(taskId);
+    if (target.status === 'COMPLETED') {
+      const open = await this.prisma.task.count({ where: { id: taskId, ...OPEN_TASK_WHERE } });
+      if (open) throw new BadRequestException(`"${target.name}" is complete. Reopen it before moving open work into it.`);
+    }
+    const from = link.taskListId
+      ? await this.prisma.taskList.findUnique({ where: { id: link.taskListId }, select: { name: true } })
+      : null;
+    await this.prisma.$transaction(async tx => {
+      const sequence = await tx.projectTask.count({ where: { taskListId: target.id } });
+      await tx.projectTask.update({ where: { id: link.id }, data: { taskListId: target.id, sequence } });
+    });
+    await this.events.emit({
+      action: EVENTS.TASK_MOVED,
+      entityType: 'TASK',
+      entityId: taskId,
+      metadata: { projectId, title: link.task.title, from: from?.name ?? null, to: target.name, taskListId: target.id },
+    });
+    return this.get(taskId);
+  }
+
   async list(projectId: string, opts: { taskListId?: string } = {}) {
     await this.access.assertProjectAccess(getActorId(), projectId);
     const tasks = await this.prisma.task.findMany({
@@ -378,6 +443,8 @@ export class TasksService {
             projectId: true,
             taskListId: true,
             sequence: true,
+            // CLIENTS-FLOW: which task group inside the client — My Tasks labels "Client · Group".
+            taskList: { select: { id: true, name: true, deletedAt: true } },
             project: { select: { id: true, title: true, code: true, roundSeq: true, projectType: true, projectPhase: true } },
           },
         },
@@ -583,6 +650,7 @@ export class TasksService {
         entityId: id,
         metadata: { projectId, title: task.title, status: status.name },
       });
+      await this.reopenedGroups(id, task.title);
     }
     // `settle` rides along so the screen can say what was filed without a second round trip.
     return Object.assign(updated as object, { settle }) as typeof updated & { settle: typeof settle };

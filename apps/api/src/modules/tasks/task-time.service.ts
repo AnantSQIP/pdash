@@ -9,6 +9,7 @@ import { TimesheetsService } from '../timesheets/timesheets.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { EventService } from '../audit-events/event.service';
 import { TimeModeService } from '../time-mode/time-mode.module';
+import { reactivateGroupsOfTask } from '../../common/task-groups';
 import { EVENTS } from '../../common/events/canonical-events';
 
 /**
@@ -626,6 +627,15 @@ export class TaskTimeService {
       entityId: taskId,
       metadata: { projectId: await this.projectIdOf(taskId), title: task.title },
     });
+    // CLIENTS-FLOW: the same rule setStatus keeps — a completed group re-opens with its task.
+    for (const g of await reactivateGroupsOfTask(this.prisma, taskId)) {
+      await this.events.emit({
+        action: EVENTS.TASKGROUP_REOPENED,
+        entityType: 'TASK_GROUP',
+        entityId: g.id,
+        metadata: { projectId: g.projectId, name: g.name, because: `"${task.title}" was reopened` },
+      });
+    }
     return updated;
   }
 
