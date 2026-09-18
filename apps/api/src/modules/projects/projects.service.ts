@@ -383,9 +383,11 @@ export class ProjectsService {
     const { template, effectiveType } = await this.resolveTemplate(organizationId, actorId, {
       projectType: spec.groupType, customType: spec.customType as any,
     });
-    // A type the org does not have is refused rather than silently stored as a label with no
-    // tasks behind it — the same rule a project's type always had.
-    if (spec.groupType && !spec.customType?.label && !template) {
+    // A type the org does not have is refused rather than silently stored as a label. A BUILT-IN
+    // type is always valid even when it brings no standard tasks (Risk & Strategy, Reverse
+    // Engineering) — templateFor() answers "is there anything to create", not "is this a type",
+    // and reading it as the second refused real work types.
+    if (spec.groupType && !spec.customType?.label && !template && !PROJECT_TYPES.some(pt => pt.value === spec.groupType)) {
       throw new BadRequestException(`"${spec.groupType}" is not a type of work this organisation offers.`);
     }
     const technologyDomain = await this.resolveDomain(organizationId, actorId, spec);

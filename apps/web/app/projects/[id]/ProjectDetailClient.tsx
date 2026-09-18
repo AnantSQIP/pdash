@@ -202,7 +202,11 @@ export function ProjectDetailClient({ projectId }: Props) {
     enabled: !!project,
     staleTime: 30_000,
   });
-  const multiRound = !!roundsData?.multiRound && (roundsData?.rounds?.length ?? 0) > 0;
+  // CLIENTS-FLOW: a PID names ONE client now, and further work is a task group inside it — so the
+  // stacked-rounds layout is only for a PID that genuinely holds more than one client (data from
+  // before this change). It used to switch on for every PID with a single round, which drew the
+  // client inside a "The project you opened" card and hid the client's own task-group controls.
+  const multiRound = !!roundsData?.multiRound && (roundsData?.rounds?.length ?? 0) > 1;
   const rounds = roundsData?.rounds ?? [];
 
   /**

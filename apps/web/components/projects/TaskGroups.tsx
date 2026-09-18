@@ -73,7 +73,7 @@ export function TaskGroups({
   const [busyId, setBusyId] = useState<string | null>(null);
   const { data: domains = [] } = useTechnologyDomains();
 
-  const { data: groups = [] } = useQuery<TaskGroup[]>({
+  const { data: groups = [], isLoading: groupsLoading } = useQuery<TaskGroup[]>({
     queryKey: ['task-groups', projectId],
     queryFn: () => api.taskLists.list(projectId),
     staleTime: 30_000,
@@ -144,6 +144,21 @@ export function TaskGroups({
     });
     if (!ok) return;
     await act(g, 'delete the group', () => api.taskLists.remove(projectId, g.id), count ? `Group deleted — ${count} task${count === 1 ? '' : 's'} moved to ${target?.name ?? 'the default group'}` : 'Group deleted');
+  }
+
+  // Before the groups arrive, "0 active task groups" would be a false statement about the client.
+  if (groupsLoading) {
+    return (
+      <div className="space-y-3" aria-busy="true">
+        {[0, 1].map(i => (
+          <div key={i} className="rounded-xl border border-gray-200 bg-white p-4 animate-pulse">
+            <div className="h-4 w-56 bg-gray-200 rounded mb-3" />
+            <div className="h-3 w-80 bg-gray-100 rounded mb-4" />
+            {[0, 1, 2].map(j => <div key={j} className="h-8 bg-gray-50 rounded mb-2" />)}
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (

@@ -153,6 +153,11 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   const mine = (await sra(`/tasks?userId=${who.sra}`)).data ?? [];
   ok('My Tasks carries the group name', mine.filter(t => t.projectTasks?.[0]?.taskList?.name === invGroup.name).length === invGroup.createdTaskCount);
 
+  const noTemplate = await mgr(`/projects/${client.id}/tasklists`, { method: 'POST', body: { name: `Risk review ${RUN}`, groupType: 'RISK_STRATEGY' } });
+  ok('a built-in type with no standard tasks is still a valid type of work', noTemplate.status === 201
+    && noTemplate.data?.groupType === 'RISK_STRATEGY' && noTemplate.data?.createdTaskCount === 0, brief(noTemplate));
+  if (noTemplate.data?.id) await mgr(`/projects/${client.id}/tasklists/${noTemplate.data.id}`, { method: 'DELETE' });
+
   const sraAssign = await sra(`/projects/${client.id}/tasklists`, { method: 'POST', body: { name: `SRA try ${RUN}`, assigneeId: who.emp } });
   ok('an SRA (no right to assign) is told so, and nothing is created', sraAssign.status === 403
     && !((await mgr(`/projects/${client.id}/tasklists`)).data ?? []).some(g => g.name === `SRA try ${RUN}`), brief(sraAssign));

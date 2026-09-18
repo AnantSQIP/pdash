@@ -277,7 +277,7 @@ export function ClientGroupChip({ projectId, groupId, groupName, canEdit }: {
   canEdit: boolean;
 }) {
   const qc = useQueryClient();
-  const { data: groups = [] } = useClientGroups();
+  const { data: groups = [], isLoading } = useClientGroups();
   const [saving, setSaving] = useState(false);
 
   async function move(next: string) {
@@ -295,7 +295,9 @@ export function ClientGroupChip({ projectId, groupId, groupName, canEdit }: {
     }
   }
 
-  if (!canEdit) {
+  // Until the list arrives a <select> cannot show the current group (its option is not there yet)
+  // and would read "No group" for a client that has one — so it shows the label instead.
+  if (!canEdit || isLoading) {
     return groupName ? (
       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-violet-50 text-violet-700 ring-1 ring-violet-100" title="Client group">
         <FolderTree size={12} /> {groupName}
