@@ -40,7 +40,7 @@ import { LiveStatus } from '@/components/capacity/LiveStatus';
 import { assignProjectHues } from '@/lib/project-colors';
 import { todayIST, plural } from '@/lib/date';
 import {
-  resolveWindow, countWorkingDays, daysOf, weekdayOf, weekdayName, WEEKDAYS_IN_ORDER,
+  resolveWindow, countWorkingDays, daysOf, weekdayOf, weekdayName, WEEKDAYS_IN_ORDER, defaultWindowMode,
   type Weekday, type WindowChoice,
 } from '@/lib/work-week';
 import { cidLabel } from '@/lib/mock-data';
@@ -85,8 +85,7 @@ function choiceFor(range: RangeKey, weekStartsOn: Weekday, start: string, length
  * re-ranged, and then used in the meeting.
  */
 function defaultRange(today: string): RangeKey {
-  const wd = weekdayOf(today);
-  return wd === 5 || wd === 6 || wd === 0 ? 'next-work-week' : 'work-week';
+  return defaultWindowMode(today);
 }
 
 export default function CapacityPage() {

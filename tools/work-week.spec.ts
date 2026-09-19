@@ -24,6 +24,7 @@ import {
   resolveWindow,
   startOfWeekOn,
   startOfWorkWeek,
+  defaultWindowMode,
   weekdayName,
   weekdayOf,
   type Weekday,
@@ -232,6 +233,21 @@ check('resolving twice gives the same window', [win('2026-09-11', NEXT_WORK_WEEK
 // value in the dashboard — a board built from a locally-parsed midnight is a day out.
 check('a Date reference is read as a UTC calendar day', win(new Date('2026-09-11T00:00:00Z'), NEXT_WORK_WEEK), '2026-09-14→2026-09-18×5');
 check('and late in the IST evening it is still that same day', win(new Date('2026-09-11T18:29:00Z'), NEXT_WORK_WEEK), '2026-09-14→2026-09-18×5');
+
+// ── the window the board OPENS on ────────────────────────────────────────────
+// The week ahead: this week Mon–Thu, next week from Friday, and on the weekend the week that is
+// about to start — never the week after it (the Saturday bug: it opened on 28 Sep on 19 Sep).
+const opens = (day: string) => {
+  const w = resolveWindow(day, { mode: defaultWindowMode(day), weekStartsOn: MON });
+  return `${w.start}→${w.end}`;
+};
+check('opened on a Monday, the board shows this week', opens('2026-09-14'), '2026-09-14→2026-09-18');
+check('opened on a Thursday, still this week', opens('2026-09-17'), '2026-09-14→2026-09-18');
+check('opened on the Friday, the week ahead', opens('2026-09-18'), '2026-09-21→2026-09-25');
+check('opened on the Saturday, the week ahead — not the week after', opens('2026-09-19'), '2026-09-21→2026-09-25');
+check('opened on the Sunday, the week ahead — not the week after', opens('2026-09-20'), '2026-09-21→2026-09-25');
+check('a Sunday-start firm plans on its Thursday for the week ahead',
+  defaultWindowMode('2026-09-17', SUN), 'next-work-week');
 
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length) {
