@@ -5,7 +5,7 @@
 // Run after editing the catalog or a role preset:
 //   DATABASE_URL=... npx ts-node packages/db/prisma/regrant-roles.ts
 import { PrismaClient } from '@prisma/client';
-import { PERMISSIONS, ROLE_PRESETS, ALL_PERMISSION_CODES } from './permissions-catalog';
+import { PERMISSIONS, rolePresetsFor, ALL_PERMISSION_CODES } from './permissions-catalog';
 
 const prisma = new PrismaClient();
 
@@ -24,7 +24,11 @@ async function main() {
   // Ensure every role named in the presets EXISTS (additive). Lets a brand-new role
   // (e.g. "Senior Research Associate") be introduced by editing the catalog + running this
   // on any existing DB — its permissions are then applied by the sync below.
-  const org = await prisma.organization.findFirst({ select: { id: true } });
+  const org = await prisma.organization.findFirst({ select: { id: true, workspaceFlow: true } });
+  // The presets of the flow this organisation runs (docs/WORKSPACE_FLOWS.md): they differ in who
+  // holds the Team Capacity codes. Regranting a CLIENTS org to PROJECTS presets would reopen the
+  // board to everyone, and the other way round would close it.
+  const ROLE_PRESETS = rolePresetsFor(org?.workspaceFlow === 'CLIENTS' ? 'CLIENTS' : 'PROJECTS');
   let rolesAdded = 0;
   for (const name of Object.keys(ROLE_PRESETS)) {
     const existing = await prisma.role.findFirst({ where: { name } });

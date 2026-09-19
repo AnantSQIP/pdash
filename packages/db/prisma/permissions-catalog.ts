@@ -386,4 +386,26 @@ export const ROLE_PRESETS: Record<string, string[] | '*'> = {
   Employee: EMPLOYEE_CODES,
 };
 
+/**
+ * The presets for an organisation's WORKSPACE FLOW (docs/WORKSPACE_FLOWS.md).
+ *
+ *   CLIENTS  — ROLE_PRESETS above: Team Capacity (view + manage) for the delivery ladder only.
+ *   PROJECTS — what production has always run: every role sees Team Capacity (matrix 2026-08-12,
+ *              HR included) and nobody holds capacity.manage — the PROJECTS board has no task CRUD.
+ *
+ * The two differ in nothing else. seed.ts and regrant-roles.ts take the organisation's flow; the
+ * workspace-flow conversion moves the capacity grants of a live database without a regrant.
+ */
+export type PresetFlow = 'PROJECTS' | 'CLIENTS';
+export function rolePresetsFor(flow: PresetFlow): Record<string, string[] | '*'> {
+  if (flow === 'CLIENTS') return ROLE_PRESETS;
+  const out: Record<string, string[] | '*'> = {};
+  for (const [role, preset] of Object.entries(ROLE_PRESETS)) {
+    if (preset === '*') { out[role] = preset; continue; }
+    const codes = preset.filter(c => c !== 'capacity.manage');
+    out[role] = codes.includes('capacity.view') ? codes : [...codes, 'capacity.view'];
+  }
+  return out;
+}
+
 export const SUPER_ADMIN_ROLE = 'Super Admin';
