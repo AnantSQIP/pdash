@@ -1,5 +1,6 @@
 import { FlowGuard } from './common/guards/flow.guard';
 import { WorkspaceFlowModule } from './modules/workspace-flow/workspace-flow.service';
+import { WorkspaceFlowConversionModule } from './modules/workspace-flow/workspace-flow-conversion.module';
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
@@ -126,6 +127,7 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
     SequenceModule,
     WorkspaceFlowModule, // which flow each organisation runs — PROJECTS or CLIENTS
+    WorkspaceFlowConversionModule, // Settings → Workspace flow: preflight + conversion between the two
     CidModule, // the CID registry + ledger — every client write that touches a CID goes through it
     // PatentsModule, // CLIENTS-FLOW: commented out
     TeamsModule,
