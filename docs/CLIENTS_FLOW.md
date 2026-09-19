@@ -333,3 +333,56 @@ any time; that power — and the board itself — only for people at or above Se
   from every other role, group, direct grant and ALLOW override — nothing else. **No regrant**
   (and do not run one: it would wipe the /admin/access edits). Re-runnable.
 - **Tests.** `tools/capacity-crud.e2e.mjs` (86 checks, scratch database only).
+
+## My Tasks: Finish, Reopen and one Log time — the timer is retired
+
+The owner: no Start/Stop and no timer; every task has only Finish and Reopen, and there is one Log
+time for filling the timesheet.
+
+- **Screens.** Each task row (the desktop table AND the phone card) shows Finish when open, Reopen
+  when closed. The header's **Log time** opens the day sheet — the only way to log from My Tasks.
+  The sheet lists planned work, everything else open, and **work finished in the last 14 days**
+  (a task is usually finished before its hours are logged); hours on a finished task dated on or
+  before its finishing day raise no warning. The catch-up banner and the punch-out gate open the
+  same sheet on the right day. The admin time-mode card is gone.
+- **Server.** `GET /tasks/timer/running`, `GET /tasks/timer/today`, `POST /tasks/:id/start` and
+  `POST /tasks/:id/pause` are removed (404). The time mode answers MANUAL; switching to TIMER is
+  refused. Finish files nothing — it learns the estimate from the hours LOGGED on the task. Reopen
+  is check-and-set under a row lock (ten concurrent presses record one reopening). The time-mode
+  routes refuse an organisation that is not the caller's.
+- **Deploy.** Migration `20261103090000_manual_time_only`: closes any clock still running (keeping
+  its minutes, capped at 12h), records TIMER → MANUAL in the switch history, moves every org to
+  MANUAL and defaults new orgs to MANUAL. Re-runnable. No regrant.
+- **Tests.** `tools/manual-time.e2e.mjs` replaces `time-mode.e2e.mjs` and
+  `timer-flow-untouched.e2e.mjs`; `time-mode-gaps`, `concurrency` and `activity-lifecycle` no longer
+  drive a clock.
+
+## Billable per task
+
+The owner: every task is billable by default and can be set non-billable by anybody associated with
+its client, the task or its task group; timesheets on a non-billable task are non-billable.
+
+- **Rule.** `Task.billable` (default true). Anybody on the task's client (active member, or delivery
+  oversight) or staffed on it may change it — `PATCH /tasks/:id/billable` — and anybody on the
+  client may change a whole task group — `PATCH /tasks/groups/:taskListId/billable`. No role gate:
+  association is the rule, checked per task. Refused on a completed client (its ledger is frozen)
+  and for team-space work (never billable).
+- **Time follows the task.** Every timesheet write on a task — create, the day sheet, assigning a
+  buffered entry, edits — takes the task's flag; a per-entry choice survives only for a client call
+  or an entry still waiting for its task. Changing the flag re-marks the task's existing entries
+  in the same transaction; the flag is read under `FOR SHARE` and changed under `FOR UPDATE`, so time
+  logged while it changes still agrees. Recorded as `task.billable_changed` /
+  `taskgroup.billable_changed` (from → to, entries re-marked).
+- **Screens.** A Billing switch in the task panel; a Billable / Non-billable / Partly billable button
+  on each task-group header; a Non-billable chip on client task rows, My Tasks and the day sheet;
+  the log-time modals say what the task decides instead of offering a switch.
+- **Deploy.** Migration `20261104090000_task_billable` (additive): the column plus who/when changed
+  it; team-space tasks are set non-billable. Existing entries keep each person's earlier choice
+  until their task's flag first changes. No regrant.
+- **Tests.** `tools/task-billable.e2e.mjs` (26 checks, including the race).
+
+## Order to deploy all of it
+
+`20261020120000_cid_auto_mint_and_ledger` → `20261021090000_capacity_access` →
+`20261103090000_manual_time_only` → `20261104090000_task_billable` (`prisma migrate deploy` applies
+them in this order). None needs a regrant, and none should be followed by one.
