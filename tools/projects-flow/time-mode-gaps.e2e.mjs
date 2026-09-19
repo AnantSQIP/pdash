@@ -175,7 +175,11 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   eq('with no unfiled clock time to nag about', pday.unfiledHours ?? 0, 0);
   eq('and nothing on the clock', pday.trackedMinutes ?? 0, 0);
   eq('and no tracked tasks to list', (pday.tracked ?? []).length, 0);
-  ok('while still measuring the day itself', (pday.target ?? 0) > 0, JSON.stringify({ target: pday.target, logged: pday.logged }));
+  // FIXTURE (calendar), not behaviour: a working day owes 8h (4 on a half day); a weekend owes
+  // nothing. Either way it is measured. Same fix as tools/time-mode-gaps.e2e.mjs (2d837dd).
+  const weekend = [0, 6].includes(new Date(today() + 'T00:00:00Z').getUTCDay());
+  ok('while still measuring the day itself', typeof pday.target === 'number' && (weekend ? pday.target === 0 : pday.target > 0),
+     JSON.stringify({ target: pday.target, logged: pday.logged, weekend }));
 
   const gate = await admin('/tasks/timer/today');
   ok('the day status still answers', gate.status === 200, `status ${gate.status}`);
