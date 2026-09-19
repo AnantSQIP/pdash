@@ -1,74 +1,48 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Injectable, Module, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { getActorId } from '../../common/context/request-context';
-import { PermissionService } from '../permissions/permission.service';
-import { EventService } from '../audit-events/event.service';
-import { EVENTS } from '../../common/events/canonical-events';
-import { OPEN_TASK_WHERE } from '../../common/task-state';
-import { startOfIstDay, startOfUtcDay } from '../../common/dates';
-import { DeadlineVisibilityService, type DeadlineScope } from '../deadlines/deadline-visibility.service';
-import { DeadlineChangeService } from '../deadlines/deadline-change.service';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
+import { validateBody } from '../../common/validation/flow-body';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import { ProjectsModule } from '../projects/projects.module';
-import { ProjectsService } from '../projects/projects.service';
 import { TasksModule } from '../tasks/tasks.module';
-import { TasksService } from '../tasks/tasks.service';
-import { CustomDomainDto, TaskGroupSpecDto } from '../projects/dto';
-import { PROJECT_TYPES } from '../projects/project-templates';
+import {
+  ClientsTaskListsService,
+  CreateTaskListDto as CreateTaskGroupDto,
+  UpdateTaskListDto as UpdateTaskGroupDto,
+} from './tasklists.clients';
 
-/** POST body: exactly the shape a client's first task group takes — one definition, two doors. */
-class CreateTaskListDto extends TaskGroupSpecDto {}
+class CreateTaskListDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name!: string;
+
+}
 
 class UpdateTaskListDto {
   @IsOptional()
   @IsString()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @MinLength(1)
   @MaxLength(100)
   name?: string;
+
 
   @IsOptional()
   @IsInt()
   @Min(0)
   sequence?: number;
-
-  // CLIENTS-FLOW: the rest of what a task group carries. `null` clears; absent leaves alone.
-  @IsOptional() @IsString() @MaxLength(2000)
-  description?: string | null;
-
-  /** Relabels the kind of work. It does NOT add the type's standard tasks — that happens once, at creation. */
-  @IsOptional() @IsString() @MaxLength(60)
-  groupType?: string | null;
-
-  @IsOptional() @IsString() @MaxLength(60)
-  technologyDomain?: string | null;
-
-  @IsOptional() @ValidateNested() @Type(() => CustomDomainDto)
-  customDomain?: CustomDomainDto;
-
-  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
-  startDate?: string | null;
-
-  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
-  dueDate?: string | null;
-
-  /** The date promised to the client. Restricted; never before the team's deadline. */
-  @IsOptional() @IsDateString() @Transform(({ value }) => (value === '' ? null : value))
-  clientDueDate?: string | null;
 }
 
-const sameDay = (a?: Date | null, b?: Date | null) =>
-  !!a && !!b && a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
-
 /**
- * A PROJECT's task lists — which the CLIENTS-FLOW calls TASK GROUPS: one piece of work for the
- * client, with its kind, its field, its dates and a status. Team-space columns are also TaskList
- * rows, but they are reached through /teams/:id/lists in the Teams module — nothing here touches
- * them.
+ * PROJECTS flow — production's task lists (bb5728b). The CLIENTS flow's task groups, which carry a
+ * type, a domain, dates and a status, are ClientsTaskListsService (tasklists.clients.ts).
+ *
+ * A PROJECT's task lists (the board's groups). Team-space columns are also TaskList rows, but
+ * they are reached through /teams/:id/lists in the Teams module — nothing here touches them.
  *
  * Every method walls on ProjectAccessService first. A task list names the shape of a matter —
  * "Claim chart round 2", "Opposition response" — and its counts say how much of it is left, so
@@ -77,151 +51,41 @@ const sameDay = (a?: Date | null, b?: Date | null) =>
  * straight to Prisma on a bare projectId, so the same person got 403 on the project and 200 on
  * its board, and a Consultant could file a list into a matter they had never been staffed on.
  * Same service, same wording as its neighbours, so the wall reads as one wall.
- *
- * THE RULES A TASK GROUP KEEPS
- *
- *   • Complete only when every task in it is closed. A reopened task re-opens the group (see
- *     common/task-groups.ts); new or moved open work cannot enter a completed group.
- *   • Deleting a group never deletes work — its tasks move to the client's default group.
- *   • The default group cannot be deleted; it is where tasks made from the board or capacity land.
- *   • Nothing changes on a completed or deleted client (assertProjectWritable).
  */
 @Injectable()
 export class TaskListsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: ProjectAccessService,
-    private readonly permissions: PermissionService,
-    private readonly events: EventService,
-    private readonly projects: ProjectsService,
-    private readonly tasks: TasksService,
-    private readonly deadlines: DeadlineVisibilityService,
-    private readonly deadlineChanges: DeadlineChangeService,
   ) {}
 
-  /**
-   * CLIENTS-FLOW (deadlines): the client deadline leaves the building only for someone who may see
-   * it — the client-deadline permission, or managing this client. The same rule a project's own
-   * client date has always had, applied to the level where the promise now lives.
-   */
-  private redact<T extends { clientDueDate?: Date | null }>(list: T, scope: DeadlineScope, projectId: string): T {
-    if (this.deadlines.canSee(scope, [projectId])) return list;
-    const { clientDueDate: _hidden, ...rest } = list;
-    return rest as T;
-  }
-
-  private actorId(): string {
-    const id = getActorId();
-    if (!id) throw new ForbiddenException('You must be signed in.');
-    return id;
-  }
-
-  /**
-   * CLIENTS-FLOW: create a task group — with the standard tasks of its type, and optionally staffed.
-   *
-   * Everything that can fail is checked BEFORE anything is written: the wall, the client being
-   * open, the type and domain, the dates, the right to assign and the person assigned. The group
-   * and its tasks are then one transaction. Staffing goes through TasksService.setStaffing, the
-   * same path the task panel uses, so the seats it makes are exactly the seats a person would
-   * have made by hand — role, hours, start — and the capacity board places them the same way.
-   */
   async create(projectId: string, dto: CreateTaskListDto) {
-    const actorId = this.actorId();
-    await this.access.assertProjectAccess(actorId, projectId);
-    await this.access.assertProjectWritable(projectId);
-    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true, title: true } });
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null } });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
-    const actor = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
-    if (!actor) throw new ForbiddenException('You must be signed in.');
 
-    const group = await this.projects.prepareTaskGroup(actor.organizationId, actorId, dto);
-    const scope = await this.deadlines.scope(actorId);
-    if (group.clientDueDate) await this.deadlines.assertMaySetClientDue([projectId], scope);
-
-    // Assigning is its own right. Someone who may create a group but not assign work gets a clear
-    // refusal instead of a group created half-way with nobody on it.
-    const assigneeId = dto.assigneeId?.trim() || null;
-    if (assigneeId) {
-      if (!(await this.permissions.check(actorId, 'task.assign'))) {
-        throw new ForbiddenException('You can create the group, but assigning its work needs the right to assign tasks.');
-      }
-      const person = await this.prisma.user.findFirst({
-        where: { id: assigneeId, organizationId: actor.organizationId, deletedAt: null, status: 'ACTIVE' },
-        select: { id: true },
-      });
-      if (!person) throw new BadRequestException('The person chosen is not an active member of this organisation.');
-      // The same rule staffing applies, asked up front so it cannot fail after the group exists.
-      const member = await this.prisma.projectMember.findFirst({ where: { projectId, userId: assigneeId, isActive: true }, select: { id: true } });
-      if (!member && !(await this.access.hasOversight(actorId))) {
-        throw new BadRequestException('You can only assign people who are on this client. Ask a manager to add them first.');
-      }
-    }
-
-    const { list, taskIds } = await this.prisma.$transaction(async tx => {
-      const count = await tx.taskList.count({ where: { projectId, deletedAt: null } });
-      return this.projects.createTaskGroupTx(tx, { projectId, actorId, isDefault: false, sequence: count, group });
-    });
-
-    // Staff each standard task. A start date PLACES the hours on the capacity board from that day
-    // forward; without one they would be smeared to the deadline, which is a guess nobody made.
-    let assignmentWarning: string | null = null;
-    let assigned = 0;
-    if (assigneeId && taskIds.length) {
-      const start = group.startDate ?? startOfIstDay(new Date());
-      for (const taskId of taskIds) {
-        try {
-          await this.tasks.setStaffing(taskId, {
-            assignees: [{
-              userId: assigneeId, role: 'ANALYST',
-              estimatedHours: dto.hoursPerTask ?? 0,
-              startDate: start.toISOString(),
-            }],
-          } as any);
-          assigned++;
-        } catch (e) {
-          assignmentWarning = `The group was created, but ${taskIds.length - assigned} of its ${taskIds.length} tasks could not be assigned: ${e instanceof Error ? e.message : 'unknown error'}`;
-          break;
-        }
-      }
-    }
-
-    await this.events.emit({
-      action: EVENTS.TASKGROUP_CREATED,
-      entityType: 'TASK_GROUP',
-      entityId: list.id,
-      metadata: {
-        projectId, name: list.name, groupType: list.groupType, taskCount: taskIds.length,
-        ...(assigneeId ? { assigneeId, assigned } : {}),
+    const count = await this.prisma.taskList.count({ where: { projectId, deletedAt: null } });
+    return this.prisma.taskList.create({
+      data: {
+        projectId,
+        name: dto.name,
+        sequence: count,
       },
     });
-    return { ...this.redact(await this.find(projectId, list.id), scope, projectId), createdTaskCount: taskIds.length, assigned, assignmentWarning };
   }
 
-  /**
-   * The client's task groups, in order, each with how many tasks it holds and how many are still
-   * open — enough for the group headers and the client card without loading every task.
-   */
   async list(projectId: string) {
     await this.access.assertProjectAccess(getActorId(), projectId);
-    const lists = await this.prisma.taskList.findMany({
+    return this.prisma.taskList.findMany({
       where: { projectId, deletedAt: null },
       orderBy: { sequence: 'asc' },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
-    if (!lists.length) return lists;
-    const open = await this.prisma.projectTask.groupBy({
-      by: ['taskListId'],
-      where: { projectId, taskListId: { in: lists.map(l => l.id) }, task: { deletedAt: null, ...OPEN_TASK_WHERE } },
-      _count: { _all: true },
-    });
-    const openBy = new Map(open.map(o => [o.taskListId, o._count._all]));
-    const scope = await this.deadlines.scope();
-    return lists.map(l => this.redact({ ...l, openTaskCount: openBy.get(l.id) ?? 0 }, scope, projectId));
   }
 
   async get(projectId: string, id: string) {
     await this.access.assertProjectAccess(getActorId(), projectId);
-    return this.redact(await this.find(projectId, id), await this.deadlines.scope(), projectId);
+    return this.find(projectId, id);
   }
 
   /**
@@ -235,221 +99,59 @@ export class TaskListsService {
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
     if (!list) throw new NotFoundException(`Task list ${id} not found`);
-    const openTaskCount = await this.openTasksIn(projectId, id);
-    return { ...list, openTaskCount };
-  }
-
-  private openTasksIn(projectId: string, taskListId: string) {
-    return this.prisma.projectTask.count({
-      where: { projectId, taskListId, task: { deletedAt: null, ...OPEN_TASK_WHERE } },
-    });
+    return list;
   }
 
   async update(projectId: string, id: string, dto: UpdateTaskListDto) {
-    const actorId = this.actorId();
-    await this.access.assertProjectAccess(actorId, projectId);
-    await this.access.assertProjectWritable(projectId);
-    const existing = await this.find(projectId, id);
+    await this.access.assertProjectAccess(getActorId(), projectId);
+    await this.find(projectId, id);
     // The DEFAULT group may be renamed. "General" is a placeholder nobody chose, and on a project
     // running several pieces of work it has to be able to say what it actually is ("Prior-art
     // search", "Round 2"). What must not change is its ROLE: isDefault is untouched here, so it
     // remains the fallback new tasks land in — which is what actually needs protecting, not its
     // name. Deleting it is still refused (see remove).
-
-    // CLIENTS-FLOW: the rest of the group. Dates are checked as they will END UP, so moving only
-    // the start past an existing deadline is caught as surely as sending both.
-    const start = dto.startDate === undefined ? existing.startDate : (dto.startDate ? startOfUtcDay(new Date(dto.startDate)) : null);
-    const due = dto.dueDate === undefined ? existing.dueDate : (dto.dueDate ? startOfUtcDay(new Date(dto.dueDate)) : null);
-    if (start && due && due < start) throw new BadRequestException('The deadline cannot be before the start date.');
-
-    // CLIENTS-FLOW (deadlines): the date promised to the client. Only someone who may see it may
-    // move it; and whichever of the two dates moved, the team's deadline stays inside the promise.
-    const scope = await this.deadlines.scope(actorId);
-    if (dto.clientDueDate !== undefined) await this.deadlines.assertMaySetClientDue([projectId], scope);
-    const clientDue = dto.clientDueDate === undefined ? existing.clientDueDate : (dto.clientDueDate ? startOfUtcDay(new Date(dto.clientDueDate)) : null);
-    if (clientDue && start && clientDue < start) throw new BadRequestException('The client deadline cannot be before the start date.');
-    this.deadlines.assertOrdered(due, clientDue);
-
-    let groupType: string | null | undefined = undefined;
-    if (dto.groupType !== undefined) {
-      groupType = dto.groupType?.trim() || null;
-      if (groupType) {
-        const builtIn = PROJECT_TYPES.find(t => t.value === groupType);
-        if (builtIn?.comingSoon) throw new BadRequestException(`Work of type "${builtIn.label}" isn't available yet.`);
-        const actor = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
-        const saved = builtIn ? null : await this.prisma.projectTemplate.findFirst({
-          where: { organizationId: actor?.organizationId ?? '', value: groupType, isActive: true }, select: { value: true },
-        });
-        // A group created with a one-off custom type keeps it; a new value must be a real type.
-        if (!builtIn && !saved && groupType !== existing.groupType) {
-          throw new BadRequestException(`"${groupType}" is not a type of work this organisation offers.`);
-        }
-      }
-    }
-
-    let technologyDomain: string | null | undefined = undefined;
-    if (dto.customDomain?.label?.trim() || dto.technologyDomain !== undefined) {
-      const actor = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
-      technologyDomain = dto.technologyDomain === null && !dto.customDomain?.label?.trim()
-        ? null
-        : await this.projects.resolveDomain(actor?.organizationId ?? '', actorId, {
-            technologyDomain: dto.technologyDomain ?? undefined, customDomain: dto.customDomain,
-          });
-    }
-
-    // The group, and — when its deadline moves — the tasks that hang off that deadline, in ONE
-    // transaction, each move written to the deadline ledger. Tasks that were due ON the old date
-    // move with it; any open task due after a nearer new date is pulled in to it, because a task in
-    // the group cannot be due after the group. Closed tasks are history and are left alone.
-    const dueMoved = dto.dueDate !== undefined && !sameDay(existing.dueDate, due) && (!!existing.dueDate || !!due);
-    const { updated, movedTasks } = await this.prisma.$transaction(async tx => {
-      const updated = await tx.taskList.update({
-        where: { id },
-        data: {
-          name: dto.name,
-          sequence: dto.sequence,
-          ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
-          ...(groupType !== undefined ? { groupType } : {}),
-          ...(technologyDomain !== undefined ? { technologyDomain } : {}),
-          ...(dto.startDate !== undefined ? { startDate: start } : {}),
-          ...(dto.dueDate !== undefined ? { dueDate: due } : {}),
-          ...(dto.clientDueDate !== undefined ? { clientDueDate: clientDue } : {}),
-        },
-      });
-      let movedTasks = 0;
-      if (dueMoved) {
-        await this.deadlineChanges.record({
-          entityType: 'TASK_GROUP', entityId: id, projectId,
-          previous: existing.dueDate, next: due, changedById: actorId, tx,
-        });
-        if (due) {
-          const open = await tx.task.findMany({
-            where: { deletedAt: null, projectTasks: { some: { projectId, taskListId: id } }, ...OPEN_TASK_WHERE },
-            select: { id: true, dueDate: true, startDate: true },
-          });
-          for (const t of open) {
-            const rides = sameDay(t.dueDate, existing.dueDate);
-            const overruns = !!t.dueDate && t.dueDate > due;
-            if (!rides && !overruns) continue;
-            // A task cannot start after it is due. Pulling a group's deadline IN can land in front
-            // of a task's start date, and the row it left behind was refused by every later edit
-            // ("The due date cannot be before the start date") — the task was effectively frozen,
-            // by an action nobody took on it. The start comes with it.
-            const startsLate = !!t.startDate && t.startDate > due;
-            await tx.task.update({
-              where: { id: t.id },
-              data: { dueDate: due, overdueNotifiedAt: null, ...(startsLate ? { startDate: due } : {}) },
-            });
-            await this.deadlineChanges.record({
-              entityType: 'TASK', entityId: t.id, projectId,
-              previous: t.dueDate, next: due, changedById: actorId, tx,
-              reason: rides ? 'moved with its task group' : 'pulled in to its task group',
-            });
-            movedTasks++;
-          }
-        }
-      }
-      return { updated, movedTasks };
+    return this.prisma.taskList.update({
+      where: { id },
+      data: { name: dto.name, sequence: dto.sequence },
     });
-    // A pure reorder is not worth a line in anybody's feed.
-    const meaningful = Object.keys(dto).some(k => k !== 'sequence');
-    if (meaningful) {
-      await this.events.emit({
-        action: EVENTS.TASKGROUP_UPDATED,
-        entityType: 'TASK_GROUP',
-        entityId: id,
-        metadata: {
-          projectId, name: updated.name,
-          ...(dto.name && dto.name !== existing.name ? { previousName: existing.name } : {}),
-          ...(dueMoved ? { dueDate: due?.toISOString().slice(0, 10) ?? null, movedTasks } : {}),
-        },
-      });
-    }
-    return { ...this.redact(await this.find(projectId, id), scope, projectId), movedTasks };
-  }
-
-  /** CLIENTS-FLOW: mark a group complete — only when nothing in it is still open. */
-  async complete(projectId: string, id: string) {
-    const actorId = this.actorId();
-    await this.access.assertProjectAccess(actorId, projectId);
-    await this.access.assertProjectWritable(projectId);
-    const group = await this.find(projectId, id);
-    if (group.status === 'COMPLETED') return this.redact(group, await this.deadlines.scope(actorId), projectId);
-    if (group._count.projectTasks === 0) {
-      throw new BadRequestException('This group has no tasks yet — there is nothing to complete.');
-    }
-    const open = await this.openTasksIn(projectId, id);
-    if (open > 0) {
-      throw new BadRequestException(open === 1
-        ? 'One task in this group is still open. Finish it or move it to another group first.'
-        : `${open} tasks in this group are still open. Finish them or move them to another group first.`);
-    }
-    // Conditional on still being ACTIVE, so two clicks at once complete it once.
-    await this.prisma.taskList.updateMany({ where: { id, status: 'ACTIVE' }, data: { status: 'COMPLETED', completedAt: new Date() } });
-    await this.events.emit({
-      action: EVENTS.TASKGROUP_COMPLETED,
-      entityType: 'TASK_GROUP',
-      entityId: id,
-      metadata: { projectId, name: group.name, taskCount: group._count.projectTasks },
-    });
-    return this.redact(await this.find(projectId, id), await this.deadlines.scope(actorId), projectId);
-  }
-
-  /** CLIENTS-FLOW: re-open a completed group so work can be added to it again. */
-  async reopen(projectId: string, id: string) {
-    const actorId = this.actorId();
-    await this.access.assertProjectAccess(actorId, projectId);
-    await this.access.assertProjectWritable(projectId);
-    const group = await this.find(projectId, id);
-    if (group.status !== 'COMPLETED') return this.redact(group, await this.deadlines.scope(actorId), projectId);
-    await this.prisma.taskList.updateMany({ where: { id, status: 'COMPLETED' }, data: { status: 'ACTIVE', completedAt: null } });
-    await this.events.emit({
-      action: EVENTS.TASKGROUP_REOPENED,
-      entityType: 'TASK_GROUP',
-      entityId: id,
-      metadata: { projectId, name: group.name },
-    });
-    return this.redact(await this.find(projectId, id), await this.deadlines.scope(actorId), projectId);
   }
 
   async remove(projectId: string, id: string) {
-    const actorId = this.actorId();
-    await this.access.assertProjectAccess(actorId, projectId);
-    await this.access.assertProjectWritable(projectId);
+    await this.access.assertProjectAccess(getActorId(), projectId);
     const list = await this.find(projectId, id);
     if (list.isDefault) {
-      throw new BadRequestException(`"${list.name}" is this client's default group and cannot be deleted — rename it instead.`);
+      throw new BadRequestException('The default "General" task list cannot be deleted.');
     }
     // L2: move this list's tasks onto the default list instead of orphaning the
     // ProjectTask join rows (which pointed at a now-soft-deleted list).
     const def = await this.prisma.taskList.findFirst({ where: { projectId, isDefault: true, deletedAt: null } });
-    const moving = list._count.projectTasks;
-    // CLIENTS-FLOW: if open work is about to land in a COMPLETED default group, that group is not
-    // complete any more — re-open it in the same transaction, so the rule never breaks for an instant.
-    const reopenDefault = !!def && def.status === 'COMPLETED' && list.openTaskCount > 0;
     const [, updated] = await this.prisma.$transaction([
       this.prisma.projectTask.updateMany({ where: { taskListId: id }, data: { taskListId: def?.id ?? null } }),
       this.prisma.taskList.update({ where: { id }, data: { deletedAt: new Date() } }),
-      ...(reopenDefault ? [this.prisma.taskList.update({ where: { id: def!.id }, data: { status: 'ACTIVE', completedAt: null } })] : []),
     ]);
-    await this.events.emit({
-      action: EVENTS.TASKGROUP_DELETED,
-      entityType: 'TASK_GROUP',
-      entityId: id,
-      metadata: { projectId, name: list.name, movedTasks: moving, movedTo: def?.name ?? null },
-    });
-    const { clientDueDate: _cd, ...safe } = updated;
-    return { ...safe, movedTasks: moving, movedTo: def ? { id: def.id, name: def.name } : null };
+    return updated;
   }
 }
 
+/**
+ * One set of routes, two flows. A task list is a name and an order in PROJECTS and a task group in
+ * CLIENTS, so create and update validate the body against the caller's flow's DTO (with the global
+ * pipe's options), and complete / reopen exist in CLIENTS only.
+ */
 @Controller('projects/:projectId/tasklists')
 class TaskListsController {
-  constructor(private readonly service: TaskListsService) {}
+  constructor(
+    private readonly service: TaskListsService,
+    private readonly groups: ClientsTaskListsService,
+    private readonly flows: WorkspaceFlowService,
+  ) {}
 
   @Post() @RequirePermission('tasklist.create')
-  create(@Param('projectId') projectId: string, @Body() dto: CreateTaskListDto) {
-    return this.service.create(projectId, dto);
+  async create(@Param('projectId') projectId: string, @Body() body: unknown) {
+    if (await this.flows.currentIsClients()) {
+      return this.groups.create(projectId, await validateBody(CreateTaskGroupDto, body));
+    }
+    return this.service.create(projectId, await validateBody(CreateTaskListDto, body));
   }
 
   // The reads carry `tasklist.view` like every other read in the catalog. PermissionGuard is
@@ -458,40 +160,45 @@ class TaskListsController {
   // WHAT you may do; the service's project wall says WHICH matters you may do it to, and both
   // have to be there.
   @Get() @RequirePermission('tasklist.view')
-  list(@Param('projectId') projectId: string) {
-    return this.service.list(projectId);
+  async list(@Param('projectId') projectId: string) {
+    return (await this.flows.currentIsClients()) ? this.groups.list(projectId) : this.service.list(projectId);
   }
 
   @Get(':id') @RequirePermission('tasklist.view')
-  get(@Param('projectId') projectId: string, @Param('id') id: string) {
-    return this.service.get(projectId, id);
+  async get(@Param('projectId') projectId: string, @Param('id') id: string) {
+    return (await this.flows.currentIsClients()) ? this.groups.get(projectId, id) : this.service.get(projectId, id);
   }
 
   @Patch(':id') @RequirePermission('tasklist.update')
-  update(@Param('projectId') projectId: string, @Param('id') id: string, @Body() dto: UpdateTaskListDto) {
-    return this.service.update(projectId, id, dto);
+  async update(@Param('projectId') projectId: string, @Param('id') id: string, @Body() body: unknown) {
+    if (await this.flows.currentIsClients()) {
+      return this.groups.update(projectId, id, await validateBody(UpdateTaskGroupDto, body));
+    }
+    return this.service.update(projectId, id, await validateBody(UpdateTaskListDto, body));
   }
 
-  @Post(':id/complete') @RequirePermission('tasklist.update')
+  /** CLIENTS: mark a task group complete — only when nothing in it is still open. */
+  @Post(':id/complete') @RequireFlow('CLIENTS') @RequirePermission('tasklist.update')
   complete(@Param('projectId') projectId: string, @Param('id') id: string) {
-    return this.service.complete(projectId, id);
+    return this.groups.complete(projectId, id);
   }
 
-  @Post(':id/reopen') @RequirePermission('tasklist.update')
+  /** CLIENTS: re-open a completed task group. */
+  @Post(':id/reopen') @RequireFlow('CLIENTS') @RequirePermission('tasklist.update')
   reopen(@Param('projectId') projectId: string, @Param('id') id: string) {
-    return this.service.reopen(projectId, id);
+    return this.groups.reopen(projectId, id);
   }
 
   @Delete(':id') @RequirePermission('tasklist.delete')
-  remove(@Param('projectId') projectId: string, @Param('id') id: string) {
-    return this.service.remove(projectId, id);
+  async remove(@Param('projectId') projectId: string, @Param('id') id: string) {
+    return (await this.flows.currentIsClients()) ? this.groups.remove(projectId, id) : this.service.remove(projectId, id);
   }
 }
 
 @Module({
   imports: [ProjectsModule, TasksModule],
   controllers: [TaskListsController],
-  providers: [TaskListsService],
-  exports: [TaskListsService],
+  providers: [TaskListsService, ClientsTaskListsService],
+  exports: [TaskListsService, ClientsTaskListsService],
 })
 export class TaskListsModule {}

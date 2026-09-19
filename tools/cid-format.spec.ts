@@ -7,12 +7,15 @@
  *
  * WHY THE MIGRATION IS READ HERE
  *
- * A CID is minted in two places: CidService (every new client) and the SQL backfill in
- * 20261020120000_cid_auto_mint_and_ledger (every client that existed before). If the two ever
- * disagree about the prefix, the same organisation files clients under two different series and the
- * "never issued twice" guarantee is only true per series. The same goes for the status and event
- * vocabularies, which the database holds as CHECK constraints: a type the code writes and the CHECK
- * does not list is a transaction that fails in production. So the lists are compared, not trusted.
+ * The status and event vocabularies are held by the database as CHECK constraints: a type the code
+ * writes and the CHECK does not list is a transaction that fails in production. So the lists are
+ * compared, not trusted.
+ *
+ * Since workspace flows (docs/WORKSPACE_FLOWS.md) the migration is flow-neutral: the registry CHECK
+ * is the UNION of both flows' states (PROJECTS still holds RESERVED / RELEASED / EXPIRED PIDs), there
+ * is no SQL backfill (giving existing projects a CID is the PROJECTS → CLIENTS conversion's job, and
+ * the conversion's own suite pins its prefix rule), and "a live client has a CID" is kept by the
+ * CLIENTS code, not by a table constraint — PROJECTS allows a project whose PID is still pending.
  */
 process.env.TZ = 'Asia/Kolkata';
 
@@ -78,19 +81,16 @@ const listIn = (constraint: string) => {
   const m = new RegExp(`"${constraint}"\\s*CHECK\\s*\\(\\s*"(?:status|type)"\\s+IN\\s*\\(([^)]*)\\)`, 'i').exec(sql);
   return m ? [...m[1].matchAll(/'([A-Z_]+)'/g)].map(x => x[1]).sort() : null;
 };
-check('the registry CHECK lists exactly the statuses the code uses',
-  listIn('pid_reservation_status_check'), [...CID_REGISTRY_STATUSES].sort());
+// PROJECTS' own registry states: a 5-minute hold, and the two it could end in before the ledger.
+const PID_ONLY_STATUSES = ['RESERVED', 'RELEASED', 'EXPIRED'];
+check('the registry CHECK lists exactly the statuses both flows use',
+  listIn('pid_reservation_status_check'), [...new Set([...CID_REGISTRY_STATUSES, ...PID_ONLY_STATUSES])].sort());
 check('the ledger CHECK lists exactly the event types the code writes',
   listIn('cid_event_type_check'), [...CID_EVENT_TYPES].sort());
-check('the backfill strips the same characters from the org code',
-  sql.includes(`regexp_replace(o."code", '[^A-Za-z0-9]', '', 'g')`), true);
-check(`the backfill cuts the prefix at the same length (${CID_PREFIX_MAX})`,
-  new RegExp(`left\\(upper\\(regexp_replace\\([^)]*\\)\\),\\s*${CID_PREFIX_MAX}\\)`).test(sql), true);
-check(`the backfill falls back to the same prefix ('${CID_PREFIX_FALLBACK}')`,
-  sql.includes(`, ''), '${CID_PREFIX_FALLBACK}')`), true);
-check('the backfill pads serials to three, as formatCid does', sql.includes(`lpad(v_serial::TEXT, 3, '0')`), true);
-check('the backfill reads the financial year in IST, as financialYear does', sql.includes(`AT TIME ZONE 'Asia/Kolkata'`), true);
-check('a live client without a CID is refused by the database', /CHECK\s*\(\s*"deletedAt" IS NOT NULL OR "code" IS NOT NULL\s*\)/.test(sql), true);
+check('no SQL backfill: the migration mints nothing (the conversion does, per organisation)',
+  /lpad\(|regexp_replace\(/.test(sql), false);
+check('a project without a number is NOT refused by the database (PROJECTS allows a pending PID)',
+  /"deletedAt" IS NOT NULL OR "code" IS NOT NULL/.test(sql), false);
 check('the ledger refuses edits', /BEFORE UPDATE ON "cid_event"/.test(sql), true);
 
 // ── report ──────────────────────────────────────────────────────────────────

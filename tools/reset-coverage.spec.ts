@@ -81,6 +81,7 @@ check('the reset script parsed and clears a plausible number of tables', cleared
 const KEEP: Record<string, string> = {
   // ── the firm itself ──
   organization: 'the one Organization row IS the workspace; deleting it deletes everything',
+  workspaceFlowChange: 'how the firm came to run the flow it runs (docs/WORKSPACE_FLOWS.md) — the org\'s own configuration history, not work',
 
   // ── people, and their way back in ──
   user: 'the entire point of this script: the reset keeps the people',

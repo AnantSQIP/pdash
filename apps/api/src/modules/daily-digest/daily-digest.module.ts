@@ -1,4 +1,5 @@
-import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
+import { patentsAndClientCodes } from '../../common/features';
+import { WorkspaceFlowService, type WorkspaceFlow } from '../workspace-flow/workspace-flow.service';
 import {
   BadRequestException, Body, Controller, Get, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit, Patch, Post, Query,
 } from '@nestjs/common';
@@ -43,7 +44,19 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly timesheets: TimesheetsService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * The workspace flow the digest speaks for. The digest is organisation-wide and, like the rest of
+   * this module, reads the one organisation there is; a request answers for the caller's own.
+   */
+  private async digestFlow(): Promise<WorkspaceFlow> {
+    const actorId = getActorId();
+    if (actorId) return this.flows.flowOfUser(actorId);
+    const org = await this.prisma.organization.findFirst({ select: { id: true } });
+    return this.flows.flowOf(org?.id);
+  }
 
   /**
    * The Daily Digest module is Super-Admin only. It aggregates the whole organisation — every
@@ -196,6 +209,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
 
   /** Everything the digest screen needs for one IST day, fully linked and drillable. */
   async buildDetail(dateStr?: string) {
+    // The client code is a PROJECTS-flow fact; the CLIENTS flow has none (common/features.ts).
+    const clientCodes = patentsAndClientCodes(await this.digestFlow());
     const base = dateStr ? new Date(`${dateStr.slice(0, 10)}T12:00:00.000Z`) : new Date();
     if (isNaN(base.getTime())) throw new BadRequestException('A valid date is required.');
     const dayStart = startOfIstDay(base);
@@ -277,8 +292,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       return {
         id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, title: p.title, type: p.projectType ?? null,
         phase: p.projectPhase, priority: p.priority,
-        // CLIENTS-FLOW: commented out — client codes are switched off.
-        client: PATENTS_AND_CLIENT_CODES ? (p.client?.name ?? p.client?.code ?? null) : null,
+        client: clientCodes ? (p.client?.name ?? p.client?.code ?? null) : null,
         startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
         clientDeliveryDate: p.clientDeliveryDate ?? null,
         workingHours: p.workingHours ?? null, actualHours: p.actualHours ?? null,
@@ -358,12 +372,15 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private format(r: Awaited<ReturnType<DailyDigestService['buildReport']>>): { title: string; message: string } {
+  private format(r: Awaited<ReturnType<DailyDigestService['buildReport']>>, flow: WorkspaceFlow): { title: string; message: string } {
+    // PROJECTS reads as production did; CLIENTS says "clients", and every client has its CID.
+    const unit = flow === 'CLIENTS' ? 'Clients' : 'Projects';
+    const noNumber = flow === 'CLIENTS' ? '—' : 'PID-pending';
     const lines = [
       `Daily report — ${r.date}`,
       ``,
-      `• Clients created: ${r.projectsCreated.length}${r.projectsCreated.length ? ' — ' + r.projectsCreated.map(p => `${p.code ?? '—'} ${p.title}`).slice(0, 6).join('; ') : ''}`,
-      `• Clients completed: ${r.projectsCompleted.length}${r.projectsCompleted.length ? ' — ' + r.projectsCompleted.map(p => `${p.code ?? ''} ${p.title}`).slice(0, 6).join('; ') : ''}`,
+      `• ${unit} created: ${r.projectsCreated.length}${r.projectsCreated.length ? ' — ' + r.projectsCreated.map(p => `${p.code ?? noNumber} ${p.title}`).slice(0, 6).join('; ') : ''}`,
+      `• ${unit} completed: ${r.projectsCompleted.length}${r.projectsCompleted.length ? ' — ' + r.projectsCompleted.map(p => `${p.code ?? ''} ${p.title}`).slice(0, 6).join('; ') : ''}`,
       `• Tasks completed today: ${r.tasksCompleted}`,
       `• Deadlines met today: ${r.deadlinesMetToday}`,
       `• Overdue tasks: ${r.overdueCount}${r.overdueCount ? ' — ' + r.overdueSample.map(t => t.title).slice(0, 5).join('; ') + (r.overdueCount > 5 ? ` (+${r.overdueCount - 5} more)` : '') : ''}`,
@@ -392,7 +409,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     const sent = new Set(already.map(n => n.userId));
     const recipients = opts.force ? admins : admins.filter(id => !sent.has(id));
     if (!recipients.length) return { sent: 0, admins: admins.length, alreadySentToday: sent.size };
-    const { title, message } = this.format(await this.buildReport(now));
+    const { title, message } = this.format(await this.buildReport(now), await this.digestFlow());
     await this.prisma.notification.createMany({
       data: recipients.map(userId => ({ userId, type: 'admin.daily_digest', title, message, link: '/digest' })),
     });

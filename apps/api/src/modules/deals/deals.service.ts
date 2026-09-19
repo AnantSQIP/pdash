@@ -1,4 +1,5 @@
-import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
+import { patentsAndClientCodes } from '../../common/features';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
@@ -46,7 +47,13 @@ export class DealsService {
     // The pipeline asks the delivery side whether the work about to land can be absorbed.
     // This one dependency is the difference between a pipeline and a CRM bolted on beside one.
     private readonly capacity: CapacityService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /** Client codes exist in the PROJECTS flow only (common/features.ts). */
+  private async clientCodes(organizationId: string): Promise<boolean> {
+    return patentsAndClientCodes(await this.flows.flowOf(organizationId));
+  }
 
   private async actor(): Promise<string> {
     const id = getActorId();
@@ -80,11 +87,12 @@ export class DealsService {
       clients.filter(c => c.name?.trim()).map(c => [c.name!.trim().toLowerCase(), c]),
     );
 
+    const clientCodes = await this.clientCodes(organizationId);
     return rows.map(({ activities, ...d }) => {
       const existing = d.client ?? byName.get(d.company.trim().toLowerCase()) ?? null;
       return {
         ...d,
-        flags: assessDeal({ ...d, activities }),
+        flags: assessDeal({ ...d, activities }, undefined, clientCodes),
         daysInStage: daysInCurrentStage({ ...d, activities }),
         lastTouchedAt: lastTouchedAt({ ...d, activities }),
         /** Already a client of ours — surfaced whether or not the deal has been linked yet. */
@@ -122,6 +130,7 @@ export class DealsService {
    * and how the firm actually converts.
    */
   async summary(organizationId: string) {
+    const clientCodes = await this.clientCodes(organizationId);
     const deals = await this.prisma.deal.findMany({
       where: { organizationId, deletedAt: null },
       select: {
@@ -208,11 +217,11 @@ export class DealsService {
       /** How many open deals need attention today, by the same rules the board uses. */
       needsAttention: deals
         .filter(d => OPEN_STAGES.includes(d.stage as DealStage))
-        .reduce((n, d) => n + (assessDeal(d as never).some(f => f.severity === 'urgent') ? 1 : 0), 0),
+        .reduce((n, d) => n + (assessDeal(d as never, undefined, clientCodes).some(f => f.severity === 'urgent') ? 1 : 0), 0),
 
       /** Won, but nobody has created the client record — the handover to delivery, unfinished. */
-      // CLIENTS-FLOW: commented out while client codes are switched off (always 0).
-      awaitingClientRecord: PATENTS_AND_CLIENT_CODES ? deals.filter(d => d.stage === 'WON' && !d.clientId).length : 0,
+      // Always 0 in the CLIENTS flow, which has no client records to create.
+      awaitingClientRecord: clientCodes ? deals.filter(d => d.stage === 'WON' && !d.clientId).length : 0,
       // Currency is per-deal, so a pipeline mixing them cannot be summed honestly. Say so rather
       // than adding rupees to dollars and presenting the result as a forecast.
       currencies: [...new Set(deals.map(d => d.currency))],
@@ -406,9 +415,9 @@ export class DealsService {
     // Winning may tie the deal to a client, either an existing one or a newly minted code. That
     // link is what lets the work show up in the client ledger later.
     let clientId = deal.clientId;
-    // CLIENTS-FLOW: commented out — a won deal no longer mints or links a client code; the client
-    // is created in the Clients module instead. The deal simply records that it was won.
-    if (to === 'WON' && PATENTS_AND_CLIENT_CODES) clientId = await this.resolveWonClient(organizationId, actorId, deal.company, dto) ?? clientId;
+    // CLIENTS flow: a won deal mints or links no client code (there are none); the client is
+    // created in the Clients module instead, and the deal simply records that it was won.
+    if (to === 'WON' && await this.clientCodes(organizationId)) clientId = await this.resolveWonClient(organizationId, actorId, deal.company, dto) ?? clientId;
 
     await this.prisma.$transaction([
       this.prisma.deal.update({
