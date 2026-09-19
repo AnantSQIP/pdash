@@ -88,6 +88,29 @@ export function projectTypeLabel(value?: string | null): string {
  * Every live client is given its CID when it is created, so a missing one is not a state anybody
  * should see; it renders as a plain dash rather than the old "PID pending".
  */
+/**
+ * PROJECTS flow: a project's PID as shown everywhere — "PID pending" while it has none (a project is
+ * created first and its PID generated or requested afterwards), and the round when there is more
+ * than one under the same PID.
+ */
+export function pidLabel(code?: string | null, roundSeq?: number | null): string {
+  const pid = code ?? 'PID pending';
+  return roundSeq && roundSeq > 1 ? `${pid} · P${roundSeq}` : pid;
+}
+
+/**
+ * The label for a project's / client's number in the flow the firm runs: the PID (PROJECTS) or the
+ * CID (CLIENTS). For code shared by both flows; flow-specific screens call pidLabel / cidLabel.
+ */
+export function numberLabel(flow: 'PROJECTS' | 'CLIENTS', code?: string | null, roundSeq?: number | null): string {
+  return flow === 'CLIENTS' ? cidLabel(code, roundSeq) : pidLabel(code, roundSeq);
+}
+
+/** "PID" or "CID" — what the firm calls the number, in the flow it runs. */
+export function numberName(flow: 'PROJECTS' | 'CLIENTS'): 'PID' | 'CID' {
+  return flow === 'CLIENTS' ? 'CID' : 'PID';
+}
+
 export function cidLabel(code?: string | null, roundSeq?: number | null): string {
   const cid = code || '—';
   return code && roundSeq && roundSeq > 1 ? `${cid} · P${roundSeq}` : cid;

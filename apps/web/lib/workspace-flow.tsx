@@ -3,6 +3,7 @@
 import type { ComponentType } from 'react';
 import { useOrg } from './org-context';
 import type { WorkspaceFlow } from './api';
+import { numberLabel, numberName } from './mock-data';
 
 export type { WorkspaceFlow } from './api';
 
@@ -49,4 +50,21 @@ export function byFlow<P extends object>(Projects: ComponentType<P>, Clients: Co
   }
   FlowSwitch.displayName = `byFlow(${Projects.displayName ?? Projects.name}, ${Clients.displayName ?? Clients.name})`;
   return FlowSwitch;
+}
+
+/** The project's / client's number as the firm calls it: a PID label (PROJECTS) or a CID (CLIENTS). */
+export function useNumberLabel(): (code?: string | null, roundSeq?: number | null) => string {
+  const flow = useWorkspaceFlow();
+  return (code, roundSeq) => numberLabel(flow, code, roundSeq);
+}
+
+/** "PID" or "CID". */
+export function useNumberName(): 'PID' | 'CID' {
+  return numberName(useWorkspaceFlow());
+}
+
+/** "Project" or "Client" — what the unit of work is called in this flow (capitalised; use
+ *  .toLowerCase() / a plural as needed). */
+export function useWorkUnitName(): 'Project' | 'Client' {
+  return useWorkspaceFlow() === 'CLIENTS' ? 'Client' : 'Project';
 }
