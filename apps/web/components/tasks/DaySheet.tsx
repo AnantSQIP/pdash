@@ -8,7 +8,8 @@ import { api, type DayPlan, type DayPlanRow } from '@/lib/api';
 import { warningsForSheet, sheetSummary } from '@/lib/day-plan';
 import { useToast } from '@/components/ui/Toast';
 import { todayIST, formatDate } from '@/lib/date';
-import { cidLabel } from '@/lib/mock-data';
+import { numberLabel } from '@/lib/mock-data';
+import { useWorkspaceFlow } from '@/lib/workspace-flow';
 import { NonBillableChip } from '@/components/tasks/BillableToggle';
 
 /** Nobody may book more than this against one calendar day — the server's rule, said here first. */
@@ -54,6 +55,12 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
   initialDate?: string;
 }) {
   const { toast } = useToast();
+  // Both flows use this sheet. PROJECTS: the number is a PID and the work a project. CLIENTS: a
+  // CID and a client; the sheet also offers work finished recently, and says which tasks are
+  // non-billable (the task decides there) — the API sends those rows and flags in CLIENTS only.
+  const flow = useWorkspaceFlow();
+  const clients = flow === 'CLIENTS';
+  const noUnit = clients ? 'No client' : 'No project';
   const today = todayIST();
   const [date, setDate] = useState(initialDate ?? today);
   const [hours, setHours] = useState<Record<string, string>>({});
@@ -84,13 +91,13 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
     for (const r of groups.OTHER) {
       const key = r.projectId ?? '—';
       const label = r.project
-        ? `${r.projectPid ? `${cidLabel(r.projectPid, r.projectRound)} · ` : ''}${r.project}`
-        : 'No client';
+        ? `${r.projectPid ? `${numberLabel(flow, r.projectPid, r.projectRound)} · ` : ''}${r.project}`
+        : noUnit;
       if (!map.has(key)) map.set(key, { key, label, rows: [] });
       map.get(key)!.rows.push(r);
     }
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
-  }, [groups.OTHER]);
+  }, [groups.OTHER, flow, noUnit]);
 
   const hoursByTask = useMemo(() => {
     const out: Record<string, number> = {};
@@ -167,11 +174,11 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-1.5 text-[13.5px] font-medium text-gray-900" title={r.title}>
               <span className="truncate">{r.title}</span>
-              {r.billable === false && <NonBillableChip className="shrink-0" />}
+              {clients && r.billable === false && <NonBillableChip className="shrink-0" />}
             </p>
             <p className="mt-0.5 truncate text-[11px] text-gray-500">
-              {r.projectPid ? `${cidLabel(r.projectPid, r.projectRound)} · ` : ''}{r.project ?? 'No client'}
-              {r.taskGroup && <span className="text-gray-400"> · {r.taskGroup}</span>}
+              {r.projectPid ? `${numberLabel(flow, r.projectPid, r.projectRound)} · ` : ''}{r.project ?? noUnit}
+              {clients && r.taskGroup && <span className="text-gray-400"> · {r.taskGroup}</span>}
               {r.plannedHours > 0 && <span className="text-gray-400"> · planned {r.plannedHours}h</span>}
               {r.loggedToday > 0 && <span className="text-gray-400"> · {r.loggedToday}h already logged</span>}
               {r.closed
@@ -295,13 +302,17 @@ export function DaySheet({ onClose, onSaved, initialDate }: {
                 </div>
               )}
 
-              <div className="mt-3">
-                <Section label="Finished recently" list={groups.FINISHED} />
-              </div>
+              {groups.FINISHED.length > 0 && (
+                <div className="mt-3">
+                  <Section label="Finished recently" list={groups.FINISHED} />
+                </div>
+              )}
 
               {rows.length === 0 && (
                 <p className="rounded-lg bg-gray-50 px-3 py-2.5 text-[12.5px] text-gray-500">
-                  You have no open or recently finished work on a live client, so there is nothing to log against yet.
+                  {clients
+                    ? 'You have no open or recently finished work on a live client, so there is nothing to log against yet.'
+                    : 'You have no open work on a live project, so there is nothing to log against yet.'}
                 </p>
               )}
             </>
