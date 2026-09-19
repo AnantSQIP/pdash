@@ -167,11 +167,15 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   eq('with no unfiled clock time to nag about', pday.unfiledHours ?? 0, 0);
   eq('and nothing on the clock', pday.trackedMinutes ?? 0, 0);
   eq('and no tracked tasks to list', (pday.tracked ?? []).length, 0);
-  ok('while still measuring the day itself', (pday.target ?? 0) > 0, JSON.stringify({ target: pday.target, logged: pday.logged }));
+  // A working day owes 8h (4 on a half day); a weekend owes nothing. Either way it is measured.
+  const weekend = [0, 6].includes(new Date(today() + 'T00:00:00Z').getUTCDay());
+  ok('while still measuring the day itself', typeof pday.target === 'number' && (weekend ? pday.target === 0 : pday.target > 0),
+     JSON.stringify({ target: pday.target, logged: pday.logged, weekend }));
 
   const sheet = await admin(`/capacity/my-plan?date=${today()}`);
   ok('the Log time sheet answers', sheet.status === 200, `status ${sheet.status}`);
-  ok('and measures the day it is for', (sheet.data?.target ?? 0) > 0, JSON.stringify({ target: sheet.data?.target, logged: sheet.data?.logged }));
+  ok('and measures the day it is for', typeof sheet.data?.target === 'number' && (weekend ? sheet.data.target === 0 : sheet.data.target > 0),
+     JSON.stringify({ target: sheet.data?.target, logged: sheet.data?.logged, weekend }));
 
   // ── cover is visible on the board, not merely computed ───────────────────
   //

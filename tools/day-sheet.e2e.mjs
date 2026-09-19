@@ -96,8 +96,11 @@ const msg = r => (typeof r.data?.message === 'string' ? r.data.message : JSON.st
   // ── what the sheet then saves ────────────────────────────────────────────
   console.log('\n— saving what was typed —');
   const rows = plan.data.rows;
-  const planned = rows.find(r => r.when === 'TODAY');
-  const other = rows.find(r => r.when === 'OTHER') ?? rows[rows.length - 1];
+  // On a weekend or a holiday nothing is planned for the day itself — the board places no work on a
+  // day with no hours — so fall back to the next planned row rather than fail on the calendar.
+  const planned = rows.find(r => r.when === 'TODAY') ?? rows.find(r => r.when === 'TOMORROW') ?? rows[0];
+  const other = rows.find(r => r.when === 'OTHER' && r.taskId !== planned.taskId)
+    ?? rows.filter(r => r.taskId !== planned.taskId).at(-1);
   const save = await admin('/timesheets/day', { method: 'POST', body: { date: today(), entries: [
     { taskId: planned.taskId, hoursLogged: 2, notes: 'planned work' },
     { taskId: other.taskId, hoursLogged: 1, notes: 'something that came up' },
