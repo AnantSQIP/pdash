@@ -1,146 +1,121 @@
 // The colour of a project, and of a task inside it, on the capacity board.
 //
-// LIGHT, SEP 2026. The owner: "the current colours are too dark, I want light colours". The board
-// used to fill each task with a deep shade and white text; it now uses pastel fills with dark ink,
-// a saturated EDGE per client, and softer signals. Chosen with the dataviz method and its validator
-// (skill dataviz, scripts/validate_palette.js — OKLab ΔE ×100, Machado 2009 CVD simulation), not
-// by eye. The numbers below are what that run reported.
+// Three variables, three visual channels, never sharing one:
 //
-// Four variables, four channels, never sharing one:
-//
-//   hue        = WHICH CLIENT.  Seven families, assigned by a client's rank (by CID) among the
-//                clients on the board, so no two clients visible together share a hue until there
-//                are more than seven. Every family has a pastel FILL ladder and one saturated EDGE
-//                (OKLCH L 0.58, C 0.15) drawn as the segment's 1px ring. The edge carries identity
-//                where the pastels cannot: light fills compress hue differences, and under red–green
-//                colour blindness no two pastels of this set stay ≥ 8 apart past the second. The
-//                first three EDGES pass the validator all-pairs (CVD ΔE 10.7, normal-vision 15.8,
-//                ≥ 4:1 on the free base); the fourth onwards cannot, for any order of any set that
-//                avoids green, teal, red and amber — so from the fourth on each family also carries
-//                a TEXTURE (Bertin's second channel), and the CID label, the legend and every hover
-//                name the client in words.
-//   lightness  = HOW URGENT THE TASK IS.  Critical deepest, low lightest, as an ordinal ramp:
-//                OKLCH L 0.725 / 0.79 / 0.855 / 0.92, one hue per family, validator ordinal check
-//                "monotone, every step ≥ 0.06". The light end is pale BY REQUEST, below the 2:1 the
-//                method asks of a lightest step — the edge ring (≥ 3.99:1) is what keeps a LOW
-//                segment visible on the free base. Priority is also a word in every hover.
-//   a rail     = HOW CLOSE THE DEADLINE IS.  A 3px strip on the segment's bottom edge — solid soft
-//                red for overdue, dotted amber for due within two working days — in the two hues no
-//                client is ever given. Position and pattern, so it survives greyscale.
-//   a line     = MORE THAN A DAY'S WORK.  A rose line UNDER the day's box (not a near-black one any
-//                more). Under, not on: the box and the work in it stay exactly as drawn.
-//
-// Text on a fill is the family's own dark INK (OKLCH L 0.32), never white: ≥ 5.1:1 on the deepest
-// fill of every family, ≥ 9:1 on the palest. Verified for every hue.
+//   hue        = WHICH PROJECT.  Seven hues, assigned by a project's rank (by PID) among the
+//                projects on the board, so no two projects visible together share a hue until
+//                there are more than seven. The PID is always printed beside the swatch — in the
+//                legend, the hover card and the person panel — so hue never has to carry meaning
+//                on its own.
+//   lightness  = HOW URGENT THE TASK IS.  Critical darkest, low lightest. The four steps are
+//                matched on RELATIVE LUMINANCE (0.035 / 0.08 / 0.16 / 0.40), not on HSL
+//                lightness: an HSL L of 50% is far lighter to the eye in pink than in indigo,
+//                and the ladder must read the same in every column.
+//   a rail     = HOW CLOSE THE DEADLINE IS.  A 3px strip on the segment's bottom edge — solid
+//                red for overdue, dotted amber for due within two working days — in the two
+//                hues no project is ever given. Position and pattern, so it survives greyscale.
+//   a texture  = WHICH PROJECT, AGAIN, for the fifth hue onwards. With green, teal, red and amber
+//                all reserved, seven distinct hues cannot all survive red–green colour blindness:
+//                simulated (Machado 2009) the blue-purple family collapses to a ΔE of 2. So the
+//                hues are ASSIGNED in the order that keeps the first four furthest apart for
+//                protan, deutan and normal vision alike (worst-case ΔE 121 → 51 → 20), and the
+//                last three carry a faint hatch or dot texture as a second, colour-free channel
+//                (Bertin's texture variable). The PID label inside wide segments, in the legend
+//                and in every hover is the third.
 //
 // Palette rules inherited from lib/calendar-colors.ts and kept here:
-//   · no green or teal (40°–195° is excluded outright): green means "free" on this board;
-//   · red and amber are reserved for the deadline rail, rose for the over-committed line;
+//   · no green or teal (40°–195° is excluded outright): green means "done" everywhere else;
+//   · red and amber are reserved for the deadline rail;
+//   · white text is used only where it clears 4.5:1 — CRITICAL, HIGH and MEDIUM fills
+//     (12.3:1, 8.1:1, 5.0:1); LOW fills take dark text (8.1:1). Verified for every hue.
 //   · colour is never the only carrier: priority is also a word, deadline is also a date,
-//     over-committed is also "over by Nh", and a client is also its CID.
+//     and a red/green-blind viewer sees the lightness ladder and the rail unchanged.
 //
-// The one green on the board is the FREE base of a working-day cell — the owner's "green box",
-// now a paler one. It means "unallocated hours", and nothing here may be confused with it.
+// The one green on the board is the FREE base of a working-day cell — the owner's "green box".
+// It means "unallocated hours", it predates this file, and nothing here may be confused with it.
 
 export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
-export type HueTexture = 'none' | 'hatch' | 'dots' | 'cross' | 'backhatch';
+export type HueTexture = 'none' | 'hatch' | 'dots' | 'cross';
 
 export type ProjectHue = {
   name: string;
-  /** OKLCH hue angle of the family. */
-  h: number;
-  /** Segment fills, pastel, luminance-stepped per priority (OKLCH L .725 / .79 / .855 / .92). */
+  h: number; s: number;
+  /** Segment fills, luminance-matched per priority. */
   critical: string; high: string; medium: string; low: string;
-  /** The family's saturated edge: every segment's 1px ring, and its swatch border. Carries identity. */
-  edge: string;
-  /** Dark text for anything written ON a fill or a tint of this family. */
-  ink: string;
-  /** Chip surfaces in the app's tint + ring form. Text on a tint uses `ink`. */
+  /** Chip surfaces in the app's tint + ring form. Text on a tint uses `critical`. */
   tint: string; ring: string;
-  /** A colour-free second channel from the fourth hue on (see the header). */
+  /** A colour-free second channel for the hues that collide under colour blindness. */
   texture: HueTexture;
 };
 
 /**
- * Seven families, in ASSIGNMENT order. The first three were chosen, and their angles tuned
- * (copper 52°, azure 242°, pink 348° in OKLCH), to maximise the worst all-pairs separation of the
- * edges under normal, protan and deutan vision at once; the last four are textured because no
- * fourth colour can clear the floor against all three (see the header). Slate is deliberately
- * desaturated — separated from the blues by chroma, which is also how a colour-blind viewer
- * separates them — and therefore sits below the chroma floor by design; it is textured.
+ * Seven hues, in ASSIGNMENT order — the order that keeps each prefix furthest apart under normal,
+ * protan and deutan vision at once (greedy on the worst case of the three; see the header). The
+ * first four are plain; the last three carry a texture, because from the fifth hue on no
+ * arrangement of these families keeps a red–green-blind viewer's ΔE above 10.
+ *
+ * Bronze was tried and dropped: it sits in the amber band, so the due-soon rail vanished on it.
+ * Slate is deliberately desaturated — separated from the blues by chroma rather than by angle,
+ * which is also how a colour-blind viewer separates them.
  */
 export const PROJECT_HUES: readonly ProjectHue[] = [
-  { name: 'copper',  h: 52,  critical: '#e68d54', high: '#f0a77b', medium: '#fac19f', low: '#ffddc9', edge: '#bc5b03', ink: '#532300', tint: '#fff2ec', ring: '#f5cab1', texture: 'none' },
-  { name: 'azure',   h: 242, critical: '#51aff0', high: '#7bc3f8', medium: '#a2d6ff', low: '#cde9ff', edge: '#0082c4', ink: '#003656', tint: '#edf7fe', ring: '#b2daf9', texture: 'none' },
-  { name: 'pink',    h: 348, critical: '#e183b4', high: '#ed9fc6', medium: '#f8bbd9', low: '#fed8ea', edge: '#b84f8a', ink: '#521c3b', tint: '#fef1f7', ring: '#f3c5db', texture: 'none' },
-  { name: 'violet',  h: 300, critical: '#b392eb', high: '#c5abf4', medium: '#d7c4fd', low: '#e9dffe', edge: '#8962c5', ink: '#3a2659', tint: '#f6f3ff', ring: '#daccf7', texture: 'hatch' },
-  { name: 'slate',   h: 257, critical: '#91a8c9', high: '#a9bcd7', medium: '#c2d1e6', low: '#dce5f3', edge: '#627ca0', ink: '#263446', tint: '#f2f5fa', ring: '#cad5e5', texture: 'dots' },
-  { name: 'fuchsia', h: 322, critical: '#cc89d6', high: '#dba4e3', medium: '#e9bfef', low: '#f5daf9', edge: '#a258ae', ink: '#47204e', tint: '#faf2fc', ring: '#e8c8ec', texture: 'cross' },
-  { name: 'indigo',  h: 278, critical: '#939df6', high: '#aab4fe', medium: '#c4ccff', low: '#dee3fe', edge: '#676ed1', ink: '#292c5f', tint: '#f3f4ff', ring: '#cad1fc', texture: 'backhatch' },
+  { name: 'copper',  h: 19,  s: 0.82, critical: '#5c2309', high: '#8a350e', medium: '#bf4a13', low: '#e69772', tint: '#fdeee8', ring: '#f6bda2', texture: 'none' },
+  { name: 'violet',  h: 268, s: 0.80, critical: '#480f88', high: '#6b17cb', medium: '#9143ea', low: '#c099ec', tint: '#f2e8fc', ring: '#c9a3f5', texture: 'none' },
+  { name: 'pink',    h: 330, s: 0.72, critical: '#66113b', high: '#971958', medium: '#d02279', low: '#e490ba', tint: '#fbe9f2', ring: '#f1a7cc', texture: 'none' },
+  { name: 'azure',   h: 203, s: 0.80, critical: '#093854', high: '#0e5480', medium: '#1475b1', low: '#65b2e2', tint: '#e8f5fc', ring: '#a3d6f5', texture: 'none' },
+  { name: 'slate',   h: 215, s: 0.26, critical: '#293546', high: '#3f516b', medium: '#577195', low: '#9cabc0', tint: '#eff2f6', ring: '#bfcad9', texture: 'hatch' },
+  { name: 'fuchsia', h: 293, s: 0.68, critical: '#591363', high: '#861c94', medium: '#b827cc', low: '#d890e1', tint: '#f9eafb', ring: '#e7a9ef', texture: 'dots' },
+  { name: 'indigo',  h: 244, s: 0.72, critical: '#221a9d', high: '#392ddd', medium: '#655ce4', low: '#a7a2e9', tint: '#eae9fb', ring: '#aca7f1', texture: 'cross' },
 ];
 
 /**
- * The texture as a CSS background: a dark, translucent pattern laid over the pastel fill. Faint on
- * purpose — it is a tie-breaker for the eye that cannot use the hue, not decoration for the one
- * that can — and dark because a white pattern vanishes on a light fill. Textures scale with
- * nothing, so a 6px sliver shows a hint of one and a 60px bar shows it plainly.
+ * The texture as a CSS background: a faint white pattern laid over the fill. Faint on purpose —
+ * it is a tie-breaker for the eye that cannot use the hue, not decoration for the one that can.
+ * Textures scale with nothing, so a 6px sliver shows a hint of one and a 60px bar shows it plainly.
  */
-const STROKE = 'rgba(15,23,42,0.20)';
 export function textureStyle(texture: HueTexture): { backgroundImage?: string; backgroundSize?: string } {
   switch (texture) {
-    case 'hatch':     return { backgroundImage: `repeating-linear-gradient(45deg, ${STROKE} 0 1px, transparent 1px 4px)` };
-    case 'backhatch': return { backgroundImage: `repeating-linear-gradient(135deg, ${STROKE} 0 1px, transparent 1px 4px)` };
-    case 'dots':      return { backgroundImage: 'radial-gradient(rgba(15,23,42,0.32) 0.7px, transparent 0.8px)', backgroundSize: '4px 4px' };
-    case 'cross':     return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(15,23,42,0.15) 0 1px, transparent 1px 5px), repeating-linear-gradient(-45deg, rgba(15,23,42,0.15) 0 1px, transparent 1px 5px)' };
-    default:          return {};
+    case 'hatch': return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0 1px, transparent 1px 4px)' };
+    case 'dots':  return { backgroundImage: 'radial-gradient(rgba(255,255,255,0.45) 0.7px, transparent 0.8px)', backgroundSize: '4px 4px' };
+    case 'cross': return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.22) 0 1px, transparent 1px 5px), repeating-linear-gradient(-45deg, rgba(255,255,255,0.22) 0 1px, transparent 1px 5px)' };
+    default:      return {};
   }
 }
 
-/** Work that belongs to no client (a team space, or nothing at all): a cool neutral, never a hue. */
+/** Work that belongs to no project (a team space, or nothing at all): neutral, never a hue. */
 export const NO_PROJECT_HUE: ProjectHue = {
-  name: 'none', h: 260, critical: '#a2a6ae', high: '#b6bbc2', medium: '#cbd0d7', low: '#e0e5ed', edge: '#767b82', ink: '#2f3339', tint: '#f3f4f6', ring: '#d0d4dc', texture: 'none',
+  name: 'none', h: 0, s: 0, critical: '#374151', high: '#4b5563', medium: '#6b7280', low: '#b0b6bf', tint: '#f3f4f6', ring: '#d1d5db', texture: 'none',
 };
 
-/** The same four depths with no hue, for the legend's "priority" key. */
-export const PRIORITY_RAMP = [NO_PROJECT_HUE.critical, NO_PROJECT_HUE.high, NO_PROJECT_HUE.medium, NO_PROJECT_HUE.low] as const;
-
-/**
- * The deadline rail. Red and amber are excluded from PROJECT_HUES so these are unambiguous.
- * Softer than the red-600 / amber-600 they replace, and still clear on a pastel fill: the soft red
- * is 3.9:1 on white; the amber is dotted against white, so its pattern — not its contrast — is what
- * reads, and the date is always written beside it in the hover and the panel.
- */
+/** The deadline rail. Red and amber are excluded from PROJECT_HUES so these are unambiguous. */
 export const RAIL = {
-  overdue: '#e5484d',   // soft red, solid
-  dueSoon: '#f59e0b',   // amber-500, dotted
+  overdue: '#dc2626',   // red-600, solid
+  dueSoon: '#d97706',   // amber-600, dotted
 } as const;
 
 /**
- * Over-commitment on a day: a rose line UNDER the cell (it was near-black). Not on the box itself —
- * the green box with its segments stays exactly as drawn, the line beneath it saying "more than a
- * day's work" — and lighter and pinker than the overdue rail's red, which sits INSIDE a segment.
- * The same rose is the "over" band of every total bar.
+ * Over-commitment on a day: a black line UNDER the cell — not red, and not on the box itself.
+ * Red on the board means exactly one thing, "this task is late" (the rail); and the green box
+ * with its segments stays exactly as drawn, the line beneath it saying "more than a day's work".
  */
-export const OVER_COMMITTED = '#fb7185'; // rose-400
+export const OVER_COMMITTED = '#111827';
 
-/** The 1px inset ring of a segment in its family's edge — a LOW fill keeps a ≥ 3.99:1 edge on the free base. */
-export function segmentRing(hue: ProjectHue): string {
-  return `inset 0 0 0 1px ${hue.edge}`;
-}
+/** The 1px inset ring every segment carries, so a LOW fill keeps a ≥3:1 edge on the free base. */
+export const SEGMENT_RING = 'inset 0 0 0 1px rgba(0,0,0,0.18)';
 
-/** The free base — the one sanctioned green (see the header comment), emerald-50 on emerald-200. */
-export const FREE_BASE = { bg: '#ecfdf5', border: '#a7f3d0' } as const;
+/** The free base — the one sanctioned green (see the header comment). */
+export const FREE_BASE = { bg: '#d1fae5', border: '#a7f3d0' } as const;
 
 /**
  * Give every project on a board its hue.
  *
- * Rank by CID (then by id for anything without one) and take rank mod 7. Deterministic for a
+ * Rank by PID (then by id for anything without one) and take rank mod 7. Deterministic for a
  * given set of projects, collision-free up to seven, and it reshuffles ONLY when the set of
  * projects on the board changes — never on hover, sort, filter or search, because callers pass
  * the whole payload's project set, not what is currently on screen.
  *
- * Why rank rather than a hash or the CID's serial: a hash collides at random, and serial mod 7
+ * Why rank rather than a hash or the PID's serial: a hash collides at random, and serial mod 7
  * collides as soon as two visible projects are seven apart (003 and 010) — which, with a dozen
  * open matters, is most windows. Rank keeps the seven projects you are looking at distinct.
  */
@@ -170,9 +145,9 @@ export function segmentFill(hue: ProjectHue, priority: string | null | undefined
   }
 }
 
-/** Text on a segment fill: the family's dark ink, which clears 5.1:1 on every one of its fills. */
-export function textOnFill(hue: ProjectHue): string {
-  return hue.ink;
+/** Text colour that clears 4.5:1 on a segment fill: white on the three darker steps, near-black on LOW. */
+export function textOnFill(priority: string | null | undefined): string {
+  return (priority ?? 'MEDIUM').toUpperCase() === 'LOW' ? '#111827' : '#ffffff';
 }
 
 export type DeadlineState = 'overdue' | 'today' | 'soon' | 'later' | 'none';
@@ -217,7 +192,7 @@ export function daysOverdue(due: string, today: string): number {
 /** The rail's CSS background for a deadline state, or null when there is no rail. */
 export function railStyle(state: DeadlineState): string | null {
   if (state === 'overdue' || state === 'today') return RAIL.overdue;
-  // Dotted: amber on white, so the pattern reads on a LOW fill as well as a CRITICAL one.
+  // Dotted: amber on white, so it stays visible on a LOW fill as well as a CRITICAL one.
   if (state === 'soon') return `repeating-linear-gradient(90deg, ${RAIL.dueSoon} 0 3px, #ffffff 3px 5px)`;
   return null;
 }
