@@ -10,6 +10,8 @@ import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandalon
 import { TimesheetCalendar } from '@/components/timesheets/TimesheetCalendar';
 import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
 import { AssignClientModal } from '@/components/timesheets/AssignClientModal';
+import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { todayIST } from '@/lib/date';
@@ -51,6 +53,9 @@ function Tile({ label, value, tint, Icon, hint }: { label: string; value: string
 
 export default function TimesheetsPage() {
   const { currentUser } = useOrg();
+  // PROJECTS: a buffer entry waits for its PID ("Assign PID"). CLIENTS: every client has its CID
+  // from creation, so a buffer entry waits only for its client and task ("Assign to client").
+  const clients = useIsClientsFlow();
   const qc = useQueryClient();
   const [showLog, setShowLog] = useState(false);
   const [assigning, setAssigning] = useState<Timesheet | null>(null);
@@ -163,7 +168,7 @@ export default function TimesheetsPage() {
                       <div className="flex flex-col gap-1">
                         <button onClick={() => setAssigning(entry)}
                           className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-md hover:bg-brand-100 w-max">
-                          <KeyRound size={11} /> Assign to client
+                          <KeyRound size={11} /> {clients ? 'Assign to client' : 'Assign PID'}
                         </button>
                         {(() => { const d = bufferDaysLeft(entry); return d === null ? null : (
                           <span className={clsx('text-[10px] font-medium', d < 0 ? 'text-red-500' : d <= 2 ? 'text-amber-600' : 'text-gray-400')}>{d < 0 ? 'overdue' : `${d}d left`}</span>
@@ -175,7 +180,7 @@ export default function TimesheetsPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
                       {entry.task?.title ?? entry.issue?.title
-                        ?? (isOther(entry) ? (entry.title ?? 'Non-client time')
+                        ?? (isOther(entry) ? (entry.title ?? (clients ? 'Non-client time' : 'Non-project time'))
                           : isCall(entry) ? (entry.title ?? 'Client call')
                             : 'Unassigned time')}
                       {entry.issue && <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
@@ -211,7 +216,9 @@ export default function TimesheetsPage() {
       </div>
 
       {showLog && <LogTimeStandaloneModal defaultDate={selectedDate <= todayKey ? selectedDate : todayKey} onClose={() => setShowLog(false)} onSuccess={invalidate} />}
-      {assigning && <AssignClientModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
+      {assigning && (clients
+        ? <AssignClientModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />
+        : <AssignPidModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />)}
     </div>
   );
 }

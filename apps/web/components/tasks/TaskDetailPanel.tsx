@@ -20,6 +20,7 @@ import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUplo
 import { TaskStaffing } from './TaskStaffing';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { BillableToggle } from '@/components/tasks/BillableToggle';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // 'staffing' replaces the old 'assignees' tab. 'subtasks' | 'comments' | 'activity' remain in the
@@ -125,6 +126,10 @@ function TaskDetailPanelInner({
   onDeleted?: () => void;
 }) {
   const { currentUser, users } = useOrg();
+  // CLIENTS: billable is set per task here, and the work unit is a client. PROJECTS: each person
+  // decides billability per time entry, and the work unit is a project.
+  const clientsFlow = useIsClientsFlow();
+  const unit = clientsFlow ? 'client' : 'project';
   const { can } = usePermissions();
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -752,7 +757,7 @@ function TaskDetailPanelInner({
 
               {/* Billable is decided per task, by anybody on its client or staffed on it. The time
                   already logged on the task follows the switch. Team-space work never bills. */}
-              {task.projectTasks?.length ? (
+              {clientsFlow && task.projectTasks?.length ? (
                 <div>
                   <div className="mb-1 text-gray-400">
                     <span className="text-xs uppercase tracking-wide">Billing</span>
@@ -866,7 +871,7 @@ function TaskDetailPanelInner({
               </div>
             ) : (
               <p className="text-xs text-gray-400 italic">
-                {readOnly ? 'This client is completed or closed — assignees can’t be changed.' : 'You don’t have permission to change assignees.'}
+                {readOnly ? `This ${unit} is completed or closed — assignees can’t be changed.` : 'You don’t have permission to change assignees.'}
               </p>
             )}
           </div>
@@ -1068,7 +1073,7 @@ function TaskDetailPanelInner({
         <button
           onClick={toggleComplete}
           disabled={readOnly}
-          title={readOnly ? 'This client is completed or closed — reopen it to make changes' : closed ? 'Click to reopen' : 'Mark this task complete'}
+          title={readOnly ? `This ${unit} is completed or closed — reopen it to make changes` : closed ? 'Click to reopen' : 'Mark this task complete'}
           className={clsx(
             'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
             closed

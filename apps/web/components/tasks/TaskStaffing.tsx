@@ -7,6 +7,7 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { fmtHours } from '@/lib/date';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 type Row = { userId: string; hours: string; start: string; due: string; perDay: string };
 const dueOf = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
@@ -44,6 +45,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
   task: ApiTask; readOnly?: boolean; canAssign: boolean; defaultManagerId?: string | null; onSaved?: (t: ApiTask) => void;
 }) {
   const { users } = useOrg();
+  const clientsFlow = useIsClientsFlow();
   const { toast } = useToast();
   const [pm, setPm] = useState<Row>(() => pmOf(task, defaultManagerId));
   const [reviewers, setReviewers] = useState<Row[]>(() => rowsFor(task, 'REVIEWER'));
@@ -181,7 +183,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
 
       {/* Project Manager — one */}
       <section>
-        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-2"><UserCog size={15} className="text-brand-600" /> Manager</h3>
+        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-2"><UserCog size={15} className="text-brand-600" /> {clientsFlow ? 'Manager' : 'Project Manager'}</h3>
         <PersonRow row={pm} onChange={setPm} onRemove={pm.userId ? () => setPm({ ...EMPTY_ROW }) : undefined} />
       </section>
 
