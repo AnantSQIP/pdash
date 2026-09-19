@@ -2,7 +2,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { hash as argonHash } from '@node-rs/argon2';
 import { randomBytes } from 'node:crypto';
-import { PERMISSIONS, rolePresetsFor, ALL_PERMISSION_CODES } from './permissions-catalog';
+import { permissionsFor, rolePresetsFor, ALL_PERMISSION_CODES } from './permissions-catalog';
 
 const prisma = new PrismaClient();
 
@@ -145,7 +145,7 @@ async function main() {
   // inserts capacity.manage so a deployed database gets it without a regrant). Migrations run
   // before the seed on a fresh database, and a duplicate code would otherwise abort the seed.
   await prisma.permission.createMany({
-    data: PERMISSIONS.map(p => ({ code: p.code, name: p.name, description: p.description })),
+    data: permissionsFor(SEED_FLOW).map(p => ({ code: p.code, name: p.name, description: p.description })),
     skipDuplicates: true,
   });
   const allPerms = await prisma.permission.findMany();

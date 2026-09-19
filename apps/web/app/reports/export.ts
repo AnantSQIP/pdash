@@ -1,4 +1,3 @@
-import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import type { ReportProject } from '@/lib/api';
 import type { ExportData } from '@/components/ExportMenu';
 import { projectTypeLabel } from '@/lib/mock-data';
@@ -8,7 +7,7 @@ import { todayIST } from '@/lib/date';
  * Report exports.
  *
  * The old export was seven columns — title, phase, priority, completion, tasks, members, due date —
- * which is a summary, not a report: no CID, no type, no client, no delivery date, no hours, and no
+ * which is a summary, not a report: no PID, no type, no client, no delivery date, no hours, and no
  * sign of who actually did the work. These build the whole picture instead.
  *
  *  • `projectsExport`   — the wide flat table (ExportMenu drives CSV *and* PDF from it).
@@ -28,31 +27,28 @@ const dt = (v: string | null | undefined) =>
 const variance = (p: ReportProject) =>
   p.actualHours != null && p.workingHours != null ? Math.round((p.actualHours - p.workingHours) * 10) / 10 : '';
 
-// CLIENTS-FLOW: the row is a client now. The old client-code and patent columns are commented
-// out with those features — header and row are filtered by the same flag, so they cannot drift.
 export const PROJECT_COLUMNS = [
-  'CID', '#', 'Client', 'Type', 'Phase', 'Status', 'Priority',
-  ...(PATENTS_AND_CLIENT_CODES ? ['Client code'] : []), 'Billable',
+  'PID', 'Project #', 'Project', 'Project Type', 'Phase', 'Status', 'Priority', 'Client', 'Billable',
   'Progress %', 'Tasks', 'Tasks Closed', 'Tasks Open', 'Members',
   'Start', 'Deadline', 'Client Deadline', 'Client Delivered', 'Completed At', 'Closed At',
   'Working Hours', 'Actual Hours', 'Hours Variance', 'Logged Hours', 'Estimated Hours',
-  'Client Managers', 'Team', ...(PATENTS_AND_CLIENT_CODES ? ['Patents'] : []), 'Created By', 'Created At', 'Description',
+  'Project Managers', 'Team', 'Patents', 'Created By', 'Created At', 'Description',
 ];
 
 export const projectRow = (p: ReportProject) => [
-  p.pid ?? '—', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '', p.phase, p.status ?? '',
-  p.priority, ...(PATENTS_AND_CLIENT_CODES ? [p.client ?? ''] : []), p.billable ? 'Yes' : 'No',
+  p.pid ?? 'PID pending', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '', p.phase, p.status ?? '',
+  p.priority, p.client ?? '', p.billable ? 'Yes' : 'No',
   p.progress, p.taskCount, p.tasksClosed, p.tasksOpen, p.memberCount,
   d(p.startDate), d(p.dueDate), d(p.clientDueDate), d(p.clientDeliveryDate), dt(p.completedAt), dt(p.closedAt),
   p.workingHours ?? '', p.actualHours ?? '', variance(p), p.loggedHours, p.estimatedHours,
   p.managers.map(m => m.name).join('; '),
   p.members.map(m => `${m.name} (${m.role}${m.designation ? `, ${m.designation}` : ''})`).join('; '),
-  ...(PATENTS_AND_CLIENT_CODES ? [p.patents.join('; ')] : []),
+  p.patents.join('; '),
   p.createdBy ?? '', d(p.createdAt), p.description ?? '',
 ];
 
 export const TASK_COLUMNS = [
-  'CID', 'Project #', 'Project', 'Project Type', 'Task', 'Task Status', 'Closed', 'Priority', 'Task Deadline',
+  'PID', 'Project #', 'Project', 'Project Type', 'Task', 'Task Status', 'Closed', 'Priority', 'Task Deadline',
   'Task Estimated Hours', 'Task Actual Hours', 'Assignee', 'Assignee Role',
   'Assignee Estimated Hours', 'Assignee Deadline',
 ];
@@ -61,7 +57,7 @@ export const TASK_COLUMNS = [
 export const taskRows = (p: ReportProject) =>
   p.tasks.flatMap(t => {
     const base = [
-      p.pid ?? '—', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '',
+      p.pid ?? 'PID pending', p.roundSeq, p.title, p.type ? projectTypeLabel(p.type) : '',
       t.title, t.status ?? '', t.isClosed ? 'Yes' : 'No', t.priority, d(t.dueDate),
       t.estimatedHours ?? '', t.actualHours ?? '',
     ];

@@ -1,0 +1,331 @@
+'use client';
+
+/**
+ * CLIENTS flow — see docs/WORKSPACE_FLOWS.md. The PROJECTS flow's implementation (production's, bb5728b)
+ * is views.tsx, which dispatches to this one when the organisation runs CLIENTS.
+ */
+import { NonBillableChip } from '@/components/tasks/BillableToggle';
+import { useState } from 'react';
+import Link from 'next/link';
+import clsx from 'clsx';
+import { Plus, CheckSquare, Users, Calendar, Flag, LayoutList, UserPlus, X as XIcon } from 'lucide-react';
+import { api, type ApiTask, type ApiProject, type WorkflowStatus } from '@/lib/api';
+import { useToast } from '@/components/ui/Toast';
+import { formatDate } from '@/lib/date';
+import { Avatar } from '@/components/Avatar';
+import { AvatarStack } from '@/components/ui/AvatarStack';
+import { isTaskClosed, taskAssigneeUsers, orderedByDeadline } from '@/lib/tasks';
+import { TaskStateMark } from '@/components/tasks/TaskStateMark';
+import { useOrg } from '@/lib/org-context';
+import { usePermissions } from '@/lib/permissions-context';
+import { useQueryClient } from '@tanstack/react-query';
+import { fullName } from '@/lib/avatar';
+import { confirmDialog } from '@/components/ui/ConfirmDialog';
+
+const PRIORITY_FLAG: Record<string, string> = {
+  CRITICAL: 'text-red-500', HIGH: 'text-orange-500', MEDIUM: 'text-amber-500', LOW: 'text-gray-300',
+};
+/** Alphabetical by display name — people lists read the same everywhere in the app. */
+const byName = (a: { firstName?: string | null; lastName?: string | null }, b: { firstName?: string | null; lastName?: string | null }) =>
+  fullName(a as never).toLowerCase().localeCompare(fullName(b as never).toLowerCase());
+
+// The Task List and Overview bodies, shared by the single-project page and by each card on a
+// multi-project CID page. They were local to the page until a CID could hold several projects;
+// keeping one copy is what stops the two paths drifting apart.
+
+export function ClientsTaskListView({
+  tasks, loading, statuses, canAddTask, onTaskClick, onAddTask, onStatusChange, rowActions, showHours, emptyText,
+}: {
+  tasks: ApiTask[];
+  loading: boolean;
+  statuses: WorkflowStatus[];
+  canAddTask: boolean;
+  onTaskClick: (task: ApiTask) => void;
+  onAddTask: () => void;
+  onStatusChange: (taskId: string, statusId: string) => void;
+  /** CLIENTS-FLOW: per-row controls (assign, move) drawn at the row's end. */
+  rowActions?: (task: ApiTask) => React.ReactNode;
+  /** CLIENTS-FLOW: planned and logged hours per task — what the capacity board is built from. */
+  showHours?: boolean;
+  emptyText?: string;
+}) {
+  if (loading) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-gray-50 animate-pulse">
+            <div className="w-4 h-4 rounded border-2 border-gray-200 shrink-0" />
+            <div className="flex-1 h-4 bg-gray-100 rounded" />
+            <div className="w-24 h-3 bg-gray-100 rounded hidden md:block" />
+            <div className="w-16 h-3 bg-gray-100 rounded hidden lg:block" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // NO header here. The group card above owns the single bar — its editable name, its count and
+  // its "Add task". This used to render a SECOND bar underneath saying "General", so a renamed
+  // group showed two stacked bars with two different names for the same list.
+  return (
+    <div className="bg-white overflow-hidden">
+      {/* Column headers */}
+      <div className="flex items-center gap-4 px-5 py-2.5 border-b border-gray-100 text-xs font-medium text-gray-400 uppercase tracking-wide">
+        <span className="w-4 shrink-0" />
+        <span className="flex-1">Task</span>
+        <span className="w-32 hidden sm:block">Status</span>
+        <span className="w-20 hidden lg:block">Priority</span>
+        <span className="w-20 hidden sm:block">Team members</span>
+        {showHours && <span className="w-24 hidden md:block text-right">Hours</span>}
+        <span className="w-24 hidden lg:block text-right">Due Date</span>
+        {rowActions && <span className="w-16 shrink-0" />}
+      </div>
+
+      {tasks.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-sm text-gray-400">
+          <CheckSquare size={32} className="mb-3 text-gray-200" />
+          <p>{emptyText ?? 'No tasks yet'}</p>
+          {/* Offered only to someone who may add one — the button used to show for everybody
+              and fail for most of them. */}
+          {canAddTask && (
+            <button onClick={onAddTask} className="mt-2 text-brand-600 hover:underline text-xs font-medium">
+              Add the first task
+            </button>
+          )}
+        </div>
+      )}
+
+      {tasks.map((task, i) => {
+        const closed = isTaskClosed(task);
+
+        return (
+          <div
+            key={task.id}
+            onClick={() => onTaskClick(task)}
+            className={clsx(
+              'flex items-center gap-4 px-5 py-3.5 hover:bg-gray-50 transition-colors cursor-pointer',
+              i < tasks.length - 1 && 'border-b border-gray-50',
+            )}
+          >
+            {/* A mark, not a control: the row's status dropdown is where a task is closed,
+                in the workflow's own words. See components/tasks/TaskStateMark. */}
+            <TaskStateMark closed={closed} size={16} />
+
+            <span className={clsx('flex-1 text-sm min-w-0 truncate', closed ? 'line-through text-gray-400' : 'text-gray-800')}>
+              {task.title}
+            </span>
+            {task.billable === false && <NonBillableChip className="shrink-0" />}
+
+            {/* Status control */}
+            <div className="hidden sm:block w-32 shrink-0" onClick={e => e.stopPropagation()}>
+              <select
+                value={task.currentWorkflowStatusId ?? ''}
+                onChange={e => onStatusChange(task.id, e.target.value)}
+                disabled={statuses.length === 0}
+                aria-label="Task status"
+                className="w-full text-xs font-medium rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand-500/30 cursor-pointer disabled:cursor-default"
+                style={task.currentStatus ? { backgroundColor: task.currentStatus.colorHex + '22', color: task.currentStatus.colorHex } : { backgroundColor: '#f1f5f9', color: '#64748b' }}
+              >
+                {!task.currentStatus && <option value="">—</option>}
+                {statuses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+
+
+            <div className="hidden lg:block w-20 shrink-0">
+              <span className={clsx('text-xs font-medium', PRIORITY_FLAG[task.priority] ?? 'text-gray-400')}>
+                <Flag size={11} className="inline mr-1" />
+                {task.priority ? task.priority.charAt(0) + task.priority.slice(1).toLowerCase() : '—'}
+              </span>
+            </div>
+
+            <div className="hidden sm:flex items-center w-20 shrink-0">
+              <AvatarStack
+                users={taskAssigneeUsers(task)}
+                size={24}
+                max={3}
+                empty={<div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-200" title="Unassigned" />}
+              />
+            </div>
+
+            {/* The deadline is ordinarily just a date. On the one row where the deadline is the
+                ONLY reason this task sits below the one above it — same priority, later date —
+                it is also the explanation for the order, so it says so. Marking every row would
+                teach people to stop reading it; marking the row where the rule actually bit is
+                what makes the order legible. See lib/tasks.ts. */}
+            {showHours && (
+              <span className="hidden md:block w-24 shrink-0 text-right text-xs text-gray-600" title="Planned hours · hours logged">
+                <TaskHours task={task} />
+              </span>
+            )}
+
+            <span
+              className={clsx('hidden lg:block w-24 shrink-0 text-right text-xs',
+                orderedByDeadline(task, tasks[i - 1]) ? 'text-gray-600 font-medium' : 'text-gray-500')}
+              title={orderedByDeadline(task, tasks[i - 1])
+                ? 'Same priority as the task above — the nearer deadline is ordered first'
+                : undefined}
+            >
+              {formatDate(task.dueDate)}
+            </span>
+
+            {rowActions && (
+              <div className="w-16 shrink-0 flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
+                {rowActions(task)}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {canAddTask && tasks.length > 0 && (
+        <div
+          onClick={onAddTask}
+          className="flex items-center gap-3 px-5 py-3 text-sm text-gray-400 hover:bg-gray-50 cursor-pointer transition-colors border-t border-dashed border-gray-200"
+        >
+          <Plus size={14} /> Add a task...
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Planned and logged hours for one task: "4h · 1.5h logged", or a dash when nothing is planned. */
+function TaskHours({ task }: { task: ApiTask }) {
+  const planned = task.estimatedHours ?? 0;
+  const logged = task.actualHours ?? 0;
+  if (!planned && !logged) return <span className="text-gray-300">—</span>;
+  const over = planned > 0 && logged > planned;
+  return (
+    <span className="tabular-nums">
+      {planned ? `${Math.round(planned * 10) / 10}h` : '—'}
+      {logged > 0 && <span className={clsx('ml-1', over ? 'text-red-600 font-medium' : 'text-gray-400')}>· {Math.round(logged * 10) / 10}h</span>}
+    </span>
+  );
+}
+
+// ── Overview View ──────────────────────────────────────────────────────────────
+
+export function ClientsOverviewView({ project, tasks }: { project: ApiProject; tasks: ApiTask[] }) {
+  const { toast } = useToast();
+  const statusCounts: Record<string, { count: number; color: string }> = {};
+  for (const t of tasks) {
+    const name = t.currentStatus?.name ?? 'Open';
+    const color = t.currentStatus?.colorHex ?? '#64748b';
+    if (!statusCounts[name]) statusCounts[name] = { count: 0, color };
+    statusCounts[name].count++;
+  }
+  const statuses = Object.entries(statusCounts).map(([label, { count, color }]) => ({ label, count, color }));
+  const members = [...(project.members ?? [])].sort((a, b) => byName(a.user, b.user));
+
+  // #11: add / remove project members.
+  const { users } = useOrg();
+  const { can } = usePermissions();
+  const qc = useQueryClient();
+  const canManage = can('project.update');
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const memberIds = new Set(members.map(m => m.userId));
+  const candidates = (users ?? []).filter(u => !memberIds.has(u.id));
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['project', project.id] }); qc.invalidateQueries({ queryKey: ['projects'] }); };
+  async function addMember(userId: string) {
+    setBusy(true);
+    try { await api.projects.addMember(project.id, userId); setAdding(false); refresh(); toast('Member added.', 'success'); }
+    catch (e) { toast(e instanceof Error ? e.message : 'Could not add member.', 'error'); }
+    finally { setBusy(false); }
+  }
+  async function removeMember(userId: string) {
+    if (!await confirmDialog({ title: 'Remove this member from the project?', danger: true, confirmLabel: 'Remove' })) return;
+    setBusy(true);
+    try { await api.projects.removeMember(project.id, userId); refresh(); toast('Member removed.', 'info'); }
+    catch (e) { toast(e instanceof Error ? e.message : 'Could not remove member.', 'error'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+      {/* Progress card */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+        <h3 className="text-sm font-semibold text-gray-700 mb-4">Overall Progress</h3>
+        <div className="flex items-center gap-4 mb-4">
+          <div className="relative w-24 h-24 shrink-0">
+            <svg viewBox="0 0 36 36" className="w-24 h-24 -rotate-90">
+              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#f3f4f6" strokeWidth="3" />
+              <circle
+                cx="18" cy="18" r="15.9" fill="none"
+                stroke="#E8533A" strokeWidth="3"
+                strokeDasharray={`${project.completionPercentage} ${100 - project.completionPercentage}`}
+              />
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-xl font-bold text-gray-900">{project.completionPercentage}%</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {statuses.length === 0 ? (
+              <p className="text-sm text-gray-400">No tasks yet</p>
+            ) : statuses.map(s => (
+              <div key={s.label} className="flex items-center gap-2 text-sm">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                <span className="text-gray-600">{s.label}</span>
+                <span className="font-medium text-gray-900 ml-auto pl-4">{s.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Team */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-700">Team Members</h3>
+          {canManage && !adding && candidates.length > 0 && (
+            <button onClick={() => setAdding(true)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700">
+              <UserPlus size={13} /> Add member
+            </button>
+          )}
+        </div>
+        {canManage && adding && (
+          <div className="flex items-center gap-2 mb-3">
+            <select
+              disabled={busy}
+              defaultValue=""
+              onChange={e => { if (e.target.value) addMember(e.target.value); }}
+              className="flex-1 text-sm border border-gray-300 rounded-lg px-2 py-1.5"
+              autoFocus
+            >
+              <option value="" disabled>Select a teammate…</option>
+              {candidates.map(u => (
+                <option key={u.id} value={u.id}>{`${u.firstName} ${u.lastName ?? ''}`.trim()}</option>
+              ))}
+            </select>
+            <button onClick={() => setAdding(false)} className="p-1.5 text-gray-400 hover:text-gray-600"><XIcon size={15} /></button>
+          </div>
+        )}
+        <div className="space-y-3">
+          {members.length === 0 ? (
+            <p className="text-sm text-gray-400">No members assigned</p>
+          ) : members.map((m, i) => (
+            <div key={m.userId} className="flex items-center gap-3 group">
+              <Avatar user={m.user} size={32} />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-800 truncate">{`${m.user.firstName} ${m.user.lastName ?? ''}`.trim()}</p>
+                <p className="text-xs text-gray-500">{m.projectRole ?? (i === 0 ? 'Manager' : 'Member')}</p>
+              </div>
+              {canManage && (m.projectRole !== 'MANAGER') && (
+                <button
+                  onClick={() => removeMember(m.userId)}
+                  disabled={busy}
+                  title="Remove from project"
+                  className="ml-auto p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition disabled:opacity-50"
+                >
+                  <XIcon size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

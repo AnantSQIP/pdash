@@ -13,18 +13,25 @@ import { OPEN_SEARCH_EVENT } from '@/components/GlobalSearch';
 import clsx from 'clsx';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useWorkspaceFlowState, type WorkspaceFlow } from '@/lib/workspace-flow';
 
-type NavItem = { href: string; icon: LucideIcon; label: string; perm?: string | string[]; superAdminOnly?: boolean };
+type NavItem = {
+  href: string; icon: LucideIcon; label: string; perm?: string | string[]; superAdminOnly?: boolean;
+  /** Shown only to a firm running this workspace flow (docs/WORKSPACE_FLOWS.md). Absent = both. */
+  flow?: WorkspaceFlow;
+  /** The CLIENTS flow's word for the same destination, where it differs. */
+  clientsLabel?: string;
+};
 
 // Home is always shown (landing page). The rest are permission-gated so each role
 // sees only what it can use — e.g. HR (no project/task perms) won't see Projects/My Tasks.
 const NAV: NavItem[] = [
   { href: '/home',        icon: LayoutDashboard, label: 'Home' },
-  // CLIENTS-FLOW: what was a project is a client now; the route keeps its name so every stored
-  // link (notifications, bookmarks) still lands.
-  { href: '/projects',    icon: FolderKanban,    label: 'Clients',     perm: 'project.view' },
-  // CLIENTS-FLOW: commented out — the patent portal is switched off (lib/features.ts).
-  // { href: '/patents',     icon: FileLock2,       label: 'Patents',     perm: 'patent.manage' },
+  // CLIENTS flow: what was a project is a client; the route keeps its name so every stored link
+  // (notifications, bookmarks) still lands.
+  { href: '/projects',    icon: FolderKanban,    label: 'Projects',    perm: 'project.view', clientsLabel: 'Clients' },
+  // Patents and client codes are a PROJECTS-flow feature (lib/features.ts).
+  { href: '/patents',     icon: FileLock2,       label: 'Patents',     perm: 'patent.manage', flow: 'PROJECTS' },
   { href: '/tasks',       icon: ListTodo,        label: 'My Tasks',    perm: 'task.view' },
   // My time across every project — logging + reviewing hours is now a first-class
   // destination, not buried in a per-project tab. timesheet.view is held by everyone.
@@ -54,8 +61,7 @@ const NAV: NavItem[] = [
   // The handle <-> number directory. Gated on patent.view, which every role but HR holds — the
   // point of the screen is that anybody asked "what is Pat_ABC_001?" can answer it themselves
   // rather than interrupting a Super Admin. It resolves; it cannot list.
-  // CLIENTS-FLOW: commented out — patent IDs are switched off (lib/features.ts).
-  // { href: '/patent-lookup', icon: ScanSearch,     label: 'Patent Lookup', perm: 'patent.view' },
+  { href: '/patent-lookup', icon: ScanSearch,     label: 'Patent Lookup', perm: 'patent.view', flow: 'PROJECTS' },
   // Probation, confirmation and leaving. Gated on user.update — the same permission the rest of
   // people-operations already sits behind, so HR and admins see it and nobody else does.
   { href: '/people-ops',  icon: UserCog,         label: 'People Ops', perm: 'user.update' },
@@ -73,11 +79,12 @@ const ADMIN_NAV: NavItem[] = [
   // The digest aggregates the WHOLE organisation — every project, every person's hours, every
   // deadline — so it is Super-Admin only, matching the server-side gate in daily-digest.module.
   { href: '/digest',      icon: ClipboardList,  label: 'Daily Digest', superAdminOnly: true },
-  { href: '/cid-ledger',  icon: KeyRound,       label: 'CID Ledger', perm: 'user.manage_access' },
+  { href: '/pid-ledger',  icon: KeyRound,       label: 'PID Ledger', perm: 'user.manage_access', flow: 'PROJECTS' },
+  // CLIENTS flow: every CID ever issued and everything that happened to it (same gate).
+  { href: '/cid-ledger',  icon: KeyRound,       label: 'CID Ledger', perm: 'user.manage_access', flow: 'CLIENTS' },
   // What each client's work amounts to. Same gate as the patent portal (client identity is the
   // Super-Admin-only fact), but a separate destination — it never reveals a patent number.
-  // CLIENTS-FLOW: commented out — the client ledger is keyed on client codes, which are switched off.
-  // { href: '/client-ledger', icon: BookOpen,     label: 'Client Ledger', perm: 'patent.manage' },
+  { href: '/client-ledger', icon: BookOpen,     label: 'Client Ledger', perm: 'patent.manage', flow: 'PROJECTS' },
   { href: '/admin/audit', icon: History,        label: 'Audit Log', perm: ['audit.view'] },
   // The bin: restore something deleted by mistake, or destroy it for good. Super-Admin-only
   // rather than permission-gated, because both permanent-delete codes live in
@@ -92,6 +99,12 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
   const { currentUser, org } = useOrg();
   const { can, isSuperAdmin } = usePermissions();
   // A nav entry is visible when its permission passes, or when it's Super-Admin-only and you are one.
+  const { flow, ready: flowKnown } = useWorkspaceFlowState();
+  // Each workspace flow lists its own destinations, in its own words — and an entry that differs by
+  // flow waits for the flow to be known, so neither flow's entries flash up for the other.
+  const inFlow = (n: NavItem) => (!n.flow && !n.clientsLabel) || (flowKnown && (!n.flow || n.flow === flow));
+  const inFlowNav = (items: NavItem[]) => items.filter(inFlow)
+    .map(n => (flow === 'CLIENTS' && n.clientsLabel ? { ...n, label: n.clientsLabel } : n));
   const navVisible = (n: NavItem) => (n.superAdminOnly ? isSuperAdmin : !n.perm || can(n.perm));
   const [collapsed, setCollapsed] = useState(false);
 
@@ -194,7 +207,7 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
           {!collapsed && <span className="flex-1 text-left">Search</span>}
           {!collapsed && <kbd className="text-[10px] font-mono text-white/30 border border-white/10 rounded px-1 py-0.5">⌘K</kbd>}
         </button>
-        {NAV.filter(n => !n.perm || can(n.perm)).map(({ href, icon: Icon, label }) => {
+        {inFlowNav(NAV).filter(n => !n.perm || can(n.perm)).map(({ href, icon: Icon, label }) => {
           const active = href === '/home' ? path === '/home' : path.startsWith(href);
           return (
             <Link
@@ -214,10 +227,10 @@ export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean;
         })}
 
         {/* Permission-gated admin section */}
-        {ADMIN_NAV.some(navVisible) && (
+        {inFlowNav(ADMIN_NAV).some(navVisible) && (
           <div className={clsx('pt-3 mt-2 border-t border-white/10', collapsed && 'mx-1')}>
             {!collapsed && <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/30">Administration</p>}
-            {ADMIN_NAV.filter(navVisible).map(({ href, icon: Icon, label }) => {
+            {inFlowNav(ADMIN_NAV).filter(navVisible).map(({ href, icon: Icon, label }) => {
               const active = path.startsWith(href);
               return (
                 <Link

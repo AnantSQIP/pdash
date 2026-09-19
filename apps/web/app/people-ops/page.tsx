@@ -1,6 +1,7 @@
 'use client';
 
-import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
+import { usePatentsAndClientCodes } from '@/lib/features';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -291,6 +292,10 @@ function PersonPanel({ person, onClose, onSaved }: { person: LifecyclePerson; on
 
 /** What the person is still holding — the thing a checklist cannot produce. */
 function HandoverPanel({ person, onClose, onDone }: { person: LifecyclePerson; onClose: () => void; onDone: () => void }) {
+  // Patents and client codes are a PROJECTS-flow feature (lib/features.ts).
+  const PATENTS_AND_CLIENT_CODES = usePatentsAndClientCodes();
+  // The unit of work is a project (PROJECTS) or a client (CLIENTS); the words follow.
+  const clientsFlow = useIsClientsFlow();
   const { toast } = useToast();
   const { data, isLoading } = useQuery<Handover>({
     queryKey: ['handover', person.id],
@@ -320,10 +325,10 @@ function HandoverPanel({ person, onClose, onDone }: { person: LifecyclePerson; o
           </div>
 
           {data.projectsManaged.length > 0 && (
-            <List title="Clients they manage — these need a new owner" items={data.projectsManaged.map(p =>
-              `${p.code ?? '—'} · ${p.title}`)} tone="red" />
+            <List title={clientsFlow ? 'Clients they manage — these need a new owner' : 'Projects they manage — these need a new owner'} items={data.projectsManaged.map(p =>
+              `${p.code ?? (clientsFlow ? '—' : 'no PID')} · ${p.title}`)} tone="red" />
           )}
-          {/* CLIENTS-FLOW: commented out — these are client-code records, which are switched off. */}
+          {/* Client-code records — a PROJECTS-flow feature (off in CLIENTS). */}
           {PATENTS_AND_CLIENT_CODES && data.clientsOwned.length > 0 && (
             <List title="Clients in their name" items={data.clientsOwned.map(c => `${c.code}${c.name ? ` · ${c.name}` : ''}`)} tone="red" />
           )}
@@ -332,7 +337,7 @@ function HandoverPanel({ person, onClose, onDone }: { person: LifecyclePerson; o
               `${t.title}${t.project ? ` — ${t.project.code ?? t.project.title}` : ''}`)} tone="red" />
           )}
           {data.unsubmittedTime.length > 0 && (
-            <List title="Time logged with no client attached" items={data.unsubmittedTime.slice(0, 10).map(t =>
+            <List title={clientsFlow ? 'Time logged with no client attached' : 'Time logged with no PID attached'} items={data.unsubmittedTime.slice(0, 10).map(t =>
               `${String(t.date).slice(0, 10)} · ${t.hoursLogged}h${t.notes ? ` · ${t.notes}` : ''}`)} tone="amber" />
           )}
 

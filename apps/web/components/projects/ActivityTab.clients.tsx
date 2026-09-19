@@ -1,0 +1,213 @@
+'use client';
+
+/**
+ * CLIENTS flow — see docs/WORKSPACE_FLOWS.md. The PROJECTS flow's implementation (production's, bb5728b)
+ * is ActivityTab.tsx, which dispatches to this one when the organisation runs CLIENTS.
+ */
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import clsx from 'clsx';
+import {
+  Plus, MessageCircle, RefreshCw, Flag, CheckCircle, Trash2, FolderKanban, Clock, Download, Activity as ActivityIcon,
+  Play, Pause, RotateCcw, Hash, Layers, Pencil, ArrowRightLeft, FolderInput, FolderPlus, Archive,
+  BadgeIndianRupee,
+} from 'lucide-react';
+import { api, type ActivityItem } from '@/lib/api';
+import { fullName } from '@/lib/avatar';
+import { Avatar } from '@/components/Avatar';
+import { ORG_TZ } from '@/lib/date';
+
+// action → display verb, filter category, and icon.
+const ACTION_META: Record<string, { verb: string; cat: string; icon: React.ReactNode; color: string }> = {
+  'task.created':         { verb: 'created task',          cat: 'Tasks',    icon: <Plus className="w-3.5 h-3.5" />,        color: 'bg-blue-100 text-blue-600' },
+  'task.status_changed':  { verb: 'changed status of',     cat: 'Tasks',    icon: <RefreshCw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
+  'task.updated':         { verb: 'updated task',          cat: 'Tasks',    icon: <ActivityIcon className="w-3.5 h-3.5" />, color: 'bg-blue-100 text-blue-600' },
+  'task.deleted':         { verb: 'deleted task',          cat: 'Tasks',    icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'task.started':         { verb: 'started work on',       cat: 'Tasks',    icon: <Play className="w-3.5 h-3.5" />,        color: 'bg-emerald-100 text-emerald-600' },
+  'task.paused':          { verb: 'paused work on',        cat: 'Tasks',    icon: <Pause className="w-3.5 h-3.5" />,       color: 'bg-gray-100 text-gray-500' },
+  'task.finished':        { verb: 'finished task',         cat: 'Tasks',    icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'task.reopened':        { verb: 'reopened task',         cat: 'Tasks',    icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
+  'task.billable_changed': { verb: 'changed billing on',   cat: 'Tasks',    icon: <BadgeIndianRupee className="w-3.5 h-3.5" />, color: 'bg-emerald-100 text-emerald-700' },
+  'task.moved':           { verb: 'moved task',            cat: 'Tasks',    icon: <ArrowRightLeft className="w-3.5 h-3.5" />, color: 'bg-blue-100 text-blue-600' },
+  // CLIENTS-FLOW: the task groups inside a client.
+  'taskgroup.created':    { verb: 'created the task group',   cat: 'Task groups', icon: <Layers className="w-3.5 h-3.5" />,      color: 'bg-brand-100 text-brand-600' },
+  'taskgroup.updated':    { verb: 'updated the task group',   cat: 'Task groups', icon: <Pencil className="w-3.5 h-3.5" />,      color: 'bg-blue-100 text-blue-600' },
+  'taskgroup.completed':  { verb: 'completed the task group', cat: 'Task groups', icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'taskgroup.reopened':   { verb: 'reopened the task group',  cat: 'Task groups', icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
+  'taskgroup.deleted':    { verb: 'deleted the task group',   cat: 'Task groups', icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'taskgroup.billable_changed': { verb: 'changed billing on the task group', cat: 'Task groups', icon: <BadgeIndianRupee className="w-3.5 h-3.5" />, color: 'bg-emerald-100 text-emerald-700' },
+  'comment.created':      { verb: 'commented',             cat: 'Comments', icon: <MessageCircle className="w-3.5 h-3.5" />, color: 'bg-purple-100 text-purple-600' },
+  'issue.created':        { verb: 'reported issue',        cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },
+  'issue.updated':        { verb: 'updated issue',         cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },
+  'issue.resolved':       { verb: 'resolved issue',        cat: 'Issues',   icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'project.created':      { verb: 'created the client',    cat: 'Clients',  icon: <FolderKanban className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
+  'project.approved':     { verb: 'approved the client',   cat: 'Clients',  icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'project.cid_moved':    { verb: 'changed the CID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
+  // Written before CIDs were renamed CIDs; the same fact.
+  'project.pid_moved':    { verb: 'changed the CID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
+  'project.rejected':     { verb: 'rejected the client',   cat: 'Clients',  icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'project.client_group_changed': { verb: 'changed the client group', cat: 'Clients', icon: <FolderInput className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
+  'clientgroup.created':  { verb: 'created the client group',  cat: 'Clients', icon: <FolderPlus className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
+  'clientgroup.updated':  { verb: 'updated the client group',  cat: 'Clients', icon: <Pencil className="w-3.5 h-3.5" />,     color: 'bg-blue-100 text-blue-600' },
+  'clientgroup.archived': { verb: 'archived the client group', cat: 'Clients', icon: <Archive className="w-3.5 h-3.5" />,    color: 'bg-gray-100 text-gray-500' },
+  'timesheet.logged':     { verb: 'logged time',           cat: 'Tasks',    icon: <Clock className="w-3.5 h-3.5" />,       color: 'bg-teal-100 text-teal-600' },
+  'document.uploaded':    { verb: 'uploaded a file',       cat: 'Files',    icon: <Download className="w-3.5 h-3.5" />,    color: 'bg-sky-100 text-sky-600' },
+  'document.deleted':     { verb: 'deleted a file',        cat: 'Files',    icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+};
+function metaFor(action: string) {
+  return ACTION_META[action] ?? { verb: action, cat: 'Other', icon: <ActivityIcon className="w-3.5 h-3.5" />, color: 'bg-gray-100 text-gray-500' };
+}
+
+const FILTERS = ['All', 'Tasks', 'Task groups', 'Comments', 'Issues', 'Clients'] as const;
+type FilterLabel = (typeof FILTERS)[number];
+
+function formatTime(d: Date) {
+  return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: ORG_TZ });
+}
+function dateLabel(d: Date): string {
+  const now = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function detailOf(a: ActivityItem): string | null {
+  const m = a.metadata ?? {};
+  if (a.action === 'comment.created' && m.snippet) return `“${m.snippet}”`;
+  if (a.action === 'task.status_changed' && m.title) return `${m.title}`;
+  if (a.action === 'task.moved' && m.title) {
+    return `“${m.title}”${m.from ? ` from “${m.from}”` : ''}${m.to ? ` to “${m.to}”` : ''}`;
+  }
+  if (a.action === 'project.client_group_changed') return m.clientGroup ? `to “${m.clientGroup}”` : 'to none';
+  if (a.action.startsWith('taskgroup.') && m.name) {
+    const n = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
+    if (a.action === 'taskgroup.updated' && m.previousName) return `“${m.previousName}” → “${m.name}”`;
+    let out = `“${m.name}”`;
+    if (a.action === 'taskgroup.created' && typeof m.taskCount === 'number' && m.taskCount > 0) out += ` with ${n(m.taskCount, 'task')}`;
+    if (a.action === 'taskgroup.deleted' && typeof m.movedTasks === 'number' && m.movedTasks > 0) {
+      out += ` — ${n(m.movedTasks, 'task')} moved${m.movedTo ? ` to “${m.movedTo}”` : ''}`;
+    }
+    if (a.action === 'taskgroup.reopened' && m.because) out += ` — ${m.because}`;
+    return out;
+  }
+  if (a.action.startsWith('clientgroup.') && m.name) return `“${m.name}”`;
+  if (m.title) return `“${m.title}”`;
+  return null;
+}
+
+function EventRow({ a }: { a: ActivityItem }) {
+  const meta = metaFor(a.action);
+  const at = new Date(a.createdAt);
+  return (
+    <div className="flex gap-3 py-2.5">
+      {a.actor ? (
+        <Avatar user={a.actor} size={28} className="shrink-0" />
+      ) : (
+        <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center shrink-0', meta.color)}>{meta.icon}</div>
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-gray-700 leading-snug">
+          {a.actor && <span className="font-semibold text-gray-900">{fullName(a.actor)} </span>}
+          <span>{meta.verb}</span>
+          {detailOf(a) && <span className="font-medium text-brand-600 break-words"> {detailOf(a)}</span>}
+        </p>
+      </div>
+      <span className="text-xs text-gray-400 ml-auto shrink-0 pt-0.5">{formatTime(at)}</span>
+    </div>
+  );
+}
+
+export default function ClientsActivityTab({ projectId }: { projectId: string }) {
+  const [filter, setFilter] = useState<FilterLabel>('All');
+
+  const { data: items = [], isLoading, isError } = useQuery<ActivityItem[]>({
+    queryKey: ['activity', 'PROJECT', projectId],
+    queryFn: () => api.activity.list({ projectId, limit: 150 }),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+
+  const filtered = useMemo(
+    () => items.filter(a => filter === 'All' || metaFor(a.action).cat === filter),
+    [items, filter],
+  );
+
+  const groups = useMemo(() => {
+    const map = new Map<string, ActivityItem[]>();
+    for (const a of filtered) {
+      const label = dateLabel(new Date(a.createdAt));
+      (map.get(label) ?? map.set(label, []).get(label)!).push(a);
+    }
+    return Array.from(map.entries());
+  }, [filtered]);
+
+  function exportCsv() {
+    const rows = [
+      ['time', 'actor', 'action', 'detail'],
+      ...filtered.map(a => [
+        new Date(a.createdAt).toISOString(),
+        a.actor ? fullName(a.actor) : '',
+        a.action,
+        (detailOf(a) ?? '').replace(/"/g, '""'),
+      ]),
+    ];
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = `activity-${projectId}.csv`; link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="flex flex-col min-h-0 h-full">
+      <div className="flex items-center gap-3 flex-wrap -mx-6 px-6 py-3 bg-white border-b border-gray-200 shrink-0">
+        <span className="text-xs font-medium text-gray-500 shrink-0">Filter by:</span>
+        {FILTERS.map(f => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={clsx('px-3 py-1 text-xs font-medium rounded-full transition-colors',
+              filter === f ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')}
+          >
+            {f}
+          </button>
+        ))}
+        <div className="flex-1" />
+        <button onClick={exportCsv} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+          <Download className="w-3.5 h-3.5" /> Export
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto min-h-0 pt-2">
+        {isLoading && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <RefreshCw className="w-5 h-5 text-gray-400 animate-spin mb-3" />
+            <p className="text-sm text-gray-500">Loading activity…</p>
+          </div>
+        )}
+        {!isLoading && isError && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <p className="text-sm text-red-500">Failed to load activity.</p>
+          </div>
+        )}
+        {!isLoading && !isError && groups.map(([label, rows], gi) => (
+          <div key={label}>
+            <div className={clsx('text-xs font-semibold text-gray-400 uppercase tracking-wider py-2 border-b border-gray-100 mb-2', gi > 0 && 'mt-4')}>
+              {label}
+            </div>
+            {rows.map(a => <EventRow key={a.id} a={a} />)}
+          </div>
+        ))}
+        {!isLoading && !isError && filtered.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+              <ActivityIcon className="w-5 h-5 text-gray-400" />
+            </div>
+            <p className="text-sm text-gray-500">{filter === 'All' ? 'No activity yet — actions will appear here.' : `No ${filter === 'Task groups' ? 'task group' : filter.toLowerCase()} activity.`}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

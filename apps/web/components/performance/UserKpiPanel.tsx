@@ -1,5 +1,7 @@
 'use client';
 
+import { byFlow } from '@/lib/workspace-flow';
+import { ClientsUserKpiPanel } from './UserKpiPanel.clients';
 /**
  * One person's performance, which is now exactly two KPIs.
  *
@@ -17,7 +19,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader } from 'lucide-react';
 import { api, type UserKpis, type ProjectBreachRow, type KpiRange } from '@/lib/api';
-import { cidLabel } from '@/lib/mock-data';
+import { pidLabel } from '@/lib/mock-data';
 import { ChartCard, DonutCard, DataGrid, type GridColumn } from './charts';
 import { KpiHero, Breaches, Stat, ExcludedNote, KpiGlossary, KPI_HELP, kpiDonuts, streakCaption, overrunColor } from './KpiCards';
 import { ExportMenu, type ExportData } from '@/components/ExportMenu';
@@ -30,12 +32,12 @@ function ratioText(r: number | null): string {
 function pctText(v: number | null): string {
   return v == null ? 'n/a' : `${v}%`;
 }
-/** Two rounds of one CID share a code, so the round has to be on the label or rows are ambiguous. */
+/** Two rounds of one PID share a code, so the round has to be on the label or rows are ambiguous. */
 function projectLabel(r: ProjectBreachRow): string {
-  return r.projectCode ? `${cidLabel(r.projectCode, r.roundSeq)} · ${r.projectName}` : r.projectName;
+  return r.projectCode ? `${pidLabel(r.projectCode, r.roundSeq)} · ${r.projectName}` : r.projectName;
 }
 
-export function UserKpiPanel({ userId, period, self = false }: {
+function ProjectsUserKpiPanel({ userId, period, self = false }: {
   userId: string;
   period: PeriodWindow;
   /** True when this is the signed-in person's own tab — it only changes the wording. */
@@ -64,7 +66,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
   const breachedProjects = data.byProject.filter(p => p.hoursBreaches.times > 0 || p.deadlineBreaches.times > 0);
 
   const projectCols: GridColumn<ProjectBreachRow>[] = [
-    { key: 'projectName', header: 'Client', sortable: true, accessor: r => r.projectName, render: r => <span className="text-gray-800">{projectLabel(r)}</span>, exportValue: r => projectLabel(r) },
+    { key: 'projectName', header: 'Project', sortable: true, accessor: r => r.projectName, render: r => <span className="text-gray-800">{projectLabel(r)}</span>, exportValue: r => projectLabel(r) },
     { key: 'deliveries', header: 'Finished', align: 'right', sortable: true, accessor: r => r.deliveries },
     {
       key: 'hoursBreaches', header: 'Over allocated hours', sortable: true, accessor: r => r.hoursBreaches.times,
@@ -95,7 +97,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
     rows: [
       ['KPI 1 — time spent vs allocated', ratioText(overrun)],
       ['Times over allocated hours', `${data.hoursBreaches.times} times across ${data.hoursBreaches.things} tasks`],
-      ['Clients with an over-run', String(breachedProjects.length)],
+      ['Projects with an over-run', String(breachedProjects.length)],
       ['Red flags (2× or more)', String(hours.redFlag)],
       ['Allocated hours', `${hours.allocatedHours}h`],
       ['Hours spent', `${hours.spentHours}h`],
@@ -142,7 +144,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
         >
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <Stat label="over the limit" value={<Breaches count={data.hoursBreaches} thing="task" />} />
-            <Stat label="clients affected" value={breachedProjects.length} />
+            <Stat label="projects affected" value={breachedProjects.length} />
             <Stat label="red flags (2×+)" value={hours.redFlag} tone={hours.redFlag ? 'bad' : undefined} />
             <Stat label="hours beyond allocation" value={`${hours.overHours}h`} tone={hours.overHours > 0 ? 'bad' : undefined} />
           </div>
@@ -193,18 +195,18 @@ export function UserKpiPanel({ userId, period, self = false }: {
         </ChartCard>
       </div>
 
-      {/* Layer 3 — the detail, folded away. Requirements 5 and 11: which clients, how often. */}
+      {/* Layer 3 — the detail, folded away. Requirements 5 and 11: which projects, how often. */}
       <details className="group" open={breachedProjects.length > 0 && breachedProjects.length <= 3}>
         <summary className="cursor-pointer select-none text-sm font-medium text-gray-600 hover:text-gray-800 py-2">
           Where the breaches happened
-          <span className="font-normal text-gray-400"> · {data.byProject.length} {data.byProject.length === 1 ? 'client' : 'clients'} worked on, {breachedProjects.length} with a breach</span>
+          <span className="font-normal text-gray-400"> · {data.byProject.length} {data.byProject.length === 1 ? 'project' : 'projects'} worked on, {breachedProjects.length} with a breach</span>
         </summary>
         <div className="mt-2">
           <DataGrid
             columns={projectCols}
             rows={data.byProject}
             initialSort={{ key: 'hoursBreaches', dir: 'desc' }}
-            exportName={`breaches-by-client-${period.key}`}
+            exportName={`breaches-by-project-${period.key}`}
             emptyLabel="Nothing was finished in this period"
           />
         </div>
@@ -214,3 +216,7 @@ export function UserKpiPanel({ userId, period, self = false }: {
     </div>
   );
 }
+
+// ── Workspace flow (docs/WORKSPACE_FLOWS.md) ────────────────────────────────────────────────────
+// The PROJECTS implementation above is production's (bb5728b); CLIENTS is UserKpiPanel.clients.tsx.
+export const UserKpiPanel = byFlow(ProjectsUserKpiPanel, ClientsUserKpiPanel);

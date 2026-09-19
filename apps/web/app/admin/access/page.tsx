@@ -32,6 +32,7 @@ import {
 import { api, type RoleSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { toast, toastError } from '@/components/ui/Toast';
 import {
   MODULES, UNCATALOGUED_KEY, describeDiff, groupByModule, isImplicitAllRole,
@@ -42,7 +43,7 @@ import {
 // "can a Manager see everyone's attendance" lives under a module called Attendance.
 const SHORTCUTS: { label: string; module: string; search: string }[] = [
   { label: 'Attendance', module: 'attendance', search: '' },
-  { label: 'Client creation', module: 'project', search: 'create' },
+  { label: 'Project creation', module: 'project', search: 'create' },
   { label: 'Performance', module: 'performance', search: '' },
   { label: 'Permanent deletion', module: '', search: 'delete.permanent' },
 ];
@@ -92,6 +93,7 @@ export default function AccessControlPage() {
 }
 
 function AccessMatrix({ orgId }: { orgId: string }) {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client, and generate_pid reads "Change CID"
   const qc = useQueryClient();
 
   const { data: perms = [], isLoading: permsLoading } = useQuery({
@@ -118,7 +120,7 @@ function AccessMatrix({ orgId }: { orgId: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const { groups, missingFromDatabase, unknownToCatalog } = useMemo(() => groupByModule(perms), [perms]);
+  const { groups, missingFromDatabase, unknownToCatalog } = useMemo(() => groupByModule(perms, undefined, clients ? 'CLIENTS' : 'PROJECTS'), [perms, clients]);
   const idByCode = useMemo(() => new Map(perms.map(p => [p.code, p.id])), [perms]);
 
   // Super Admin first — it is the reference column everything else is read against.
@@ -257,7 +259,7 @@ function AccessMatrix({ orgId }: { orgId: string }) {
             onClick={() => { setModuleFilter(s.module); setSearch(s.search); setCollapsed(new Set()); }}
             className="text-xs px-2.5 py-1 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50"
           >
-            {s.label}
+            {clients && s.label === 'Project creation' ? 'Client creation' : s.label}
           </button>
         ))}
         <button
@@ -512,6 +514,7 @@ function ReviewModal({ changes, saving, onCancel, onConfirm }: {
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const removals = changes.reduce((n, c) => n + c.diff.removed.length, 0);
   return (
     <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onCancel}>
@@ -548,7 +551,7 @@ function ReviewModal({ changes, saving, onCancel, onConfirm }: {
                       {change.diff.added.map(code => (
                         <li key={code} className="text-xs text-gray-700 flex items-baseline gap-2">
                           <Check size={11} className="text-green-600 shrink-0 translate-y-0.5" />
-                          <span>{labelForCode(code)} <span className="font-mono text-gray-400">{code}</span></span>
+                          <span>{labelForCode(code, clients ? 'CLIENTS' : 'PROJECTS')} <span className="font-mono text-gray-400">{code}</span></span>
                         </li>
                       ))}
                     </ul>
@@ -561,7 +564,7 @@ function ReviewModal({ changes, saving, onCancel, onConfirm }: {
                       {change.diff.removed.map(code => (
                         <li key={code} className="text-xs text-gray-700 flex items-baseline gap-2">
                           <X size={11} className="text-red-600 shrink-0 translate-y-0.5" />
-                          <span>{labelForCode(code)} <span className="font-mono text-gray-400">{code}</span></span>
+                          <span>{labelForCode(code, clients ? 'CLIENTS' : 'PROJECTS')} <span className="font-mono text-gray-400">{code}</span></span>
                         </li>
                       ))}
                     </ul>

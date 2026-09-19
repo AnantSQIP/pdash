@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { api, type TechnologyDomainDef } from '@/lib/api';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 /**
  * The technology domain a project sits in — Medical, Automobile, Source Code and so on.
@@ -11,7 +12,7 @@ import { api, type TechnologyDomainDef } from '@/lib/api';
  * behaving differently would be its own small puzzle to solve every time.
  *
  * Shared by the new-project form and the new-round form so the two cannot drift: a project
- * started under an existing CID asks for its domain exactly as a brand-new one does.
+ * started under an existing PID asks for its domain exactly as a brand-new one does.
  */
 export const CUSTOM_DOMAIN = '__custom_domain__';
 
@@ -50,6 +51,7 @@ export function TechnologyDomainPicker({
   disabled?: boolean;
 }) {
   const { data: domains = [] } = useTechnologyDomains();
+  const clients = useIsClientsFlow(); // CLIENTS flow: the type belongs to the task group ("type of work")
 
   return (
     <div>
@@ -97,7 +99,7 @@ export function TechnologyDomainPicker({
         </div>
       ) : (
         <p className="text-[11px] text-gray-400 mt-1">
-          The field the work is about — separate from the type of work, which is the kind of study it is.
+          The field the work is about — separate from the {clients ? 'type of work' : 'project type'}, which is the kind of study it is.
         </p>
       )}
     </div>

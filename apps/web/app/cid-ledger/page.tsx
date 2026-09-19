@@ -1,5 +1,7 @@
 'use client';
 
+import { byFlow } from '@/lib/workspace-flow';
+import { redirectTo } from '@/components/layout/FlowRedirect';
 import { Loader, Shield, KeyRound } from 'lucide-react';
 import { usePermissions } from '@/lib/permissions-context';
 import { CidLedgerView } from '@/components/projects/CidLedgerView';
@@ -7,7 +9,7 @@ import { CidLedgerView } from '@/components/projects/CidLedgerView';
 /** The CID Ledger module — every CID the organisation has ever issued, with its clients, hours
  *  and full event history, and CSV export of both. Gated on user.manage_access (Admin, Super
  *  Admin, HR); the API behind it is gated the same way. */
-export default function CidLedgerPage() {
+function CidLedgerPage() {
   const { can, isSuperAdmin, loading } = usePermissions();
 
   if (loading) {
@@ -39,3 +41,7 @@ export default function CidLedgerPage() {
     </div>
   );
 }
+
+// ── Workspace flow (docs/WORKSPACE_FLOWS.md) ────────────────────────────────────────────────────
+// The CID Ledger is the CLIENTS flow's. A PROJECTS firm's numbers are PIDs, read in the PID Ledger.
+export default byFlow(redirectTo('/pid-ledger'), CidLedgerPage);

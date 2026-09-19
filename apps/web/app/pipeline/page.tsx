@@ -1,6 +1,6 @@
 'use client';
 
-import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
+import { usePatentsAndClientCodes } from '@/lib/features';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -32,6 +32,8 @@ const STAGE_TINT: Record<string, string> = {
  * numbers are forecasts rather than facts.
  */
 export default function PipelinePage() {
+  // Patents and client codes are a PROJECTS-flow feature (lib/features.ts).
+  const PATENTS_AND_CLIENT_CODES = usePatentsAndClientCodes();
   const { can, loading } = usePermissions();
   const qc = useQueryClient();
   const { toast } = useToast();
