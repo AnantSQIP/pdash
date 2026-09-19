@@ -63,6 +63,38 @@ Every conversion is recorded in `workspace_flow_change` with its preflight and v
 Before an organisation has any project, client or timesheet the same conversion runs with nothing to
 convert — choosing the flow for a new firm is one click.
 
+## Where the projects domain splits
+
+API (`apps/api/src/modules`):
+
+- `projects/` — `projects.service.ts`, `dto.ts`, `pid-move.ts` are production's (PROJECTS);
+  `projects.clients.service.ts` (`ClientsProjectsService`), `dto.clients.ts`, `cid-move.ts` are the
+  clients flow's. `ProjectsController` dispatches on the caller's flow; create and update take the
+  raw body and validate it against their flow's DTO with the global pipe's options
+  (`common/validation/flow-body.ts`), so each flow refuses exactly what it always refused. PID
+  routes (generate, reservation, next, ledger, authorities, requests, fulfil, attach, pid-move,
+  pid reassign/split/merge, patent and client tagging) are `@RequireFlow('PROJECTS')`; the CID
+  ledger and CID moves are `@RequireFlow('CLIENTS')`.
+- `tasklists/` — production's `TaskListsService` for PROJECTS; the task groups (type, domain,
+  dates, status, deadline cascade) are `ClientsTaskListsService` (`tasklists.clients.ts`), and
+  complete / reopen exist in CLIENTS only.
+- `patents/` (portal, patent IDs, client codes, client ledger) — PROJECTS only; `client-groups/` —
+  CLIENTS only. `common/features.ts`: `patentsAndClientCodes(flow)`.
+- `admin-data/` — restore and purge branch on the flow: PROJECTS restores ACTIVE and marks the PID
+  reservation DISCONTINUED (production); CLIENTS restores the phase and CID and writes the ledger.
+- Refusals and messages that name the unit of work or its number follow the flow
+  (`common/access/project-access.module.ts`, comp-off, the digest, the lifecycle handover).
+
+Web (`apps/web`):
+
+- A screen that diverged is `X.tsx` (production's, ending in `export const X = byFlow(ProjectsX,
+  ClientsX)`) plus `X.clients.tsx`. The clients screens import the clients variants directly.
+- Pages in one flow only: `/pid-ledger` ↔ `/cid-ledger` redirect to each other; `/patents`,
+  `/patent-lookup`, `/client-ledger` send a CLIENTS firm to `/projects`
+  (`components/layout/FlowRedirect.tsx`).
+- Shared screens keep production's words in PROJECTS (`useIsClientsFlow()`, `useNumberName()`),
+  and `lib/features.ts` answers `usePatentsAndClientCodes()`.
+
 ## Schema and migrations
 
 All schema changes are additive and flow-neutral; data that belongs to one flow is shaped by the
