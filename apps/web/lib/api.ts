@@ -166,7 +166,19 @@ export type OrgSummary = {
   /** Which time-recording flow is in force. Absent on a payload from an older API — treated as
    *  TIMER, which is what such an API was doing. */
   timeTrackingMode?: TimeTrackingMode;
+  /** Which workspace flow the firm runs (docs/WORKSPACE_FLOWS.md). Absent on a payload from an
+   *  older API — treated as PROJECTS, which is what such an API was doing. */
+  workspaceFlow?: WorkspaceFlow;
+  workspaceFlowChangedAt?: string | null;
 };
+
+/**
+ * The two ways a firm can run — chosen per organisation in Settings, changed only by a conversion.
+ *   PROJECTS — projects with PIDs (requested / generated), patents, the timer.
+ *   CLIENTS  — clients in client groups with task groups, automatic CIDs, manual time, billable per
+ *              task, Team Capacity for Senior Consultant and above.
+ */
+export type WorkspaceFlow = 'PROJECTS' | 'CLIENTS';
 
 /** A record of the firm changing how it records time, and what the change had to tidy up. */
 export type TimeModeChange = {

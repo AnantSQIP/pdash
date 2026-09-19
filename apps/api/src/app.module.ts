@@ -1,3 +1,5 @@
+import { FlowGuard } from './common/guards/flow.guard';
+import { WorkspaceFlowModule } from './modules/workspace-flow/workspace-flow.service';
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
@@ -123,6 +125,7 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     LifecycleModule,
     // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
     SequenceModule,
+    WorkspaceFlowModule, // which flow each organisation runs — PROJECTS or CLIENTS
     CidModule, // the CID registry + ledger — every client write that touches a CID goes through it
     // PatentsModule, // CLIENTS-FLOW: commented out
     TeamsModule,
@@ -134,6 +137,10 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // 1) Global authentication (deny-by-default; @Public() opts out).
     { provide: APP_GUARD, useClass: AuthGuard },
+    // 1b) Global, opt-in workspace flow: a route marked @RequireFlow(x) exists only for an
+    //     organisation running flow x, and answers 404 to the other (docs/WORKSPACE_FLOWS.md).
+    //     Before the permission check, so a route that is not there is not reported as forbidden.
+    { provide: APP_GUARD, useClass: FlowGuard },
     // 2) Global, opt-in authorization (enforces only where @RequirePermission is set).
     { provide: APP_GUARD, useClass: PermissionGuard },
     // 3) Global, opt-in step-up: "big change" routes marked @RequirePasscode() also

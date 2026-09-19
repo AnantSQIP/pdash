@@ -31,6 +31,10 @@ const ORG_SELECT = {
   // because it decides what My Tasks even shows — a client that had to ask separately would
   // render the wrong set of buttons for a moment on every load.
   timeTrackingMode: true,
+  // Which workspace flow the firm runs (PROJECTS or CLIENTS) — it decides the whole shape of the
+  // app: the sidebar, the words, which screens exist. Sent with the org for the same reason.
+  workspaceFlow: true,
+  workspaceFlowChangedAt: true,
 };
 
 @Controller('organizations')
