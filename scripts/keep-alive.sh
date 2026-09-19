@@ -3,8 +3,8 @@
 # pdash / SquarkIP — always-on supervisor.
 #
 # Keeps the demo link alive by ensuring three things stay up:
-#   1. API      → http://localhost:4021/api/v1/health
-#   2. Web      → http://localhost:3021  (Next.js production server)
+#   1. API      → http://localhost:4000/api/v1/health
+#   2. Web      → http://localhost:3001  (Next.js production server)
 #   3. Tunnel   → cloudflared quick tunnel that publishes the public URL
 #
 # DESIGN RULES (protect the boss's live link):
@@ -26,8 +26,8 @@ ROOT="/home/sqip031/pdash"
 BIN="/home/sqip031/.local/bin"
 export PATH="$BIN:$PATH"
 CF="$BIN/cloudflared"
-API_PORT=4021
-WEB_PORT=3021
+API_PORT=4000
+WEB_PORT=3001
 INTERVAL=15
 
 LOG="$ROOT/.keep-alive.log"

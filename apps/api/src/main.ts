@@ -82,7 +82,7 @@ async function bootstrap() {
   // CORS: pin to an explicit allow-list (never reflect arbitrary origins with credentials).
   // Normal app traffic is same-origin via the Next.js proxy, so this only matters for
   // direct cross-origin API callers. Configure with CORS_ORIGINS (comma-separated).
-  const corsOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:3021')
+  const corsOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:3001,http://localhost:3000')
     .split(',').map((s) => s.trim()).filter(Boolean);
   app.enableCors({ origin: corsOrigins, credentials: true });
 
@@ -92,7 +92,7 @@ async function bootstrap() {
   );
   app.enableShutdownHooks();
 
-  const port = Number(process.env.API_PORT ?? 4021);
+  const port = Number(process.env.API_PORT ?? 4000);
   await app.listen(port);
   Logger.log(`pdash API listening on :${port}/api/v1 (${process.env.NODE_ENV ?? 'development'})`, 'Bootstrap');
 }
