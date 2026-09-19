@@ -6,6 +6,7 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { PermissionService } from '../permissions/permission.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
 import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
@@ -297,6 +298,7 @@ export class CapacityService {
     private readonly notifications: NotificationsService,
     private readonly optionalHolidays: OptionalHolidaysService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
@@ -1110,74 +1112,79 @@ export class CapacityService {
       };
     });
 
-    // Work FINISHED recently still needs its hours. Finish closes a task the moment it is done and
-    // the hours are usually logged afterwards — that evening, or the next morning — so a task
-    // that vanished from the sheet on Finish could only be logged by hunting for it elsewhere.
-    // Offered at the end, marked as finished, never planned.
-    const listed = new Set(rows.map(r => r.taskId));
-    const finished = await this.prisma.task.findMany({
-      where: {
-        deletedAt: null,
-        assignees: { some: { userId } },
-        currentStatus: { type: 'CLOSED' },
-        completedAt: { gte: addDays(day, -FINISHED_LOOKBACK_DAYS) },
-        ...(listed.size ? { id: { notIn: [...listed] } } : {}),
-      },
-      select: {
-        id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true, billable: true,
-        assignees: { where: { userId }, select: { estimatedHours: true } },
-        projectTasks: {
-          take: 1,
-          select: {
-            taskList: { select: { name: true, deletedAt: true } },
-            project: { select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true, projectPhase: true } },
-          },
+    // CLIENTS flow only: the Log time sheet also offers work finished recently, and says which
+    // open tasks are non-billable (the task decides there). PROJECTS lists open work alone, as it
+    // always did — each person decides billability per entry there.
+    if (await this.flows.isClients(organizationId)) {
+      // Work FINISHED recently still needs its hours. Finish closes a task the moment it is done and
+      // the hours are usually logged afterwards — that evening, or the next morning — so a task
+      // that vanished from the sheet on Finish could only be logged by hunting for it elsewhere.
+      // Offered at the end, marked as finished, never planned.
+      const listed = new Set(rows.map(r => r.taskId));
+      const finished = await this.prisma.task.findMany({
+        where: {
+          deletedAt: null,
+          assignees: { some: { userId } },
+          currentStatus: { type: 'CLOSED' },
+          completedAt: { gte: addDays(day, -FINISHED_LOOKBACK_DAYS) },
+          ...(listed.size ? { id: { notIn: [...listed] } } : {}),
         },
-        teamTasks: { take: 1, select: { team: { select: { id: true, name: true, deletedAt: true } } } },
-      },
-      orderBy: { completedAt: 'desc' },
-      take: 50,
-    });
-    for (const t of finished) {
-      const project = t.projectTasks[0]?.project;
-      const team = t.teamTasks[0]?.team;
-      // A deleted or completed client refuses time anyway; offering it would only produce a
-      // refusal after the person has typed the hours.
-      if (project && (project.deletedAt || project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED')) continue;
-      if (team?.deletedAt) continue;
-      const group = t.projectTasks[0]?.taskList;
-      const seatHours = t.assignees.reduce((s, a) => s + (a.estimatedHours ?? 0), 0);
-      rows.push({
-        taskId: t.id,
-        title: t.title,
-        projectId: project?.id ?? team?.id ?? null,
-        project: project?.title ?? team?.name ?? null,
-        taskGroup: project && group && !group.deletedAt ? group.name : null,
-        projectPid: project?.code ?? null,
-        projectRound: project?.roundSeq,
-        priority: t.priority,
-        dueDate: t.dueDate ? dayKey(t.dueDate) : null,
-        overdue: false,
-        estimatedHours: r1(seatHours || (t.estimatedHours ?? 0)),
-        remainingHours: 0,
-        loggedToday: r1(loggedByTask.get(t.id) ?? 0),
-        plannedHours: 0,
-        closed: true,
-        billable: t.billable,
-        // The IST calendar day it was finished on — the day people mean.
-        finishedOn: t.completedAt ? dayKey(startOfIstDay(t.completedAt)) : null,
-        when: 'OTHER' as const,
+        select: {
+          id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true, billable: true,
+          assignees: { where: { userId }, select: { estimatedHours: true } },
+          projectTasks: {
+            take: 1,
+            select: {
+              taskList: { select: { name: true, deletedAt: true } },
+              project: { select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true, projectPhase: true } },
+            },
+          },
+          teamTasks: { take: 1, select: { team: { select: { id: true, name: true, deletedAt: true } } } },
+        },
+        orderBy: { completedAt: 'desc' },
+        take: 50,
       });
-    }
+      for (const t of finished) {
+        const project = t.projectTasks[0]?.project;
+        const team = t.teamTasks[0]?.team;
+        // A deleted or completed client refuses time anyway; offering it would only produce a
+        // refusal after the person has typed the hours.
+        if (project && (project.deletedAt || project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED')) continue;
+        if (team?.deletedAt) continue;
+        const group = t.projectTasks[0]?.taskList;
+        const seatHours = t.assignees.reduce((s, a) => s + (a.estimatedHours ?? 0), 0);
+        rows.push({
+          taskId: t.id,
+          title: t.title,
+          projectId: project?.id ?? team?.id ?? null,
+          project: project?.title ?? team?.name ?? null,
+          taskGroup: project && group && !group.deletedAt ? group.name : null,
+          projectPid: project?.code ?? null,
+          projectRound: project?.roundSeq,
+          priority: t.priority,
+          dueDate: t.dueDate ? dayKey(t.dueDate) : null,
+          overdue: false,
+          estimatedHours: r1(seatHours || (t.estimatedHours ?? 0)),
+          remainingHours: 0,
+          loggedToday: r1(loggedByTask.get(t.id) ?? 0),
+          plannedHours: 0,
+          closed: true,
+          billable: t.billable,
+          // The IST calendar day it was finished on — the day people mean.
+          finishedOn: t.completedAt ? dayKey(startOfIstDay(t.completedAt)) : null,
+          when: 'OTHER' as const,
+        });
+      }
 
-    // Whether each open task's time is billable — the task decides (Task.billable), and the sheet
-    // says so on the line so nobody is surprised when the entry comes out non-billable.
-    const openIds = rows.filter(r => r.billable === undefined).map(r => r.taskId);
-    if (openIds.length) {
-      const flags = new Map((await this.prisma.task.findMany({
-        where: { id: { in: openIds } }, select: { id: true, billable: true },
-      })).map(t => [t.id, t.billable]));
-      for (const r of rows) if (r.billable === undefined) r.billable = flags.get(r.taskId) ?? true;
+      // Whether each open task's time is billable — the task decides (Task.billable), and the sheet
+      // says so on the line so nobody is surprised when the entry comes out non-billable.
+      const openIds = rows.filter(r => r.billable === undefined).map(r => r.taskId);
+      if (openIds.length) {
+        const flags = new Map((await this.prisma.task.findMany({
+          where: { id: { in: openIds } }, select: { id: true, billable: true },
+        })).map(t => [t.id, t.billable]));
+        for (const r of rows) if (r.billable === undefined) r.billable = flags.get(r.taskId) ?? true;
+      }
     }
 
     // Planned first, then tomorrow's, then the rest — the order somebody fills a day in.
@@ -1440,7 +1447,7 @@ export class CapacityService {
    * It used to read role grants alone, so a DENY override or a group grant was invisible to it,
    * and every recipient was told to go to the board whether or not they could open it.
    */
-  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<{
+  private async coverageReviewersClients(organizationId: string, projectIds: string[]): Promise<{
     board: string[]; clients: { userId: string; projectId: string }[];
   }> {
     const holdsBoard = { permission: { code: 'capacity.view' } };
@@ -1475,6 +1482,30 @@ export class CapacityService {
       clients.push({ userId: m.userId, projectId: m.projectId });
     }
     return { board, clients };
+  }
+
+  /**
+   * PROJECTS flow: users who can act on a coverage risk — capacity.view holders (by role) + the
+   * affected projects' managers. Everybody holds capacity.view in this flow, so all of them are
+   * sent to the board.
+   */
+  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<string[]> {
+    const [viewers, managers] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          organizationId, deletedAt: null, status: 'ACTIVE',
+          userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'capacity.view' } } } } } },
+        },
+        select: { id: true },
+      }),
+      projectIds.length
+        ? this.prisma.projectMember.findMany({
+            where: { projectId: { in: projectIds }, projectRole: 'MANAGER', isActive: true },
+            select: { userId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    return [...new Set([...viewers.map(v => v.id), ...managers.map(m => m.userId)])];
   }
 
   private emptyCoverage(today: Date, to: Date) {
@@ -1572,7 +1603,17 @@ export class CapacityService {
       });
     if (!tasks.length) return;
     const projectIds = [...new Set(tasks.map(t => t.projectId).filter((x): x is string => !!x))];
-    const { board, clients } = await this.coverageReviewers(organizationId, projectIds);
+    if (!(await this.flows.isClients(organizationId))) {
+      const reviewers = (await this.coverageReviewers(organizationId, projectIds)).filter(id => id !== userId);
+      if (!reviewers.length) return;
+      await this.notifications.notify(reviewers, {
+        type: 'coverage.at_risk',
+        title: 'Coverage at risk',
+        message: `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out — reassign or extend on the Capacity board.`,
+      });
+      return;
+    }
+    const { board, clients } = await this.coverageReviewersClients(organizationId, projectIds);
     const what = `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out`;
     const toBoard = board.filter(id => id !== userId);
     if (toBoard.length) {

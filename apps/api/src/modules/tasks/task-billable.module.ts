@@ -5,6 +5,7 @@ import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 import { ProjectAccessService } from '../../common/access/project-access.module';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 
 export class SetBillableDto {
   @IsBoolean()
@@ -141,7 +142,12 @@ export class TaskBillableService {
   }
 }
 
+/**
+ * CLIENTS flow only. In the PROJECTS flow each person decides, per time entry, whether their own
+ * time is billable, and there is no task-level switch — these routes answer 404 there.
+ */
 @Controller('tasks')
+@RequireFlow('CLIENTS')
 export class TaskBillableController {
   constructor(private readonly billable: TaskBillableService) {}
 

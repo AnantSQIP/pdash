@@ -10,6 +10,7 @@ import { getActorId } from '../../common/context/request-context';
 import { startOfIstDay } from '../../common/dates';
 import { istDayWindow, overlapMinutes, ceilQuarter, minutesToHours, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { NotificationsService } from '../notifications/notifications.module';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 import { TIMESHEET_SOURCE } from '../time-mode/time-mode.module';
 
@@ -55,7 +56,16 @@ export class TimesheetsService {
     private readonly permissions: PermissionService,
     private readonly access: ProjectAccessService,
     private readonly notifications: NotificationsService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * Who decides whether a TASK entry is billable. PROJECTS: the person logging it, per entry
+   * (dto.billable), as it always was. CLIENTS: the task (Task.billable), read under a lock.
+   */
+  private async taskDecidesBillable(userId: string): Promise<boolean> {
+    return (await this.flows.flowOfUser(userId)) === 'CLIENTS';
+  }
 
   private async actor() {
     const actorId = getActorId();
@@ -332,10 +342,12 @@ export class TimesheetsService {
     if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
     // Backdating windows: free within ~1 month, Super-Admin-approved 1–3 months, blocked beyond.
     await this.assertBackfillAllowed(actorId, entryDay);
-    // Billability of TASK time is the task's (Task.billable) and is read under a lock below; the
-    // person's own choice applies only where there is no task: a client call or an entry still
-    // waiting for its task. Defaults to billable when not specified.
+    // PROJECTS: each person decides whether their own logged time is billable — there is no
+    // project-level override or admin authority. CLIENTS: billability of TASK time is the task's
+    // (Task.billable), read under a lock below; the person's own choice applies only where there
+    // is no task: a client call or an entry still waiting for its task. Defaults to billable.
     const billable = dto.billable ?? true;
+    const clients = await this.taskDecidesBillable(actorId);
 
     // ── "Other" entry: miscellaneous NON-PROJECT time (admin, internal meetings, training).
     //    Always non-billable, never tied to a project/task, and never a CID buffer to assign —
@@ -374,7 +386,7 @@ export class TimesheetsService {
     if (dto.category === 'CLIENT_CALL') {
       const title = dto.title?.trim();
       if (!title) throw new BadRequestException('Say what the call was about.');
-      if (!dto.projectId) throw new BadRequestException('Choose the client the call was about.');
+      if (!dto.projectId) throw new BadRequestException(clients ? 'Choose the client the call was about.' : 'Choose the PID the call was about.');
       // The CID must be one that exists in the caller's own organisation — this is the only
       // check left, so it is the one that stops time being booked to another firm's matter.
       const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
@@ -386,7 +398,7 @@ export class TimesheetsService {
         },
         select: { id: true, projectType: true },
       });
-      if (!project) throw new NotFoundException('That client could not be found.');
+      if (!project) throw new NotFoundException(clients ? 'That client could not be found.' : 'That project could not be found.');
       const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
         await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
         return tx.timesheet.create({
@@ -458,9 +470,9 @@ export class TimesheetsService {
         if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
       }
       await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
-      // The task decides. Read under a share lock so a concurrent "mark non-billable" either
-      // waits for this entry (and re-marks it) or has already committed (and is read here).
-      const taskBillable = await this.taskBillable(tx, taskId);
+      // CLIENTS: the task decides. Read under a share lock so a concurrent "mark non-billable"
+      // either waits for this entry (and re-marks it) or has already committed (and is read here).
+      const entryBillable = clients ? await this.taskBillable(tx, taskId) : billable;
 
       const created = await tx.timesheet.create({
         data: {
@@ -472,8 +484,10 @@ export class TimesheetsService {
           source: opts.source ?? dto.source ?? null,
           date: entryDay,
           hoursLogged: dto.hoursLogged,
-          // The task's own flag; internal (team-space) work is never billable whatever it says.
-          billable: teamId ? false : taskBillable,
+          // Internal (team-space) work has no client to bill, so it is non-billable regardless of
+          // what was asked for — or of what the task says. Leaving the choice open would let HR
+          // and BD hours land in billable totals.
+          billable: teamId ? false : entryBillable,
           notes: dto.notes,
         },
         include: INCLUDE,
@@ -505,8 +519,17 @@ export class TimesheetsService {
     // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
     // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a CID.
-    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a client.');
-    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its client — there is nothing to assign.');
+    const clients = await this.taskDecidesBillable(entry.userId);
+    if (entry.category === 'OTHER') {
+      throw new BadRequestException(clients
+        ? '“Other” time is non-project and cannot be assigned to a client.'
+        : '“Other” time is non-project and cannot be assigned to a PID.');
+    }
+    if (entry.category === 'CLIENT_CALL') {
+      throw new BadRequestException(clients
+        ? 'A client call already records its client — there is nothing to assign.'
+        : 'A client call already records its PID — there is nothing to assign.');
+    }
     const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).
@@ -527,11 +550,13 @@ export class TimesheetsService {
         select: { id: true },
       });
       if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
-      // Once it has a task, the entry is billable exactly when the task is (never, for team work).
-      const taskBillable = await this.taskBillable(tx, taskId);
+      // Internal work cannot be billable — see create(). PROJECTS: otherwise the entry keeps the
+      // person's own choice. CLIENTS: once it has a task, the entry is billable exactly when the
+      // task is.
+      const billable = teamId ? false : clients ? await this.taskBillable(tx, taskId) : undefined;
       const updated = await tx.timesheet.update({
         where: { id },
-        data: { taskId, projectId, teamId, projectType, billable: teamId ? false : taskBillable },
+        data: { taskId, projectId, teamId, projectType, ...(billable !== undefined ? { billable } : {}) },
         include: INCLUDE,
       });
       await this.recomputeTaskActualHours(taskId, tx);
@@ -551,9 +576,11 @@ export class TimesheetsService {
     if (entry.projectId) await this.access.assertProjectWritable(entry.projectId);
 
     // An issue-raised entry AND "Other" (non-project) time are non-billable by rule — neither
-    // can ever be flipped to billable. A TASK entry follows its task (resolved in the lock below);
-    // only a client call or an entry still waiting for its task keeps a choice of its own.
+    // can ever be flipped to billable. PROJECTS: every other entry is the person's own choice.
+    // CLIENTS: a TASK entry follows its task (resolved in the lock below); only a client call or
+    // an entry still waiting for its task keeps a choice of its own.
     const ownChoice = (entry.issueId || entry.category === 'OTHER') ? false : dto.billable;
+    const clients = await this.taskDecidesBillable(entry.userId);
 
     // Re-enforce the daily cap when the hours change, in the same locked transaction as the
     // write. This used to be a second copy of the cap arithmetic sitting outside any transaction,
@@ -562,7 +589,7 @@ export class TimesheetsService {
     const raising = dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged;
     const updated = await serialize(this.prisma, dayKeyFor(entry.userId, entry.date), async tx => {
       if (raising) await this.assertDayCap(entry.userId, entry.date, dto.hoursLogged!, id, tx);
-      const billable = entry.taskId
+      const billable = clients && entry.taskId
         ? (entry.teamId ? false : await this.taskBillable(tx, entry.taskId))
         : ownChoice;
       const u = await tx.timesheet.update({

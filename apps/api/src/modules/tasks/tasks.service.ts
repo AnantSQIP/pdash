@@ -13,6 +13,7 @@ import { startOfUtcDay, resolveDate } from '../../common/dates';
 import { reactivateGroupsOfTask } from '../../common/task-groups';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { TaskTimeService } from './task-time.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 
 /** Who a task's assignment adds to its client, decided before anything is written. */
 type MembershipPlan = { primary: string; outsiders: string[]; reactivate: string[]; create: string[] };
@@ -43,7 +44,16 @@ export class TasksService {
     private readonly deadlineChanges: DeadlineChangeService,
     private readonly access: ProjectAccessService,
     private readonly time: TaskTimeService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * Whether the caller's organisation runs the CLIENTS flow. Task groups (their status and
+   * deadlines) exist only there; in PROJECTS a task list is a plain list, as it always was.
+   */
+  private clientsFlow(): Promise<boolean> {
+    return this.flows.currentIsClients();
+  }
 
   /**
    * Bring a task's assignee rows to `wanted`, KEEPING the rows that survive.
@@ -240,7 +250,9 @@ export class TasksService {
 
     const actorId = getActorId();
     if (!actorId || !(opts.oversight || await this.access.hasOversight(actorId))) {
-      throw new BadRequestException('You can only assign people who are on this client. Ask a manager to add them first.');
+      throw new BadRequestException(await this.clientsFlow()
+        ? 'You can only assign people who are on this client. Ask a manager to add them first.'
+        : 'You can only assign people who are members of the project. Ask a manager to add them first.');
     }
 
     // Add the outsiders to the primary project — validate they are active, same-org users. The
@@ -290,10 +302,13 @@ export class TasksService {
       entityId: plan.primary,
       metadata: { addedUserIds: plan.outsiders, via: 'task-assignment', projectTitle: project?.title },
     });
+    const clients = await this.clientsFlow();
     await this.notifications.notify(plan.outsiders, {
       type: 'project.member_added',
-      title: 'Added to a client',
-      message: `You were added to the client "${project?.title ?? 'a client'}" because you were assigned work on it.`,
+      title: clients ? 'Added to a client' : 'Added to a project',
+      message: clients
+        ? `You were added to the client "${project?.title ?? 'a client'}" because you were assigned work on it.`
+        : `You were added to "${project?.title ?? 'a project'}" because you were assigned work on it.`,
       link: `/projects/${plan.primary}`,
     });
   }
@@ -337,7 +352,8 @@ export class TasksService {
       throw new BadRequestException(`TaskList ${dto.taskListId} not found in project ${dto.projectId}`);
     }
     // CLIENTS-FLOW: a completed task group holds no open work — reopen it to add more.
-    if (taskList.status === 'COMPLETED') {
+    const clients = await this.clientsFlow();
+    if (clients && taskList.status === 'COMPLETED') {
       throw new BadRequestException(`The task group "${taskList.name}" is complete. Reopen it to add work to it.`);
     }
 
@@ -364,9 +380,9 @@ export class TasksService {
     // A task has a single deadline (dueDate). Client-facing deadlines live only on the
     // project now — tasks no longer carry one.
     // CLIENTS-FLOW (deadlines): with no date of its own, a task in a dated group takes the group's.
-    const internalDue = dto.dueDate ? new Date(dto.dueDate) : (taskList.dueDate ?? undefined);
+    const internalDue = dto.dueDate ? new Date(dto.dueDate) : clients ? (taskList.dueDate ?? undefined) : undefined;
     this.assertTaskDateOrder(dto.startDate ? new Date(dto.startDate) : undefined, internalDue);
-    this.assertWithinGroup(taskList, internalDue);
+    if (clients) this.assertWithinGroup(taskList, internalDue);
     // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
     await this.ensureAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
 
@@ -475,7 +491,7 @@ export class TasksService {
     this.assertWithinGroup(taskList, internalDue);
 
     const seats = dto.seats ?? [];
-    this.validateStaffing(seats);
+    this.validateStaffing(seats, true);
     if (opts.activeOrgUsersOnly) await this.assertActiveOrgUsers(seats.map(e => e.userId));
     const people = [...new Set(seats.map(e => e.userId))];
     const membership = await this.planMembershipAdds([dto.projectId], people, opts);
@@ -709,7 +725,7 @@ export class TasksService {
     const effectiveStart = dto.startDate === undefined ? before.startDate : resolveDate(dto.startDate, null);
     this.assertTaskDateOrder(effectiveStart, internalDue);
     const move = opts.moveToTaskListId ? await this.planMove(id, opts.moveToTaskListId, internalDue ?? null) : null;
-    if (dto.dueDate !== undefined && internalDue) {
+    if (dto.dueDate !== undefined && internalDue && (move || await this.clientsFlow())) {
       let groups: { id: string; name: string; dueDate: Date | null }[] = await this.groupsOfTask(id);
       if (move && !move.noop) groups = [...groups.filter(g => g.id !== move.link.taskListId), move.target];
       for (const g of groups) this.assertWithinGroup(g, internalDue);
@@ -889,7 +905,7 @@ export class TasksService {
         entityId: id,
         metadata: { projectId, title: task.title, status: status.name },
       });
-      await this.reopenedGroups(id, task.title);
+      if (await this.clientsFlow()) await this.reopenedGroups(id, task.title);
     }
     // `settle` rides along so the screen can say what was filed without a second round trip.
     return Object.assign(updated as object, { settle }) as typeof updated & { settle: typeof settle };
@@ -966,7 +982,7 @@ export class TasksService {
    * The rules a set of seats keeps, wherever it comes from (PUT /tasks/:id/staffing, the capacity
    * board's create and reassign). Throws in words before anything is written.
    */
-  private validateStaffing(entries: SeatInput[]) {
+  private validateStaffing(entries: SeatInput[], clients: boolean) {
     // A person may hold MULTIPLE roles on one task, but only once PER ROLE (the unique key is
     // taskId+userId+role). Dedupe by that pair; hours are optional (0 allowed).
     const seen = new Set<string>();
@@ -983,7 +999,7 @@ export class TasksService {
       if (e.hoursPerDay != null && e.hoursPerDay < 0) throw new BadRequestException('Hours per day cannot be negative.');
     }
     if (entries.filter(e => e.role === 'PM').length > 1) {
-      throw new BadRequestException('A task can have only one manager.');
+      throw new BadRequestException(clients ? 'A task can have only one manager.' : 'A task can have only one Project Manager.');
     }
   }
 
@@ -1009,7 +1025,8 @@ export class TasksService {
     const before = await this.getRaw(id);
 
     const entries = dto.assignees ?? [];
-    this.validateStaffing(entries);
+    const clients = await this.clientsFlow();
+    this.validateStaffing(entries, clients);
     if (opts.activeOrgUsersOnly) await this.assertActiveOrgUsers(entries.map(e => e.userId));
 
     // Worked out (and refused, if it must be) before anything is written; applied inside the
@@ -1035,7 +1052,8 @@ export class TasksService {
     await this.notifications.notify(added, {
       type: 'task.assigned', title: 'New task assigned',
       message: `You were assigned to "${before.title}".`,
-      link: `/tasks?taskId=${id}`,
+      // CLIENTS: the notification opens the task (the board's reassign sends people here).
+      ...(clients ? { link: `/tasks?taskId=${id}` } : {}),
     });
     await this.events.emit({
       action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: id,

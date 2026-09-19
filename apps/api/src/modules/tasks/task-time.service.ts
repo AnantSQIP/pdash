@@ -10,6 +10,7 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { EventService } from '../audit-events/event.service';
 import { TimeModeService } from '../time-mode/time-mode.module';
 import { reactivateGroupsOfTask } from '../../common/task-groups';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import { EVENTS } from '../../common/events/canonical-events';
 
 /**
@@ -48,6 +49,7 @@ export class TaskTimeService {
     private readonly access: ProjectAccessService,
     private readonly events: EventService,
     private readonly timeMode: TimeModeService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   private actor(): string {
@@ -642,7 +644,9 @@ export class TaskTimeService {
       metadata: { projectId: await this.projectIdOf(taskId), title: task.title },
     });
     // CLIENTS-FLOW: the same rule setStatus keeps — a completed group re-opens with its task.
-    for (const g of await reactivateGroupsOfTask(this.prisma, taskId)) {
+    // (Task groups have no status in the PROJECTS flow.)
+    const groups = (await this.flows.currentIsClients()) ? await reactivateGroupsOfTask(this.prisma, taskId) : [];
+    for (const g of groups) {
       await this.events.emit({
         action: EVENTS.TASKGROUP_REOPENED,
         entityType: 'TASK_GROUP',
