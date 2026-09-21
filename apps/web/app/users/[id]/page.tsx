@@ -103,7 +103,8 @@ export default function UserDetailPage() {
           <>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <Tile label="Committed" value={`${row.committedHours}h`} sub="next 14 days" tint="bg-brand-50 text-brand-700" Icon={Clock} />
-              <Tile label="Free" value={`${row.freeHours}h`} sub={row.availableNow ? 'available now' : row.nextFreeDate ? `free from ${formatDate(row.nextFreeDate)}` : 'no clear run'} tint="bg-green-50 text-green-700" Icon={CalendarCheck} />
+              {/* Across every client — the same figure the board and the assignment dialogs use. */}
+              <Tile label="Free" value={`${row.freeHours}h`} sub={`all clients · ${row.availableNow ? 'available now' : row.nextFreeDate ? `free from ${formatDate(row.nextFreeDate)}` : 'no clear run'}`} tint="bg-green-50 text-green-700" Icon={CalendarCheck} />
               <Tile label="Utilisation" value={`${row.utilization}%`} sub="of capacity" tint="bg-amber-50 text-amber-700" Icon={Clock} />
               <Tile label="Overdue" value={row.overdueCount} sub={row.overdueCount === 1 ? 'task past due' : 'tasks past due'} tint={row.overdueCount > 0 ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-500'} Icon={AlertTriangle} />
             </div>

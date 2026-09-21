@@ -10,6 +10,7 @@ import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 import { OPEN_TYPE } from '@/lib/tasks';
 import { formatDate } from '@/lib/date';
+import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from '@/components/capacity/AssignmentImpact';
 
 interface AddTaskModalProps {
   projectId: string;
@@ -162,6 +163,23 @@ export function AddTaskModal({
     }
   }
 
+  // The hours being handed out, against every client these people are already on. The estimate is
+  // the task's total, so with more than one person on it each carries an even share — which is
+  // exactly what the board does with a task whose people have no hours of their own.
+  const proposed = useMemo(() => {
+    const est = parseFloat(estimatedHours);
+    const each = Number.isFinite(est) && est > 0 && assigneeIds.length ? est / assigneeIds.length : 0;
+    return assigneeIds.map(userId => ({
+      userId,
+      hours: assignRole && initialAssigneeIds?.length === 1 && assignHours ? parseFloat(assignHours) || 0 : each,
+      startDate: startDate || null,
+      dueDate: (assignDue || dueDate) || null,
+      hoursPerDay: null,
+    }));
+  }, [assigneeIds, estimatedHours, startDate, dueDate, assignRole, assignHours, assignDue, initialAssigneeIds]);
+  const impact = useAssignmentPreview(proposed, { projectId });
+  const gate = useOverrideGate(impact.over, impact.seats.map(s => `${s.userId}:${s.overHours}`).join('|'));
+
   return (
     <Modal
       title="New Task"
@@ -177,7 +195,8 @@ export function AddTaskModal({
             >
               Cancel
             </button>
-            <button type="submit" form="add-task-form" disabled={loading || !title.trim()}
+            <button type="submit" form="add-task-form" disabled={loading || !title.trim() || !gate.allowed}
+              title={gate.allowed ? undefined : 'This puts somebody past their working day — tick the box above to do it anyway.'}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading
@@ -335,6 +354,19 @@ export function AddTaskModal({
               })}
             </div>
           </div>
+
+          {/* Free here is not free everywhere: what else these people are on, and whether the
+              hours actually fit. */}
+          {(impact.isLoading || impact.seats.length > 0) && (
+            <div>
+              <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-medium text-gray-700">Do they have the hours?</p>
+                <ImpactLegend />
+              </div>
+              <AssignmentImpact state={impact} compact />
+              {gate.node}
+            </div>
+          )}
 
         </form>
     </Modal>

@@ -745,9 +745,18 @@ export function TeamAvailabilityCard() {
       {(freeNow.length > 0 || soon.length > 0) && (
         <div className="px-5 py-3 border-t border-gray-100">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1">Available for more work</p>
+          {/* Free means free — across every client they are on, which is the only reading that
+              makes this card safe to allocate from. The hours come straight off the availability
+              service; nothing here adds up a subset of them. */}
+          <p className="mb-1 text-[10.5px] text-gray-400">Hours left after everything they are already on, on every client.</p>
           {freeNow.slice(0, 3).map(r => (
             <PersonRow key={r.userId} user={{ firstName: r.name, id: r.userId, profilePhoto: r.profilePhoto }} name={r.name}
-              trailing={<span className="text-xs text-emerald-600 font-medium">{fmtHours(r.freeHours)} free</span>} />
+              trailing={(
+                <span className="text-xs font-medium text-emerald-600">
+                  {fmtHours(r.freeHours)} free
+                  {(r.committedHours ?? 0) > 0.05 && <span className="ml-1 font-normal text-gray-400">· {fmtHours(r.committedHours)} booked</span>}
+                </span>
+              )} />
           ))}
           {soon.map(r => (
             <PersonRow key={r.userId} user={{ firstName: r.name, id: r.userId, profilePhoto: r.profilePhoto }} name={r.name}
