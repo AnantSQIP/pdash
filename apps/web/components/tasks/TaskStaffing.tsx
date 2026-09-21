@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { fmtHours } from '@/lib/date';
 import { useIsClientsFlow } from '@/lib/workspace-flow';
+import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from '@/components/capacity/AssignmentImpact';
 
 type Row = { userId: string; hours: string; start: string; due: string; perDay: string };
 const dueOf = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
@@ -62,6 +63,37 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
     const all = [pm.hours, ...reviewers.map(r => r.hours), ...analysts.map(r => r.hours)];
     return all.map(h => parseFloat(h)).filter(n => Number.isFinite(n)).reduce((s, n) => s + n, 0);
   }, [pm, reviewers, analysts]);
+
+  // What this staffing would actually do to these people's weeks — across EVERY matter they are
+  // on, not just this one. A person holding two roles on the task is one seat here: their hours
+  // add up, because that is how the board will place them.
+  const proposed = useMemo(() => {
+    const merged = new Map<string, { userId: string; hours: number; startDate: string | null; dueDate: string | null; hoursPerDay: number | null }>();
+    for (const r of [pm, ...reviewers, ...analysts]) {
+      if (!r.userId) continue;
+      const h = parseFloat(r.hours);
+      const cap = parseFloat(r.perDay);
+      const prev = merged.get(r.userId);
+      merged.set(r.userId, {
+        userId: r.userId,
+        hours: (prev?.hours ?? 0) + (Number.isFinite(h) ? h : 0),
+        // Two roles: the earlier start and the later deadline, exactly as the board reads them.
+        startDate: [prev?.startDate, r.start || null].filter(Boolean).sort()[0] ?? null,
+        dueDate: [prev?.dueDate, r.due || null].filter(Boolean).sort().pop() ?? null,
+        hoursPerDay: prev?.hoursPerDay != null && Number.isFinite(cap) ? prev.hoursPerDay + cap : (Number.isFinite(cap) ? cap : prev?.hoursPerDay ?? null),
+      });
+    }
+    return [...merged.values()];
+  }, [pm, reviewers, analysts]);
+  // The task's own hours already sit in everybody's committed load, so they come out before the
+  // new ones go in — otherwise re-saving an unchanged staffing would warn about an overload
+  // nobody has.
+  const impact = useAssignmentPreview(proposed, {
+    projectId: task.projectTasks?.[0]?.projectId ?? null,
+    excludeTaskId: task.id,
+    enabled: editable,
+  });
+  const gate = useOverrideGate(impact.over, impact.seats.map(s => `${s.userId}:${s.overHours}`).join('|'));
 
   function build(): StaffingEntry[] | string {
     const out: StaffingEntry[] = [];
@@ -225,6 +257,18 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
         </div>
       </section>
 
+      {/* What this does to their weeks — across every matter, not just this one. */}
+      {editable && (impact.isLoading || impact.seats.length > 0) && (
+        <section className="border-t border-gray-100 pt-4">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold text-gray-800">Do they have the hours?</h3>
+            <ImpactLegend />
+          </div>
+          <AssignmentImpact state={impact} />
+          {gate.node}
+        </section>
+      )}
+
       {/* Total + save */}
       <div className="flex items-center justify-between border-t border-gray-100 pt-4">
         <div>
@@ -233,7 +277,8 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
           <p className="text-[11px] text-gray-400">Auto-summed from everyone’s hours.</p>
         </div>
         {editable && (
-          <button type="button" onClick={save} disabled={saving}
+          <button type="button" onClick={save} disabled={saving || !gate.allowed}
+            title={gate.allowed ? undefined : 'This puts somebody past their working day — tick the box above to do it anyway.'}
             className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
             {saving ? <Loader size={14} className="animate-spin" /> : null} Save staffing
           </button>

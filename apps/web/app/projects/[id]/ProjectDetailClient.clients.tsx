@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
   ArrowLeft, Plus, CheckSquare, Users, Calendar, Pencil,
@@ -71,6 +71,10 @@ export function ClientsProjectDetailClient({ projectId }: Props) {
   const { can } = usePermissions();
   const { currentUser } = useOrg();
   const [activeTab, setActiveTab] = useState<Tab>('Task List');
+  // CLIENTS-FLOW: arriving from the Clients module's cross-client task-group list. The link names
+  // the piece of work, not just the client, so the page opens on the groups and TaskGroups puts
+  // that one in front of the reader instead of leaving them to find it again.
+  const focusGroupId = useSearchParams().get('group');
   const [showAddTask, setShowAddTask] = useState(false);
   const [addTaskStatusId, setAddTaskStatusId] = useState<string | undefined>(undefined);
   const [selectedTask, setSelectedTask] = useState<ApiTask | null>(null);
@@ -721,6 +725,7 @@ export function ClientsProjectDetailClient({ projectId }: Props) {
             canAssign={can('task.assign')}
             canMoveTasks={can('task.update')}
             canSetClientDue={canSetClientDue}
+            focusGroupId={focusGroupId}
           />
         )}
         {activeTab === 'Board' && (

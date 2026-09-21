@@ -685,7 +685,7 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
                         className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 max-w-[170px] text-gray-600 disabled:opacity-40"
                         title="Give this work to somebody else — while they are away, or for good"
                       >
-                        <option value="">Give this to…</option>
+                        <option value="">Give this to… (free hours are across every project)</option>
                         {/* The two things you can mean by "somebody else does it": only while
                             they are out, or from now on. They are different decisions and the
                             old single Reassign could only ever express the second. */}

@@ -153,9 +153,11 @@ const VIEW_BASICS = [
   code('tasklist', 'view'), code('timesheet', 'view'),
   code('issue', 'view'), code('comment', 'view'), code('document', 'view'),
   code('calendar', 'view'),
-  // capacity.view is NOT a basic any more. The matrix of 2026-08-12 opened the board to everyone;
-  // the owner closed it again in Sep 2026 — Team Capacity is visible only to Senior Consultant and
-  // above, who also get capacity.manage (task CRUD from the board). See DELIVERY_LEAD_CAPACITY.
+  // capacity.view is NOT a basic any more — in the CLIENTS flow. The matrix of 2026-08-12 opened
+  // the board to everyone; the owner closed it again in Sep 2026 — Team Capacity goes to Senior
+  // Consultant and above, who also get capacity.manage (task CRUD from the board), plus HR, which
+  // only reads it. See DELIVERY_LEAD_CAPACITY. The PROJECTS flow still opens the board to every
+  // role — rolePresetsFor('PROJECTS') puts capacity.view back for all of them.
   // Seeing the Team Spaces module is a basic: which space you can actually OPEN is decided by
   // membership, exactly as it is for projects, so this reveals nothing on its own.
   code('team', 'view'),
@@ -168,7 +170,8 @@ const VIEW_BASICS = [
 /**
  * Team Capacity, for the delivery ladder at or above Senior Consultant (Super Admin holds every code
  * implicitly; Admin's preset is every code, so it gets both through ADMIN_CODES). HR is people-ops,
- * not delivery, and is deliberately NOT on this ladder — it lost the board with this change.
+ * not delivery, so it is not on this ladder — it READS the board (capacity.view, in HR_CODES since
+ * 19 Sep 2026) and never edits it.
  */
 const DELIVERY_LEAD_CAPACITY = [code('capacity', 'view'), code('capacity', 'manage')];
 
@@ -317,7 +320,10 @@ const HR_CODES = [
   code('comment', 'view'), code('comment', 'create'),
   // Matrix 2026-08-11: may remove a file they attached.
   code('document', 'view'), code('document', 'create'), code('document', 'delete'),
-  // No capacity.view since Sep 2026: the board is for the delivery ladder (Senior Consultant and up).
+  // Team Capacity: the board is the delivery ladder's to MANAGE (capacity.manage, Senior Consultant
+  // and up), but HR may SEE it — the owner's call, 19 Sep 2026: who is loaded and who is free is a
+  // people question too. View only; it stays a tick in Admin → Access Control either way.
+  code('capacity', 'view'),
   code('calendar', 'view'), code('channel', 'view'),
   // matrix: HR manages their own calendar + logs/deletes their own time.
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),

@@ -79,10 +79,12 @@ function ProjectsProjectCapacityTab({ projectId }: { projectId: string }) {
       const mine = r.openTasks.filter(t => t.projectId === projectId);
       if (mine.length) people++;
       for (const t of mine) { remaining += t.remainingHours; if (t.overdue) overdueTasks++; }
-      const mineIds = new Set(mine.map(t => t.id));
       for (const d of r.days) {
         if (d.capacity <= 0 || (due && d.date > due)) continue;
-        plannedBefore += (d.tasks ?? []).filter(t => mineIds.has(t.taskId)).reduce((s, t) => s + t.hours, 0);
+        // This project's share of the day comes from the API's availability service, which is the
+        // same split the cells and the assignment dialogs draw. Re-totalling it from the day's
+        // task list here was a second derivation of a number that has to agree with itself.
+        plannedBefore += d.focusHours ?? 0;
         freeBefore += d.free;
       }
     }
@@ -95,6 +97,11 @@ function ProjectsProjectCapacityTab({ projectId }: { projectId: string }) {
       due, state: deadlineState(due, today, holidays), workdays, beyondWindow,
       remaining: r1(remaining), plannedBefore: r1(plannedBefore), freeBefore: r1(freeBefore), capacityBefore: r1(capacityBefore),
       perDay: workdays ? r1(remaining / workdays) : null, shortBy: r1(shortBy), people, overdueTasks,
+      // Hours these same people owe OTHER matters inside the window. The free hours above are
+      // already net of it — the server has always counted every project — but saying it out loud
+      // is what keeps "18h free" from being read as "18h free for us".
+      elsewhere: r1(rows.reduce((s, r) => s + (r.otherHours ?? 0), 0)),
+      elsewhereHidden: rows.some(r => (r.restrictedHours ?? 0) > 0.05),
     };
   }, [rows, project?.dueDate, projectId, today, holidays]);
 
@@ -134,7 +141,8 @@ function ProjectsProjectCapacityTab({ projectId }: { projectId: string }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-gray-500">
           When each member of this project is free — across <span className="font-medium text-gray-700">all</span> their projects,
-          so you can see who has real room for more of this one. This project&apos;s work is pinned; the rest is faded.
+          so you can see who has real room for more of this one. This project&apos;s work is drawn in its own colours;
+          everything else they are on is the slate block beside it, at its full size. Hover a day to see what it is.
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} intervalMs={POLL_MS} />
@@ -173,6 +181,12 @@ function ProjectsProjectCapacityTab({ projectId }: { projectId: string }) {
                 <span className="font-semibold text-gray-900">{summary.capacityBefore}h</span> the team can give it before then
               </span>
             )}
+            {summary.elsewhere > 0.05 && (
+              <span className="text-gray-700 tabular-nums" title="Hours these same people owe other projects inside this window. The free hours above are already net of it.">
+                <span className="font-semibold text-slate-700">{summary.elsewhere}h</span> of their window is on other work
+                {summary.elsewhereHidden && <span className="text-gray-400"> (some not named to you)</span>}
+              </span>
+            )}
             {summary.overdueTasks > 0 && <span className="text-red-700">{summary.overdueTasks} overdue {summary.overdueTasks === 1 ? 'task' : 'tasks'}</span>}
           </div>
           {verdict && (
@@ -198,6 +212,7 @@ function ProjectsProjectCapacityTab({ projectId }: { projectId: string }) {
           onFocus={setFocusProjectId}
           defaultPinnedProjectId={projectId}
           highlightProjectId={projectId}
+          aggregateOthers
           onSelectPerson={(userId, date) => { setFocusDate(date); setSelectedUserId(userId); }}
           onAssign={row => setAssign({ userId: row.userId, date: row.nextFreeDate ?? today })}
           emptyText="This project has no active members yet."

@@ -12,7 +12,7 @@ import { Building2, Plus } from 'lucide-react';
 import type { CapacityRow, CapacityDay, DayState } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
 import { formatDate, todayIST } from '@/lib/date';
-import { DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, projectsOf, holidaysOf, type Segment } from './grid.clients';
+import { DOW, DayCell, dayOfWeek, dayNum, isToday, segmentsFor, focusSegments, projectsOf, holidaysOf, type Segment } from './grid.clients';
 import { BoardLegend } from './BoardLegend.clients';
 import { HoverCard, type HoverTarget, type HoverIntent } from './HoverCard.clients';
 import { assignProjectHues } from '@/lib/project-colors.clients';
@@ -73,7 +73,7 @@ function weeksOf(days: CapacityDay[], today: string): CapacityDay[] {
 
 export function Board({
   allRows, groups, days, focusProjectId, onFocus, defaultPinnedProjectId = null, highlightProjectId,
-  onSelectPerson, onAssign, emptyText, fill, hoverSuppressed, taskActions,
+  aggregateOthers, onSelectPerson, onAssign, emptyText, fill, hoverSuppressed, taskActions,
 }: {
   /** Every row in the payload: hues, holidays, the team totals and the legend come from ALL of them. */
   allRows: CapacityRow[];
@@ -85,6 +85,13 @@ export function Board({
   defaultPinnedProjectId?: string | null;
   /** The client this board is scoped to: its share is marked inside each person's bar. */
   highlightProjectId?: string;
+  /**
+   * Inside one client's view: every other client's hours collapse into a single neutral block in
+   * each cell instead of being drawn per task and faded out. A day full of somebody else's work
+   * then LOOKS full — which is the whole reason this exists. The hover card is unaffected and
+   * still lists the real tasks, named where the viewer may see them.
+   */
+  aggregateOthers?: boolean;
   onSelectPerson: (userId: string, focusDate?: string) => void;
   onAssign?: (row: CapacityRow) => void;
   emptyText: string;
@@ -121,6 +128,19 @@ export function Board({
     for (const r of allRows) for (const d of viewDays.get(r.userId) ?? []) m.set(`${r.userId}|${d.date}`, segmentsFor(r, d, hues, today, holidays));
     return m;
   }, [allRows, viewDays, hues, holidays, today]);
+  // What the CELLS draw. Identical to the above on the full board; inside one client's view every
+  // other matter is one neutral block, so the day is measured rather than ghosted. The hover keeps
+  // `segmentsByKey`, because that is where the detail belongs.
+  //
+  // Only while THIS client is the one pinned: pinning some other matter from the legend is a
+  // request to look at that matter, and then the ordinary per-task drawing is what answers it.
+  const aggregating = !!aggregateOthers && !!highlightProjectId && focusProjectId === highlightProjectId;
+  const cellSegmentsByKey = useMemo(() => {
+    if (!aggregating || !highlightProjectId) return segmentsByKey;
+    const m = new Map<string, Segment[] | null>();
+    for (const [k, v] of segmentsByKey) m.set(k, focusSegments(v, highlightProjectId));
+    return m;
+  }, [segmentsByKey, aggregating, highlightProjectId]);
 
   // Team totals under the header, over the same columns.
   const totals = useMemo(() => teamTotals(allRows.map(r => ({ ...r, days: viewDays.get(r.userId) ?? r.days }))), [allRows, viewDays]);
@@ -167,7 +187,7 @@ export function Board({
     // card beside where the cell used to be.
     hoverTimer.current = setTimeout(() => {
       if (!t.el.isConnected) return;
-      setHover({ row: t.row, day: t.day, segments: t.segments, rect: t.el.getBoundingClientRect() });
+      setHover({ row: t.row, day: t.day, segments: t.segments, rect: t.el.getBoundingClientRect(), focusProjectId: highlightProjectId ?? null });
     }, 120);
   };
   // An interactive card (task actions) must survive the pointer's trip from the cell into it, so
@@ -315,9 +335,11 @@ export function Board({
                   rowIndex++;
                   const r = rowIndex;
                   const rowDays = viewDays.get(row.userId) ?? row.days;
-                  const mine = highlightProjectId
-                    ? Math.round(rowDays.reduce((s, d) => s + (d.tasks ?? []).filter(t => row.openTasks.find(o => o.id === t.taskId)?.projectId === highlightProjectId).reduce((x, t) => x + t.hours, 0), 0) * 10) / 10
-                    : undefined;
+                  // This client's share of the window comes from the API's availability service
+                  // (CapacityRow.focusHours), which is the same split the day cells and the
+                  // assignment dialogs read. It used to be re-totalled here from the day rows —
+                  // a second derivation of a number that has to agree with itself everywhere.
+                  const mine = highlightProjectId ? row.focusHours ?? 0 : undefined;
                   return (
                     <div key={row.userId} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50/70 transition-colors group">
                       <button onClick={() => onSelectPerson(row.userId)} className="w-56 shrink-0 flex items-center gap-2.5 text-left" title={`See ${row.name.split(' ')[0]}'s whole plan`}>
@@ -333,9 +355,10 @@ export function Board({
                       <div className="flex-1 grid gap-1" style={gridStyle}>
                         {rowDays.map((d, c) => {
                           const segments = segmentsByKey.get(`${row.userId}|${d.date}`) ?? null;
+                          const drawn = cellSegmentsByKey.get(`${row.userId}|${d.date}`) ?? null;
                           return (
                             <DayCell
-                              key={d.date} day={d} segments={segments} focusProjectId={focusProjectId} today={containsToday(d)} maxSegments={maxSegments}
+                              key={d.date} day={d} segments={drawn} focusProjectId={aggregating ? null : focusProjectId} today={containsToday(d)} maxSegments={maxSegments}
                               cellWidth={cellWidth} tabIndex={tabCell.r === r && tabCell.c === c ? 0 : -1} dataRow={r} dataCol={c}
                               onHover={e => { if (!hoverSuppressed) beginHover({ row, day: d, segments, el: e.currentTarget }); }}
                               onLeave={endHover}
@@ -361,7 +384,13 @@ export function Board({
                             )}
                             {' · '}{row.freeHours}h free
                             {row.overCommittedHours > 0.05 && <span className="ml-1 font-medium text-rose-700">· {row.overCommittedHours}h over</span>}
-                            {mine != null && <span className="block text-gray-500">{mine}h on this client</span>}
+                            {mine != null && (
+                              <span className="block text-gray-500">
+                                {mine}h on this client
+                                {/* The number that stops somebody reading "12h free" as "12h free for me". */}
+                                {(row.otherHours ?? 0) > 0.05 && <> · <span className="font-medium text-slate-600">{row.otherHours}h elsewhere</span></>}
+                              </span>
+                            )}
                           </p>
                         </div>
                         {onAssign && (

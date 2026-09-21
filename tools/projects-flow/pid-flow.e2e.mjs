@@ -142,6 +142,10 @@ const idOf = async s => { const me = (await s('/auth/me')).data; return (me?.use
   step('The CLIENTS flow\'s routes and fields do not exist here');
   for (const [method, path] of [
     ['GET', '/projects/cid-ledger'], ['GET', '/client-groups'],
+    // The cross-client task-group browser. Task groups are a CLIENTS idea — the PROJECTS flow has
+    // task lists, inside one matter — so the whole controller is absent here rather than answering
+    // with an empty list, which would read as "no work found" (docs/WORKSPACE_FLOWS.md).
+    ['GET', '/task-groups'], ['GET', '/task-groups?search=claim'],
     ['GET', `/projects/${p1.data?.id}/cid-move?mode=REASSIGN`], ['GET', `/projects/${p1.data?.id}/cid-move/targets`],
     ['POST', `/projects/${p1.data?.id}/cid/reassign`], ['POST', `/projects/${p1.data?.id}/tasklists/${tl.data?.id}/complete`],
   ]) {

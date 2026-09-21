@@ -36,7 +36,7 @@
 
 export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
-export type HueTexture = 'none' | 'hatch' | 'dots' | 'cross';
+export type HueTexture = 'none' | 'hatch' | 'dots' | 'cross' | 'backhatch';
 
 export type ProjectHue = {
   name: string;
@@ -77,6 +77,9 @@ export const PROJECT_HUES: readonly ProjectHue[] = [
 export function textureStyle(texture: HueTexture): { backgroundImage?: string; backgroundSize?: string } {
   switch (texture) {
     case 'hatch': return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0 1px, transparent 1px 4px)' };
+    // Not on any project hue — the neutral "other work" block wears it, so the mass it stands for
+    // is separable from a real matter without relying on colour.
+    case 'backhatch': return { backgroundImage: 'repeating-linear-gradient(135deg, rgba(255,255,255,0.28) 0 1px, transparent 1px 4px)' };
     case 'dots':  return { backgroundImage: 'radial-gradient(rgba(255,255,255,0.45) 0.7px, transparent 0.8px)', backgroundSize: '4px 4px' };
     case 'cross': return { backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.22) 0 1px, transparent 1px 5px), repeating-linear-gradient(-45deg, rgba(255,255,255,0.22) 0 1px, transparent 1px 5px)' };
     default:      return {};

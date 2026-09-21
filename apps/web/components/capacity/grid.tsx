@@ -48,6 +48,8 @@ export const DAILY_CAPACITY = 8;
  * a label is what you read without looking away. The full PID and title are always in the hover.
  */
 export function segmentLabel(task: CapacityOpenTask): string | null {
+  if (task.id === OTHER_WORK_TASK_ID) return 'other';
+  if (task.restricted) return 'other';
   if (task.isTeamWork) return 'team';
   if (task.projectPid) {
     const serial = task.projectPid.split(/[_\-/]/).pop() ?? task.projectPid;
@@ -78,6 +80,25 @@ export function holidaysOf(rows: { days: CapacityDay[] }[]): Set<string> {
   for (const d of rows[0]?.days ?? []) if (d.state === 'HOLIDAY' && d.note !== 'Optional holiday') out.add(d.date);
   return out;
 }
+
+/**
+ * The neutral block every other project's work collapses into inside ONE project's view.
+ *
+ * A day drawn per-task, with everyone else's segments faded to a quarter of their opacity, reads
+ * as an empty day — which is exactly how somebody came to be handed work they had no room for.
+ * Here the hours keep their full width and their full strength in a neutral slate, hatched so the
+ * band is distinguishable without colour, and labelled "other". The hover card still lists the
+ * real tasks behind it, named where this viewer is allowed to know them.
+ */
+export const OTHER_WORK_HUE: ProjectHue = {
+  name: 'other', h: 215, s: 0.26,
+  // One depth at every priority: this block is not one task and has no urgency of its own. Slate
+  // 600 rather than the palette's own slate, so a day's "everything else" cannot be mistaken for
+  // the matter that happens to have been given the slate hue.
+  critical: '#475569', high: '#475569', medium: '#475569', low: '#475569',
+  tint: '#f1f5f9', ring: '#cbd5e1', texture: 'backhatch',
+};
+export const OTHER_WORK_TASK_ID = '~other';
 
 /** Every project a board's rows mention, for hue assignment. */
 export function projectsOf(rows: { openTasks: CapacityOpenTask[] }[]): { id: string; pid: string | null }[] {
@@ -111,6 +132,39 @@ export function segmentsFor(
     { id: x.taskId, overdue: x.task.overdue, priority: x.task.priority, dueDate: x.task.dueDate, projectPid: x.task.projectPid },
     { id: y.taskId, overdue: y.task.overdue, priority: y.task.priority, dueDate: y.task.dueDate, projectPid: y.task.projectPid },
   ));
+}
+
+/**
+ * The same day, drawn for ONE project: its own segments as they are, and every other project's
+ * hours rolled into a single neutral block at the end.
+ *
+ * One block rather than many is deliberate. Inside a project's view the question is not "which
+ * seven other matters is she on" — the hover answers that — it is "how much of Tuesday is already
+ * gone". A single measured block answers it in one glance, and it cannot be mistaken for this
+ * project's work however many other matters there happen to be.
+ */
+export function focusSegments(segments: Segment[] | null, focusProjectId: string): Segment[] | null {
+  if (!segments) return null;
+  const mine: Segment[] = [];
+  let otherHours = 0;
+  let otherTask: CapacityOpenTask | null = null;
+  for (const seg of segments) {
+    if (seg.task.projectId === focusProjectId) { mine.push(seg); continue; }
+    otherHours += seg.hours;
+    otherTask = otherTask ?? seg.task;
+  }
+  if (otherHours <= 0 || !otherTask) return mine;
+  return [...mine, {
+    taskId: OTHER_WORK_TASK_ID,
+    hours: Math.round(otherHours * 100) / 100,
+    // Carries a real task only so the segment has the shape the cell expects; nothing about it
+    // is drawn, because the block stands for all of them.
+    task: { ...otherTask, id: OTHER_WORK_TASK_ID, title: 'Other work', project: 'Other work', projectId: undefined, projectPid: null, isTeamWork: false },
+    hue: OTHER_WORK_HUE,
+    fill: OTHER_WORK_HUE.medium,
+    deadline: 'none' as const,
+    rail: null,
+  }];
 }
 
 export function DayCell({

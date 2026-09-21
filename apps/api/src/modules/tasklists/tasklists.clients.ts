@@ -8,6 +8,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsDateString, IsInt, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { getActorId } from '../../common/context/request-context';
@@ -22,6 +23,7 @@ import { ClientsProjectsService } from '../projects/projects.clients.service';
 import { TasksService } from '../tasks/tasks.service';
 import { CustomDomainDto, TaskGroupSpecDto } from '../projects/dto.clients';
 import { PROJECT_TYPES } from '../projects/project-templates';
+import { TECHNOLOGY_DOMAINS } from '../projects/technology-domains';
 
 /** POST body: exactly the shape a client's first task group takes — one definition, two doors. */
 export class CreateTaskListDto extends TaskGroupSpecDto {}
@@ -66,6 +68,58 @@ export class UpdateTaskListDto {
 
 const sameDay = (a?: Date | null, b?: Date | null) =>
   !!a && !!b && a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
+
+/**
+ * One page of the CROSS-CLIENT task-group list: a sane default, and a ceiling nobody can raise
+ * from a query string. A firm's whole body of work is a real number of rows, and the Clients
+ * module asks for this list on every keystroke.
+ */
+const SEARCH_PAGE = 50;
+const SEARCH_PAGE_MAX = 200;
+/** Enough words for a real phrase. Past that somebody is pasting, not searching. */
+const MAX_SEARCH_TOKENS = 6;
+/** How many matching tasks are read to explain a page of matches, and named on one row. */
+const MATCHED_TASK_CAP = 400;
+const MATCHED_TASKS_SHOWN = 3;
+
+/** What the cross-client task-group list accepts. Everything is optional; nothing widens scope. */
+export type TaskGroupQuery = {
+  search?: string;
+  /** ACTIVE (default), COMPLETED or ALL. */
+  status?: string;
+  groupType?: string;
+  technologyDomain?: string;
+  /** Narrow to one client. Can only ever narrow — the reader's scope is ANDed underneath. */
+  clientId?: string;
+  overdue?: boolean;
+  mine?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
+/**
+ * A search box's text as the words to match.
+ *
+ * Every word has to appear somewhere in the group, which is what makes typing more NARROW the
+ * result. Matching any word instead would mean a second word widens the list, which is the
+ * opposite of what a person doing it expects.
+ */
+function searchTokens(raw?: string): string[] {
+  return (raw ?? '').toLowerCase().split(/\s+/).map(t => t.trim()).filter(Boolean).slice(0, MAX_SEARCH_TOKENS);
+}
+
+/**
+ * A typed word as a LIKE pattern that means ITSELF.
+ *
+ * Prisma builds `contains` into `ILIKE '%' || <term> || '%'` and passes the term through
+ * untouched, so `%` typed into the search box matched every group in the firm and `_` matched
+ * any single character — a search that answers a question nobody asked. Postgres LIKE escapes
+ * with a backslash by default, so the three pattern characters are escaped here (the backslash
+ * first, or it would escape the escapes).
+ */
+function likeTerm(token: string): string {
+  return token.replace(/\\/g, '\\\\').replace(/[%_]/g, c => `\\${c}`);
+}
 
 /**
  * A PROJECT's task lists — which the CLIENTS-FLOW calls TASK GROUPS: one piece of work for the
@@ -220,6 +274,183 @@ export class ClientsTaskListsService {
     const openBy = new Map(open.map(o => [o.taskListId, o._count._all]));
     const scope = await this.deadlines.scope();
     return lists.map(l => this.redact({ ...l, openTaskCount: openBy.get(l.id) ?? 0 }, scope, projectId));
+  }
+
+  /**
+   * CLIENTS-FLOW: every task group the reader may see, ACROSS clients — the Clients module's
+   * "find the piece of work, not the client" view.
+   *
+   * The per-client list above answers "what is in this matter". This answers the other question a
+   * patent team actually asks — "where is the FTO on the wafer bonding" — when the person does not
+   * remember, or was never told, which client it sits under.
+   *
+   * SCOPE IS THE SAME WALL AS THE CLIENTS LIST, deliberately reusing ProjectsService.list's own
+   * fragment (`projectScopeWhere`): a delivery lead sees every matter in their organisation,
+   * everyone else only the matters they are staffed on. A cross-client list is exactly the shape
+   * that turns a per-client wall into a directory of the firm's work if it grows its own rule, so
+   * it does not have one. `clientId` narrows the list; it can never widen it, because the scope is
+   * ANDed underneath and an unreachable client simply matches nothing.
+   *
+   * The client deadline is redacted per row by the same `redact` the per-client list uses, so the
+   * promise made to a client is no more readable here than it is there.
+   *
+   * SEARCH is case-insensitive and matches PART of a word, across the group's name and
+   * description, its kind of work and the field it is in (by stored value AND by the label a
+   * person reads — nobody types "SOURCE_CODE"), the client it belongs to, and the titles of the
+   * tasks inside it. Several words all have to match, each anywhere: "fto wafer" finds the FTO
+   * group about wafer bonding and not every FTO in the firm.
+   */
+  async search(organizationId: string, q: TaskGroupQuery) {
+    const actorId = this.actorId();
+    const scope = await this.access.projectScopeWhere(actorId, organizationId);
+    const projectWhere = { deletedAt: null, ...scope } as Prisma.ProjectWhereInput;
+
+    const status = q.status === 'COMPLETED' || q.status === 'ALL' ? q.status : 'ACTIVE';
+    const limit = Math.min(Math.max(q.limit ?? SEARCH_PAGE, 1), SEARCH_PAGE_MAX);
+    const offset = Math.max(q.offset ?? 0, 0);
+    const tokens = searchTokens(q.search);
+
+    // The labels a person reads live in code (built-ins) and in two per-org tables (the types and
+    // domains an organisation added itself), so a token is turned into the set of VALUES whose
+    // label it matches before the query — one extra round trip, and only when there is a search.
+    let typeValues: string[][] = [];
+    let domainValues: string[][] = [];
+    if (tokens.length) {
+      const [savedTypes, savedDomains] = await Promise.all([
+        this.prisma.projectTemplate.findMany({ where: { organizationId, isActive: true }, select: { value: true, label: true } }),
+        this.prisma.technologyDomain.findMany({ where: { organizationId, isActive: true }, select: { value: true, label: true } }),
+      ]);
+      const types = [...PROJECT_TYPES.map(t => ({ value: t.value, label: t.label })), ...savedTypes];
+      const domains = [...TECHNOLOGY_DOMAINS.map(d => ({ value: d.value, label: d.label })), ...savedDomains];
+      typeValues = tokens.map(tok => types.filter(t => t.label.toLowerCase().includes(tok)).map(t => t.value));
+      domainValues = tokens.map(tok => domains.filter(d => d.label.toLowerCase().includes(tok)).map(d => d.value));
+    }
+
+    const and: Prisma.TaskListWhereInput[] = [];
+    // "Overdue" means what the group header means by it: still running, past its deadline, and
+    // with work left in it. A group whose tasks are all closed but which nobody pressed Complete
+    // on is not what somebody filtering for overdue work is looking for.
+    if (q.overdue) {
+      and.push({
+        status: 'ACTIVE',
+        dueDate: { lt: startOfIstDay(new Date()) },
+        projectTasks: { some: { task: { deletedAt: null, ...OPEN_TASK_WHERE } } },
+      });
+    }
+    // "Assigned to me" is staffing, not membership: a group counts as mine when I am on one of
+    // its tasks. Being a member of the client is what let me see it at all.
+    if (q.mine) {
+      and.push({ projectTasks: { some: { task: { deletedAt: null, assignees: { some: { userId: actorId } } } } } });
+    }
+    tokens.forEach((tok, i) => {
+      const like = { contains: likeTerm(tok), mode: 'insensitive' as const };
+      and.push({
+        OR: [
+          { name: like },
+          { description: like },
+          { groupType: like },
+          ...(typeValues[i]?.length ? [{ groupType: { in: typeValues[i] } }] : []),
+          { technologyDomain: like },
+          ...(domainValues[i]?.length ? [{ technologyDomain: { in: domainValues[i] } }] : []),
+          { project: { title: like } },
+          { project: { code: like } },
+          { projectTasks: { some: { task: { deletedAt: null, title: like } } } },
+        ],
+      });
+    });
+
+    const base: Prisma.TaskListWhereInput = {
+      deletedAt: null,
+      // A team space's columns are TaskList rows too; they are not a client's work and are reached
+      // through /teams/:id/lists. `project` alone would exclude them, but saying so is cheaper to
+      // read than inferring it from a relation filter.
+      projectId: q.clientId ? q.clientId : { not: null },
+      project: projectWhere,
+    };
+    const where: Prisma.TaskListWhereInput = {
+      ...base,
+      ...(status !== 'ALL' ? { status } : {}),
+      ...(q.groupType ? { groupType: q.groupType } : {}),
+      ...(q.technologyDomain ? { technologyDomain: q.technologyDomain } : {}),
+      ...(and.length ? { AND: and } : {}),
+    };
+
+    const [total, rows, inScope] = await Promise.all([
+      this.prisma.taskList.count({ where }),
+      this.prisma.taskList.findMany({
+        where,
+        // Running work first, then whatever is due soonest — the order somebody scanning for what
+        // to pick up next is reading for. Undated groups fall to the end rather than the front,
+        // and the id tiebreak keeps paging stable.
+        orderBy: [{ status: 'asc' }, { dueDate: { sort: 'asc', nulls: 'last' } }, { name: 'asc' }, { id: 'asc' }],
+        take: limit,
+        skip: offset,
+        select: {
+          id: true, name: true, description: true, groupType: true, technologyDomain: true,
+          status: true, isDefault: true, sequence: true,
+          startDate: true, dueDate: true, clientDueDate: true, completedAt: true, createdAt: true,
+          projectId: true,
+          project: {
+            select: {
+              id: true, title: true, code: true, roundSeq: true, projectPhase: true,
+              clientGroup: { select: { id: true, name: true } },
+            },
+          },
+        },
+      }),
+      // What the filters are hiding, so an empty result can say why instead of implying the
+      // reader has no work at all.
+      this.prisma.taskList.count({ where: base }),
+    ]);
+
+    const ids = rows.map(r => r.id);
+    const today = startOfIstDay(new Date());
+    const [allTasks, openTasks, overdueTasks, matched] = ids.length ? await Promise.all([
+      this.prisma.projectTask.groupBy({ by: ['taskListId'], _count: { _all: true }, where: { taskListId: { in: ids }, task: { deletedAt: null } } }),
+      this.prisma.projectTask.groupBy({ by: ['taskListId'], _count: { _all: true }, where: { taskListId: { in: ids }, task: { deletedAt: null, ...OPEN_TASK_WHERE } } }),
+      this.prisma.projectTask.groupBy({ by: ['taskListId'], _count: { _all: true }, where: { taskListId: { in: ids }, task: { deletedAt: null, dueDate: { lt: today }, ...OPEN_TASK_WHERE } } }),
+      // The tasks that made a group match, so the row can SAY it matched on a task and name it —
+      // a group called "Round 2" turning up for "claim chart" is otherwise inexplicable.
+      tokens.length ? this.prisma.projectTask.findMany({
+        where: { taskListId: { in: ids }, task: { deletedAt: null, OR: tokens.map(t => ({ title: { contains: likeTerm(t), mode: 'insensitive' as const } })) } },
+        select: { taskListId: true, task: { select: { id: true, title: true } } },
+        take: MATCHED_TASK_CAP,
+      }) : Promise.resolve([]),
+    ]) : [[], [], [], []];
+
+    const countIn = (rowsIn: { taskListId: string | null; _count: { _all: number } }[]) =>
+      new Map(rowsIn.map(r => [r.taskListId ?? '', r._count._all]));
+    const all = countIn(allTasks), open = countIn(openTasks), late = countIn(overdueTasks);
+    const tasksBy = new Map<string, { id: string; title: string }[]>();
+    for (const m of matched) {
+      if (!m.taskListId) continue;
+      const list = tasksBy.get(m.taskListId) ?? tasksBy.set(m.taskListId, []).get(m.taskListId)!;
+      if (list.length < MATCHED_TASKS_SHOWN) list.push(m.task);
+    }
+
+    const deadlineScope = await this.deadlines.scope(actorId);
+    const items = rows.map(r => {
+      const matchedTasks = tasksBy.get(r.id) ?? [];
+      const hit = (v?: string | null) => !!v && tokens.some(t => v.toLowerCase().includes(t));
+      const matchedOn = tokens.length ? [
+        hit(r.name) && 'name',
+        hit(r.description) && 'description',
+        (hit(r.groupType) || typeValues.some(vs => r.groupType && vs.includes(r.groupType))) && 'type',
+        (hit(r.technologyDomain) || domainValues.some(vs => r.technologyDomain && vs.includes(r.technologyDomain))) && 'domain',
+        (hit(r.project?.title) || hit(r.project?.code)) && 'client',
+        matchedTasks.length > 0 && 'task',
+      ].filter((x): x is string => !!x) : [];
+      return this.redact({
+        ...r,
+        taskCount: all.get(r.id) ?? 0,
+        openTaskCount: open.get(r.id) ?? 0,
+        overdueTaskCount: late.get(r.id) ?? 0,
+        matchedTasks,
+        matchedOn,
+      }, deadlineScope, r.projectId ?? '');
+    });
+
+    return { items, total, limit, offset, hasMore: offset + items.length < total, inScope };
   }
 
   async get(projectId: string, id: string) {

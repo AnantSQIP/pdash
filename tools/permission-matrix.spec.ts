@@ -39,6 +39,7 @@ import {
   MODULES as CATALOG_MODULES,
   ROLE_PRESETS,
   SUPER_ADMIN_ONLY_CODES,
+  rolePresetsFor,
 } from '../packages/db/prisma/permissions-catalog';
 
 let passed = 0;
@@ -200,24 +201,53 @@ check('Admin is everything else bar deleting a role',
 check('Super Admin is stored as the implicit-all sentinel, not as a list',
   ROLE_PRESETS['Super Admin'], '*');
 
-// ── Team Capacity: Senior Consultant and above, and nobody else ────────────
+// ── Team Capacity: managed by Senior Consultant and above; HR may look ─────
 // Owner, Sep 2026: "the Team Capacity module is only visible to [people whose role is above or
 // equal to Senior Consultant]", and those same people get task CRUD from it (capacity.manage).
-// HR is people-ops, not the delivery ladder, and is deliberately left out.
+// Amended 19 Sep 2026, same owner: HR may SEE the board — who is loaded and who is free is a
+// people question too — but not manage it. Everyone else below the ladder still sees nothing.
 const holds = (role: string, c: string) => {
   const p = ROLE_PRESETS[role];
   return p === '*' || (p as string[]).includes(c);
 };
 const LADDER = ['Super Admin', 'Admin', 'Manager', 'Senior Consultant'];
-const BELOW = ['Consultant', 'Senior Research Associate', 'HR', 'Business Development', 'Employee'];
+const BELOW = ['Consultant', 'Senior Research Associate', 'Business Development', 'Employee'];
 check('capacity.manage is a real, grantable code', ALL_PERMISSION_CODES.includes('capacity.manage'), true);
 check('it reads as what it hands out', CODE_NOTES['capacity.manage']?.includes('Create, edit, assign and delete'), true);
 check('the ladder sees the board', LADDER.map(r => holds(r, 'capacity.view')), [true, true, true, true]);
 check('…and manages tasks from it', LADDER.map(r => holds(r, 'capacity.manage')), [true, true, true, true]);
-check('nobody below Senior Consultant sees the board — HR included',
-  BELOW.map(r => holds(r, 'capacity.view')), [false, false, false, false, false]);
-check('…or manages tasks from it', BELOW.map(r => holds(r, 'capacity.manage')), [false, false, false, false, false]);
-check('every preset is accounted for by the two lists', Object.keys(ROLE_PRESETS).sort(), [...LADDER, ...BELOW].sort());
+check('nobody below Senior Consultant sees the board', BELOW.map(r => holds(r, 'capacity.view')), [false, false, false, false]);
+check('…or manages tasks from it', BELOW.map(r => holds(r, 'capacity.manage')), [false, false, false, false]);
+check('HR sees the board', holds('HR', 'capacity.view'), true);
+check('…but never manages tasks from it', holds('HR', 'capacity.manage'), false);
+check('every preset is accounted for by the three lists', Object.keys(ROLE_PRESETS).sort(), [...LADDER, ...BELOW, 'HR'].sort());
+
+// ── the same question, asked of the PROJECTS flow ───────────────────────────
+// ROLE_PRESETS above IS the CLIENTS flow. The PROJECTS flow is what production has always run —
+// the matrix of 2026-08-12: every role sees Team Capacity, HR included, and nobody holds
+// capacity.manage, because that board has no task CRUD to hand out. rolePresetsFor is where the
+// two part company, and the workspace-flow conversion moves a live database between them, so if
+// this drifts the conversion moves grants to the wrong place. See docs/WORKSPACE_FLOWS.md.
+const PROJECTS_PRESETS = rolePresetsFor('PROJECTS');
+const holdsInProjects = (role: string, c: string) => {
+  const p = PROJECTS_PRESETS[role];
+  return p === '*' || (p as string[]).includes(c);
+};
+const EVERY_ROLE = Object.keys(ROLE_PRESETS);
+check('PROJECTS: the same roles exist', Object.keys(PROJECTS_PRESETS).sort(), EVERY_ROLE.slice().sort());
+check('PROJECTS: every role sees the board — HR included',
+  EVERY_ROLE.map(r => holdsInProjects(r, 'capacity.view')), EVERY_ROLE.map(() => true));
+check('PROJECTS: only the implicit-all role manages tasks from it',
+  EVERY_ROLE.filter(r => holdsInProjects(r, 'capacity.manage')), ['Super Admin']);
+check('PROJECTS: nothing else about the presets changes',
+  EVERY_ROLE.map(r => {
+    const c = PROJECTS_PRESETS[r], p = ROLE_PRESETS[r];
+    if (c === '*' || p === '*') return c === p;
+    const strip = (x: string[]) => x.filter(v => !v.startsWith('capacity.')).sort().join(',');
+    return strip(c as string[]) === strip(p as string[]);
+  }),
+  EVERY_ROLE.map(() => true));
+check('CLIENTS is the catalog itself, unchanged', rolePresetsFor('CLIENTS'), ROLE_PRESETS);
 
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length) {

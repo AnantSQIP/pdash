@@ -33,6 +33,7 @@ import { ProfileCard } from '@/components/people/ProfileCard';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 import { TimeModeCard } from '@/components/settings/TimeModeCard';
+import { WorkspaceFlowCard } from '@/components/settings/WorkspaceFlowCard';
 
 // Only tabs backed by real functionality are shown. Notifications / Workflows /
 // Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
@@ -290,6 +291,8 @@ function GeneralTab() {
       <ProfilePhotoCard />
       <ChangePasswordCard />
       <ChangePasscodeCard />
+      {/* Which of the two flows this firm runs, and the guided conversion between them. */}
+      {org && <WorkspaceFlowCard org={org} />}
       {/* Timer or day sheet — a PROJECTS-flow choice; the CLIENTS flow records time one way only. */}
       {org && org.workspaceFlow !== 'CLIENTS' && <TimeModeCard org={org} />}
       {/* Organization card */}

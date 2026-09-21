@@ -22,9 +22,13 @@ const WIDTH = 320;
 const GAP = 6;
 const MAX_ROWS = 6;
 
-export type HoverTarget = { row: CapacityRow; day: CapacityDay; segments: Segment[] | null; rect: DOMRect };
+export type HoverTarget = {
+  row: CapacityRow; day: CapacityDay; segments: Segment[] | null; rect: DOMRect;
+  /** The client this board is scoped to, so the card can say how much of the day is NOT it. */
+  focusProjectId?: string | null;
+};
 /** What a cell hands over on hover; the rect is read when the delay elapses, not now. */
-export type HoverIntent = { row: CapacityRow; day: CapacityDay; segments: Segment[] | null; el: HTMLElement };
+export type HoverIntent = { row: CapacityRow; day: CapacityDay; segments: Segment[] | null; el: HTMLElement; focusProjectId?: string | null };
 
 /** The words beside the colour: never rely on the rail alone. */
 export function dueText(seg: Segment, today: string): { text: string; cls: string } {
@@ -79,6 +83,9 @@ export function HoverCard({ target, today, actions, onPointerInside, onAction }:
   }, [target, el]);
 
   const { row, day, segments } = target;
+  // Inside a client's view, the first thing to say about a day is how much of it belongs to
+  // somebody else. A cell can be read as "room for us" otherwise, which is precisely the mistake.
+  const otherHours = target.focusProjectId ? day.otherHours ?? 0 : 0;
   const working = day.capacity > 0;
   const cap = working ? day.capacity : DAILY_CAPACITY;
   const over = working && day.load > cap + 0.05;
@@ -117,6 +124,12 @@ export function HoverCard({ target, today, actions, onPointerInside, onAction }:
         {day.state === 'LEAVE_PENDING' && day.note && (
           <p className="mt-0.5 text-[11px] text-purple-700">{day.note}</p>
         )}
+        {working && otherHours > 0.05 && (
+          <p className="mt-0.5 text-[11px] text-slate-600">
+            <span className="font-semibold tabular-nums">{Math.round(otherHours * 10) / 10}h</span> of it is on other clients
+            {(day.restrictedHours ?? 0) > 0.05 && <span className="text-gray-400"> · some not named to you</span>}
+          </p>
+        )}
 
         {shown.length > 0 && (
           <ul className="mt-2.5 space-y-2">
@@ -132,12 +145,15 @@ export function HoverCard({ target, today, actions, onPointerInside, onAction }:
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="min-w-0 truncate">
                         {pid && <span className="font-mono text-[10.5px] text-gray-500">{pid} · </span>}
-                        <span className="text-gray-700">{seg.task.project ?? (seg.task.isTeamWork ? 'Team space' : '—')}</span>
+                        {/* A client this viewer may not open is counted, never named. */}
+                        <span className={seg.task.restricted ? 'italic text-gray-500' : 'text-gray-700'}>
+                          {seg.task.restricted ? 'Other work — a client you cannot open' : seg.task.project ?? (seg.task.isTeamWork ? 'Team space' : '—')}
+                        </span>
                         {seg.task.taskGroup && <span className="text-gray-400"> · {seg.task.taskGroup}</span>}
                       </span>
                       <span className="shrink-0 font-semibold tabular-nums text-gray-900">{Math.round(seg.hours * 10) / 10}h</span>
                     </div>
-                    <p className="truncate font-medium text-gray-900">{seg.task.title}</p>
+                    {!seg.task.restricted && <p className="truncate font-medium text-gray-900">{seg.task.title}</p>}
                     <p className="text-[11px] text-gray-500">
                       {priorityWord(seg.task.priority)} · <span className={due.cls}>{due.text}</span>
                       {seg.task.ownDeadline && <span className="text-gray-400"> (own{seg.task.taskDueDate ? `; task ${formatDate(seg.task.taskDueDate)}` : ''})</span>}
@@ -149,7 +165,7 @@ export function HoverCard({ target, today, actions, onPointerInside, onAction }:
                         {seg.task.overEstimate && <span className="text-amber-700"> · over the estimate</span>}
                       </p>
                     )}
-                    {actions && !seg.task.isTeamWork && (
+                    {actions && !seg.task.isTeamWork && !seg.task.restricted && (
                       <div className="mt-1 flex items-center gap-3 text-[11px] font-medium">
                         <button type="button" onClick={() => { onAction?.(); actions.edit(seg.task); }}
                           className="inline-flex items-center gap-1 text-gray-500 hover:text-brand-700"><Pencil size={11} /> Edit</button>

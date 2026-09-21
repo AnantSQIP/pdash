@@ -10,7 +10,7 @@ a Super Admin under **Settings → Workspace flow**:
 | Patents / client codes | on (patent portal, patent IDs, client ledger) | off |
 | Time | TIMER or MANUAL (admin switch) | MANUAL only: Finish, Reopen, one Log time |
 | Billable | each person decides per time entry | per task (default billable), time follows the task |
-| Team Capacity | everyone sees it (dark palette) | Senior Consultant and above; task CRUD from the board; light palette |
+| Team Capacity | everyone sees it (dark palette) | Senior Consultant and above, plus HR reading it; task CRUD from the board; light palette |
 
 ## The rule the code keeps
 
@@ -48,7 +48,10 @@ PROJECTS → CLIENTS:
   carry it, and every existing number is written to the CID ledger as IMPORTED;
 - every live project without a number gets the next CID (oldest first), recorded as BACKFILLED;
 - Team Capacity: `capacity.view` + `capacity.manage` for Super Admin / Admin / Manager / Senior
-  Consultant; `capacity.view` removed from every other role, group, direct grant and ALLOW override;
+  Consultant, and `capacity.view` for HR — the owner's amendment of 19 Sep 2026: who is loaded and
+  who is free is a people question too, but the board stays the ladder's to change. Both codes are
+  removed from every other role, every group, and the direct grants and ALLOW overrides of people
+  whose role carries neither;
 - the flow becomes CLIENTS.
 
 CLIENTS → PROJECTS:
@@ -62,6 +65,21 @@ CLIENTS → PROJECTS:
 Every conversion is recorded in `workspace_flow_change` with its preflight and verification reports.
 Before an organisation has any project, client or timesheet the same conversion runs with nothing to
 convert — choosing the flow for a new firm is one click.
+
+## Work that is not a flow's own: availability
+
+How free a person is — their committed and free hours, the share of them that belongs to some other
+matter, and what a proposed assignment would do to their week — is the same question in both flows,
+so `capacity/availability.ts` serves both and carries no `@RequireFlow`. Every read of the board
+goes through it (`/capacity/team`, `/capacity/project/:id`), and every dialog that hands out work
+asks `POST /capacity/availability/preview` before it lets the work be handed out. The clients flow
+did not invent this and PROJECTS does not do without it: on a PROJECTS board, which is open to the
+whole firm, a viewer with no access to a matter is the ordinary case rather than the exception, so
+the "Other work" roll-up matters there most of all.
+
+The service's field names keep this repository's clients vocabulary (`ClientShare`,
+`otherClients`); nothing a person reads does — its sentences say "other work" and "all their work",
+and the screens ask the flow for the word (`useWorkUnitName()`, `useNumberLabel()`).
 
 ## Where the projects domain splits
 
@@ -80,6 +98,12 @@ API (`apps/api/src/modules`):
   complete / reopen exist in CLIENTS only.
 - `patents/` (portal, patent IDs, client codes, client ledger) — PROJECTS only; `client-groups/` —
   CLIENTS only. `common/features.ts`: `patentsAndClientCodes(flow)`.
+- `GET /task-groups` — the cross-client task-group search — is CLIENTS only
+  (`@RequireFlow('CLIENTS')` on `TaskGroupSearchController`, dispatching to
+  `ClientsTaskListsService.search`). A task group is a CLIENTS idea: it carries a kind of work, a
+  field, dates and a status, and it is searched by all of them. The PROJECTS flow has task lists —
+  a name and an order inside one matter — so the route answers 404 there rather than an empty list,
+  which would read as "no work found". `tools/projects-flow/pid-flow.e2e.mjs` pins its absence.
 - `admin-data/` — restore and purge branch on the flow: PROJECTS restores ACTIVE and marks the PID
   reservation DISCONTINUED (production); CLIENTS restores the phase and CID and writes the ledger.
 - Refusals and messages that name the unit of work or its number follow the flow
@@ -94,6 +118,15 @@ Web (`apps/web`):
   (`components/layout/FlowRedirect.tsx`).
 - Shared screens keep production's words in PROJECTS (`useIsClientsFlow()`, `useNumberName()`),
   and `lib/features.ts` answers `usePatentsAndClientCodes()`.
+- `components/projects/TaskGroupBrowser.tsx` (the Clients module's third view, "the work, not the
+  client") and the search inside `TaskGroups.clients.tsx` exist only in the CLIENTS variants.
+  `ProjectsClient.tsx` — the PROJECTS list — has cards and a list, exactly as production does.
+- `components/capacity/AssignmentImpact.tsx` is shared by both flows: it is drawn wherever work is
+  handed out (the staffing form, Add task, the board's task editor, "assign the N tasks"), and it
+  takes its words and its number label from the flow.
+- `components/settings/WorkspaceFlowCard.tsx` is Settings → Workspace flow: the current flow, when
+  it was chosen, the conversions so far, and the guided conversion (preflight → confirmations →
+  convert), which is the card the section above describes.
 
 ## Schema and migrations
 
@@ -109,9 +142,34 @@ they ever reached production:
   verification — it cannot be a table constraint because PROJECTS allows PID-pending projects.
 - The Team Capacity grants and the manual-time switch moved into the conversion.
 
+That rewrite is the truth for a database migrated from scratch. It is not the truth for one that
+had already run the ORIGINAL clients-flow migrations — every clients-flow dev, preview and demo
+database, though no production database. Those dropped `pid_request`, narrowed the registry CHECK
+to the CLIENTS states, and added a CHECK that every live project carries a code; put one of them in
+the PROJECTS flow and it cannot issue a PID, hold a request, or create a project at all.
+`20261106090000_flows_repair_clients_era_schema` puts all three back, conditionally, so it does
+nothing whatsoever to a database that never saw the old migrations.
+
 ## Tests
 
 - `tools/*.e2e.mjs` — the CLIENTS suites, run against an organisation in the CLIENTS flow.
 - `tools/projects-flow/*.e2e.mjs` — production's own suites (as of bb5728b), run against an
-  organisation in the PROJECTS flow. They must pass unchanged: that is the proof PROJECTS is untouched.
-- `tools/workspace-flow.e2e.mjs` — the conversion both ways, on a scratch database.
+  organisation in the PROJECTS flow. They must pass unchanged: that is the proof PROJECTS is
+  untouched. Two of them are not production's: `pid-flow.e2e.mjs` walks the PID pool end to end and
+  checks that none of the CLIENTS routes exist, and `availability.e2e.mjs` is the PROJECTS copy of
+  the availability suite, built entirely out of production's own routes (no `/capacity/tasks`).
+- `tools/workspace-flow.e2e.mjs` — the conversion both ways, on a scratch database: a running
+  clock, a held PID, a project waiting for a number and a request in the pool are put there first,
+  and each of them is asked for afterwards.
+- `tools/workspace-flow-conversion.spec.ts` — the conversion's copies of things decided elsewhere
+  (who holds Team Capacity in each flow, which registry states each flow knows) checked against the
+  permissions catalog, so the two cannot drift.
+- `tools/permission-matrix.spec.ts` pins both flows' presets: the CLIENTS ladder plus HR, and the
+  PROJECTS matrix of 2026-08-12 where every role sees the board and nobody but a Super Admin
+  manages it.
+
+A suite in `tools/projects-flow/` may be edited where the DATABASE FIXTURE forces it — a person
+whose role changed, a demo database where everybody is staffed on everything — and never to
+accommodate a behaviour change. Several of them now choose their actors by
+`/me/effective-permissions` rather than by name, which is the same change the CLIENTS copies
+carry.

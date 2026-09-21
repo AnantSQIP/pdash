@@ -180,6 +180,58 @@ export type OrgSummary = {
  */
 export type WorkspaceFlow = 'PROJECTS' | 'CLIENTS';
 
+/** One step a conversion took, and how many rows it touched. */
+export type ConversionStep = { key: string; label: string; changed: number; details?: Record<string, unknown> };
+/** One thing the new flow is checked to be true of, after the conversion and before it commits. */
+export type ConversionInvariant = { key: string; label: string; ok: boolean; found: number; examples?: string[] };
+/** Something in the data that stops the conversion outright. */
+export type ConversionBlocker = { code: string; message: string; examples?: string[] };
+
+/**
+ * The preflight (dryRun) or the conversion that happened — the same report either way, which is
+ * what makes the preview honest: what is shown before is what runs.
+ */
+export type ConversionReport = {
+  dryRun: boolean;
+  organizationId: string; organizationName: string;
+  from: WorkspaceFlow; to: WorkspaceFlow;
+  inUse: boolean;
+  survey: {
+    organization: { id: string; name: string; code: string; workspaceFlow: WorkspaceFlow; timeTrackingMode: TimeTrackingMode };
+    inUse: { any: boolean; projects: number; liveProjects: number; tasks: number; timesheets: number };
+    liveProjectsWithoutNumber: number;
+    registryByStatus: Record<string, number>;
+    pendingPidRequests: number;
+    runningClocks: number;
+    cidEvents: number;
+  };
+  steps: ConversionStep[];
+  verification: { flow: WorkspaceFlow; ok: boolean; invariants: ConversionInvariant[] };
+  blockers: ConversionBlocker[];
+  changeId?: string | null;
+  changedAt?: string | null;
+};
+
+/** A conversion that has already happened, for the card's history. */
+export type WorkspaceFlowChange = {
+  id: string; fromFlow: WorkspaceFlow; toFlow: WorkspaceFlow;
+  changedAt: string; changedBy: string; changedByName: string;
+  note?: string | null; verified: boolean;
+  steps: { key: string; label: string; changed: number }[];
+};
+
+/** Settings → Workspace flow: what the firm runs, whether it is using it, and every conversion. */
+export type WorkspaceFlowState = {
+  organizationId: string; name: string;
+  flow: WorkspaceFlow;
+  changedAt?: string | null;
+  timeTrackingMode: TimeTrackingMode;
+  inUse: { any: boolean; projects: number; liveProjects: number; tasks: number; timesheets: number };
+  /** Only a Super Admin may run a conversion; everyone with user.manage_access may read this. */
+  canConvert: boolean;
+  history: WorkspaceFlowChange[];
+};
+
 /** A record of the firm changing how it records time, and what the change had to tidy up. */
 export type TimeModeChange = {
   id: string; fromMode: TimeTrackingMode; toMode: TimeTrackingMode;
@@ -678,6 +730,47 @@ export type TaskGroup = {
   _count?: { projectTasks: number };
   /** Tasks in the group that are not closed. */
   openTaskCount?: number;
+};
+
+/**
+ * CLIENTS-FLOW: one task group as the CROSS-CLIENT list returns it — the group, the client it
+ * belongs to, and, when a search was run, WHY it matched.
+ */
+export type TaskGroupHit = TaskGroup & {
+  projectId: string | null;
+  project: {
+    id: string; title: string; code: string | null; roundSeq: number | null; projectPhase: string;
+    clientGroup: { id: string; name: string } | null;
+  } | null;
+  taskCount: number;
+  overdueTaskCount: number;
+  /** The tasks whose titles the search matched — named so a match is never inexplicable. */
+  matchedTasks: { id: string; title: string }[];
+  /** Which of name / description / type / domain / client / task the search hit. Empty with no search. */
+  matchedOn: string[];
+};
+
+export type TaskGroupSearch = {
+  items: TaskGroupHit[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  /** Task groups the reader may see with NO filters — what an empty result is being measured against. */
+  inScope: number;
+};
+
+/** CLIENTS-FLOW: what the cross-client task-group list accepts. Nothing here widens what is visible. */
+export type TaskGroupQuery = {
+  search?: string;
+  status?: 'ACTIVE' | 'COMPLETED' | 'ALL';
+  groupType?: string;
+  technologyDomain?: string;
+  clientId?: string;
+  overdue?: boolean;
+  mine?: boolean;
+  limit?: number;
+  offset?: number;
 };
 
 /** CLIENTS-FLOW: a named, optional grouping of clients. */
@@ -1596,6 +1689,13 @@ export type DayState =
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
   utilization: number; free: number; note?: string;
+  /**
+   * The day's `load`, split by the API's availability service into the client being looked at and
+   * everything else. This is what keeps a day from looking emptier than it is inside one client's
+   * view: work on other matters arrives as `otherHours` and is drawn as load, never hidden.
+   * `restrictedHours` is the part of it whose client this viewer may not be told the name of.
+   */
+  focusHours?: number; otherHours?: number; restrictedHours?: number;
   /** The day's load itemised by task (working days only), largest first. Join taskId → openTasks. */
   tasks?: { taskId: string; hours: number }[];
   /** Set on a CLIENT-SIDE week roll-up cell (the board's "by week" view): the Monday it starts. */
@@ -1634,6 +1734,18 @@ export type CapacityOpenTask = {
    *  already passed the estimate (absent on a payload from an older API). */
   estimatedHours?: number; loggedHours?: number; overEstimate?: boolean;
   remainingHours: number; overdue: boolean;
+  /** This viewer may not be told which client this is — the hours count, the name does not show. */
+  restricted?: boolean;
+};
+/** Where a window's committed hours went. `projectId: null` is the restricted work, rolled up. */
+export type ClientShare = {
+  projectId: string | null;
+  label: string;
+  code: string | null;
+  round?: number;
+  hours: number;
+  restricted: boolean;
+  isTeamWork: boolean;
 };
 export type CapacityRow = {
   userId: string; name: string; designation?: string; department?: string; office?: string; profilePhoto?: string | null;
@@ -1641,7 +1753,36 @@ export type CapacityRow = {
   openTasks: CapacityOpenTask[];
   freeHours: number; committedHours: number; overCommittedHours: number; capacityHours: number; utilization: number;
   nextFreeDate: string | null; freeRunDays: number; availableNow: boolean; overdueCount: number;
+  /** Hours in the window on the client being looked at, and on everything else. */
+  focusHours?: number; otherHours?: number; restrictedHours?: number;
+  byClient?: ClientShare[];
 };
+
+// What a proposed assignment would do — the one answer every dialog that hands out work asks for.
+export type ProposedSeat = {
+  userId: string;
+  hours?: number | null;
+  startDate?: string | null;
+  dueDate?: string | null;
+  hoursPerDay?: number | null;
+};
+export type AssignmentVerdict = 'FITS' | 'TIGHT' | 'OVER' | 'NO_ROOM';
+export type SeatPreview = {
+  userId: string; name: string;
+  from: string; to: string;
+  requestedHours: number;
+  capacityHours: number; committedHours: number; freeHours: number;
+  otherHours: number; restrictedHours: number;
+  otherClients: ClientShare[];
+  /** Hours THIS assignment pushes beyond capacity — the increase, not a pre-existing overload. */
+  overHours: number; overDays: string[];
+  /** Hours they were already over on those days before it. Said in the message, never blamed. */
+  alreadyOverHours: number;
+  days: { date: string; capacity: number; committed: number; add: number; over: number }[];
+  verdict: AssignmentVerdict;
+  message: string;
+};
+export type AssignmentPreview = { from: string; to: string; seats: SeatPreview[] };
 export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[]; generatedAt?: string };
 
 // Retrospective (past-window) view — actual attendance, not projected load.
@@ -1929,6 +2070,19 @@ export const api = {
     /** Every switch the firm's time mode has made. */
     timeModeHistory: (id: string) =>
       req<TimeModeChange[]>(`/organizations/${id}/time-mode/history`),
+
+    /** Settings → Workspace flow: the flow, when it was chosen, and every conversion so far. */
+    workspaceFlow: (id: string) =>
+      req<WorkspaceFlowState>(`/organizations/${id}/workspace-flow`),
+    /** The dry run — exactly what converting would change. Writes nothing. */
+    workspaceFlowPreflight: (id: string, to: WorkspaceFlow) =>
+      req<ConversionReport>(`/organizations/${id}/workspace-flow/preflight`, { method: 'POST', body: JSON.stringify({ to }) }),
+    /**
+     * Convert. The org passcode is collected by the interceptor above; the organisation's name has
+     * to be typed exactly and a backup acknowledged, both of which the server re-checks.
+     */
+    workspaceFlowConvert: (id: string, body: { to: WorkspaceFlow; confirm: string; backupTaken: boolean; note?: string }) =>
+      req<ConversionReport>(`/organizations/${id}/workspace-flow/convert`, { method: 'POST', body: JSON.stringify(body) }),
   },
 
   users: {
@@ -2392,6 +2546,28 @@ export const api = {
     },
     // Passcode-gated blob (opened via an object URL); a plain link can't carry the passcode.
     downloadDocument: (id: string) => blobReq(`/patents/${id}/document/content`),
+  },
+
+  /**
+   * CLIENTS-FLOW: task groups ACROSS clients — "where is the FTO on the wafer bonding", asked
+   * without knowing whose matter it is. Scoped on the server exactly like the clients list, so
+   * this can only ever show work the reader could already reach through /projects.
+   */
+  taskGroups: {
+    search: (q: TaskGroupQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.search) p.set('search', q.search);
+      if (q.status) p.set('status', q.status);
+      if (q.groupType) p.set('groupType', q.groupType);
+      if (q.technologyDomain) p.set('technologyDomain', q.technologyDomain);
+      if (q.clientId) p.set('clientId', q.clientId);
+      if (q.overdue) p.set('overdue', 'true');
+      if (q.mine) p.set('mine', 'true');
+      if (q.limit) p.set('limit', String(q.limit));
+      if (q.offset) p.set('offset', String(q.offset));
+      const qs = p.toString();
+      return req<TaskGroupSearch>(`/task-groups${qs ? `?${qs}` : ''}`);
+    },
   },
 
   taskLists: {
@@ -2951,6 +3127,15 @@ export const api = {
      */
     team: (days = 14, from?: string) =>
       req<TeamCapacity>(`/capacity/team?days=${days}${from ? `&from=${from}` : ''}`),
+    /**
+     * What a proposed assignment would do to the people in it: their REAL free hours over the
+     * days being assigned, across every client, and the days it would push over.
+     *
+     * The single source for every dialog that hands out work. A POST because a seat is an object
+     * and there may be several; it reads and changes nothing.
+     */
+    previewAssignment: (body: { seats: ProposedSeat[]; projectId?: string | null; excludeTaskId?: string | null }) =>
+      req<AssignmentPreview>('/capacity/availability/preview', { method: 'POST', body: JSON.stringify(body) }),
     /** Availability of one project's members — the capacity view opened from a project. */
     forProject: (projectId: string, days = 14, from?: string) =>
       req<TeamCapacity & { project: { id: string; title: string } }>(

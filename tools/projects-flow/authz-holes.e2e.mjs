@@ -26,10 +26,19 @@
  */
 const BASE = process.env.BASE || 'http://127.0.0.1:4011';
 const PW = 'sqip@1234';
-const ADMIN = 'mohit@squarkip.com';        // Super Admin — patent.manage
-const STAFF = 'ajay.sharma@squarkip.com';  // Employee — on no project
-const CONSULTANT = 'meetu.singh@squarkip.com';
-const MEMBER = 'basant.goyal@squarkip.com'; // staffed on a seeded matter
+// FIXTURE, not behaviour: actors are chosen by what they may DO
+// (/me/effective-permissions), not by name. ajay.sharma, the Employee this suite was written
+// against, is a Senior Consultant now — with oversight of every matter — and every "refused"
+// check below then read 200. The same change the CLIENTS copy of this suite carries.
+//   ADMIN      — patent.manage (a Super Admin)
+//   STAFF      — project.create, no project.approve (no oversight), no tasklist.create
+//   CONSULTANT — tasklist.create, no project.approve
+//   MEMBER     — anyone else without oversight who is staffed on some matter (uploads the file)
+const CANDIDATES = [
+  'mohit@squarkip.com', 'aman.sharma@squarkip.com', 'meetu.singh@squarkip.com', 'basant.goyal@squarkip.com',
+  'ketan.dagar@squarkip.com', 'khushi.gupta@squarkip.com', 'amritpal.kaur@squarkip.com', 'vijay.mishra@squarkip.com',
+  'drishti.jain@squarkip.com', 'rajesh.joshi@squarkip.com', 'ritik.sharma@squarkip.com',
+];
 const PASSCODE = process.env.ORG_PASSCODE || 'Hunt-Passcode-4419';
 
 let passed = 0; const fails = [];
@@ -57,8 +66,20 @@ function sess() {
 const login = async (s, email) => s('/auth/login', { method: 'POST', body: { email, password: PW } });
 
 (async () => {
-  const admin = sess(), staff = sess(), consultant = sess(), member = sess();
-  await Promise.all([login(admin, ADMIN), login(staff, STAFF), login(consultant, CONSULTANT), login(member, MEMBER)]);
+  const picked = {};
+  for (const email of CANDIDATES) {
+    if (picked.ADMIN && picked.STAFF && picked.CONSULTANT && picked.MEMBER) break;
+    const s = sess();
+    if ((await login(s, email)).status >= 300) continue;
+    const c = new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+    if (!picked.ADMIN && c.has('patent.manage')) picked.ADMIN = s;
+    else if (!picked.STAFF && c.has('project.create') && !c.has('project.approve') && !c.has('tasklist.create')) picked.STAFF = s;
+    else if (!picked.CONSULTANT && c.has('tasklist.create') && !c.has('project.approve')) picked.CONSULTANT = s;
+    else if (!picked.MEMBER && !c.has('project.approve') && ((await s('/projects')).data ?? []).length > 0) picked.MEMBER = s;
+  }
+  const missing = ['ADMIN', 'STAFF', 'CONSULTANT', 'MEMBER'].filter(k => !picked[k]);
+  if (missing.length) { console.log(`FIXTURE: nobody in the roster fits ${missing.join(', ')} — reseed the scratch database`); process.exit(2); }
+  const admin = picked.ADMIN, staff = picked.STAFF, consultant = picked.CONSULTANT, member = picked.MEMBER;
 
   // ── A client with patents to resolve ────────────────────────────────────────
   let client = ((await admin('/clients')).data ?? [])[0];
@@ -122,13 +143,28 @@ const login = async (s, email) => s('/auth/login', { method: 'POST', body: { ema
     `pid-ledger contains "${client.name}"`);
 
   // ── 2. A file you may not read is a file you may not destroy ────────────────
-  const foreign = ((await member('/projects')).data ?? []).find(p => p.id !== pid);
-  ok('setup: a matter the Employee is not staffed on', !!foreign);
+  // FIXTURE, not behaviour: a matter the MEMBER is on and neither the Employee nor the Consultant
+  // is. "Any matter but the probe" quietly picks one the Consultant is staffed on, and then the
+  // refusals below are asserted against a matter they were entitled to all along. The CLIENTS copy
+  // of this suite chooses it the same way.
+  const outsiders = new Set([
+    ...((await staff('/projects')).data ?? []).map(p => p.id),
+    ...((await consultant('/projects')).data ?? []).map(p => p.id),
+  ]);
+  // The member's own list first, because they have to be able to upload into it; failing that,
+  // any matter at all that the two outsiders cannot reach, which still proves the wall.
+  const memberOnly = ((await member("/projects")).data ?? []).filter(p => p.id !== pid && !outsiders.has(p.id));
+  const foreign = memberOnly[0] ?? ((await admin("/projects")).data ?? []).find(p => p.id !== pid && !outsiders.has(p.id));
+  ok('setup: a matter the Employee is not staffed on', !!foreign,
+    'every matter in the fixture is one the Employee or the Consultant is staffed on');
+  if (!foreign) { console.log('\n✗ cannot continue\n'); process.exit(1); }
+  // Whoever can actually open it uploads the file — the point is that the OUTSIDERS cannot.
+  const uploader = memberOnly.length ? member : admin;
 
   const fd = new FormData();
   fd.append('file', new Blob(['CONFIDENTIAL — claim chart'], { type: 'text/plain' }), 'claim-chart.txt');
   fd.append('projectId', foreign.id);
-  const doc = (await member('/documents', { method: 'POST', form: fd })).data;
+  const doc = (await uploader('/documents', { method: 'POST', form: fd })).data;
   ok('setup: a member uploaded a file to that matter', !!doc?.id);
 
   const read = await staff(`/documents/${doc.id}/content`);

@@ -37,9 +37,10 @@
  *   · every live project without a number gets the next CID (oldest first; the FY it was created
  *     in, Indian FY read in IST; one past the highest serial EVER used), recorded as BACKFILLED;
  *   · Team Capacity: capacity.view + capacity.manage for the delivery ladder (Super Admin, Admin,
- *     Manager, Senior Consultant); both codes removed from every other role, every permission
- *     group, and the direct grants / ALLOW overrides of people on none of the ladder roles
- *     (DENY overrides are someone's decision about someone, and stay).
+ *     Manager, Senior Consultant) and capacity.view for HR, which reads the board without editing
+ *     it; both codes removed from every other role, every permission group, and the direct grants
+ *     / ALLOW overrides of people whose role carries neither (DENY overrides are someone's
+ *     decision about someone, and stay).
  *
  * CLIENTS → PROJECTS
  *   · Team Capacity back to the PROJECTS presets: every role holds capacity.view, only a '*'
@@ -112,20 +113,30 @@ export const CAPACITY_VIEW = 'capacity.view';
 export const CAPACITY_MANAGE = 'capacity.manage';
 export const CAPACITY_CODES = [CAPACITY_VIEW, CAPACITY_MANAGE] as const;
 
-/** The delivery ladder: who holds Team Capacity in the CLIENTS flow (CLIENTS presets). */
+/** The delivery ladder: who EDITS Team Capacity in the CLIENTS flow (CLIENTS presets). */
 export const DELIVERY_LADDER_ROLES = ['Super Admin', 'Admin', 'Manager', 'Senior Consultant'] as const;
+/**
+ * Who may only READ the board in the CLIENTS flow. HR, since the owner's call of 19 Sep 2026: who
+ * is loaded and who is free is a people question too, but the board stays the ladder's to change.
+ */
+export const CAPACITY_VIEWER_ROLES = ['HR'] as const;
+/** Every role that holds any capacity code in a flow — who a stray grant is redundant for. */
+export function capacityRolesFor(flow: WorkspaceFlowName): readonly string[] {
+  return flow === 'CLIENTS' ? [...DELIVERY_LADDER_ROLES, ...CAPACITY_VIEWER_ROLES] : [];
+}
 /** Roles whose preset is '*' (every code) in both flows. */
 export const ALL_CODES_ROLES = ['Super Admin'] as const;
 
 /**
  * The capacity codes a role holds in a flow — rolePresetsFor(flow) restricted to the two capacity
  * codes, and the rule for a role no preset names (a custom role): none in CLIENTS (the board is
- * the ladder's), capacity.view in PROJECTS (everyone sees the board). Pinned against the catalog
- * by tools/workspace-flow-conversion.spec.ts, so the presets and the conversion cannot drift.
+ * the ladder's, plus HR reading it), capacity.view in PROJECTS (everyone sees the board). Pinned
+ * against the catalog by tools/workspace-flow-conversion.spec.ts, so the two cannot drift.
  */
 export function capacityCodesFor(flow: WorkspaceFlowName, roleName: string): string[] {
   if (flow === 'CLIENTS') {
-    return (DELIVERY_LADDER_ROLES as readonly string[]).includes(roleName) ? [CAPACITY_VIEW, CAPACITY_MANAGE] : [];
+    if ((DELIVERY_LADDER_ROLES as readonly string[]).includes(roleName)) return [CAPACITY_VIEW, CAPACITY_MANAGE];
+    return (CAPACITY_VIEWER_ROLES as readonly string[]).includes(roleName) ? [CAPACITY_VIEW] : [];
   }
   return (ALL_CODES_ROLES as readonly string[]).includes(roleName) ? [CAPACITY_VIEW, CAPACITY_MANAGE] : [CAPACITY_VIEW];
 }
@@ -445,12 +456,16 @@ function orgProjects(organizationId: string): Prisma.Sql {
   )`;
 }
 
-/** Users of this organisation holding at least one role on the delivery ladder. */
-function ladderUsers(organizationId: string): Prisma.Sql {
+/**
+ * Users of this organisation whose ROLE already carries a capacity code in the target flow — the
+ * ladder, and HR, which reads the board. A direct grant or ALLOW override on one of them says
+ * nothing their role does not already say, so clearing it would be noise in the report.
+ */
+function capacityRoleUsers(organizationId: string, flow: WorkspaceFlowName): Prisma.Sql {
   return Prisma.sql`(
     SELECT ur."userId" FROM "user_role" ur
     JOIN "role" r ON r."id" = ur."roleId"
-    WHERE r."organizationId" = ${organizationId} AND r."name" IN (${Prisma.join([...DELIVERY_LADDER_ROLES])})
+    WHERE r."organizationId" = ${organizationId} AND r."name" IN (${Prisma.join([...capacityRolesFor(flow)])})
   )`;
 }
 
@@ -858,9 +873,9 @@ async function applyCapacity({ tx, organizationId }: StepContext, flow: Workspac
      WHERE gp."groupId" = g."id" AND gp."permissionId" = p."id"
        AND g."organizationId" = ${organizationId} AND p."code" IN (${barredSql})
     RETURNING g."name", p."code"`;
-  // CLIENTS: only for people on none of the ladder roles (a ladder member's grant is redundant).
-  // PROJECTS: capacity.manage for anybody — the PROJECTS board has no task CRUD to grant.
-  const exempt = flow === 'CLIENTS' ? Prisma.sql`AND u."id" NOT IN ${ladderUsers(organizationId)}` : Prisma.empty;
+  // CLIENTS: only for people whose role carries no capacity code anyway (a ladder member's or
+  // HR's grant is redundant). PROJECTS: capacity.manage for anybody — that board has no task CRUD.
+  const exempt = flow === 'CLIENTS' ? Prisma.sql`AND u."id" NOT IN ${capacityRoleUsers(organizationId, flow)}` : Prisma.empty;
   const direct = await tx.$queryRaw<{ email: string; code: string }[]>`
     DELETE FROM "user_permission" up
      USING "user" u, "permission" p
@@ -878,7 +893,7 @@ async function applyCapacity({ tx, organizationId }: StepContext, flow: Workspac
   return {
     key: 'capacity',
     label: flow === 'CLIENTS'
-      ? 'Team Capacity for Senior Consultant and above: capacity.view + capacity.manage for Super Admin, Admin, Manager, Senior Consultant; removed from everyone else'
+      ? 'Team Capacity for the delivery ladder: capacity.view + capacity.manage for Super Admin, Admin, Manager, Senior Consultant; capacity.view for HR; removed from everyone else'
       : 'Team Capacity back to the PROJECTS presets: everyone sees the board, capacity.manage only through Super Admin',
     changed,
     details: {
@@ -1005,12 +1020,12 @@ export async function verify(db: Db, organizationId: string, flow: WorkspaceFlow
     if (want !== have) wrongRoles.push(`${r.name}: holds [${have}], should hold [${want}]`);
   }
   out.push(invariant('capacity_roles', flow === 'CLIENTS'
-    ? 'Team Capacity roles: view + manage for the four ladder roles, nothing for any other role'
+    ? 'Team Capacity roles: view + manage for the four ladder roles, view for HR, nothing for any other role'
     : 'Team Capacity roles: every role sees the board; manage only through Super Admin', wrongRoles));
 
   // … and nothing else hands out what the flow does not.
   const barred = Prisma.join(flow === 'CLIENTS' ? [...CAPACITY_CODES] : [CAPACITY_MANAGE]);
-  const exempt = flow === 'CLIENTS' ? Prisma.sql`AND u."id" NOT IN ${ladderUsers(organizationId)}` : Prisma.empty;
+  const exempt = flow === 'CLIENTS' ? Prisma.sql`AND u."id" NOT IN ${capacityRoleUsers(organizationId, flow)}` : Prisma.empty;
   const groups = await db.$queryRaw<{ label: string }[]>`
     SELECT g."name" || ': ' || p."code" AS label FROM "permission_group_permission" gp
       JOIN "permission_group" g ON g."id" = gp."groupId" JOIN "permission" p ON p."id" = gp."permissionId"
@@ -1024,7 +1039,7 @@ export async function verify(db: Db, organizationId: string, flow: WorkspaceFlow
     ) g JOIN "user" u ON u."id" = g."userId" JOIN "permission" p ON p."id" = g."permissionId"
      WHERE u."organizationId" = ${organizationId} AND p."code" IN (${barred}) ${exempt}`;
   out.push(invariant('capacity_people', flow === 'CLIENTS'
-    ? 'Nobody below the ladder holds a capacity code directly or by an ALLOW override'
+    ? 'Nobody whose role carries no capacity code holds one directly or by an ALLOW override'
     : 'Nobody holds capacity.manage directly or by an ALLOW override', direct.map(r => r.label)));
 
   return { flow, ok: out.every(i => i.ok), invariants: out };

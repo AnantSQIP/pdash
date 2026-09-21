@@ -24,11 +24,29 @@ const BASE = process.env.BASE || 'http://127.0.0.1:4011';
 const PW = process.env.SEED_PASSWORD || 'sqip@1234';
 const PASSCODE = process.env.ORG_PASSCODE || 'Hunt-Passcode-4419';
 
-const ADMIN = 'mohit@squarkip.com';          // Super Admin — the only role holding patent.manage
-const MANAGER = 'ankit.verma@squarkip.com';  // delivery oversight, no patent.manage
-const STAFF = 'ajay.sharma@squarkip.com';    // Employee
-const HR = 'hr@squarkip.com';                // holds no tasklist permission of any kind
-const CONSULTANT = 'meetu.singh@squarkip.com';
+// FIXTURE, not behaviour: actors are chosen by what they may DO, not by name — the roster moves
+// (ajay.sharma, once the Employee here, became a Senior Consultant with oversight, and the "matter
+// the Employee is not staffed on" setup then found nothing). The CLIENTS copy of this suite
+// carries the same change. Each role is described by the permissions the checks below depend on:
+//   ADMIN      — patent.manage (a Super Admin)
+//   MANAGER    — project.approve (delivery oversight), no patent.manage
+//   STAFF      — project.create, no project.approve (no oversight), no tasklist.create
+//   HR         — user.manage_access and no tasklist permission of any kind
+//   CONSULTANT — tasklist.create but no project.approve (can make lists, only where staffed)
+const CANDIDATES = [
+  // Likeliest first, so a normal run logs in five times, not fifteen (the login is rate-limited).
+  'mohit@squarkip.com', 'ankit.verma@squarkip.com', 'meetu.singh@squarkip.com', 'aman.sharma@squarkip.com',
+  'hr@squarkip.com', 'yash@squarkip.com', 'ajay.sharma@squarkip.com', 'neha.shukla@squarkip.com',
+  'vijay.mishra@squarkip.com', 'ketan.dagar@squarkip.com', 'khushi.gupta@squarkip.com', 'shavetasharma@squarkip.com',
+  'ritik.sharma@squarkip.com', 'drishti.jain@squarkip.com', 'rajesh.joshi@squarkip.com',
+];
+const ROLE_TESTS = {
+  ADMIN: c => c.has('patent.manage'),
+  MANAGER: c => c.has('project.approve') && !c.has('patent.manage'),
+  STAFF: c => c.has('project.create') && !c.has('project.approve') && !c.has('tasklist.create') && !c.has('user.manage_access'),
+  HR: c => c.has('user.manage_access') && ![...c].some(x => x.startsWith('tasklist.')) && !c.has('project.approve'),
+  CONSULTANT: c => c.has('tasklist.create') && !c.has('project.approve'),
+};
 
 let passed = 0, skipped = 0; const fails = [];
 const ok = (n, c, d = '') => {
@@ -57,11 +75,20 @@ function sess() {
 const login = (s, email) => s('/auth/login', { method: 'POST', body: { email, password: PW } });
 
 (async () => {
-  const admin = sess(), manager = sess(), staff = sess(), hr = sess(), consultant = sess();
-  await Promise.all([
-    login(admin, ADMIN), login(manager, MANAGER), login(staff, STAFF),
-    login(hr, HR), login(consultant, CONSULTANT),
-  ]);
+  const picked = {};
+  for (const email of CANDIDATES) {
+    if (Object.keys(ROLE_TESTS).every(k => picked[k])) break;
+    const s = sess();
+    if ((await login(s, email)).status >= 300) continue;
+    const codes = new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
+    const role = Object.keys(ROLE_TESTS).find(k => !picked[k] && ROLE_TESTS[k](codes));
+    if (role) picked[role] = { s, email };
+  }
+  const missing = Object.keys(ROLE_TESTS).filter(k => !picked[k]);
+  if (missing.length) { console.log(`FIXTURE: nobody in the roster fits ${missing.join(', ')} — reseed the scratch database`); process.exit(2); }
+  console.log('actors: ' + Object.entries(picked).map(([k, v]) => `${k}=${v.email}`).join(' '));
+  const admin = picked.ADMIN.s, manager = picked.MANAGER.s, staff = picked.STAFF.s, hr = picked.HR.s, consultant = picked.CONSULTANT.s;
+  const CONSULTANT = picked.CONSULTANT.email;
 
   // ── Fixture: a matter whose client is resolvable ──────────────────────────────
   // An Employee holds patent.view, so they can tag a patent and mint a matter whose client the

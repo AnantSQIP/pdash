@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post, Query } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { getActorId } from '../../common/context/request-context';
+import { ActorContextService } from '../../common/context/actor-context.service';
 import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 import { validateBody } from '../../common/validation/flow-body';
 import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
@@ -195,9 +196,65 @@ class TaskListsController {
   }
 }
 
+/** A query string carries text: "true" and "1" mean yes, anything else means no. */
+const isTrue = (v?: string) => v === 'true' || v === '1';
+/** A query string is whatever was typed into the URL — trimmed, capped, and empty means absent. */
+const str = (v?: string, max = 80) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+const toInt = (v?: string) => { const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : undefined; };
+
+/**
+ * CLIENTS FLOW ONLY: task groups across every client the reader may see.
+ *
+ * Its own controller rather than one more route under /projects/:projectId, because this list is
+ * not about one client: hanging it off a project path would have meant a projectId that means
+ * nothing and a wall that LOOKS checked without being. The permission is the same `tasklist.view`
+ * the per-client reads carry — this is the same data, asked a different way — and the scope is
+ * the clients list's own fragment, so what a person can reach here and what they can reach on
+ * /projects cannot drift apart.
+ *
+ * A task group is a CLIENTS idea: it carries a kind of work, a field, dates and a status, and it
+ * is searched by all of them. The PROJECTS flow has task lists — a name and an order inside one
+ * matter — so there is nothing here for it to search, and the whole controller answers 404 there
+ * (docs/WORKSPACE_FLOWS.md).
+ */
+@Controller('task-groups')
+@RequireFlow('CLIENTS')
+class TaskGroupSearchController {
+  constructor(
+    private readonly groups: ClientsTaskListsService,
+    private readonly actor: ActorContextService,
+  ) {}
+
+  /** The organisation comes from the SESSION, never a query param — the rule /projects keeps. */
+  @Get() @RequirePermission('tasklist.view')
+  async search(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('groupType') groupType?: string,
+    @Query('technologyDomain') technologyDomain?: string,
+    @Query('clientId') clientId?: string,
+    @Query('overdue') overdue?: string,
+    @Query('mine') mine?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.groups.search(await this.actor.requireOrgId(), {
+      search: str(search, 120),
+      status: str(status, 16),
+      groupType: str(groupType),
+      technologyDomain: str(technologyDomain),
+      clientId: str(clientId, 40),
+      overdue: isTrue(overdue),
+      mine: isTrue(mine),
+      limit: toInt(limit),
+      offset: toInt(offset),
+    });
+  }
+}
+
 @Module({
   imports: [ProjectsModule, TasksModule],
-  controllers: [TaskListsController],
+  controllers: [TaskListsController, TaskGroupSearchController],
   providers: [TaskListsService, ClientsTaskListsService],
   exports: [TaskListsService, ClientsTaskListsService],
 })

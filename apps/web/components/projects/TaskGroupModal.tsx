@@ -8,6 +8,7 @@ import { api, type ProjectTypeDef, type TaskGroup, type UserSummary } from '@/li
 import { Modal } from '@/components/ui/Modal';
 import { DateField } from '@/components/ui/DateField';
 import { toast } from '@/components/ui/Toast';
+import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from '@/components/capacity/AssignmentImpact';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { fullName } from '@/lib/avatar';
@@ -98,6 +99,23 @@ export function TaskGroupModal({ projectId, clientName, group, members, canSetCl
   const hours = hoursPerTask.trim() === '' ? undefined : Number(hoursPerTask);
   const hoursInvalid = hours !== undefined && (!Number.isFinite(hours) || hours < 0 || hours > 200);
 
+  /**
+   * "Assign the N tasks" is the biggest single handful of work this app gives out in one click —
+   * N tasks at H hours each, all to one person. It used to be given out with nothing said about
+   * what that person already had, on this client or any other. This is that answer.
+   */
+  const proposed = useMemo(() => (assigneeId && !hoursInvalid
+    ? [{
+      userId: assigneeId,
+      hours: (hours ?? 0) * taskCount,
+      startDate: startDate || null,
+      dueDate: dueDate || null,
+      hoursPerDay: null,
+    }]
+    : []), [assigneeId, hours, hoursInvalid, taskCount, startDate, dueDate]);
+  const impact = useAssignmentPreview(proposed, { projectId, enabled: !editing });
+  const gate = useOverrideGate(impact.over, impact.seats.map(s => `${s.userId}:${s.overHours}`).join('|'));
+
   const refresh = () => {
     invalidateTaskCaches(qc);
     qc.invalidateQueries({ queryKey: ['task-groups', projectId] });
@@ -186,7 +204,8 @@ export function TaskGroupModal({ projectId, clientName, group, members, canSetCl
           <div className="flex items-center gap-2 shrink-0">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
             <button onClick={submit}
-              disabled={save.isPending || !name.trim() || datesInverted || clientBeforeTeam || hoursInvalid || (!editing && isCustom && !customLabel.trim())}
+              disabled={save.isPending || !name.trim() || datesInverted || clientBeforeTeam || hoursInvalid || !gate.allowed || (!editing && isCustom && !customLabel.trim())}
+              title={gate.allowed ? undefined : 'This puts them past their working day — tick the box in the panel to do it anyway.'}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50">
               {save.isPending ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
               {editing ? 'Save' : 'Create task group'}
@@ -334,6 +353,13 @@ export function TaskGroupModal({ projectId, clientName, group, members, canSetCl
                 <Layers size={12} className="mt-px shrink-0 text-gray-400" />
                 {hours ? `${Math.round(hours * taskCount * 10) / 10}h in all, ` : ''}planned from {startDate ? 'the start date' : 'today'} in task order.
               </p>
+            )}
+            {(impact.isLoading || impact.seats.length > 0) && (
+              <div>
+                <ImpactLegend className="mb-1.5" />
+                <AssignmentImpact state={impact} compact />
+                {gate.node}
+              </div>
             )}
           </div>
         )}

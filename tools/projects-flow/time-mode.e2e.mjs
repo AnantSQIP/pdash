@@ -93,7 +93,12 @@ async function main() {
   MY_TASKS = (Array.isArray(mine.data) ? mine.data : mine.data?.items ?? [])
     .filter(t => t.currentStatus?.type !== 'CLOSED');
   if (MY_TASKS.length < 2) { console.error(`Need at least 2 open tasks assigned to ${EMAIL}; found ${MY_TASKS.length}.`); process.exit(1); }
-  const [A, B] = MY_TASKS;
+  // FIXTURE, not behaviour: prefer tasks nobody has filed hours against yet. The ledger check at
+  // the end compares the task's actualHours — everybody's hours — against THIS person's entries,
+  // which only agree on a task that is theirs alone. On a demo database where several people have
+  // already logged against the same task the check reads as a failure of a rule that is holding.
+  const untouched = MY_TASKS.filter(t => !(t.actualHours > 0));
+  const [A, B] = untouched.length >= 2 ? untouched : MY_TASKS;
 
   // Put the firm back on the stopwatch BEFORE counting, so the suite gives the same answer
   // whether it inherits a database someone left mid-experiment or a fresh one.
