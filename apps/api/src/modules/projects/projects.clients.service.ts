@@ -65,6 +65,38 @@ import {
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 /**
+ * THE FLOW THIS SERVICE SERVES (docs/WORKSPACE_FLOWS.md).
+ *
+ * `ClientsProjectsService` is reached only when the caller's organisation runs CLIENTS: every
+ * shared route on `ProjectsController` asks `WorkspaceFlowService` and dispatches to
+ * `ProjectsService` otherwise, and the CID-only routes additionally carry `@RequireFlow('CLIENTS')`,
+ * which answers 404 in the other flow. So the flow is not a variable here: it is a fact about the
+ * file. Hard-coding it keeps every read below honest without another round trip per query, and if
+ * the dispatch were ever changed this constant is the single line that would have to move.
+ */
+const FLOW = 'CLIENTS' as const;
+
+/**
+ * Registry states the PROJECTS flow alone ever writes: its five-minute generation hold and the two
+ * legacy shapes of an abandoned one. The clients flow mints a number straight to ATTACHED and has
+ * no hold at all. Used only to judge a registry row that points at NO client — see `cidLedger`.
+ */
+const PROJECTS_ONLY_REGISTRY_STATUSES = ['RESERVED', 'RELEASED', 'EXPIRED'];
+
+/**
+ * A client row with its workspace flow taken off, for the routes that hand back a whole row.
+ *
+ * The flow is a column now, so every raw row Prisma returns carries it — and the flow is a backend
+ * fact nobody outside Settings → Workspace flow is told exists. Stripping it where a row leaves the
+ * service keeps every response exactly the shape it has always had.
+ */
+function withoutFlow<T>(row: T): T {
+  if (!row || typeof row !== 'object') return row;
+  const { workspaceFlow: _flow, ...rest } = row as T & { workspaceFlow?: unknown };
+  return rest as T;
+}
+
+/**
  * Every CID may hold MORE THAN ONE client row ("rounds").
  *
  * A returning client keeps the number they already know, and each new piece of work for them
@@ -163,7 +195,7 @@ export class ClientsProjectsService {
    * two matters are the same party's. Pass `scope` when the caller already resolved one.
    */
   private async redactProjectOut<T extends { id: string }>(project: T, scope?: DeadlineScope): Promise<T> {
-    const redacted = this.deadlines.redactProject(project as never, scope ?? await this.deadlines.scope());
+    const redacted = this.deadlines.redactProject(withoutFlow(project) as never, scope ?? await this.deadlines.scope());
     return this.redactClient(redacted as T, await this.canViewClient());
   }
 
@@ -508,8 +540,8 @@ export class ClientsProjectsService {
     await this.access.assertProjectAccess(actorId, fromProjectId);
 
     const source = await this.prisma.project.findFirst({
-      where: { id: fromProjectId, deletedAt: null },
-      select: { id: true, code: true, office: true, clientId: true, title: true },
+      where: { id: fromProjectId, deletedAt: null, workspaceFlow: FLOW },
+      select: { id: true, code: true, office: true, clientId: true, title: true, workspaceFlow: true },
     });
     if (!source) throw new NotFoundException(`Project ${fromProjectId} not found`);
     // Every live client carries a CID (a database CHECK holds it); this is only a defensive word.
@@ -519,9 +551,10 @@ export class ClientsProjectsService {
     const organizationId = creator.organizationId;
 
     // The next round number is derived from what already exists, INCLUDING soft-deleted rounds, so
-    // a deleted round never causes a number to be handed out twice.
+    // a deleted round never causes a number to be handed out twice. Rounds are this flow's only:
+    // the number series is shared between the flows, so a code alone does not say whose work it is.
     const last = await this.prisma.project.findFirst({
-      where: { code: source.code },
+      where: { code: source.code, workspaceFlow: FLOW },
       orderBy: { roundSeq: 'desc' },
       select: { roundSeq: true },
     });
@@ -570,6 +603,10 @@ export class ClientsProjectsService {
           code: source.code,
           clientId: source.clientId,
           office: source.office,
+          // A round belongs to whatever the row it is a round of belongs to, taken from that row
+          // rather than from the constant: the read above already refused a source in the other
+          // flow, so this is the assertion made visible instead of an assumption repeated.
+          workspaceFlow: source.workspaceFlow,
           roundSeq,
           title: dto.title,
           description: dto.description,
@@ -605,7 +642,7 @@ export class ClientsProjectsService {
       if (template) await this.seedTemplateTasks(tx, project.id, template, creator.id);
 
       // The registry points at the newest live round, and the ledger says a client joined the CID.
-      await this.cid.syncRegistryInTx(tx, organizationId, sourceCode, { actorId: creator.id });
+      await this.cid.syncRegistryInTx(tx, organizationId, sourceCode, FLOW, { actorId: creator.id });
       await this.cid.recordInTx(tx, {
         organizationId, cid: sourceCode, projectId: project.id, clientTitle: project.title,
         type: 'ROUND_ADDED', toCid: sourceCode, actorId: creator.id,
@@ -638,7 +675,7 @@ export class ClientsProjectsService {
   async roundsForProject(projectId: string) {
     await this.access.assertProjectAccess(getActorId(), projectId);
     const self = await this.prisma.project.findFirst({
-      where: { id: projectId, deletedAt: null },
+      where: { id: projectId, deletedAt: null, workspaceFlow: FLOW },
       select: { id: true, code: true, office: true },
     });
     if (!self) throw new NotFoundException(`Project ${projectId} not found`);
@@ -666,14 +703,16 @@ export class ClientsProjectsService {
 
     // Defensive: a live client always has a CID, but a row without one simply stands alone.
     if (!self.code) {
-      const one = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
+      const one = await this.prisma.project.findFirst({ where: { id: projectId, workspaceFlow: FLOW }, select: shape });
       return {
         cid: self.code, multiRound: false,
         rounds: this.redactClient(this.deadlines.redactProjects([one] as never, scope), canViewClient),
       };
     }
+    // A CID's rounds are the clients of THIS flow carrying the code. The series is shared with the
+    // other flow, so without the filter a stack of rounds could show somebody else's matter.
     const rounds = await this.prisma.project.findMany({
-      where: { code: self.code, deletedAt: null },
+      where: { code: self.code, deletedAt: null, workspaceFlow: FLOW },
       orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: shape,
     });
@@ -847,6 +886,11 @@ export class ClientsProjectsService {
           technologyDomain,
           clientId: derivedClientId,
           clientGroupId: clientGroup?.id ?? null,
+          // The flow a row is made in is stamped on it once, here, and never changes: it is what
+          // every read in this service filters on, and what keeps a conversion from converting
+          // anybody's work. `createWithin` is the only door a new client comes through (the board's
+          // "start a piece of client work" included), so this one line covers every new client.
+          workspaceFlow: FLOW,
           projectPhase: 'ACTIVE',
           // Taken from the creator unless they picked another office on the form.
           office: dto.office ?? creator.office ?? null,
@@ -975,7 +1019,7 @@ export class ClientsProjectsService {
       id: true, code: true, roundSeq: true, projectPhase: true, deletedAt: true, title: true, clientId: true,
     } as const;
 
-    const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: shape });
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, workspaceFlow: FLOW }, select: shape });
     if (!project) throw new NotFoundException('Client not found.');
     await this.assertProjectInOrg(organizationId, projectId);
 
@@ -984,7 +1028,8 @@ export class ClientsProjectsService {
     let targetCid: string | null = null;
     if (opts.intoProjectId) {
       const into = await this.prisma.project.findFirst({
-        where: { id: opts.intoProjectId }, select: { id: true, code: true, deletedAt: true, title: true },
+        where: { id: opts.intoProjectId, workspaceFlow: FLOW },
+        select: { id: true, code: true, deletedAt: true, title: true },
       });
       if (!into) throw new NotFoundException('The client to merge into was not found.');
       await this.assertProjectInOrg(organizationId, into.id);
@@ -1001,16 +1046,18 @@ export class ClientsProjectsService {
       ({ id: p.id, code: p.code, roundSeq: p.roundSeq, phase: p.projectPhase, title: p.title });
 
     // Live rounds only, on both sides: a soft-deleted round neither holds a round number nor keeps
-    // a number from being vacated.
+    // a number from being vacated. Of this flow only, as everywhere a code is turned into work: the
+    // round numbers a move re-deals are this flow's, and counting the other flow's rows would
+    // renumber a stack nobody here can even see.
     const groupShape = { id: true, code: true, roundSeq: true, projectPhase: true, title: true } as const;
     const sourceGroup = project.code
       ? (await this.prisma.project.findMany({
-          where: { code: project.code, deletedAt: null }, orderBy: { roundSeq: 'asc' }, select: groupShape,
+          where: { code: project.code, deletedAt: null, workspaceFlow: FLOW }, orderBy: { roundSeq: 'asc' }, select: groupShape,
         })).map(toRef)
       : [];
     const targetGroup = targetCid
       ? (await this.prisma.project.findMany({
-          where: { code: targetCid, deletedAt: null }, orderBy: { roundSeq: 'asc' }, select: groupShape,
+          where: { code: targetCid, deletedAt: null, workspaceFlow: FLOW }, orderBy: { roundSeq: 'asc' }, select: groupShape,
         })).map(toRef)
       : [];
 
@@ -1098,7 +1145,7 @@ export class ClientsProjectsService {
    */
   async cidMoveTargets(organizationId: string, projectId: string) {
     await this.assertProjectInOrg(organizationId, projectId);
-    const project = await this.prisma.project.findFirst({ where: { id: projectId }, select: { code: true } });
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, workspaceFlow: FLOW }, select: { code: true } });
     const fy = cidFy(project?.code ?? null);
 
     const registry = await this.prisma.pidReservation.findMany({
@@ -1110,8 +1157,12 @@ export class ClientsProjectsService {
     const cids = registry.map(r => r.pid).filter(p => p !== project?.code);
     if (!cids.length) return [];
 
+    // The registry above is read across the shared series, because that is what it is — one series
+    // per organisation. What makes a number a MERGE DESTINATION is the live work under it, and that
+    // is this flow's: a number whose rounds are all the other flow's drops out below, where targets
+    // are filtered to the numbers that actually hold rounds.
     const projects = await this.prisma.project.findMany({
-      where: { code: { in: cids }, deletedAt: null },
+      where: { code: { in: cids }, deletedAt: null, workspaceFlow: FLOW },
       orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: { id: true, code: true, roundSeq: true, title: true, projectPhase: true },
     });
@@ -1169,7 +1220,7 @@ export class ClientsProjectsService {
       // Re-read both sides under the transaction: the plan was made from a snapshot, and a client
       // joining or leaving either number since then would make its round numbers wrong.
       const liveIds = async (code: string) => (await tx.project.findMany({
-        where: { code, deletedAt: null }, select: { id: true },
+        where: { code, deletedAt: null, workspaceFlow: FLOW }, select: { id: true },
       })).map(p => p.id).sort();
       const nowTarget = plan.mode === 'MERGE' ? await liveIds(toCid) : [];
       if (plan.mode === 'MERGE' && nowTarget.length !== plan.targetTotal - 1) {
@@ -1186,8 +1237,8 @@ export class ClientsProjectsService {
       for (const c of plan.sourceRenumber) await tx.project.update({ where: { id: c.id }, data: { roundSeq: c.to } });
 
       if (reservationId) await this.cid.pointAt(tx, reservationId, projectId);
-      await this.cid.syncRegistryInTx(tx, organizationId, toCid, { actorId: userId });
-      const fromStatus = await this.cid.syncRegistryInTx(tx, organizationId, plan.fromCid, {
+      await this.cid.syncRegistryInTx(tx, organizationId, toCid, FLOW, { actorId: userId });
+      const fromStatus = await this.cid.syncRegistryInTx(tx, organizationId, plan.fromCid, FLOW, {
         actorId: userId,
         ...(plan.vacatesSource
           ? { retireAs: plan.mode === 'MERGE' ? 'MERGED' as const : 'DISCONTINUED' as const, mergedIntoCid: toCid }
@@ -1230,6 +1281,7 @@ export class ClientsProjectsService {
 
     // The number is what the team quotes on everything they send out, so the people staffed on the
     // client are told it changed. Best-effort: a notification failure must not undo a correction.
+    // The client was resolved inside this flow by resolveMove(), so its seats are this flow's.
     const members = await this.prisma.projectMember.findMany({
       where: { projectId, isActive: true }, select: { userId: true },
     });
@@ -1271,7 +1323,7 @@ export class ClientsProjectsService {
   // the same redactClient pass every other route uses.
 
   async cidLedger(organizationId: string) {
-    const [registry, events] = await Promise.all([
+    const [allRegistry, allEvents] = await Promise.all([
       this.prisma.pidReservation.findMany({
         where: { organizationId },
         orderBy: [{ fyLabel: 'desc' }, { serial: 'desc' }],
@@ -1282,11 +1334,41 @@ export class ClientsProjectsService {
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       }),
     ]);
+
+    // ── Which of those numbers and events are this flow's ────────────────────────────
+    //
+    // The SERIES is shared — one per organisation, which is what stops a CID and a PID ever naming
+    // two different matters — but this LEDGER is a list of the numbers this flow files clients
+    // under. Neither table carries a flow of its own; both carry a `projectId`, and the project
+    // row carries the flow. So:
+    //
+    //   a row or event that points at a client → that client's flow decides;
+    //   a registry row that points at nothing  → a number retired, merged away or purged. The row
+    //                                             is all that is left of it, so its STATUS decides:
+    //                                             RESERVED, RELEASED and EXPIRED are the PROJECTS
+    //                                             flow's generation holds, which this flow never
+    //                                             creates; every other state is this flow's own
+    //                                             registry history;
+    //   an event that points at nothing        → this flow's. Only the clients flow ever writes to
+    //                                             cid_event, and an event about a client that no
+    //                                             longer exists is exactly the PURGED snapshot the
+    //                                             ledger rebuilds a permanently deleted client from.
+    //
+    // "Points at nothing" is computed from an UNFILTERED read, because a pointer at a client that
+    // has since been permanently deleted is a pointer at nothing — `cid_event.projectId` has no
+    // foreign key precisely so that it survives the purge. Reading a dangling id as "the other
+    // flow's" would erase every purged client from the ledger that exists to remember it.
+    const pointed = await this.flowOfProjects([...allRegistry.map(r => r.projectId), ...allEvents.map(e => e.projectId)]);
+    const pointsAtClient = (projectId: string | null) => !!projectId && pointed.has(projectId);
+    const registry = allRegistry.filter(r => pointsAtClient(r.projectId)
+      ? pointed.get(r.projectId!) === FLOW
+      : !PROJECTS_ONLY_REGISTRY_STATUSES.includes(r.status));
+    const events = allEvents.filter(e => !pointsAtClient(e.projectId) || pointed.get(e.projectId!) === FLOW);
     const cids = registry.map(r => r.pid);
 
-    // Every client row carrying one of these numbers — live AND in the bin.
+    // Every client row carrying one of these numbers — live AND in the bin — of this flow.
     const projects = cids.length ? await this.prisma.project.findMany({
-      where: { code: { in: cids } },
+      where: { code: { in: cids }, workspaceFlow: FLOW },
       orderBy: [{ roundSeq: 'asc' }, { createdAt: 'asc' }],
       select: {
         id: true, code: true, roundSeq: true, office: true, title: true, description: true,
@@ -1307,6 +1389,7 @@ export class ClientsProjectsService {
     // Hours LOGGED per client (timesheets outlive a soft delete) and hours ALLOTTED (task
     // estimates). A deleted client's tasks were archived with it — at the same instant — so those
     // still count toward what it was allotted; a task deleted separately, earlier, does not.
+    // Keyed by ids the flow-scoped read above returned, so both are already this flow's.
     const [loggedRows, estimateRows] = ids.length ? await Promise.all([
       this.prisma.timesheet.groupBy({
         by: ['projectId'], where: { projectId: { in: ids }, deletedAt: null }, _sum: { hoursLogged: true },
@@ -1468,6 +1551,23 @@ export class ClientsProjectsService {
     return this.redactClient(ledger, await this.canViewClient());
   }
 
+  /**
+   * The flow each of these clients was made in, for ids that still resolve to a row.
+   *
+   * Deliberately UNFILTERED: the caller needs to tell "this is the other flow's row" apart from
+   * "there is no row here at all", and a filtered read collapses the two. An id missing from the
+   * map is a client that no longer exists — a permanently deleted one — which is not the same
+   * thing as a client belonging to somebody else.
+   */
+  private async flowOfProjects(ids: (string | null | undefined)[]): Promise<Map<string, string>> {
+    const clean = [...new Set(ids.filter((x): x is string => !!x))];
+    if (!clean.length) return new Map();
+    const rows = await this.prisma.project.findMany({
+      where: { id: { in: clean } }, select: { id: true, workspaceFlow: true },
+    });
+    return new Map(rows.map(p => [p.id, p.workspaceFlow]));
+  }
+
   private async nameMap(ids: (string | null | undefined)[]) {
     const clean = [...new Set(ids.filter((x): x is string => !!x))];
     if (!clean.length) return new Map<string, string>();
@@ -1493,7 +1593,8 @@ export class ClientsProjectsService {
   /** The org that owns a project (reached through its members, like list()). */
   private async orgOfProject(id: string): Promise<string | null> {
     const m = await this.prisma.projectMember.findFirst({
-      where: { projectId: id, isActive: true }, select: { user: { select: { organizationId: true } } },
+      where: { projectId: id, isActive: true, project: { workspaceFlow: FLOW } },
+      select: { user: { select: { organizationId: true } } },
     });
     return m?.user?.organizationId ?? null;
   }
@@ -1529,6 +1630,9 @@ export class ClientsProjectsService {
       where: {
         deletedAt: null,
         ...scope,
+        // Last, so it cannot be spread over: the actor's scope already carries the flow, but the
+        // no-actor fallback beside it does not, and a list is gated by nothing else.
+        workspaceFlow: FLOW,
         projectPhase: opts.phase,
         ...(opts.technologyDomain ? {
           // CLIENTS-FLOW: the domain lives on task groups now, so a client matches when it OR any
@@ -1599,7 +1703,8 @@ export class ClientsProjectsService {
       ? [...projects].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }))
       : projects;
     // CLIENTS-FLOW: open and overdue task counts per client, two grouped queries for the whole
-    // page rather than one per card. "Open" is the capacity board's definition, shared.
+    // page rather than one per card. "Open" is the capacity board's definition, shared. Keyed by
+    // the ids the flow-scoped list above returned, so the counts are already this flow's.
     const ids = ordered.map(p => p.id);
     // The firm's day, not UTC's: between midnight and 05:30 IST a UTC "today" is yesterday, so a
     // task due yesterday was left out of the overdue count while the screen already called it late.
@@ -1638,8 +1743,11 @@ export class ClientsProjectsService {
     const scope = actorId
       ? await this.access.projectScopeWhere(actorId, organizationId)
       : { members: { some: { user: { organizationId } } } };
+    // The widest read in the application — every client, every task, every assignee, and the CSV
+    // the screen exports is this. The actor's scope carries the flow, but the no-actor fallback
+    // does not, so the flow is spelled out last where nothing can spread over it.
     const projects = await this.prisma.project.findMany({
-      where: { deletedAt: null, ...scope },
+      where: { deletedAt: null, ...scope, workspaceFlow: FLOW },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true, code: true, roundSeq: true, office: true,
@@ -1685,7 +1793,8 @@ export class ClientsProjectsService {
     });
 
     // Hours actually logged per project — the report's "what did this cost" column, which is not
-    // the same as the workingHours snapshot taken at completion.
+    // the same as the workingHours snapshot taken at completion. Keyed by the ids the flow-scoped
+    // read above returned, so these entries are already this flow's.
     const logged = await this.prisma.timesheet.groupBy({
       by: ['projectId'],
       where: { projectId: { in: projects.map(p => p.id) }, deletedAt: null },
@@ -1771,6 +1880,9 @@ export class ClientsProjectsService {
       where: {
         id: { in: pending.map(p => p.entityId) },
         deletedAt: null,
+        // `approval` is a generic entity table with no flow of its own, so the ids above can name
+        // either flow's project; the flow is applied here, where the rows are actually read.
+        workspaceFlow: FLOW,
         members: { some: { user: { organizationId } } },
         // A manager sees the requests routed to them; an admin sees every pending one.
         ...(isAdmin ? {} : { members: { some: { userId: actorId, projectRole: 'MANAGER', isActive: true } } }),
@@ -1796,10 +1908,16 @@ export class ClientsProjectsService {
       .sort((a, b) => b.requestedAt.getTime() - a.requestedAt.getTime());
   }
 
-  /** Unredacted read for internal callers (approval, membership, rollups). */
+  /**
+   * Unredacted read for internal callers (approval, membership, rollups).
+   *
+   * Every single-client route in this service goes through here, so the flow filter sits on this
+   * one read rather than on each of them: a client of the other flow is "not found", which is the
+   * same answer the access wall gives, and the difference never reaches a screen.
+   */
   private async getRaw(id: string) {
     const project = await this.prisma.project.findFirst({
-      where: { id, deletedAt: null },
+      where: { id, deletedAt: null, workspaceFlow: FLOW },
       include: {
         currentStatus: true,
         members: {
@@ -1841,7 +1959,7 @@ export class ClientsProjectsService {
     const actorId = getActorId();
     await this.access.assertProjectAccess(actorId, id);
     const project = await this.getRaw(id);
-    const redacted: any = this.deadlines.redactProject(project, await this.deadlines.scope());
+    const redacted: any = this.deadlines.redactProject(withoutFlow(project), await this.deadlines.scope());
     // Patent HANDLES are visible to patent.view holders (any project creator); CLIENT details
     // are stricter — patent.manage (Super Admin) only. The CID stays visible to everyone.
     // CLIENTS-FLOW: commented out — no patent handles while patent IDs are switched off.
@@ -2093,7 +2211,7 @@ export class ClientsProjectsService {
       title: approve ? 'Project approved' : 'Project rejected',
       message: `Your project "${project.title}" was ${approve ? 'approved' : 'rejected'}.`,
     });
-    return result;
+    return withoutFlow(result);
   }
 
   // ── Lifecycle: Complete → Close → Reopen ─────────────────────────────────────
@@ -2115,10 +2233,14 @@ export class ClientsProjectsService {
    * took. Exposed so the UI can show the suggestion before anyone commits to it.
    */
   async completionHoursSuggestion(id: string): Promise<{ loggedHours: number; estimatedHours: number; suggested: number }> {
+    // Reached straight from its own route with only a permission behind it, so the client id is
+    // whatever was asked for: both reads name the flow rather than trusting the id.
     const [logged, tasks] = await Promise.all([
-      this.prisma.timesheet.aggregate({ where: { projectId: id, deletedAt: null }, _sum: { hoursLogged: true } }),
+      this.prisma.timesheet.aggregate({
+        where: { projectId: id, deletedAt: null, project: { workspaceFlow: FLOW } }, _sum: { hoursLogged: true },
+      }),
       this.prisma.projectTask.findMany({
-        where: { projectId: id, task: { deletedAt: null } },
+        where: { projectId: id, project: { workspaceFlow: FLOW }, task: { deletedAt: null } },
         select: { task: { select: { estimatedHours: true } } },
       }),
     ]);
@@ -2136,6 +2258,7 @@ export class ClientsProjectsService {
 
     // A project is only "complete" when its WORK is complete. Every task must be closed (or
     // deleted) first — otherwise a project could be signed off with live work still on it.
+    // Keyed by a client id that getRaw() above has already resolved inside this flow.
     const openTasks = await this.prisma.projectTask.findMany({
       where: {
         projectId: id,
@@ -2213,7 +2336,7 @@ export class ClientsProjectsService {
         where: { id },
         data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
       });
-      if (u.code) await this.cid.syncRegistryInTx(tx, organizationId, u.code);
+      if (u.code) await this.cid.syncRegistryInTx(tx, organizationId, u.code, FLOW);
       await this.recordClientEvent(tx, organizationId, u, 'REOPENED', { metadata: { fromPhase: phase } });
       return u;
     });
@@ -2251,7 +2374,7 @@ export class ClientsProjectsService {
         where: { id },
         data: { projectPhase: 'ACTIVE', completedAt: null, closedAt: null },
       });
-      if (u.code) await this.cid.syncRegistryInTx(tx, organizationId, u.code);
+      if (u.code) await this.cid.syncRegistryInTx(tx, organizationId, u.code, FLOW);
       await this.recordClientEvent(tx, organizationId, u, 'REINITIALIZED', { metadata: { fromPhase: phase } });
       return u;
     });
@@ -2285,7 +2408,8 @@ export class ClientsProjectsService {
     const managersBefore = before.members.filter(m => m.projectRole === 'MANAGER').map(m => person(m.user));
     await this.prisma.$transaction(async tx => {
       // Re-activate if they were previously removed; the global filter maps the unique
-      // clash to 409 if they are already an active member.
+      // clash to 409 if they are already an active member. This read and the managers read below
+      // are keyed by the client getRaw() has already resolved inside this flow.
       const existing = await tx.projectMember.findUnique({ where: { projectId_userId: { projectId, userId } } });
       if (existing) {
         await tx.projectMember.update({ where: { id: existing.id }, data: { isActive: true, projectRole: projectRole ?? existing.projectRole } });
@@ -2318,7 +2442,8 @@ export class ClientsProjectsService {
       throw new BadRequestException('The project manager cannot be removed. Assign a different manager first.');
     }
     // Unassign the removed member from this project's tasks — otherwise a stale non-member
-    // stays selected and 400s every future assignee edit on those tasks (D1).
+    // stays selected and 400s every future assignee edit on those tasks (D1). The client id came
+    // from getRaw() above, which resolved it inside this flow.
     const links = await this.prisma.projectTask.findMany({ where: { projectId }, select: { taskId: true } });
     const taskIds = links.map(l => l.taskId);
     await this.prisma.$transaction([
@@ -2386,8 +2511,10 @@ export class ClientsProjectsService {
     // No CID, or no client being set, means there is nothing a sibling could contradict.
     if (!code || !nextClientId) return;
 
+    // This flow's rounds only. A refusal has to name a round the person can actually go and look
+    // at, and the other flow's work is not that — it is invisible to them.
     const siblings = await this.prisma.project.findMany({
-      where: { code, deletedAt: null, id: { not: projectId }, clientId: { not: null } },
+      where: { code, deletedAt: null, id: { not: projectId }, clientId: { not: null }, workspaceFlow: FLOW },
       select: { roundSeq: true, clientId: true, client: { select: { code: true } } },
       orderBy: { roundSeq: 'asc' },
     });
@@ -2422,8 +2549,8 @@ export class ClientsProjectsService {
     if (!clientId && !(await this.permissions.check(actorId, 'patent.manage'))) {
       throw new ForbiddenException('You are not permitted to change a project\'s client.');
     }
-    const { code } = await this.prisma.project.findUniqueOrThrow({
-      where: { id: projectId }, select: { code: true },
+    const { code } = await this.prisma.project.findFirstOrThrow({
+      where: { id: projectId, workspaceFlow: FLOW }, select: { code: true },
     });
     await this.assertPidClientConsistent(projectId, code, resolved);
     await this.prisma.project.update({ where: { id: projectId }, data: { clientId: resolved } });
@@ -2491,8 +2618,8 @@ export class ClientsProjectsService {
 
     // Same rule as setClient, and it has to be here too: tagging is the OTHER way a project's
     // client changes, and it is the one people actually use.
-    const { code: pid } = await this.prisma.project.findUniqueOrThrow({
-      where: { id: projectId }, select: { code: true },
+    const { code: pid } = await this.prisma.project.findFirstOrThrow({
+      where: { id: projectId, workspaceFlow: FLOW }, select: { code: true },
     });
     await this.assertPidClientConsistent(projectId, pid, derivedClientId);
 
@@ -2534,7 +2661,7 @@ export class ClientsProjectsService {
       // The CID stays reserved to the deleted client: the registry reads DELETED once no live
       // client carries it (ATTACHED while another round still does), and the ledger records the
       // phase it held — which is what lets a restore put it back where it was.
-      if (project.code) await this.cid.syncRegistryInTx(tx, organizationId, project.code);
+      if (project.code) await this.cid.syncRegistryInTx(tx, organizationId, project.code, FLOW);
       await this.recordClientEvent(tx, organizationId, project, 'DELETED', {
         metadata: {
           phaseBefore: before.projectPhase, deletedAt: now.toISOString(),
@@ -2549,6 +2676,11 @@ export class ClientsProjectsService {
       const taskIds = [...new Set(links.map(l => l.taskId))];
       if (taskIds.length) {
         // Keep tasks that also live in another non-deleted project (M2M); archive the rest.
+        //
+        // DELIBERATELY UNFILTERED by flow, and it must stay that way: this asks "is anything else
+        // still holding this task", and a task held by the other flow's project is still held.
+        // Narrowing it to this flow would answer "nothing holds it" and archive a task out from
+        // under work this flow cannot even see.
         const shared = await tx.projectTask.findMany({
           where: { taskId: { in: taskIds }, projectId: { not: id }, project: { deletedAt: null } },
           select: { taskId: true },
@@ -2559,7 +2691,7 @@ export class ClientsProjectsService {
           await tx.task.updateMany({ where: { id: { in: toArchive }, deletedAt: null }, data: { deletedAt: now } });
         }
       }
-      return project;
+      return withoutFlow(project);
     });
   }
 

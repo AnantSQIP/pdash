@@ -9,6 +9,7 @@ import { ActorContextService } from '../../common/context/actor-context.service'
 import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 import { validateBody } from '../../common/validation/flow-body';
 import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { projectInFlow } from '../../common/flow-scope';
 import { ProjectsModule } from '../projects/projects.module';
 import { TasksModule } from '../tasks/tasks.module';
 import {
@@ -60,12 +61,25 @@ export class TaskListsService {
     private readonly access: ProjectAccessService,
   ) {}
 
+  /**
+   * Every route above reaches this service only when the caller's flow is NOT clients — the
+   * controller sends the CLIENTS flow to ClientsTaskListsService instead, and nothing else in the
+   * API calls it — so the flow is a constant here rather than a lookup, and the reads say so.
+   */
+  private static readonly FLOW = 'PROJECTS' as const;
+
   async create(projectId: string, dto: CreateTaskListDto) {
     await this.access.assertProjectAccess(getActorId(), projectId);
-    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null } });
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null, ...projectInFlow(TaskListsService.FLOW) },
+    });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
-    const count = await this.prisma.taskList.count({ where: { projectId, deletedAt: null } });
+    const count = await this.prisma.taskList.count({
+      // The sequence a new list takes is a count of its neighbours, so it has to count the same
+      // rows the board will show.
+      where: { projectId, deletedAt: null, project: projectInFlow(TaskListsService.FLOW) },
+    });
     return this.prisma.taskList.create({
       data: {
         projectId,
@@ -78,7 +92,9 @@ export class TaskListsService {
   async list(projectId: string) {
     await this.access.assertProjectAccess(getActorId(), projectId);
     return this.prisma.taskList.findMany({
-      where: { projectId, deletedAt: null },
+      // A list is a LIST: no assert stands between the id in the URL and these rows, so it names
+      // the flow it means itself.
+      where: { projectId, deletedAt: null, project: projectInFlow(TaskListsService.FLOW) },
       orderBy: { sequence: 'asc' },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
@@ -96,7 +112,9 @@ export class TaskListsService {
    */
   private async find(projectId: string, id: string) {
     const list = await this.prisma.taskList.findFirst({
-      where: { id, projectId, deletedAt: null },
+      // This is the lookup every mutation below goes through, so the flow belongs here: a rename
+      // or a delete aimed at the other flow's list finds nothing rather than finding it.
+      where: { id, projectId, deletedAt: null, project: projectInFlow(TaskListsService.FLOW) },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
     if (!list) throw new NotFoundException(`Task list ${id} not found`);
@@ -125,7 +143,11 @@ export class TaskListsService {
     }
     // L2: move this list's tasks onto the default list instead of orphaning the
     // ProjectTask join rows (which pointed at a now-soft-deleted list).
-    const def = await this.prisma.taskList.findFirst({ where: { projectId, isDefault: true, deletedAt: null } });
+    // The tasks being rehomed are this flow's, so the list they land on must be too — otherwise a
+    // delete here would quietly file them into the other flow's default group.
+    const def = await this.prisma.taskList.findFirst({
+      where: { projectId, isDefault: true, deletedAt: null, project: projectInFlow(TaskListsService.FLOW) },
+    });
     const [, updated] = await this.prisma.$transaction([
       this.prisma.projectTask.updateMany({ where: { taskListId: id }, data: { taskListId: def?.id ?? null } }),
       this.prisma.taskList.update({ where: { id }, data: { deletedAt: new Date() } }),

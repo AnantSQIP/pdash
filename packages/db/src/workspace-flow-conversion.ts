@@ -1,24 +1,41 @@
 /**
  * CHANGING AN ORGANISATION'S WORKSPACE FLOW — PROJECTS ⇄ CLIENTS (docs/WORKSPACE_FLOWS.md).
  *
- * A flow in use has data shaped for it, so a change of flow is a CONVERSION, not a toggle: the
- * data one flow relies on is put into the shape the other expects, the new flow's invariants are
- * checked, and only then does the organisation's `workspaceFlow` change. This module is the ONE
- * implementation. The API (Settings → Workspace flow) and the operator CLI
- * (packages/db/prisma/convert-workspace-flow.ts) both call it, so the SQL exists once.
+ * SWITCHING HIDES A FLOW'S WORK; IT DOES NOT CONVERT IT.
+ *
+ * Every project/client row carries the flow it was made in (`project.workspaceFlow`), and the two
+ * flows' reads are filtered on it, so a firm's client work and its project work sit side by side
+ * in one database and never meet. That makes a change of flow a change to the ORGANISATION'S
+ * SETTINGS and nothing else:
+ *
+ *   · the flow itself;
+ *   · who holds Team Capacity (CLIENTS: the delivery ladder manages it and HR reads it; PROJECTS:
+ *     the presets production has always had — everybody sees the board, only a Super Admin
+ *     manages it);
+ *   · the time mode — PROJECTS may use the timer, CLIENTS is MANUAL only, so entering CLIENTS
+ *     closes the clocks that are running and records the switch in the time-mode history.
+ *
+ * And what it deliberately NO LONGER does — this is the point, so it is written down: it does not
+ * give anything a number, does not retire or re-read the number registry, does not write the CID
+ * ledger, does not cancel PID requests, does not touch a project, task, timesheet or staffing row
+ * of either flow. The work of the flow being left stays exactly as it is, out of sight, and is
+ * there again, unchanged, if the firm switches back. The conversion PROVES that: it counts every
+ * flow's work before it starts and again before it commits, and rolls back if a single count moved.
  *
  * WHAT A CONVERSION IS
  *
  *   one transaction, all or nothing:
  *     1. an org-scoped advisory lock (two conversions of one organisation can never interleave;
  *        the second is refused, not queued) and the organisation row FOR UPDATE, re-read;
- *     2. the tables the steps touch are locked against writers (SHARE ROW EXCLUSIVE — reads carry
- *        on), so nothing can be created in the old shape while the conversion runs: no clock
- *        started, no PID generated, no project created without a number, no grant slipped in;
- *     3. a survey of what is there (stored as the conversion's "preflight");
- *     4. the steps (below), each reporting what it changed;
- *     5. the new flow's invariants, checked INSIDE the transaction. One failing rolls the whole
- *        conversion back and the report says which, with examples;
+ *     2. the work tables are locked against writers (SHARE ROW EXCLUSIVE — reads carry on), so
+ *        that "nothing was touched" is a fact rather than a hope, and no clock can be started or
+ *        grant slipped in between the steps and the verification;
+ *     3. a survey of what is there, including a count of each flow's work (stored as the
+ *        conversion's "preflight");
+ *     4. the steps (above), each reporting what it changed;
+ *     5. the new flow's invariants, checked INSIDE the transaction — including that every count
+ *        from step 3 is unchanged. One failing rolls the whole conversion back and the report says
+ *        which, with examples;
  *     6. the workspace_flow_change row (survey, steps, verification) and, from the caller, the
  *        audit event — in the same transaction, so the record exists exactly when the change does.
  *
@@ -26,33 +43,9 @@
  *   "what will change" is not an estimate — it is what the conversion does, counted, and whether
  *   its verification would pass. Nothing is written.
  *
- * PROJECTS → CLIENTS
- *   · running clocks closed (minutes kept, capped at 12h) and time set to MANUAL, recorded in the
- *     time-mode history like an admin's switch;
- *   · PENDING PID requests cancelled;
- *   · the number registry (pid_reservation): a code a project carries with no registry row gets
- *     one; RESERVED / RELEASED / EXPIRED → DISCONTINUED (shown once, never re-issued); every row's
- *     status re-read from the projects carrying it (live → ATTACHED, only deleted → DELETED,
- *     none and was ATTACHED → PURGED); every number written to the CID ledger as IMPORTED;
- *   · every live project without a number gets the next CID (oldest first; the FY it was created
- *     in, Indian FY read in IST; one past the highest serial EVER used), recorded as BACKFILLED;
- *   · Team Capacity: capacity.view + capacity.manage for the delivery ladder (Super Admin, Admin,
- *     Manager, Senior Consultant) and capacity.view for HR, which reads the board without editing
- *     it; both codes removed from every other role, every permission group, and the direct grants
- *     / ALLOW overrides of people whose role carries neither (DENY overrides are someone's
- *     decision about someone, and stay).
- *
- * CLIENTS → PROJECTS
- *   · Team Capacity back to the PROJECTS presets: every role holds capacity.view, only a '*'
- *     preset (Super Admin) holds capacity.manage; capacity.manage removed from groups, direct
- *     grants and ALLOW overrides;
- *   · registry states PROJECTS does not know: DELETED → ATTACHED; PURGED / MERGED → DISCONTINUED
- *     (the merge target is kept in the report; the ledger keeps the history);
- *   · time stays MANUAL; the CID ledger, client groups, task-group fields and billable flags stay.
- *
  * TENANCY. `project` has no organisation column. A project belongs to its creator's
  * organisation, else to that of its earliest member, else to the first organisation — the rule
- * CidService.orgForProject and the old SQL backfill use. Every statement here is scoped to ONE
+ * CidService.orgForProject and the flow migration use. Every statement here is scoped to ONE
  * organisation through that rule or through user.organizationId; nothing touches another tenant.
  *
  * This file is plain TypeScript over Prisma (no Nest), exported from @pdash/db.
@@ -67,44 +60,6 @@ type Tx = Prisma.TransactionClient;
 type Db = PrismaClient | Tx;
 
 // ── Pure pieces (pinned against the API's own copies by tools/workspace-flow-conversion.spec.ts) ─
-
-/** Longest prefix a CID may carry — CID_PREFIX_MAX in apps/api/src/common/cid/cid.ts. */
-export const CONVERSION_CID_PREFIX_MAX = 16;
-/** cidPrefix(): letters and digits of the organisation code, upper-cased, ≤16, 'SQ' if nothing is left. */
-export function conversionCidPrefix(orgCode: string | null | undefined): string {
-  const clean = (orgCode ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, CONVERSION_CID_PREFIX_MAX);
-  return clean || 'SQ';
-}
-
-/** The Indian financial year (April start) an instant falls in, read in IST — financialYear().label. */
-export function istFinancialYearLabel(instant: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric' })
-    .formatToParts(instant);
-  const y = Number(parts.find(p => p.type === 'year')!.value);
-  const m = Number(parts.find(p => p.type === 'month')!.value);
-  const start = m >= 4 ? y : y - 1;
-  return `${String(start % 100).padStart(2, '0')}_${String((start + 1) % 100).padStart(2, '0')}`;
-}
-
-/** PREFIX_YY_YY_NNN — formatCid(). */
-export function conversionFormatCid(prefix: string, fyLabel: string, serial: number): string {
-  return `${prefix}_${fyLabel}_${String(serial).padStart(3, '0')}`;
-}
-
-/** A code that can be put in the registry: anything_YY_YY_serial (serial ≥ 1). PROJECTS PIDs may
- *  carry an unsanitised prefix (`pdash-demo_26_27_001`), so the prefix is not constrained. */
-export function parseLegacyNumber(code: string): { fyLabel: string; serial: number } | null {
-  const m = /^.+_(\d{2})_(\d{2})_(\d{1,6})$/.exec(code ?? '');
-  if (!m) return null;
-  const serial = parseInt(m[3], 10);
-  if (serial < 1) return null;
-  return { fyLabel: `${m[1]}_${m[2]}`, serial };
-}
-
-/** One past the highest serial ever seen — the whole of "never re-issued". */
-export function nextSerialAfter(...seen: Array<number | null | undefined>): number {
-  return Math.max(0, ...seen.map(n => Number(n ?? 0)).filter(n => Number.isFinite(n))) + 1;
-}
 
 /** A clock nobody stopped stops counting after this — SESSION_CAP_MINUTES in common/work-time.ts. */
 export const CONVERSION_SESSION_CAP_MINUTES = 12 * 60;
@@ -141,18 +96,40 @@ export function capacityCodesFor(flow: WorkspaceFlowName, roleName: string): str
   return (ALL_CODES_ROLES as readonly string[]).includes(roleName) ? [CAPACITY_VIEW, CAPACITY_MANAGE] : [CAPACITY_VIEW];
 }
 
-/** The registry states each flow knows. The database CHECK holds their union. */
+/**
+ * The registry states each flow knows. The database CHECK holds their union, and the registry
+ * itself is SHARED — a PROJECTS PID and a CLIENTS CID are rows in the same table — so a row is
+ * judged by the flow of the work it is attached to, not by the flow the organisation is running.
+ * A row attached to nothing (a hold nobody took, a number long retired) belongs to no flow.
+ */
 export const REGISTRY_STATUSES_BY_FLOW: Record<WorkspaceFlowName, readonly string[]> = {
   PROJECTS: ['RESERVED', 'ATTACHED', 'RELEASED', 'EXPIRED', 'DISCONTINUED'],
   CLIENTS: ['ATTACHED', 'DELETED', 'PURGED', 'MERGED', 'DISCONTINUED'],
 };
 
-const TERMINAL_PHASES = ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'];
-
 /** The advisory-lock key a conversion (or its dry run) holds for its organisation. */
 export const conversionLockKey = (organizationId: string) => `workspace-flow:${organizationId}`;
-/** The key CidService.lockSeries takes to issue a CID — the backfill takes the same one. */
-const cidSeriesLockKey = (organizationId: string, fyLabel: string) => `cid:${organizationId}:${fyLabel}`;
+
+/**
+ * Every step a conversion into each flow takes, in order. A conversion is a SETTINGS change, so
+ * this list is short on purpose and the run asserts that what it did matches it — a step added
+ * without a thought about this file fails immediately rather than on somebody's live database.
+ */
+export const CONVERSION_STEPS: Record<WorkspaceFlowName, readonly string[]> = {
+  CLIENTS: ['clocks', 'time_mode', 'capacity', 'work_kept', 'flow'],
+  PROJECTS: ['capacity', 'time_mode', 'work_kept', 'flow'],
+};
+
+/**
+ * Steps a conversion USED to take, before each row carried the flow it belongs to. Every one of
+ * them rewrote work: numbers issued and retired, the registry re-read, the CID ledger written, PID
+ * requests cancelled. They are named here so that the test can say they are gone, rather than
+ * nobody noticing if one came back.
+ */
+export const RETIRED_CONVERSION_STEPS: readonly string[] = [
+  'pid_requests', 'registry_register', 'registry_retire', 'registry_rederive',
+  'ledger_import', 'cid_backfill', 'registry_map', 'kept',
+];
 
 // ── Report shapes (stored as JSON in workspace_flow_change and returned to the caller) ──────────
 
@@ -175,19 +152,37 @@ export type ConversionVerification = {
   invariants: ConversionInvariant[];
 };
 
+/** A count of one thing on each side of the line. */
+export type WorkByFlow = { PROJECTS: number; CLIENTS: number };
+
+/**
+ * Every flow's work, counted. Taken before the conversion's steps and again before it commits: a
+ * conversion changes settings, so every one of these numbers must come out the same twice.
+ */
+export type WorkSnapshot = {
+  projects: WorkByFlow;
+  liveProjects: WorkByFlow;
+  tasks: WorkByFlow;
+  timesheets: WorkByFlow;
+  staffing: WorkByFlow;
+  /** Attached to no project at all — a team space's tasks and the time logged against them. Shared. */
+  shared: { tasks: number; timesheets: number };
+  /** Live rows of each flow with no number yet (a PROJECTS project waiting for its PID). */
+  withoutNumber: WorkByFlow;
+  registryByStatus: Record<string, number>;
+  pidRequestsByStatus: Record<string, number>;
+  cidEvents: number;
+};
+
 export type ConversionSurvey = {
   organization: {
     id: string; name: string; code: string;
     workspaceFlow: WorkspaceFlowName; workspaceFlowChangedAt: string | null; timeTrackingMode: string;
   };
   inUse: { projects: number; liveProjects: number; tasks: number; timesheets: number; any: boolean };
-  liveProjectsWithoutNumber: number;
-  registryByStatus: Record<string, number>;
-  pendingPidRequests: number;
+  /** What each flow holds. The conversion leaves all of it exactly as it finds it. */
+  work: WorkSnapshot;
   runningClocks: number;
-  cidEvents: number;
-  /** Codes projects carry that no registry row names and that cannot be registered. */
-  unregisterableCodes: string[];
   capacity: {
     roles: { name: string; users: number; codes: string[] }[];
     groups: { name: string; codes: string[] }[];
@@ -203,7 +198,7 @@ export type ConversionReport = {
   organizationName: string;
   from: WorkspaceFlowName;
   to: WorkspaceFlowName;
-  /** Is the organisation using its current flow at all? False → nothing to convert. */
+  /** Is the organisation using its current flow at all? False → nothing is waiting to be hidden. */
   inUse: boolean;
   survey: ConversionSurvey;
   steps: ConversionStep[];
@@ -237,7 +232,8 @@ export type ConversionInput = {
   note?: string | null;
   /**
    * The caller skipped the backup and typed-name confirmations because the organisation had
-   * nothing to convert. Checked again inside the transaction: if it is in use by then, refused.
+   * nothing in the flow it is leaving. Checked again inside the transaction: if it is in use by
+   * then, refused.
    */
   notInUseShortcut?: boolean;
   /** Written inside the transaction after verification passes — the audit event. */
@@ -338,10 +334,12 @@ async function run(prisma: PrismaClient, input: ConversionInput, dryRun: boolean
         );
       }
 
-      // Writers wait; readers carry on. Held until commit, so nothing is created in the old shape
-      // between the steps and the verification, or after the verification and before the flip.
+      // Writers wait; readers carry on. The grant tables because the conversion rewrites them; the
+      // work tables because the conversion promises not to, and a count taken while somebody is
+      // logging time would prove nothing either way.
       await tx.$executeRawUnsafe(
-        `LOCK TABLE "project", "pid_reservation", "pid_request", "cid_event", "task_work_session",
+        `LOCK TABLE "project", "project_task", "task", "task_assignee", "timesheet",
+                    "pid_reservation", "pid_request", "cid_event", "task_work_session",
                     "role_permission", "permission_group_permission", "user_permission", "permission_override"
          IN SHARE ROW EXCLUSIVE MODE`,
       );
@@ -366,16 +364,16 @@ async function run(prisma: PrismaClient, input: ConversionInput, dryRun: boolean
           undefined, [{ code: 'IN_USE_NOW', message: 'The organisation is in use now.' }],
         );
       }
-      const blockers = hardBlockers(survey, to);
-      if (blockers.length) {
-        const report: ConversionReport = { ...base, steps: [], verification: { flow: to, ok: false, invariants: [] }, blockers };
-        throw new WorkspaceFlowConversionError('BLOCKED', blockers.map(b => b.message).join(' '), report, blockers);
-      }
 
       const changeId = dryRun ? 'dry-run' : `wfc_${randomUUID().replace(/-/g, '')}`;
       const ctx: StepContext = { tx, organizationId, actorId: input.actorId, changeId, survey };
       const steps = to === 'CLIENTS' ? await toClients(ctx) : await toProjects(ctx);
-      const verification = await verify(tx, organizationId, to);
+      const took = steps.map(s => s.key).join(',');
+      if (took !== CONVERSION_STEPS[to].join(',')) {
+        // Not a user's mistake — a developer's. Fail loudly inside the transaction, so it rolls back.
+        throw new Error(`Conversion to ${to} took the steps [${took}]; CONVERSION_STEPS says [${CONVERSION_STEPS[to].join(',')}].`);
+      }
+      const verification = await verify(tx, organizationId, to, survey.work);
 
       const failed = verification.invariants.filter(i => !i.ok);
       const report: ConversionReport = {
@@ -426,21 +424,6 @@ async function run(prisma: PrismaClient, input: ConversionInput, dryRun: boolean
   }
 }
 
-/** What stops a conversion before it starts (the dry run adds anything its verification finds). */
-function hardBlockers(survey: ConversionSurvey, to: WorkspaceFlowName): ConversionBlocker[] {
-  const out: ConversionBlocker[] = [];
-  if (to === 'CLIENTS' && survey.unregisterableCodes.length) {
-    out.push({
-      code: 'UNREGISTERABLE_CODES',
-      message:
-        `${survey.unregisterableCodes.length} project number(s) are not in the form PREFIX_YY_YY_NNN, so the CID `
-        + 'registry cannot hold them. Give those projects a proper number (Change PID) first.',
-      examples: survey.unregisterableCodes.slice(0, 10),
-    });
-  }
-  return out;
-}
-
 // ── Survey ──────────────────────────────────────────────────────────────────────────────────────
 
 /** This organisation's projects (live and soft-deleted), by the derived-organisation rule. */
@@ -471,6 +454,69 @@ function capacityRoleUsers(organizationId: string, flow: WorkspaceFlowName): Pri
 
 const capacityCodesSql = Prisma.join([...CAPACITY_CODES]);
 
+/**
+ * Every flow's work, counted, for one organisation. The whole promise of a conversion is that this
+ * comes out the same before and after, so it counts the things a conversion used to rewrite:
+ * projects and clients, their tasks and time and staffing, the number registry, the PID pool and
+ * the CID ledger.
+ */
+export async function workSnapshot(db: Db, organizationId: string): Promise<WorkSnapshot> {
+  const [row] = await db.$queryRaw<Record<string, bigint>[]>`
+    WITH op AS ${orgProjects(organizationId)},
+         opt AS (SELECT DISTINCT pt."taskId", op."workspaceFlow"
+                   FROM "project_task" pt JOIN op ON op."id" = pt."projectId")
+    SELECT
+      (SELECT count(*) FROM op WHERE op."workspaceFlow" = 'PROJECTS')                              AS p_projects,
+      (SELECT count(*) FROM op WHERE op."workspaceFlow" = 'CLIENTS')                               AS c_projects,
+      (SELECT count(*) FROM op WHERE op."workspaceFlow" = 'PROJECTS' AND op."deletedAt" IS NULL)   AS p_live,
+      (SELECT count(*) FROM op WHERE op."workspaceFlow" = 'CLIENTS'  AND op."deletedAt" IS NULL)   AS c_live,
+      (SELECT count(*) FROM op WHERE op."workspaceFlow" = 'PROJECTS' AND op."deletedAt" IS NULL
+                                 AND op."code" IS NULL)                                            AS p_nonum,
+      (SELECT count(*) FROM op WHERE op."workspaceFlow" = 'CLIENTS'  AND op."deletedAt" IS NULL
+                                 AND op."code" IS NULL)                                            AS c_nonum,
+      (SELECT count(*) FROM opt WHERE opt."workspaceFlow" = 'PROJECTS')                            AS p_tasks,
+      (SELECT count(*) FROM opt WHERE opt."workspaceFlow" = 'CLIENTS')                             AS c_tasks,
+      (SELECT count(*) FROM "timesheet" ts WHERE
+          ts."projectId" IN (SELECT op."id" FROM op WHERE op."workspaceFlow" = 'PROJECTS')
+       OR ts."taskId"    IN (SELECT opt."taskId" FROM opt WHERE opt."workspaceFlow" = 'PROJECTS')) AS p_time,
+      (SELECT count(*) FROM "timesheet" ts WHERE
+          ts."projectId" IN (SELECT op."id" FROM op WHERE op."workspaceFlow" = 'CLIENTS')
+       OR ts."taskId"    IN (SELECT opt."taskId" FROM opt WHERE opt."workspaceFlow" = 'CLIENTS'))  AS c_time,
+      (SELECT count(*) FROM "task_assignee" ta
+        WHERE ta."taskId" IN (SELECT opt."taskId" FROM opt WHERE opt."workspaceFlow" = 'PROJECTS'))AS p_staff,
+      (SELECT count(*) FROM "task_assignee" ta
+        WHERE ta."taskId" IN (SELECT opt."taskId" FROM opt WHERE opt."workspaceFlow" = 'CLIENTS')) AS c_staff,
+      (SELECT count(*) FROM "task" t JOIN "user" u ON u."id" = t."createdBy"
+        WHERE u."organizationId" = ${organizationId}
+          AND NOT EXISTS (SELECT 1 FROM "project_task" pt WHERE pt."taskId" = t."id"))             AS shared_tasks,
+      (SELECT count(*) FROM "timesheet" ts JOIN "user" u ON u."id" = ts."userId"
+        WHERE u."organizationId" = ${organizationId} AND ts."projectId" IS NULL
+          AND (ts."taskId" IS NULL
+               OR NOT EXISTS (SELECT 1 FROM "project_task" pt WHERE pt."taskId" = ts."taskId")))   AS shared_time,
+      (SELECT count(*) FROM "cid_event" e WHERE e."organizationId" = ${organizationId})            AS cid_events`;
+
+  const registry = await db.$queryRaw<{ status: string; n: bigint }[]>`
+    SELECT "status", count(*) AS n FROM "pid_reservation" WHERE "organizationId" = ${organizationId}
+    GROUP BY "status" ORDER BY "status"`;
+  const requests = await db.$queryRaw<{ status: string; n: bigint }[]>`
+    SELECT "status", count(*) AS n FROM "pid_request" WHERE "organizationId" = ${organizationId}
+    GROUP BY "status" ORDER BY "status"`;
+
+  const n = (k: string) => Number(row[k] ?? 0);
+  return {
+    projects: { PROJECTS: n('p_projects'), CLIENTS: n('c_projects') },
+    liveProjects: { PROJECTS: n('p_live'), CLIENTS: n('c_live') },
+    tasks: { PROJECTS: n('p_tasks'), CLIENTS: n('c_tasks') },
+    timesheets: { PROJECTS: n('p_time'), CLIENTS: n('c_time') },
+    staffing: { PROJECTS: n('p_staff'), CLIENTS: n('c_staff') },
+    shared: { tasks: n('shared_tasks'), timesheets: n('shared_time') },
+    withoutNumber: { PROJECTS: n('p_nonum'), CLIENTS: n('c_nonum') },
+    registryByStatus: Object.fromEntries(registry.map(r => [r.status, Number(r.n)])),
+    pidRequestsByStatus: Object.fromEntries(requests.map(r => [r.status, Number(r.n)])),
+    cidEvents: n('cid_events'),
+  };
+}
+
 export async function surveyOrg(db: Db, organizationId: string): Promise<ConversionSurvey> {
   const org = await db.organization.findUnique({
     where: { id: organizationId },
@@ -478,24 +524,11 @@ export async function surveyOrg(db: Db, organizationId: string): Promise<Convers
   });
   if (!org) throw new WorkspaceFlowConversionError('NOT_FOUND', 'Organisation not found.');
   const inUse = await workspaceInUse(db, organizationId);
+  const work = await workSnapshot(db, organizationId);
 
-  const [counts] = await db.$queryRaw<{ nocode: bigint; pending: bigint; clocks: bigint; events: bigint }[]>`
-    SELECT
-      (SELECT count(*) FROM ${orgProjects(organizationId)} p WHERE p."deletedAt" IS NULL AND p."code" IS NULL) AS nocode,
-      (SELECT count(*) FROM "pid_request" r WHERE r."organizationId" = ${organizationId} AND r."status" = 'PENDING') AS pending,
-      (SELECT count(*) FROM "task_work_session" s JOIN "user" u ON u."id" = s."userId"
-        WHERE u."organizationId" = ${organizationId} AND s."endedAt" IS NULL) AS clocks,
-      (SELECT count(*) FROM "cid_event" e WHERE e."organizationId" = ${organizationId}) AS events`;
-
-  const byStatus = await db.$queryRaw<{ status: string; n: bigint }[]>`
-    SELECT "status", count(*) AS n FROM "pid_reservation" WHERE "organizationId" = ${organizationId}
-    GROUP BY "status" ORDER BY "status"`;
-
-  const unregistered = await db.$queryRaw<{ code: string }[]>`
-    SELECT DISTINCT p."code" FROM ${orgProjects(organizationId)} p
-    WHERE p."code" IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM "pid_reservation" r WHERE r."organizationId" = ${organizationId} AND r."pid" = p."code")
-    ORDER BY p."code"`;
+  const [counts] = await db.$queryRaw<{ clocks: bigint }[]>`
+    SELECT (SELECT count(*) FROM "task_work_session" s JOIN "user" u ON u."id" = s."userId"
+             WHERE u."organizationId" = ${organizationId} AND s."endedAt" IS NULL) AS clocks`;
 
   const roles = await db.$queryRaw<{ name: string; users: bigint; codes: string[] | null }[]>`
     SELECT r."name",
@@ -529,12 +562,8 @@ export async function surveyOrg(db: Db, organizationId: string): Promise<Convers
       timeTrackingMode: org.timeTrackingMode,
     },
     inUse,
-    liveProjectsWithoutNumber: Number(counts.nocode),
-    registryByStatus: Object.fromEntries(byStatus.map(r => [r.status, Number(r.n)])),
-    pendingPidRequests: Number(counts.pending),
+    work,
     runningClocks: Number(counts.clocks),
-    cidEvents: Number(counts.events),
-    unregisterableCodes: unregistered.map(r => r.code).filter(c => !parseLegacyNumber(c)),
     capacity: {
       roles: roles.map(r => ({ name: r.name, users: Number(r.users), codes: r.codes ?? [] })),
       groups: groups.map(g => ({ name: g.name, codes: g.codes })),
@@ -556,37 +585,47 @@ type StepContext = {
 };
 
 async function toClients(ctx: StepContext): Promise<ConversionStep[]> {
-  const steps: ConversionStep[] = [];
-  steps.push(...await closeClocksAndGoManual(ctx));
-  steps.push(await cancelPidRequests(ctx));
-  steps.push(await registerCarriedCodes(ctx));
-  steps.push(await retireHolds(ctx));
-  steps.push(await rederiveRegistry(ctx));
-  steps.push(await importNumbersToLedger(ctx));
-  steps.push(await backfillCids(ctx));
-  steps.push(await applyCapacity(ctx, 'CLIENTS'));
-  steps.push(await flip(ctx, 'CLIENTS'));
-  return steps;
+  return [
+    ...await closeClocksAndGoManual(ctx),
+    await applyCapacity(ctx, 'CLIENTS'),
+    workStaysWhereItIs(ctx, 'PROJECTS'),
+    await flip(ctx, 'CLIENTS'),
+  ];
 }
 
 async function toProjects(ctx: StepContext): Promise<ConversionStep[]> {
-  const steps: ConversionStep[] = [];
-  steps.push(await applyCapacity(ctx, 'PROJECTS'));
-  steps.push(await mapRegistryToProjects(ctx));
-  steps.push({
-    key: 'time_mode',
-    label: 'Time stays as it is recorded now (an administrator may switch the PROJECTS flow to the timer afterwards)',
+  return [
+    await applyCapacity(ctx, 'PROJECTS'),
+    {
+      key: 'time_mode',
+      label: 'Time stays as it is recorded now (an administrator may switch the PROJECTS flow to the timer afterwards)',
+      changed: 0,
+      details: { timeTrackingMode: ctx.survey.organization.timeTrackingMode },
+    },
+    workStaysWhereItIs(ctx, 'CLIENTS'),
+    await flip(ctx, 'PROJECTS'),
+  ];
+}
+
+/**
+ * The step that does nothing, and is the most important one to say out loud: the flow being left
+ * keeps every row it has. It is reported so that the person converting reads, in the same list as
+ * the changes, exactly how much work is about to go out of sight and come back untouched.
+ */
+function workStaysWhereItIs({ survey }: StepContext, leaving: WorkspaceFlowName): ConversionStep {
+  const w = survey.work;
+  return {
+    key: 'work_kept',
+    label: `The ${leaving === 'CLIENTS' ? 'client' : 'project'} work stays exactly as it is — hidden while the other flow is on, and there again, unchanged, if the flow is switched back`,
     changed: 0,
-    details: { timeTrackingMode: ctx.survey.organization.timeTrackingMode },
-  });
-  steps.push({
-    key: 'kept',
-    label: 'The CID ledger, client groups, task-group fields and billable flags stay in the database, unused',
-    changed: 0,
-    details: { cidEvents: ctx.survey.cidEvents },
-  });
-  steps.push(await flip(ctx, 'PROJECTS'));
-  return steps;
+    details: {
+      projects: w.projects[leaving],
+      liveProjects: w.liveProjects[leaving],
+      tasks: w.tasks[leaving],
+      timesheets: w.timesheets[leaving],
+      staffing: w.staffing[leaving],
+    },
+  };
 }
 
 /** Close running clocks (minutes kept, capped at 12h) and move time to MANUAL, recorded as a switch. */
@@ -629,200 +668,6 @@ async function closeClocksAndGoManual({ tx, organizationId, actorId, survey }: S
       details: { from: fromMode, to: 'MANUAL' },
     },
   ];
-}
-
-async function cancelPidRequests({ tx, organizationId }: StepContext): Promise<ConversionStep> {
-  const rows = await tx.$queryRaw<{ title: string | null }[]>`
-    UPDATE "pid_request" r SET "status" = 'CANCELLED', "resolvedAt" = ${NOW}
-      FROM "project" p
-     WHERE p."id" = r."projectId" AND r."organizationId" = ${organizationId} AND r."status" = 'PENDING'
-    RETURNING p."title"`;
-  return {
-    key: 'pid_requests',
-    label: 'Open PID requests cancelled (the CLIENTS flow issues numbers itself)',
-    changed: rows.length,
-    details: { projects: rows.map(r => r.title).slice(0, 50) },
-  };
-}
-
-/** A code a project carries but the registry does not name gets its row, so it is never re-issued. */
-async function registerCarriedCodes({ tx, organizationId }: StepContext): Promise<ConversionStep> {
-  const rows = await tx.$queryRaw<{ pid: string }[]>`
-    INSERT INTO "pid_reservation" ("id", "organizationId", "fyLabel", "serial", "pid", "generatedById",
-                                   "status", "projectId", "createdAt", "resolvedAt")
-    SELECT DISTINCT ON (p."code")
-           'lg' || md5(${organizationId}::text || ':' || p."code"), ${organizationId},
-           (regexp_match(p."code", '_([0-9]{2}_[0-9]{2})_[0-9]{1,6}$'))[1],
-           ((regexp_match(p."code", '_([0-9]{1,6})$'))[1])::int,
-           p."code", COALESCE(p."createdBy", 'system'), 'ATTACHED', p."id", p."createdAt", ${NOW}
-      FROM ${orgProjects(organizationId)} p
-     WHERE p."code" IS NOT NULL
-       AND p."code" ~ '^.+_[0-9]{2}_[0-9]{2}_[0-9]{1,6}$'
-       AND ((regexp_match(p."code", '_([0-9]{1,6})$'))[1])::int >= 1
-       AND NOT EXISTS (SELECT 1 FROM "pid_reservation" r WHERE r."organizationId" = ${organizationId} AND r."pid" = p."code")
-     ORDER BY p."code", p."createdAt", p."id"
-    ON CONFLICT DO NOTHING
-    RETURNING "pid"`;
-  return {
-    key: 'registry_register',
-    label: 'Numbers carried by projects but missing from the registry registered',
-    changed: rows.length,
-    details: { numbers: rows.map(r => r.pid).slice(0, 50) },
-  };
-}
-
-/** A number generated and never attached was shown to somebody — it is retired, never re-issued. */
-async function retireHolds({ tx, organizationId }: StepContext): Promise<ConversionStep> {
-  const rows = await tx.$queryRaw<{ pid: string; was: string }[]>`
-    WITH was AS (
-      SELECT "id", "status" FROM "pid_reservation"
-       WHERE "organizationId" = ${organizationId} AND "status" IN ('RESERVED', 'RELEASED', 'EXPIRED')
-    )
-    UPDATE "pid_reservation" r
-       SET "status" = 'DISCONTINUED', "resolvedAt" = COALESCE(r."resolvedAt", ${NOW})
-      FROM was WHERE r."id" = was."id"
-    RETURNING r."pid", was."status" AS was`;
-  const byStatus: Record<string, number> = {};
-  rows.forEach(r => { byStatus[r.was] = (byStatus[r.was] ?? 0) + 1; });
-  return {
-    key: 'registry_retire',
-    label: 'Numbers reserved, released or expired but never attached retired (DISCONTINUED)',
-    changed: rows.length,
-    details: { byStatus, numbers: rows.map(r => r.pid).slice(0, 50) },
-  };
-}
-
-/** Every number's status read off the projects that carry it. */
-async function rederiveRegistry({ tx, organizationId }: StepContext): Promise<ConversionStep> {
-  const rows = await tx.$queryRaw<{ pid: string; was: string; now: string }[]>`
-    WITH op AS ${orgProjects(organizationId)},
-    want AS (
-      SELECT rs."id", rs."status" AS was, rs."projectId" AS was_project,
-             CASE WHEN live."id" IS NOT NULL THEN 'ATTACHED'
-                  WHEN dead."id" IS NOT NULL THEN 'DELETED'
-                  WHEN rs."status" = 'ATTACHED' THEN 'PURGED'
-                  ELSE rs."status" END AS now_status,
-             CASE WHEN live."id" IS NOT NULL THEN live."id"
-                  WHEN dead."id" IS NOT NULL THEN dead."id"
-                  WHEN rs."status" = 'ATTACHED' THEN NULL
-                  ELSE rs."projectId" END AS now_project
-        FROM "pid_reservation" rs
-        LEFT JOIN LATERAL (
-          SELECT p."id" FROM op p WHERE p."code" = rs."pid" AND p."deletedAt" IS NULL
-           ORDER BY (p."projectPhase" IN (${Prisma.join(TERMINAL_PHASES)})), p."roundSeq" DESC, p."id" DESC LIMIT 1
-        ) live ON true
-        LEFT JOIN LATERAL (
-          SELECT p."id" FROM op p WHERE p."code" = rs."pid"
-           ORDER BY p."deletedAt" DESC NULLS LAST, p."id" DESC LIMIT 1
-        ) dead ON true
-       WHERE rs."organizationId" = ${organizationId}
-    )
-    UPDATE "pid_reservation" r
-       SET "status" = w.now_status,
-           "projectId" = w.now_project,
-           "mergedIntoCid" = CASE WHEN w.now_status = 'MERGED' THEN r."mergedIntoCid" ELSE NULL END,
-           "resolvedAt" = CASE WHEN w.now_status = 'PURGED' THEN COALESCE(r."resolvedAt", ${NOW}) ELSE r."resolvedAt" END
-      FROM want w
-     WHERE r."id" = w."id"
-       AND (w.now_status IS DISTINCT FROM w.was OR w.now_project IS DISTINCT FROM w.was_project)
-    RETURNING r."pid", w.was, w.now_status AS now`;
-  const moves: Record<string, number> = {};
-  rows.forEach(r => { const k = `${r.was}→${r.now}`; moves[k] = (moves[k] ?? 0) + 1; });
-  return {
-    key: 'registry_rederive',
-    label: 'Every number’s status re-read from the projects carrying it (ATTACHED / DELETED / PURGED)',
-    changed: rows.length,
-    details: { moves, numbers: rows.map(r => `${r.pid}: ${r.was} → ${r.now}`).slice(0, 50) },
-  };
-}
-
-/** Every existing number gets one IMPORTED ledger event, dated when it was issued. Idempotent ids. */
-async function importNumbersToLedger({ tx, organizationId, changeId }: StepContext): Promise<ConversionStep> {
-  const rows = await tx.$queryRaw<{ cid: string }[]>`
-    INSERT INTO "cid_event" ("id", "organizationId", "cid", "projectId", "clientTitle", "type", "toCid",
-                             "actorId", "actorName", "metadata", "createdAt")
-    SELECT 'imp' || md5(rs."organizationId" || ':' || rs."pid"), rs."organizationId", rs."pid", rs."projectId",
-           (SELECT p."title" FROM ${orgProjects(organizationId)} p WHERE p."code" = rs."pid"
-             ORDER BY p."roundSeq", p."createdAt" LIMIT 1),
-           'IMPORTED', rs."pid", u."id",
-           CASE WHEN u."id" IS NOT NULL THEN trim(u."firstName" || ' ' || u."lastName") ELSE 'System' END,
-           jsonb_build_object('note', 'Issued before the CID ledger existed; recorded by the workspace-flow conversion',
-                              'statusAtImport', rs."status", 'conversionId', ${changeId}::text),
-           rs."createdAt"
-      FROM "pid_reservation" rs
-      LEFT JOIN "user" u ON u."id" = rs."generatedById"
-     WHERE rs."organizationId" = ${organizationId}
-       AND NOT EXISTS (SELECT 1 FROM "cid_event" e WHERE e."organizationId" = rs."organizationId" AND e."cid" = rs."pid")
-    ON CONFLICT ("id") DO NOTHING
-    RETURNING "cid"`;
-  return {
-    key: 'ledger_import',
-    label: 'Every existing number written to the CID ledger (IMPORTED)',
-    changed: rows.length,
-    details: { numbers: rows.map(r => r.cid).slice(0, 50) },
-  };
-}
-
-/** The highest serial this organisation has EVER used in a financial year — every source counts. */
-async function highestSerial(tx: Tx, organizationId: string, fyLabel: string, prefix: string): Promise<number> {
-  const head = `${prefix}_${fyLabel}_`;
-  const [row] = await tx.$queryRaw<{ reg: number | null; coded: number | null; own: number | null; counter: number | null }[]>`
-    SELECT
-      (SELECT MAX("serial") FROM "pid_reservation" WHERE "organizationId" = ${organizationId} AND "fyLabel" = ${fyLabel}) AS reg,
-      (SELECT MAX(substr(p."code", ${head.length + 1}::int)::int) FROM "project" p
-        WHERE starts_with(p."code", ${head}) AND substr(p."code", ${head.length + 1}::int) ~ '^[0-9]{1,6}$') AS coded,
-      (SELECT MAX(((regexp_match(p."code", '_([0-9]{1,6})$'))[1])::int) FROM ${orgProjects(organizationId)} p
-        WHERE p."code" ~ ${`^.+_${fyLabel}_[0-9]{1,6}$`}) AS own,
-      (SELECT "value" FROM "sequence_counter" WHERE "scope" = ${`pid:${organizationId}:${fyLabel}`}) AS counter`;
-  return nextSerialAfter(row?.reg, row?.coded, row?.own, row?.counter) - 1;
-}
-
-/** Every live project without a number gets the next CID, oldest first, in the FY it was created in. */
-async function backfillCids({ tx, organizationId, actorId, changeId, survey }: StepContext): Promise<ConversionStep> {
-  const pending = await tx.$queryRaw<{ id: string; title: string; createdAt: Date; createdBy: string | null }[]>`
-    SELECT p."id", p."title", p."createdAt", p."createdBy" FROM ${orgProjects(organizationId)} p
-     WHERE p."deletedAt" IS NULL AND p."code" IS NULL
-     ORDER BY p."createdAt", p."id"`;
-  const prefix = conversionCidPrefix(survey.organization.code);
-  const actor = await tx.user.findUnique({ where: { id: actorId }, select: { id: true, firstName: true, lastName: true } });
-  const issued: string[] = [];
-  const locked = new Set<string>();
-  for (const p of pending) {
-    const fyLabel = istFinancialYearLabel(p.createdAt);
-    if (!locked.has(fyLabel)) {
-      // The lock CidService takes to issue a CID, so a client created the moment the flow flips
-      // queues behind the backfill instead of reading the same "highest serial".
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${cidSeriesLockKey(organizationId, fyLabel)}))::text AS locked`;
-      locked.add(fyLabel);
-    }
-    const serial = (await highestSerial(tx, organizationId, fyLabel, prefix)) + 1;
-    const cid = conversionFormatCid(prefix, fyLabel, serial);
-    await tx.$executeRaw`
-      INSERT INTO "pid_reservation" ("id", "organizationId", "fyLabel", "serial", "pid", "generatedById",
-                                     "status", "projectId", "createdAt", "resolvedAt")
-      VALUES ('bf' || md5(${organizationId}::text || ':' || ${cid}::text), ${organizationId}, ${fyLabel}, ${serial}::int, ${cid},
-              ${p.createdBy ?? 'system'}, 'ATTACHED', ${p.id}, ${NOW}, ${NOW})`;
-    const updated = await tx.$executeRaw`
-      UPDATE "project" SET "code" = ${cid}, "roundSeq" = 1 WHERE "id" = ${p.id} AND "code" IS NULL`;
-    if (updated !== 1) throw new Error(`Project ${p.id} changed while its CID was being issued.`);
-    await tx.$executeRaw`
-      INSERT INTO "cid_event" ("id", "organizationId", "cid", "projectId", "clientTitle", "type", "toCid",
-                               "actorId", "actorName", "metadata", "createdAt")
-      VALUES ('bfe' || md5(${organizationId}::text || ':' || ${cid}::text || ':' || ${p.id}::text), ${organizationId}, ${cid}, ${p.id}, ${p.title},
-              'BACKFILLED', ${cid}, ${actor?.id ?? null},
-              ${actor ? `${actor.firstName} ${actor.lastName}`.trim() : 'System (workspace-flow conversion)'},
-              jsonb_build_object('via', 'workspace-flow conversion', 'conversionId', ${changeId}::text,
-                                 'clientCreatedAt', ${p.createdAt.toISOString()}::text, 'clientCreatedBy', ${p.createdBy}::text,
-                                 'order', 'createdAt, then id'),
-              ${NOW})`;
-    issued.push(`${p.title} → ${cid}`);
-  }
-  return {
-    key: 'cid_backfill',
-    label: 'Every live project without a number given the next CID (oldest first), recorded as BACKFILLED',
-    changed: pending.length,
-    details: { prefix, issued: issued.slice(0, 100) },
-  };
 }
 
 /**
@@ -906,33 +751,6 @@ async function applyCapacity({ tx, organizationId }: StepContext, flow: Workspac
   };
 }
 
-/** Registry states PROJECTS does not know become ones it does; the merge target is kept here. */
-async function mapRegistryToProjects({ tx, organizationId }: StepContext): Promise<ConversionStep> {
-  const rows = await tx.$queryRaw<{ pid: string; was: string; merged: string | null; now: string }[]>`
-    WITH was AS (
-      SELECT "id", "status", "mergedIntoCid" FROM "pid_reservation"
-       WHERE "organizationId" = ${organizationId} AND "status" IN ('DELETED', 'PURGED', 'MERGED')
-    )
-    UPDATE "pid_reservation" r
-       SET "status" = CASE WHEN was."status" = 'DELETED' THEN 'ATTACHED' ELSE 'DISCONTINUED' END,
-           "mergedIntoCid" = NULL,
-           "resolvedAt" = COALESCE(r."resolvedAt", ${NOW})
-      FROM was WHERE r."id" = was."id"
-    RETURNING r."pid", was."status" AS was, was."mergedIntoCid" AS merged, r."status" AS now`;
-  const moves: Record<string, number> = {};
-  rows.forEach(r => { const k = `${r.was}→${r.now}`; moves[k] = (moves[k] ?? 0) + 1; });
-  return {
-    key: 'registry_map',
-    label: 'Registry states PROJECTS does not know mapped: DELETED → ATTACHED, PURGED / MERGED → DISCONTINUED',
-    changed: rows.length,
-    details: {
-      moves,
-      mergedInto: rows.filter(r => r.merged).map(r => `${r.pid} → ${r.merged}`),
-      numbers: rows.map(r => `${r.pid}: ${r.was} → ${r.now}`).slice(0, 50),
-    },
-  };
-}
-
 async function flip({ tx, organizationId }: StepContext, to: WorkspaceFlowName): Promise<ConversionStep> {
   const n = await tx.$executeRaw`
     UPDATE "organization" SET "workspaceFlow" = ${to}, "workspaceFlowChangedAt" = ${NOW}, "updatedAt" = ${NOW}
@@ -946,60 +764,80 @@ function invariant(key: string, label: string, offenders: string[]): ConversionI
   return { key, label, ok: offenders.length === 0, found: offenders.length, ...(offenders.length ? { examples: offenders.slice(0, 10) } : {}) };
 }
 
-/** The invariants of `flow`, for one organisation. Read-only; used inside the conversion. */
-export async function verify(db: Db, organizationId: string, flow: WorkspaceFlowName): Promise<ConversionVerification> {
+/** Every difference between two snapshots of the work, as sentences. Empty means nothing moved. */
+export function workDifferences(before: WorkSnapshot, after: WorkSnapshot): string[] {
+  const out: string[] = [];
+  const cmp = (what: string, a: number, b: number) => { if (a !== b) out.push(`${what}: ${a} → ${b}`); };
+  for (const flow of WORKSPACE_FLOW_NAMES) {
+    cmp(`${flow} projects`, before.projects[flow], after.projects[flow]);
+    cmp(`${flow} live projects`, before.liveProjects[flow], after.liveProjects[flow]);
+    cmp(`${flow} tasks`, before.tasks[flow], after.tasks[flow]);
+    cmp(`${flow} timesheet entries`, before.timesheets[flow], after.timesheets[flow]);
+    cmp(`${flow} staffing rows`, before.staffing[flow], after.staffing[flow]);
+    cmp(`${flow} rows still without a number`, before.withoutNumber[flow], after.withoutNumber[flow]);
+  }
+  cmp('tasks belonging to no project', before.shared.tasks, after.shared.tasks);
+  cmp('time logged against no project', before.shared.timesheets, after.shared.timesheets);
+  cmp('CID ledger events', before.cidEvents, after.cidEvents);
+  for (const key of new Set([...Object.keys(before.registryByStatus), ...Object.keys(after.registryByStatus)])) {
+    cmp(`registry numbers ${key}`, before.registryByStatus[key] ?? 0, after.registryByStatus[key] ?? 0);
+  }
+  for (const key of new Set([...Object.keys(before.pidRequestsByStatus), ...Object.keys(after.pidRequestsByStatus)])) {
+    cmp(`PID requests ${key}`, before.pidRequestsByStatus[key] ?? 0, after.pidRequestsByStatus[key] ?? 0);
+  }
+  return out;
+}
+
+/**
+ * The invariants of `flow`, for one organisation. Read-only; used inside the conversion.
+ *
+ * `workBefore` is the count of both flows' work taken before the steps ran. Given one, the
+ * verification also checks that not a single row of either flow's work moved — the promise that a
+ * conversion is a settings change. Without one (an operator asking "does this organisation hold
+ * together?") the rest is checked on its own.
+ */
+export async function verify(
+  db: Db, organizationId: string, flow: WorkspaceFlowName, workBefore?: WorkSnapshot,
+): Promise<ConversionVerification> {
   const out: ConversionInvariant[] = [];
   const org = await db.organization.findUnique({
     where: { id: organizationId }, select: { workspaceFlow: true, timeTrackingMode: true },
   });
   out.push(invariant('flow', `The organisation runs the ${flow} flow`, org?.workspaceFlow === flow ? [] : [String(org?.workspaceFlow)]));
 
-  const allowed = REGISTRY_STATUSES_BY_FLOW[flow];
-  const stray = await db.$queryRaw<{ label: string }[]>`
-    SELECT "pid" || ' (' || "status" || ')' AS label FROM "pid_reservation"
-     WHERE "organizationId" = ${organizationId} AND "status" NOT IN (${Prisma.join([...allowed])}) ORDER BY "pid"`;
-  out.push(invariant('registry_states', `Every registry number is in a state the ${flow} flow knows (${allowed.join(', ')})`, stray.map(r => r.label)));
+  if (workBefore) {
+    out.push(invariant(
+      'work_untouched',
+      'Not one project, client, task, timesheet, staffing row, number or ledger entry of either flow was changed',
+      workDifferences(workBefore, await workSnapshot(db, organizationId)),
+    ));
+  }
+
+  // The registry is shared by both flows, so each number is judged by the flow of the work it is
+  // attached to. A number attached to nothing is the registry's own history and belongs to neither.
+  const strayStates = await db.$queryRaw<{ label: string }[]>`
+    WITH op AS ${orgProjects(organizationId)}
+    SELECT rs."pid" || ' (' || rs."status" || ', ' || p."workspaceFlow" || ' work)' AS label
+      FROM "pid_reservation" rs JOIN op p ON p."id" = rs."projectId"
+     WHERE rs."organizationId" = ${organizationId}
+       AND ((p."workspaceFlow" = 'PROJECTS' AND rs."status" <> ALL (${REGISTRY_STATUSES_BY_FLOW.PROJECTS}::text[]))
+         OR (p."workspaceFlow" = 'CLIENTS'  AND rs."status" <> ALL (${REGISTRY_STATUSES_BY_FLOW.CLIENTS}::text[])))
+     ORDER BY 1`;
+  out.push(invariant('registry_states', 'Every number is in a state the flow that owns its work knows', strayStates.map(r => r.label)));
 
   const dup = await db.$queryRaw<{ label: string }[]>`
     SELECT upper("pid") AS label FROM "pid_reservation" WHERE "organizationId" = ${organizationId}
      GROUP BY upper("pid") HAVING count(*) > 1 ORDER BY 1`;
   out.push(invariant('registry_unique', 'No two registry rows share a number', dup.map(r => r.label)));
 
+  // The CLIENTS rule, checked in both directions: the client work is expected to hold together
+  // whether or not it is the work on screen today.
+  const nocode = await db.$queryRaw<{ label: string }[]>`
+    SELECT p."title" AS label FROM ${orgProjects(organizationId)} p
+     WHERE p."workspaceFlow" = 'CLIENTS' AND p."deletedAt" IS NULL AND p."code" IS NULL ORDER BY p."createdAt"`;
+  out.push(invariant('every_client_has_cid', 'Every live client in the clients flow has a CID', nocode.map(r => r.label)));
+
   if (flow === 'CLIENTS') {
-    const nocode = await db.$queryRaw<{ label: string }[]>`
-      SELECT p."title" AS label FROM ${orgProjects(organizationId)} p
-       WHERE p."deletedAt" IS NULL AND p."code" IS NULL ORDER BY p."createdAt"`;
-    out.push(invariant('every_client_has_cid', 'Every live client has a CID', nocode.map(r => r.label)));
-
-    const unreg = await db.$queryRaw<{ label: string }[]>`
-      SELECT DISTINCT p."code" AS label FROM ${orgProjects(organizationId)} p
-       WHERE p."code" IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM "pid_reservation" r WHERE r."organizationId" = ${organizationId} AND r."pid" = p."code")
-       ORDER BY 1`;
-    out.push(invariant('every_cid_registered', 'Every CID a client carries has a registry row', unreg.map(r => r.label)));
-
-    const incoherent = await db.$queryRaw<{ label: string }[]>`
-      WITH op AS ${orgProjects(organizationId)}
-      SELECT rs."pid" || ' (' || rs."status" || ')' AS label FROM "pid_reservation" rs
-       WHERE rs."organizationId" = ${organizationId} AND (
-             (rs."status" = 'ATTACHED' AND NOT EXISTS (SELECT 1 FROM op p WHERE p."code" = rs."pid" AND p."deletedAt" IS NULL))
-          OR (rs."status" = 'DELETED' AND (EXISTS (SELECT 1 FROM op p WHERE p."code" = rs."pid" AND p."deletedAt" IS NULL)
-                                        OR NOT EXISTS (SELECT 1 FROM op p WHERE p."code" = rs."pid"))))
-       ORDER BY 1`;
-    out.push(invariant('registry_matches_clients', 'ATTACHED numbers have a live client, DELETED ones only deleted clients', incoherent.map(r => r.label)));
-
-    const unledgered = await db.$queryRaw<{ label: string }[]>`
-      SELECT rs."pid" AS label FROM "pid_reservation" rs
-       WHERE rs."organizationId" = ${organizationId}
-         AND NOT EXISTS (SELECT 1 FROM "cid_event" e WHERE e."organizationId" = rs."organizationId" AND e."cid" = rs."pid")
-       ORDER BY 1`;
-    out.push(invariant('ledger_complete', 'Every number has at least one CID-ledger event', unledgered.map(r => r.label)));
-
-    const pending = await db.$queryRaw<{ label: string }[]>`
-      SELECT COALESCE(p."title", r."projectId") AS label FROM "pid_request" r LEFT JOIN "project" p ON p."id" = r."projectId"
-       WHERE r."organizationId" = ${organizationId} AND r."status" = 'PENDING'`;
-    out.push(invariant('no_pending_pid_requests', 'No PID request is pending', pending.map(r => r.label)));
-
     out.push(invariant('time_manual', 'Time is recorded by hand (MANUAL)', org?.timeTrackingMode === 'MANUAL' ? [] : [String(org?.timeTrackingMode)]));
 
     const clocks = await db.$queryRaw<{ label: string }[]>`

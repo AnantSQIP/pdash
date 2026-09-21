@@ -12,6 +12,7 @@ import { getActorId } from '../../common/context/request-context';
 import { startOfIstDay } from '../../common/dates';
 import { TimesheetsModule } from '../timesheets/timesheets.module';
 import { TimesheetsService } from '../timesheets/timesheets.service';
+import { taskInFlow, timesheetInFlow } from '../../common/flow-scope';
 
 const SWEEP_INTERVAL_MS = 30 * 60 * 1000; // check twice an hour
 const BOOT_DELAY_MS = 45_000;
@@ -155,23 +156,31 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     return admins.map(a => a.id);
   }
 
-  /** Build the day's numbers. Single-org deployment → aggregate across all live data. */
+  /**
+   * Build the day's numbers. Single-org deployment → aggregate across all live data — but only the
+   * live data of the flow the firm is running. The digest is the one screen that reports on
+   * EVERYTHING at once, so unscoped it is the loudest place the other flow's work could appear:
+   * a count, a matter's title and its number, in a notification a Super Admin reads at 10pm.
+   * Tasks use taskInFlow(), which still counts a team space's task — that belongs to neither flow
+   * and is the firm's work either way.
+   */
   async buildReport(now = new Date()) {
+    const flow = await this.digestFlow();
     const dayStart = startOfIstDay(now);
     const dayEnd = new Date(dayStart.getTime() + 86_400_000);
     const [createdToday, completedToday, tasksClosedToday, overdueTasks, dueTodayOpen, activeProjects] = await Promise.all([
-      this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: { title: true, code: true } }),
-      this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: { title: true, code: true } }),
+      this.prisma.project.findMany({ where: { workspaceFlow: flow, deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: { title: true, code: true } }),
+      this.prisma.project.findMany({ where: { workspaceFlow: flow, deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: { title: true, code: true } }),
       // "Closed today" means finished today, not edited today. Windowed on completedAt so an old
       // task someone tidied up does not appear in tonight's digest as new work.
-      this.prisma.task.count({ where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: dayStart, lt: dayEnd } } }),
+      this.prisma.task.count({ where: { ...taskInFlow(flow), deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: dayStart, lt: dayEnd } } }),
       this.prisma.task.findMany({
-        where: { deletedAt: null, dueDate: { lt: dayStart }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+        where: { ...taskInFlow(flow), deletedAt: null, dueDate: { lt: dayStart }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
         select: { title: true, dueDate: true }, orderBy: { dueDate: 'asc' }, take: 500,
       }),
       // Deadlines DUE today that are already closed = met on time.
-      this.prisma.task.count({ where: { deletedAt: null, dueDate: { gte: dayStart, lt: dayEnd }, currentStatus: { type: 'CLOSED' } } }),
-      this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE' } }),
+      this.prisma.task.count({ where: { ...taskInFlow(flow), deletedAt: null, dueDate: { gte: dayStart, lt: dayEnd }, currentStatus: { type: 'CLOSED' } } }),
+      this.prisma.project.count({ where: { workspaceFlow: flow, deletedAt: null, projectPhase: 'ACTIVE' } }),
     ]);
     return {
       date: dayStart.toISOString().slice(0, 10),
@@ -210,7 +219,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
   /** Everything the digest screen needs for one IST day, fully linked and drillable. */
   async buildDetail(dateStr?: string) {
     // The client code is a PROJECTS-flow fact; the CLIENTS flow has none (common/features.ts).
-    const clientCodes = patentsAndClientCodes(await this.digestFlow());
+    const flow = await this.digestFlow();
+    const clientCodes = patentsAndClientCodes(flow);
     const base = dateStr ? new Date(`${dateStr.slice(0, 10)}T12:00:00.000Z`) : new Date();
     if (isNaN(base.getTime())) throw new BadRequestException('A valid date is required.');
     const dayStart = startOfIstDay(base);
@@ -243,37 +253,42 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       projectTasks: { select: { project: { select: { id: true, code: true, roundSeq: true, title: true, projectType: true, completionPercentage: true } } } },
     } as const;
 
+    // Every read below is bounded to `flow`. This screen resolves each number to the rows behind
+    // it — titles, numbers, clients, the people staffed on them — so an unscoped read here would
+    // not just inflate a count, it would put the other flow's matters on the page with links
+    // straight into them. The hours read is scoped by the work the time was logged against, not by
+    // the person: a day of time filed against nothing at all stays visible, as it should.
     const [createdProjects, completedProjects, tasksClosed, deadlinesMet, overdueTasks, upcomingTasks, upcomingProjects, hoursRows, activeProjects] =
       await Promise.all([
-        this.prisma.project.findMany({ where: { deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
-        this.prisma.project.findMany({ where: { deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
+        this.prisma.project.findMany({ where: { workspaceFlow: flow, deletedAt: null, createdAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
+        this.prisma.project.findMany({ where: { workspaceFlow: flow, deletedAt: null, completedAt: { gte: dayStart, lt: dayEnd } }, select: projectSelect }),
         this.prisma.task.findMany({
-          where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: dayStart, lt: dayEnd } },
+          where: { ...taskInFlow(flow), deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: dayStart, lt: dayEnd } },
           select: { ...taskSelect, updatedAt: true, completedAt: true }, take: 500,
         }),
         this.prisma.task.findMany({
-          where: { deletedAt: null, dueDate: { gte: dayStart, lt: dayEnd }, currentStatus: { type: 'CLOSED' } },
+          where: { ...taskInFlow(flow), deletedAt: null, dueDate: { gte: dayStart, lt: dayEnd }, currentStatus: { type: 'CLOSED' } },
           select: taskSelect, take: 500,
         }),
         this.prisma.task.findMany({
-          where: { deletedAt: null, dueDate: { lt: dayStart }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
+          where: { ...taskInFlow(flow), deletedAt: null, dueDate: { lt: dayStart }, OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }] },
           select: taskSelect, orderBy: { dueDate: 'asc' }, take: 500,
         }),
         // Coming up: still-open work due inside the next N WORKING days.
         this.prisma.task.findMany({
           where: {
-            deletedAt: null, dueDate: { gte: today, lt: lookaheadEnd },
+            ...taskInFlow(flow), deletedAt: null, dueDate: { gte: today, lt: lookaheadEnd },
             OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
           },
           select: taskSelect, orderBy: { dueDate: 'asc' }, take: 500,
         }),
         this.prisma.project.findMany({
-          where: { deletedAt: null, projectPhase: { in: ['ACTIVE', 'ON_HOLD'] }, dueDate: { gte: today, lt: lookaheadEnd } },
+          where: { workspaceFlow: flow, deletedAt: null, projectPhase: { in: ['ACTIVE', 'ON_HOLD'] }, dueDate: { gte: today, lt: lookaheadEnd } },
           select: projectSelect, orderBy: { dueDate: 'asc' },
         }),
         // Who worked, and on what, that day — the "working hours" side of the picture.
         this.prisma.timesheet.findMany({
-          where: { deletedAt: null, date: { gte: dayStart, lt: dayEnd } },
+          where: { ...timesheetInFlow(flow), deletedAt: null, date: { gte: dayStart, lt: dayEnd } },
           select: {
             hoursLogged: true, billable: true, notes: true,
             user: { select: { id: true, firstName: true, lastName: true, designation: true } },
@@ -281,7 +296,7 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
             task: { select: { id: true, title: true } },
           },
         }),
-        this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE' } }),
+        this.prisma.project.count({ where: { workspaceFlow: flow, deletedAt: null, projectPhase: 'ACTIVE' } }),
       ]);
 
     const person = (u: { id: string; firstName: string | null; lastName: string | null }) =>

@@ -4,9 +4,15 @@
  * Settings → Workspace flow (docs/WORKSPACE_FLOWS.md, "Changing the flow").
  *
  * Which of the two ways of running the firm this organisation uses, and the only door between
- * them. Deliberately not a toggle: a flow in use has data shaped for it, so switching runs a
- * guided conversion — preflight, then a confirmation a person has to mean, then the conversion
- * itself, which verifies the new flow's invariants before it commits.
+ * them. Each flow's work is its own — every project/client row carries the flow it was made in —
+ * so switching HIDES one flow's work and shows the other's; it converts nothing. What it does
+ * change is the firm's settings (the flow, who holds Team Capacity, the time mode), and that is
+ * still deliberate rather than a toggle: preflight, then a confirmation a person has to mean, then
+ * the conversion itself, which checks that not one row of work moved before it commits.
+ *
+ * This card is the one screen that names a flow at all. It is behind user.manage_access, and the
+ * people who reach it are the only people who know the two flows exist; nothing else in the app
+ * says which flow a piece of work belongs to.
  *
  * The three steps are the API's, not this card's: `preflight` is the conversion run as a dry run
  * and rolled back, so what is listed here is exactly what will run. Nothing is computed twice.
@@ -113,6 +119,7 @@ export function WorkspaceFlowCard({ org }: { org: OrgSummary }) {
         <h2 className="text-base font-semibold text-gray-900">Workspace flow</h2>
         <p className="mt-0.5 text-sm text-gray-500">
           How this firm runs. It decides what the work is called, how its number is issued, and which modules exist at all.
+          Each flow keeps its own work: switching hides one flow’s projects or clients and shows the other’s, and switching back shows them again, unchanged.
           {state?.changedAt && <> Chosen {formatDateTimeIST(state.changedAt)}.</>}
         </p>
       </div>
@@ -186,7 +193,7 @@ export function WorkspaceFlowCard({ org }: { org: OrgSummary }) {
                 Convert this firm to {target === 'CLIENTS' ? 'Clients' : 'Projects'}
               </h3>
               <p className="mt-0.5 text-[13px] text-gray-500">
-                Everything below runs as one transaction, and the new flow is checked before it commits. If a check fails, nothing changes.
+                This changes the firm’s settings, not its work. Everything below runs as one transaction, and it is checked before it commits. If a check fails, nothing changes.
               </p>
             </div>
 
@@ -199,8 +206,20 @@ export function WorkspaceFlowCard({ org }: { org: OrgSummary }) {
                 <>
                   <p className="text-[13px] text-gray-600">
                     {report.inUse
-                      ? <>This firm has {report.survey.inUse.liveProjects} live {report.survey.inUse.liveProjects === 1 ? 'matter' : 'matters'}, {report.survey.inUse.tasks} tasks and {report.survey.inUse.timesheets} timesheet entries.</>
-                      : <>Nothing has been created yet, so there is nothing to convert — this is just the choice.</>}
+                      ? (() => {
+                          const w = report.survey.work;
+                          const leaving = report.from === 'CLIENTS' ? 'client' : 'project';
+                          const arriving = report.to === 'CLIENTS' ? 'client' : 'project';
+                          const kept = w.liveProjects[report.from];
+                          const waiting = w.liveProjects[report.to];
+                          return <>
+                            The {kept} live {leaving}{kept === 1 ? '' : 's'} in use now, with {w.tasks[report.from]} tasks and {w.timesheets[report.from]} timesheet entries, stay exactly as they are — out of sight until the firm switches back.{' '}
+                            {waiting
+                              ? <>The {waiting} live {arriving}{waiting === 1 ? '' : 's'} kept from before will be in use again.</>
+                              : <>There are no {arriving}s yet; the module starts empty.</>}
+                          </>;
+                        })()
+                      : <>Nothing has been created yet, so there is nothing to hide — this is just the choice.</>}
                   </p>
 
                   <div>
@@ -251,7 +270,7 @@ export function WorkspaceFlowCard({ org }: { org: OrgSummary }) {
                       {inUse && (
                         <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 text-[12.5px] font-medium text-amber-900 ring-1 ring-inset ring-amber-200">
                           <input type="checkbox" checked={backup} onChange={e => setBackup(e.target.checked)} className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-amber-300 text-amber-600 focus:ring-amber-500" />
-                          <span>I have taken a backup of the database. This reshapes data — numbers, grants and running clocks — and the way back from a decision you regret is the dump.</span>
+                          <span>I have taken a backup of the database. This leaves every project and client as it is, but it moves permission grants and closes running clocks, and the way back from a decision you regret is the dump.</span>
                         </label>
                       )}
                       <div>

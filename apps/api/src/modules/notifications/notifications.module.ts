@@ -1,6 +1,7 @@
 import { Body, Controller, ForbiddenException, Get, Global, Injectable, Module, Param, Post, Put, Query } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 
 // A notification can name the channel it came from so a per-channel mute can suppress it.
 export type NotifyInput = { type: string; title: string; message: string; link?: string; channelId?: string };
@@ -19,7 +20,33 @@ export function categoryOf(type: string): string {
 
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly flows: WorkspaceFlowService,
+  ) {}
+
+  /**
+   * Which workspace flow's work a notification is about, read off the row its link names
+   * (docs/WORKSPACE_FLOWS.md). A link into a project/client row carries that row's flow; anything
+   * else — leave, an expense, a mention in a team space, a link to no row at all — is about
+   * neither flow and is shown in both.
+   *
+   * It is stamped when the notification is written rather than worked out when the bell is read,
+   * because by then the row may be the other flow's and the answer would change under a line that
+   * has already been sent.
+   */
+  private async flowOfLink(link?: string | null): Promise<string | null> {
+    const id = /^\/projects\/([^/?#]+)/.exec(link ?? '')?.[1];
+    if (!id) return null;
+    const p = await this.prisma.project.findUnique({ where: { id }, select: { workspaceFlow: true } });
+    return p?.workspaceFlow ?? null;
+  }
+
+  /** The flow filter for a person's bell: their flow's work, plus everything that is neither's. */
+  private async bellWhere(userId: string) {
+    const flow = await this.flows.flowOfUser(userId);
+    return { userId, OR: [{ workspaceFlow: null }, { workspaceFlow: flow }] };
+  }
 
   /**
    * Create a notification for one or many recipients — but FIRST honour each
@@ -44,22 +71,26 @@ export class NotificationsService {
         return true;
       });
       if (!recipients.length) return;
+      const workspaceFlow = await this.flowOfLink(input.link);
       await this.prisma.notification.createMany({
-        data: recipients.map(userId => ({ userId, type: input.type, title: input.title, message: input.message, link: input.link ?? null })),
+        data: recipients.map(userId => ({
+          userId, type: input.type, title: input.title, message: input.message,
+          link: input.link ?? null, workspaceFlow,
+        })),
       });
     } catch { /* swallow — notifications are non-critical */ }
   }
 
-  listForUser(userId: string, limit = 30) {
+  async listForUser(userId: string, limit = 30) {
     return this.prisma.notification.findMany({
-      where: { userId },
+      where: await this.bellWhere(userId),
       orderBy: { createdAt: 'desc' },
       take: Math.min(Math.max(limit, 1), 100),
     });
   }
 
-  unreadCount(userId: string) {
-    return this.prisma.notification.count({ where: { userId, isRead: false } });
+  async unreadCount(userId: string) {
+    return this.prisma.notification.count({ where: { ...await this.bellWhere(userId), isRead: false } });
   }
 
   async markRead(id: string, userId: string) {
@@ -69,7 +100,9 @@ export class NotificationsService {
   }
 
   async markAllRead(userId: string) {
-    await this.prisma.notification.updateMany({ where: { userId, isRead: false }, data: { isRead: true } });
+    // Only what the person can actually see: "mark all read" must not silently clear the other
+    // flow's unread lines, which would be waiting, already read, if the firm ever switches back.
+    await this.prisma.notification.updateMany({ where: { ...await this.bellWhere(userId), isRead: false }, data: { isRead: true } });
     return { ok: true };
   }
 

@@ -244,7 +244,16 @@ export class PatentsService {
       where: { organizationId, deletedAt: null },
       select: {
         id: true, name: true, code: true, archivedAt: true,
-        _count: { select: { patents: { where: { deletedAt: null } }, projects: { where: { deletedAt: null } } } },
+        // The portal is a PROJECTS-flow screen (its controller is @RequireFlow('PROJECTS')), so the
+        // flow is that literal rather than a lookup. "How much work is on this client" has to mean
+        // the work this workspace is running, or archiving decisions are made against a number that
+        // includes matters nobody here can open.
+        _count: {
+          select: {
+            patents: { where: { deletedAt: null } },
+            projects: { where: { deletedAt: null, workspaceFlow: 'PROJECTS' } },
+          },
+        },
       },
       // Archived codes sink to the bottom; within each group, alphabetical. The portal is a
       // working list, and a retired client should not sit between two live ones.
@@ -258,7 +267,7 @@ export class PatentsService {
     const live = await this.prisma.project.groupBy({
       by: ['clientId'],
       where: {
-        clientId: { in: clients.map(c => c.id) }, deletedAt: null,
+        clientId: { in: clients.map(c => c.id) }, deletedAt: null, workspaceFlow: 'PROJECTS',
         projectPhase: { in: ['ACTIVE', 'ON_HOLD'] },
       },
       _count: { _all: true },
@@ -347,6 +356,11 @@ export class PatentsService {
     const client = await this.requireClient(organizationId, id);
     // Count EVERY patent row, including soft-deleted ones — the cascade does not respect
     // deletedAt, so a "removed" patent is destroyed just the same.
+    // Deliberately counted across BOTH workspace flows. This is the cascade guard, and the cascade
+    // does not know about flows: `Patent.clientId` cascades and `Project.clientId` is SetNull, so a
+    // row in the other flow's work is destroyed or stripped just the same. Counting only this flow
+    // would let a client be removed while the other flow's projects still point at it — the exact
+    // silent damage the guard exists to prevent.
     const [patents, livePatents, projects, liveProjects] = await Promise.all([
       this.prisma.patent.count({ where: { clientId: id } }),
       this.prisma.patent.count({ where: { clientId: id, deletedAt: null } }),
@@ -451,7 +465,11 @@ export class PatentsService {
       select: {
         ...PATENT_OVERVIEW_SELECT,
         client: { select: CLIENT_MINI },
+        // "What work have we done on this patent" means the work of the flow this portal belongs
+        // to (@RequireFlow('PROJECTS')). A matter from the other flow would appear here as a PID
+        // that resolves to nothing anybody on this screen can open.
         projectLinks: {
+          where: { project: { workspaceFlow: 'PROJECTS' } },
           select: {
             project: {
               select: {

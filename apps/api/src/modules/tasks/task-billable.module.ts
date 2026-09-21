@@ -6,6 +6,7 @@ import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { RequireFlow } from '../../common/decorators/require-flow.decorator';
+import { projectFlowSql, taskListInFlow } from '../../common/flow-scope';
 
 export class SetBillableDto {
   @IsBoolean()
@@ -41,13 +42,26 @@ export class TaskBillableService {
     return id;
   }
 
+  /**
+   * Billable-per-task exists in the CLIENTS flow alone — its controller is @RequireFlow('CLIENTS')
+   * and nothing else calls this service — so the flow is a constant here rather than a lookup, and
+   * every read below says so in its own filter.
+   */
+  private static readonly FLOW = 'CLIENTS' as const;
+
   async setTask(taskId: string, billable: boolean) {
     const actorId = this.actor();
     const task = await this.prisma.task.findFirst({
       where: { id: taskId, deletedAt: null },
       select: {
         id: true, title: true,
-        projectTasks: { where: { project: { deletedAt: null } }, select: { projectId: true }, take: 1 },
+        // The flow belongs in this `take: 1` as much as `deletedAt` does: the one row it keeps is
+        // what the task is then judged and audited as belonging to, and a task filed in the other
+        // flow's work must not be the client this route bills.
+        projectTasks: {
+          where: { project: { deletedAt: null, workspaceFlow: TaskBillableService.FLOW } },
+          select: { projectId: true }, take: 1,
+        },
         teamTasks: { select: { teamId: true }, take: 1 },
       },
     });
@@ -96,7 +110,10 @@ export class TaskBillableService {
   async setGroup(taskListId: string, billable: boolean) {
     const actorId = this.actor();
     const group = await this.prisma.taskList.findFirst({
-      where: { id: taskListId, deletedAt: null },
+      // taskListInFlow, not a plain project filter: a team space's group has no project, and it
+      // must still be found here so it can be refused in words ("internal work is never billable")
+      // rather than disappearing as "not found". Only the other flow's groups are out of reach.
+      where: { id: taskListId, deletedAt: null, ...taskListInFlow(TaskBillableService.FLOW) },
       select: { id: true, name: true, projectId: true, teamId: true },
     });
     if (!group) throw new NotFoundException('Task group not found.');
@@ -109,10 +126,16 @@ export class TaskBillableService {
     const outcome = await this.prisma.$transaction(async tx => {
       // The same row locks a single task takes, in id order so two overlapping bulk changes cannot
       // deadlock each other.
+      // The join on "project" is the flow filter: the group above is already this flow's, but a
+      // project_task row carries its OWN projectId beside the list it points at, so the link is
+      // held to the same flow here rather than inferred from the lookup two statements up.
       const locked = await tx.$queryRaw<{ id: string; billable: boolean }[]>`
         SELECT t."id", t."billable" FROM "task" t
          WHERE t."deletedAt" IS NULL
-           AND t."id" IN (SELECT pt."taskId" FROM "project_task" pt WHERE pt."taskListId" = ${taskListId})
+           AND t."id" IN (
+             SELECT pt."taskId" FROM "project_task" pt
+               JOIN "project" p ON p."id" = pt."projectId"
+              WHERE pt."taskListId" = ${taskListId} AND ${projectFlowSql(TaskBillableService.FLOW, 'p')})
          ORDER BY t."id"
          FOR UPDATE`;
       const toChange = locked.filter(t => t.billable !== billable).map(t => t.id);

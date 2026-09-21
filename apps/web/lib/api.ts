@@ -199,11 +199,24 @@ export type ConversionReport = {
   survey: {
     organization: { id: string; name: string; code: string; workspaceFlow: WorkspaceFlow; timeTrackingMode: TimeTrackingMode };
     inUse: { any: boolean; projects: number; liveProjects: number; tasks: number; timesheets: number };
-    liveProjectsWithoutNumber: number;
-    registryByStatus: Record<string, number>;
-    pendingPidRequests: number;
+    /**
+     * Each flow's work, counted. A conversion changes settings, not work: the flow being left
+     * keeps all of this, out of sight, and the conversion checks these counts are unchanged
+     * before it commits.
+     */
+    work: {
+      projects: Record<WorkspaceFlow, number>;
+      liveProjects: Record<WorkspaceFlow, number>;
+      tasks: Record<WorkspaceFlow, number>;
+      timesheets: Record<WorkspaceFlow, number>;
+      staffing: Record<WorkspaceFlow, number>;
+      shared: { tasks: number; timesheets: number };
+      withoutNumber: Record<WorkspaceFlow, number>;
+      registryByStatus: Record<string, number>;
+      pidRequestsByStatus: Record<string, number>;
+      cidEvents: number;
+    };
     runningClocks: number;
-    cidEvents: number;
   };
   steps: ConversionStep[];
   verification: { flow: WorkspaceFlow; ok: boolean; invariants: ConversionInvariant[] };

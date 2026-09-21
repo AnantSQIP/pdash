@@ -7,6 +7,8 @@ import { ActorContextService } from '../../common/context/actor-context.service'
 import { NotificationsService } from '../notifications/notifications.module';
 import { PermissionService } from '../permissions/permission.service';
 import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import type { WorkspaceFlow } from '../../common/decorators/require-flow.decorator';
+import { taskInFlow } from '../../common/flow-scope';
 import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
 import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
@@ -332,13 +334,17 @@ export class CapacityService {
   /** Availability of one project's active members (drives the per-project capacity view). */
   async forProject(projectId: string, days = DEFAULT_DAYS, opts?: { from?: Date }) {
     const organizationId = await this.actor.requireOrgId();
+    const flow = await this.flows.flowOf(organizationId);
     // A project has no organizationId column — its org is reached through its members, the
     // same way ProjectsService.list scopes. Requiring an in-org member makes an id from
-    // another tenant a 404, not a leak.
+    // another tenant a 404, not a leak. The flow is the same kind of gate: work made in the
+    // other flow is hidden rather than converted, so its board has to answer the same "not
+    // found" the project itself answers — not a header and an empty week.
     const project = await this.prisma.project.findFirst({
       where: {
         id: projectId,
         deletedAt: null,
+        workspaceFlow: flow,
         members: { some: { user: { organizationId } } },
       },
       select: {
@@ -393,6 +399,10 @@ export class CapacityService {
     opts?: { from?: Date },
   ): Promise<{ from: string; to: string; capacityPerDay: number; rows: CapacityRow[]; generatedAt: string }> {
     const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
+    // Which flow the firm is in. Read once and threaded through every read below: the board is
+    // the one place that draws EVERY open task a person holds, so it is also the one place where
+    // the other flow's work would show up in full if nothing said otherwise.
+    const flow = await this.flows.flowOf(organizationId);
     const horizon = Math.max(MIN_DAYS, Math.min(MAX_DAYS, Number.isFinite(days) ? days : DEFAULT_DAYS));
     // The window is a START and a LENGTH. `today` stays what it has always been — the real day,
     // which is what "overdue" is measured against — and no longer doubles as the left edge.
@@ -430,9 +440,12 @@ export class CapacityService {
         select: { userId: true, startDate: true, endDate: true, leaveType: true, status: true, dayType: true },
       }),
       // Every OPEN task assigned to anyone in scope — capacity is cross-project by design.
+      // Cross-PROJECT, not cross-flow: taskInFlow drops work filed in the other flow's matters
+      // while still admitting a team-space task, which has no project and so belongs to both.
       this.prisma.task.findMany({
         where: {
           deletedAt: null,
+          ...taskInFlow(flow),
           assignees: { some: onlyUserIds ? { userId: { in: onlyUserIds } } : { user: { organizationId } } },
           OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
         },
@@ -449,6 +462,10 @@ export class CapacityService {
             // clientDueDate is deliberately not selected: it is redacted per permission elsewhere.
             // CLIENTS-FLOW: and the task group inside the client, so the board can say which piece
             // of the client's work somebody is on, not only which client.
+            // The flow filter is on this nested read as well as on the task: `take: 1` is what
+            // LABELS the row, and a task linked to matters in both flows would otherwise be drawn
+            // under whichever project came first — naming work the viewer cannot open.
+            where: { project: { workspaceFlow: flow } },
             select: {
               taskList: { select: { id: true, name: true, deletedAt: true, dueDate: true } },
               project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } },
@@ -471,6 +488,10 @@ export class CapacityService {
         where: {
           revokedAt: null,
           fromUser: { organizationId },
+          // A cover moves hours between two people on ONE task, so it follows that task's flow.
+          // Left unfiltered it would move hours for work this flow is not showing, and the board
+          // would draw a stand-in's share of a task that is nowhere on it.
+          task: taskInFlow(flow),
           OR: [{ toDate: null }, { toDate: { gte: windowStart } }],
         },
         select: { taskId: true, fromUserId: true, toUserId: true, fromDate: true, toDate: true, mode: true },
@@ -481,6 +502,8 @@ export class CapacityService {
     // of remaining effort beside the task's completion %: a task with 4h logged of an 8h estimate
     // has 4h left even while nobody has moved the percentage, so time filed from My Tasks or the
     // Timesheets module shrinks the person's plotted load the next time the board loads.
+    // No flow filter here: `taskIds` came out of the flow-filtered task read above, so this
+    // ledger lookup is already confined to this flow's work by the ids it is given.
     const taskIds = tasks.map(t => t.id);
     const logged = taskIds.length
       ? await this.prisma.timesheet.groupBy({
@@ -1005,6 +1028,10 @@ export class CapacityService {
         where: { organizationId, date: { gte: from, lt: toExcl }, ...(onlyUserIds ? { userId: { in: onlyUserIds } } : {}) },
         select: { userId: true, date: true, status: true, checkIn: true, totalHours: true },
       }),
+      // CROSS-FLOW ON PURPOSE (docs/WORKSPACE_FLOWS.md). This history reads hours only to decide
+      // whether a person worked a day — present, absent, a weekend worth a comp-off — and that is a
+      // fact about the person, not about a matter: a day spent on the other flow's work before a
+      // switch was still a day worked. Only totals leave this read; no matter is named by it.
       this.prisma.timesheet.findMany({
         where: { deletedAt: null, date: { gte: from, lt: toExcl }, user: { organizationId }, ...(onlyUserIds ? { userId: { in: onlyUserIds } } : {}) },
         select: { userId: true, date: true, hoursLogged: true },
@@ -1093,6 +1120,7 @@ export class CapacityService {
     // Enough window to reach the day after the one being filled in, and never less than the
     // board's own minimum.
     const spanDays = Math.ceil((next.getTime() - today.getTime()) / 86_400_000) + 2;
+    const flow = await this.flows.flowOf(organizationId);
     const board = await this.team(organizationId, Math.max(MIN_DAYS, Math.min(MAX_DAYS, spanDays)), [userId]);
     const row = board.rows[0];
 
@@ -1105,9 +1133,12 @@ export class CapacityService {
 
     // What they have already filed against each task on this exact date — so a sheet reopened
     // after a save shows what is already there instead of inviting it to be typed twice.
+    // Per TASK, and the tasks on this sheet are this flow's, so the lookup is scoped through the
+    // task as well: an entry against the other flow's work has no line here to be shown on, and
+    // summing it in would only produce a total that matches none of the rows underneath it.
     const filed = await this.prisma.timesheet.groupBy({
       by: ['taskId'],
-      where: { userId, date: day, deletedAt: null, taskId: { not: null } },
+      where: { userId, date: day, deletedAt: null, taskId: { not: null }, task: taskInFlow(flow) },
       _sum: { hoursLogged: true },
     });
     const loggedByTask = new Map(filed.map(f => [f.taskId as string, f._sum.hoursLogged ?? 0]));
@@ -1152,6 +1183,8 @@ export class CapacityService {
       const finished = await this.prisma.task.findMany({
         where: {
           deletedAt: null,
+          // This whole branch only runs in CLIENTS, so the flow is known without asking again.
+          ...taskInFlow('CLIENTS'),
           assignees: { some: { userId } },
           currentStatus: { type: 'CLOSED' },
           completedAt: { gte: addDays(day, -FINISHED_LOOKBACK_DAYS) },
@@ -1161,6 +1194,8 @@ export class CapacityService {
           id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true, billable: true,
           assignees: { where: { userId }, select: { estimatedHours: true } },
           projectTasks: {
+            // The `take: 1` names the client this finished work belonged to, so it is filtered too.
+            where: { project: { workspaceFlow: 'CLIENTS' } },
             take: 1,
             select: {
               taskList: { select: { name: true, deletedAt: true } },
@@ -1234,7 +1269,16 @@ export class CapacityService {
     };
   }
 
-  /** The day's owed and filled hours, without pulling in the timesheets module. */
+  /**
+   * The day's owed and filled hours, without pulling in the timesheets module.
+   *
+   * DELIBERATELY NOT FLOW-SCOPED. Both numbers are facts about one person's day rather than about
+   * any matter: eight hours are owed because the office is open eight hours, and an hour filed is
+   * an hour of that day gone whichever flow's work it went to. The TASK ROWS on the sheet above
+   * are flow-scoped — those are about the work — but the day's total is what TimesheetsService
+   * measures the same day against, and two different answers to "how full is today?" would
+   * eventually contradict each other in front of the same person.
+   */
   private async timesheetDay(userId: string, day: Date): Promise<{ target: number; logged: number }> {
     const agg = await this.prisma.timesheet.aggregate({
       where: { userId, date: day, deletedAt: null }, _sum: { hoursLogged: true },
@@ -1279,8 +1323,12 @@ export class CapacityService {
     if (mode === 'COVER' && !to) throw new BadRequestException('Say which day the cover ends, or make it a handover.');
     if (to && to < from) throw new BadRequestException('A cover cannot end before it starts.');
 
+    // Work the firm cannot currently open cannot be handed to anybody: arranging a cover on the
+    // other flow's task would create a seat, and a notification naming the task, for work that is
+    // nowhere on this flow's board.
+    const flow = await this.flows.flowOf(organizationId);
     const task = await this.prisma.task.findFirst({
-      where: { id: dto.taskId, deletedAt: null },
+      where: { id: dto.taskId, deletedAt: null, ...taskInFlow(flow) },
       select: { id: true, title: true, assignees: { select: { userId: true, role: true } } },
     });
     if (!task) throw new NotFoundException('Task not found.');
@@ -1364,8 +1412,11 @@ export class CapacityService {
    * those hours; with the cover gone it simply holds no share of the work.
    */
   async revokeCoverage(organizationId: string, id: string) {
+    const flow = await this.flows.flowOf(organizationId);
     const row = await this.prisma.taskCoverage.findFirst({
-      where: { id, fromUser: { organizationId } },
+      // Scoped to the task's flow like every other read of a cover: withdrawing one arranged on
+      // work this flow does not show would change a plan nobody here can see.
+      where: { id, fromUser: { organizationId }, task: taskInFlow(flow) },
       select: { id: true, revokedAt: true },
     });
     if (!row) throw new NotFoundException('That cover does not exist.');
@@ -1378,8 +1429,11 @@ export class CapacityService {
 
   /** Live covers, newest first. */
   async listCoverage(organizationId: string, taskId?: string) {
+    const flow = await this.flows.flowOf(organizationId);
     return this.prisma.taskCoverage.findMany({
-      where: { revokedAt: null, fromUser: { organizationId }, ...(taskId ? { taskId } : {}) },
+      // This list reports task TITLES, so an unfiltered one would name the other flow's work on a
+      // panel about this flow's — the plainest sort of leak there is.
+      where: { revokedAt: null, fromUser: { organizationId }, task: taskInFlow(flow), ...(taskId ? { taskId } : {}) },
       select: {
         id: true, taskId: true, fromDate: true, toDate: true, mode: true, reason: true, createdAt: true,
         task: { select: { id: true, title: true } },
@@ -1408,8 +1462,15 @@ export class CapacityService {
     return noticeDays <= CapacityService.EMERGENCY_NOTICE_DAYS;
   }
 
-  /** Open tasks on HIGH/CRITICAL projects, due on/before `windowEnd`, for the given users. */
-  private async atRiskTasks(userIds: string[], windowEnd: Date) {
+  /**
+   * Open tasks on HIGH/CRITICAL projects, due on/before `windowEnd`, for the given users.
+   *
+   * The flow is passed in rather than resolved here because both callers already know it, and
+   * because this read is project-only by construction — a task with no project cannot be on a
+   * HIGH/CRITICAL one — so the flow goes on the project filters themselves rather than through
+   * taskInFlow, which exists to keep project-less team work visible in both flows.
+   */
+  private async atRiskTasks(userIds: string[], windowEnd: Date, flow: WorkspaceFlow) {
     if (!userIds.length) return [];
     const tasks = await this.prisma.task.findMany({
       where: {
@@ -1423,14 +1484,16 @@ export class CapacityService {
             { assignees: { some: { userId: { in: userIds }, dueDate: { not: null, lt: windowEnd } } } },
           ] },
         ],
-        projectTasks: { some: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } } },
+        projectTasks: { some: { project: { deletedAt: null, workspaceFlow: flow, priority: { in: CapacityService.RISK_PRIORITIES } } } },
       },
       select: {
         id: true, title: true, priority: true, dueDate: true,
         estimatedHours: true, completionPercentage: true,
         assignees: { select: { userId: true, dueDate: true } },
         projectTasks: {
-          where: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } },
+          // Both filters carry the flow: the first decides whether the task is at risk at all,
+          // the second is what names the matter on the panel and in the alert.
+          where: { project: { deletedAt: null, workspaceFlow: flow, priority: { in: CapacityService.RISK_PRIORITIES } } },
           select: {
             project: { select: { id: true, title: true, priority: true } },
             taskList: { select: { id: true, name: true, dueDate: true, deletedAt: true } },
@@ -1560,7 +1623,7 @@ export class CapacityService {
     const emergency = leaves.filter(lv => this.isShortNotice(lv.createdAt, lv.startDate));
     if (!emergency.length) return this.emptyCoverage(today, to);
 
-    const tasks = await this.atRiskTasks([...new Set(emergency.map(l => l.userId))], to);
+    const tasks = await this.atRiskTasks([...new Set(emergency.map(l => l.userId))], to, await this.flows.flowOf(organizationId));
     if (!tasks.length) return this.emptyCoverage(today, to);
 
     const risks = emergency.map(lv => {
@@ -1621,7 +1684,7 @@ export class CapacityService {
     if (!this.isShortNotice(leave.createdAt, leave.startDate)) return;
     const start = startOfUtcDay(leave.startDate);
     const end = startOfUtcDay(leave.endDate);
-    const tasks = (await this.atRiskTasks([userId], addDays(end, 1)))
+    const tasks = (await this.atRiskTasks([userId], addDays(end, 1), await this.flows.flowOf(organizationId)))
       // Only tasks falling due DURING the leave — by THIS person's deadline on them — not ones
       // already overdue before it began.
       .filter(t => {

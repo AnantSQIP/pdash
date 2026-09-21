@@ -2,6 +2,7 @@ import { Global, Injectable, Module } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../context/request-context';
+import type { WorkspaceFlow } from '../decorators/require-flow.decorator';
 import { financialYear, legacyPidScope } from '../financial-year';
 import {
   cidPrefix, formatCid, isRetiredCid, parseCid,
@@ -50,6 +51,18 @@ export type CidEventInput = {
  * "Highest serial ever used" counts the registry (every status — a purged, merged or retired number
  * is still a row), any client code with the prefix (legacy rows), and a legacy sequence counter.
  * Registry rows are never deleted by the application, so a number is never issued twice.
+ *
+ * ONE SERIES PER ORGANISATION, ACROSS BOTH WORKSPACE FLOWS (docs/WORKSPACE_FLOWS.md).
+ *
+ * The two flows keep their WORK apart, but they deliberately share the number series: there is one
+ * `pid_reservation` table, one advisory lock per (organisation, financial year), and one "highest
+ * serial ever used". That is what makes a PID and a CID unable to collide — SQ_26_27_004 means one
+ * thing in an organisation, whichever flow issued it, so a number quoted on an invoice can never
+ * turn out to name two different matters. Splitting the series per flow would buy nothing and cost
+ * exactly that guarantee, so the allocation reads (`highestSerial`, `lockSeries`, `registryRow`)
+ * are cross-flow ON PURPOSE. What is per-flow is the WORK a number is attached to, which is why
+ * `syncRegistryInTx` — the one method that decides which project a number points at — takes the
+ * caller's flow and refuses to see the other flow's rows.
  */
 @Injectable()
 export class CidService {
@@ -71,6 +84,13 @@ export class CidService {
    * The organisation a client belongs to. `Project` has no organisation column: it is the creator's,
    * else that of its earliest member, else the (single) organisation this install serves — the same
    * order the migration's backfill uses.
+   *
+   * Deliberately NOT scoped to a workspace flow. It answers a TENANT question about a row the
+   * caller already holds the id of, and returns nothing but an organisation id — no project detail
+   * crosses. Both flows' purge and ledger paths reach it through `ledgerOrg`, and a flow filter
+   * here would make it answer "no organisation" for the other flow's row, which every caller reads
+   * as "nothing to compare against" rather than as a refusal — a filter that weakens the check it
+   * was meant to tighten.
    */
   async orgForProject(db: Db, projectId: string): Promise<string | null> {
     const p = await db.project.findUnique({ where: { id: projectId }, select: { createdBy: true } });
@@ -109,7 +129,19 @@ export class CidService {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))::text AS locked`;
   }
 
-  /** The highest serial this organisation has EVER used in a financial year — every source counts. */
+  /**
+   * The highest serial this organisation has EVER used in a financial year — every source counts.
+   *
+   * CROSS-FLOW ON PURPOSE, and it must stay that way. A number the PROJECTS flow once issued must
+   * never be handed out again by the CLIENTS flow, or the other way round: the two flows hide each
+   * other's work, so nobody would even see the collision until two invoices quoted one number for
+   * two matters. Scoping this read to a flow is therefore not a tightening but the one change that
+   * could break the series.
+   *
+   * The raw query has no organisation predicate because `project` has no organisation column; the
+   * `{ORG CODE}_{FY}_` prefix it matches on IS that predicate, which is the same way `takenSerials`
+   * in the PROJECTS flow has always read existing codes.
+   */
   async highestSerial(db: Db, organizationId: string, fyLabel: string, prefix: string): Promise<number> {
     const head = `${prefix}_${fyLabel}_`;
     const from = head.length + 1;
@@ -174,14 +206,21 @@ export class CidService {
    * `retireAs` is how a move says what the number became when work LEFT it (MERGED, with the
    * survivor, or DISCONTINUED); it applies only once no live client carries the number. A retired
    * number stays retired — nothing here ever brings one back to ATTACHED.
+   *
+   * `flow` is the caller's workspace flow, and it is a parameter rather than something guessed
+   * here because this method decides WHICH PROJECT a number points at. The number series is shared
+   * between the flows (see the class comment), so a code could in principle be found on the other
+   * flow's row; reading that row would point a CLIENTS registry entry at a PROJECTS matter and let
+   * the other flow's work decide whether a number counts as attached, deleted or purged. The
+   * caller always knows its own flow, so it says so.
    */
   async syncRegistryInTx(
-    tx: Tx, organizationId: string, cid: string,
+    tx: Tx, organizationId: string, cid: string, flow: WorkspaceFlow,
     opts: { retireAs?: 'MERGED' | 'DISCONTINUED'; mergedIntoCid?: string; actorId?: string | null } = {},
   ): Promise<CidRegistryStatus | null> {
     let row = await this.registryRow(tx, organizationId, cid);
     const carriers = await tx.project.findMany({
-      where: { code: cid },
+      where: { code: cid, workspaceFlow: flow },
       select: { id: true, deletedAt: true, projectPhase: true, roundSeq: true },
     });
     const live = carriers.filter(p => !p.deletedAt);

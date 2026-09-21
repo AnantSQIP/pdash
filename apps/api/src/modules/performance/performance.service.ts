@@ -1,6 +1,9 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import type { WorkspaceFlow } from '../../common/decorators/require-flow.decorator';
+import { otherFlow, taskInFlow, timesheetInFlow } from '../../common/flow-scope';
 import { Prisma } from '@prisma/client';
 import {
   breachesByProject, computeStreak, countBreaches, deadlineVerdict, breachedHours,
@@ -179,11 +182,42 @@ function isoWindow(win: KpiWindow) {
   };
 }
 
+/**
+ * WHAT THIS MODULE COUNTS, AND WHICH FLOW IT COUNTS IT IN (docs/WORKSPACE_FLOWS.md).
+ *
+ * Performance is built from two different kinds of fact, and the flow applies to exactly one of
+ * them.
+ *
+ *   WORK — tasks delivered, their budgets, the hours booked to them, issues, projects. All of it
+ *   belongs to a matter, so all of it is flow-scoped: every public entry point resolves the flow
+ *   once, from its organisation or from its user, and threads it down. Without that, switching to
+ *   PROJECTS would leave a person's page reporting the client deliveries they can no longer open,
+ *   naming the matters in the breakdowns.
+ *
+ *   THE PERSON'S DAY — the `user_metric_daily` snapshots. Those rows are keyed `(userId, date)`
+ *   and carry no flow of their own, so a rebuild run in one flow would overwrite the other flow's
+ *   day. They therefore stay CROSS-FLOW on purpose, both when written (rebuildSnapshots) and when
+ *   read (the trend, the heatmaps): "how much did this person work on the 14th" is one number
+ *   about one day, like the attendance, day-target and fill-calendar figures the rest of the app
+ *   deliberately leaves unfiltered. The LIVE FALLBACKS that stand in for a missing snapshot count
+ *   the same way, so the same day never reads differently depending on whether anybody has pressed
+ *   Rebuild. The table could not be made flow-aware anyway: half of what a row holds comes from
+ *   analytics events and comments, which have no matter behind them to take a flow from.
+ *
+ * Everything in this module that reads or names WORK — deliveries, outstanding tasks, hours in a
+ * window, hours by matter, issues, the project list — IS flow-scoped. The line is between a fact
+ * about a person's day and a claim about a matter.
+ *
+ * ANALYTICS EVENTS AND COMMENTS are not scoped either: `analytics_event` has no project relation
+ * at all, so there is nothing to filter on, and "activity volume" is already a count of clicks
+ * rather than a claim about any matter.
+ */
 @Injectable()
 export class PerformanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /**
@@ -234,10 +268,11 @@ export class PerformanceService {
    * clipping its hours at the window boundary would report a two-week task as a two-day one and
    * make every long piece of work look under budget.
    */
-  private async deliveriesForUser(userId: string, from: Date, to: Date): Promise<Delivery[]> {
+  private async deliveriesForUser(userId: string, from: Date, to: Date, flow: WorkspaceFlow): Promise<Delivery[]> {
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
+        ...taskInFlow(flow),
         assignees: { some: { userId } },
         currentStatus: { type: 'CLOSED' },
         completedAt: { gte: from, lt: to },
@@ -246,6 +281,8 @@ export class PerformanceService {
     });
     if (!tasks.length) return [];
 
+    // The ledger read needs no flow filter of its own: the ids it is given came out of the
+    // flow-filtered task read above.
     const spent = await this.prisma.timesheet.groupBy({
       by: ['taskId'],
       where: { userId, deletedAt: null, taskId: { in: tasks.map(t => t.id) } },
@@ -269,15 +306,19 @@ export class PerformanceService {
     });
     if (!user) throw new NotFoundException(`User ${userId} not found`);
 
+    // One person's page, so the flow is their organisation's.
+    const flow = await this.flows.flowOfUser(userId);
     const [current, previous, outstanding] = await Promise.all([
-      this.deliveriesForUser(userId, win.from, win.to),
-      this.deliveriesForUser(userId, win.prevFrom, win.prevTo),
+      this.deliveriesForUser(userId, win.from, win.to, flow),
+      this.deliveriesForUser(userId, win.prevFrom, win.prevTo, flow),
       // Work that was due by the end of the window and is still open — the rest of the pie in
       // "completed out of total". Counted from the task's own date because a seat date cannot be
-      // filtered on in SQL without loading every assignment in the firm.
+      // filtered on in SQL without loading every assignment in the firm. Scoped like the
+      // deliveries it is drawn beside: the two halves of one pie cannot count different work.
       this.prisma.task.count({
         where: {
           deletedAt: null,
+          ...taskInFlow(flow),
           assignees: { some: { userId } },
           dueDate: { lt: win.to },
           OR: [{ currentWorkflowStatusId: null }, { currentStatus: { type: { not: 'CLOSED' } } }],
@@ -321,10 +362,11 @@ export class PerformanceService {
    * but it is ONE task for the firm's total. Summing the per-person figures to get the org's is
    * what makes a headline count drift away from the table under it.
    */
-  private async orgDeliveries(organizationId: string, from: Date, to: Date) {
+  private async orgDeliveries(organizationId: string, from: Date, to: Date, flow: WorkspaceFlow) {
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
+        ...taskInFlow(flow),
         currentStatus: { type: 'CLOSED' },
         completedAt: { gte: from, lt: to },
         assignees: { some: { user: { organizationId } } },
@@ -372,15 +414,18 @@ export class PerformanceService {
         departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 },
       },
     });
+    const flow = await this.flows.flowOf(organizationId);
     const [cur, prev, outstanding] = await Promise.all([
-      this.orgDeliveries(organizationId, win.from, win.to),
-      this.orgDeliveries(organizationId, win.prevFrom, win.prevTo),
+      this.orgDeliveries(organizationId, win.from, win.to, flow),
+      this.orgDeliveries(organizationId, win.prevFrom, win.prevTo, flow),
       // Work the firm owed by the end of the window and has not closed — the rest of the
       // completed-out-of-total pie. Counted over TASKS, not assignments, so a task with three
-      // people on it is one outstanding piece of work rather than three.
+      // people on it is one outstanding piece of work rather than three. Scoped like the
+      // deliveries beside it, so the two halves of the pie describe the same body of work.
       this.prisma.task.count({
         where: {
           deletedAt: null,
+          ...taskInFlow(flow),
           assignees: { some: { user: { organizationId } } },
           dueDate: { lt: win.to },
           OR: [{ currentWorkflowStatusId: null }, { currentStatus: { type: { not: 'CLOSED' } } }],
@@ -460,13 +505,21 @@ export class PerformanceService {
    * never render as an error or an empty panel, which is what an inner join would have produced.
    */
   async getProjectKpis(organizationId: string, win: KpiWindow) {
+    const flow = await this.flows.flowOf(organizationId);
     const [tasks, shifts] = await Promise.all([
       this.prisma.task.findMany({
         where: {
           deletedAt: null,
           currentStatus: { type: 'CLOSED' },
           completedAt: { gte: win.from, lt: win.to },
-          projectTasks: { some: { project: { deletedAt: null, members: { some: { user: { organizationId } } } } } },
+          // Project work by construction, so the flow goes on the project filter rather than
+          // through taskInFlow. `none` as well as `some`: TASK_KPI_SELECT labels each row with
+          // its first project link, and a task that reached into both flows would otherwise be
+          // credited to whichever project sorted first.
+          projectTasks: {
+            some: { project: { deletedAt: null, workspaceFlow: flow, members: { some: { user: { organizationId } } } } },
+            none: { project: { workspaceFlow: otherFlow(flow) } },
+          },
         },
         select: { ...TASK_KPI_SELECT, actualHours: true },
       }),
@@ -516,8 +569,11 @@ export class PerformanceService {
     const projectIds = [...new Set([...byProject.keys(), ...projectShifts.keys()])];
     if (!projectIds.length) return { window: isoWindow(win), projects: [], managers: [] };
 
+    // The panel's rows are built from THIS list, so the flow filter here is also what keeps a
+    // project that only SHIFTED — it reaches `projectIds` through the deadline ledger, which has
+    // no flow column of its own — from appearing under a heading about this flow's work.
     const meta = await this.prisma.project.findMany({
-      where: { id: { in: projectIds }, deletedAt: null, members: { some: { user: { organizationId } } } },
+      where: { id: { in: projectIds }, deletedAt: null, workspaceFlow: flow, members: { some: { user: { organizationId } } } },
       select: {
         id: true, title: true, code: true, roundSeq: true,
         members: {
@@ -582,7 +638,11 @@ export class PerformanceService {
     // 'CLOSED' } }` reads as if it means the same thing, but a relation filter only matches rows
     // where the relation EXISTS, so it silently drops every status-less task. Measured on a
     // fixture: the naive form reported 1 overdue task where the correct answer was 2.
-    const assignedToUser = { deletedAt: null, assignees: { some: { userId } } };
+    // The flow this person's firm is in. Folded into `assignedToUser`, which all three backlog
+    // counts share, so the tasks assigned / completed / overdue figures agree with each other and
+    // with the windowed metrics below rather than each counting a different body of work.
+    const flow = await this.flows.flowOfUser(userId);
+    const assignedToUser = { deletedAt: null, ...taskInFlow(flow), assignees: { some: { userId } } };
     const notClosed = {
       OR: [
         { currentWorkflowStatusId: null },
@@ -599,8 +659,10 @@ export class PerformanceService {
 
     // Windowed throughput (current + previous window) + cycle time
     const [cur, prev, cycleTimeDays] = await Promise.all([
-      this.windowMetrics(userId, from, to),
-      this.windowMetrics(userId, prevFrom, prevTo),
+      this.windowMetrics(userId, from, to, flow),
+      this.windowMetrics(userId, prevFrom, prevTo, flow),
+      // Cycle time is derived from analytics events, which carry no project at all — see the note
+      // on the class. There is nothing to filter it by, so it stays as it was.
       this.cycleTime(userId, from, to),
     ]);
 
@@ -640,13 +702,13 @@ export class PerformanceService {
   }
 
   /** Windowed throughput metrics for [from, to). */
-  private async windowMetrics(userId: string, from: Date, to: Date) {
+  private async windowMetrics(userId: string, from: Date, to: Date, flow: WorkspaceFlow) {
     const [completed, hoursAgg, billableAgg, clientAgg, issuesReported, issuesResolved, commentsPosted, activityVolume] = await Promise.all([
       this.prisma.task.findMany({
         // Windowed on completedAt, not updatedAt: a task closed in January but edited in March
         // used to count as completed in MARCH, inflating the current period and emptying the one
         // where the work actually happened.
-        where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to } },
+        where: { deletedAt: null, ...taskInFlow(flow), assignees: { some: { userId } }, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to } },
         // THIS person's seat, for their own deadline — a personal extension is a decision
         // somebody made, and scoring them against the task's original date marks them late for
         // delivering exactly what was asked of them.
@@ -654,17 +716,21 @@ export class PerformanceService {
       }),
       // Delivery performance excludes "Other" (non-project) time — admin/meeting/training hours
       // shouldn't inflate a person's delivery hours or score. (billable already excludes it.)
-      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
-      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, billable: true, date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
+      // These are DELIVERY hours rather than hours in the day: they sit beside the tasks above
+      // and are divided by each other, so all three carry the same flow filter.
+      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, ...notOtherTime(), ...timesheetInFlow(flow), date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
+      this.prisma.timesheet.aggregate({ where: { userId, deletedAt: null, billable: true, ...timesheetInFlow(flow), date: { gte: from, lt: to } }, _sum: { hoursLogged: true } }),
       // CLIENT hours — the denominator billable % is honestly measured against. Team-space work
       // is excluded because it can never be billable, so including it would guarantee 0% for
       // anyone in HR or BD however well they worked.
       this.prisma.timesheet.aggregate({
-        where: { userId, deletedAt: null, ...notOtherTime(), teamId: null, date: { gte: from, lt: to } },
+        where: { userId, deletedAt: null, ...notOtherTime(), ...timesheetInFlow(flow), teamId: null, date: { gte: from, lt: to } },
         _sum: { hoursLogged: true },
       }),
-      this.prisma.issue.count({ where: { reportedBy: userId, deletedAt: null, createdAt: { gte: from, lt: to } } }),
-      this.prisma.issue.count({ where: { assigneeId: userId, deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to } } }),
+      // An issue always belongs to a project (Issue.projectId is required), so it follows that
+      // project's flow — there is no "issue against nothing" to keep visible in both.
+      this.prisma.issue.count({ where: { reportedBy: userId, deletedAt: null, project: { workspaceFlow: flow }, createdAt: { gte: from, lt: to } } }),
+      this.prisma.issue.count({ where: { assigneeId: userId, deletedAt: null, project: { workspaceFlow: flow }, status: 'RESOLVED', updatedAt: { gte: from, lt: to } } }),
       this.prisma.comment.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
       this.prisma.analyticsEvent.count({ where: { userId, createdAt: { gte: from, lt: to } } }),
     ]);
@@ -719,13 +785,16 @@ export class PerformanceService {
     const since = new Date(`${istDayKey(new Date())}T00:00:00.000Z`);
     since.setUTCDate(since.getUTCDate() - (days - 1));
 
+    // The snapshots are read unfiltered on purpose — a `(userId, date)` row is one person's day
+    // and has no flow to be filtered by. See the note on the class.
     const snapshots = await this.prisma.userMetricDaily.findMany({
       where: { userId, date: { gte: since } },
       orderBy: { date: 'asc' },
     });
     const byDay = new Map(snapshots.map(s => [dayKey(s.date), s]));
 
-    // live fallback aggregates (used where snapshots are absent)
+    // Live fallback where a snapshot is missing — cross-flow, exactly like the snapshots it stands
+    // in for, so a day does not change its figure the moment somebody presses Rebuild.
     const [sheets, events] = await Promise.all([
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, ...notOtherTime(), date: { gte: since } }, select: { date: true, hoursLogged: true } }),
       this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
@@ -806,16 +875,18 @@ export class PerformanceService {
    * Per-user window metrics for the whole org computed with a handful of grouped
    * aggregates (not one windowMetrics() call per user). Returns a userId→metrics map.
    */
-  private async orgWindowMetrics(organizationId: string, from: Date, to: Date) {
+  private async orgWindowMetrics(organizationId: string, from: Date, to: Date, flow: WorkspaceFlow) {
     const [completedTasks, hoursByUser, resolvedByUser, activityByUser] = await Promise.all([
       this.prisma.task.findMany({
         // Windowed and judged on completedAt, exactly as the per-user query is — the two must
-        // agree or the leaderboard contradicts the individual pages it is built from.
-        where: { deletedAt: null, currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
+        // agree or the leaderboard contradicts the individual pages it is built from. The flow
+        // filter is part of that agreement: windowMetrics carries it too.
+        where: { deletedAt: null, ...taskInFlow(flow), currentStatus: { type: 'CLOSED' }, completedAt: { gte: from, lt: to }, assignees: { some: { user: { organizationId } } } },
         select: { dueDate: true, completedAt: true, assignees: { select: { userId: true, dueDate: true } } },
       }),
-      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
-      this.prisma.issue.groupBy({ by: ['assigneeId'], where: { deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to }, assignee: { organizationId } }, _count: { _all: true } }),
+      this.prisma.timesheet.groupBy({ by: ['userId'], where: { deletedAt: null, ...notOtherTime(), ...timesheetInFlow(flow), date: { gte: from, lt: to }, user: { organizationId } }, _sum: { hoursLogged: true } }),
+      // An issue always has a project, so it follows that project's flow.
+      this.prisma.issue.groupBy({ by: ['assigneeId'], where: { deletedAt: null, status: 'RESOLVED', updatedAt: { gte: from, lt: to }, assignee: { organizationId }, project: { workspaceFlow: flow } }, _count: { _all: true } }),
       this.prisma.analyticsEvent.groupBy({ by: ['userId'], where: { organizationId, createdAt: { gte: from, lt: to } }, _count: { _all: true } }),
     ]);
 
@@ -890,9 +961,10 @@ export class PerformanceService {
 
     // Set-based: two window aggregations (~8 queries total) instead of the old
     // per-user fan-out (14N+2 ≈ 394 round-trips for 28 users).
+    const flow = await this.flows.flowOf(organizationId);
     const [curM, prevM] = await Promise.all([
-      this.orgWindowMetrics(organizationId, from, to),
-      this.orgWindowMetrics(organizationId, prevFrom, prevTo),
+      this.orgWindowMetrics(organizationId, from, to, flow),
+      this.orgWindowMetrics(organizationId, prevFrom, prevTo, flow),
     ]);
     const zeroM = { tasksCompleted: 0, withDueCount: 0, onTimeRate: 0, hoursLogged: 0, issuesResolved: 0, activityVolume: 0 };
     const rows = users.map(u => {
@@ -918,7 +990,9 @@ export class PerformanceService {
     const avgOnTimeRate = curM.distinct.withDueCount > 0
       ? pct(curM.distinct.onTime, curM.distinct.withDueCount)
       : null;
-    const activeProjects = await this.prisma.project.count({ where: { deletedAt: null, projectPhase: 'ACTIVE', members: { some: { user: { organizationId } } } } });
+    // The headline "active projects": this flow's, or the firm would be told it has matters on
+    // the go that the Projects module refuses to show it.
+    const activeProjects = await this.prisma.project.count({ where: { deletedAt: null, workspaceFlow: flow, projectPhase: 'ACTIVE', members: { some: { user: { organizationId } } } } });
 
     return {
       periodDays: days,
@@ -959,7 +1033,21 @@ export class PerformanceService {
     return { organizationId, days: out };
   }
 
-  /** Recompute UserMetricDaily for the org over the last `days` days. */
+  /**
+   * Recompute UserMetricDaily for the org over the last `days` days.
+   *
+   * DELIBERATELY NOT FLOW-SCOPED, and this is the reason. A snapshot row is keyed
+   * `(userId, date)` — there is one row per person per day and no column saying which flow it is
+   * about. A rebuild that only counted this flow's hours would still DELETE and rewrite that one
+   * row, so the firm's whole history of the other flow would be quietly halved the first time
+   * anybody pressed Rebuild after a switch. Given a table that cannot hold two answers, the
+   * honest one is the whole day: what this person logged, all of it, like the attendance figures
+   * the rest of the app keeps cross-flow for the same reason.
+   *
+   * Everything that reads these rows (getTrend, getHeatmap, getOrgHeatmap, getOrgTrend) reads them
+   * unfiltered to match, and so do the live fallbacks that stand in for them, so a day's figure
+   * never changes the moment somebody presses Rebuild.
+   */
   async rebuildSnapshots(organizationId: string, days = 365) {
     const users = await this.prisma.user.findMany({ where: { organizationId, deletedAt: null }, select: { id: true } });
     const since = utcDay(new Date());
@@ -969,6 +1057,8 @@ export class PerformanceService {
     for (const u of users) {
       const userId = u.id;
       const [sheets, events, comments] = await Promise.all([
+        // Every hour of the person's day, both flows — the row being written can only hold one
+        // number, and filtering here is what would destroy the other flow's history. See above.
         this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, ...notOtherTime(), date: { gte: since } }, select: { date: true, hoursLogged: true, billable: true } }),
         this.prisma.analyticsEvent.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),
         this.prisma.comment.findMany({ where: { userId, createdAt: { gte: since } }, select: { createdAt: true } }),
@@ -1014,18 +1104,21 @@ export class PerformanceService {
   async getUserBreakdowns(userId: string, days = 30) {
     await this.assertUserExists(userId);
     const { from, to } = windowRange(days);
+    const flow = await this.flows.flowOfUser(userId);
     const [tasks, issues, sheets, openTasks] = await Promise.all([
       this.prisma.task.findMany({
-        where: { deletedAt: null, assignees: { some: { userId } } },
+        where: { deletedAt: null, ...taskInFlow(flow), assignees: { some: { userId } } },
         select: { priority: true, currentStatus: { select: { name: true, type: true } } },
       }),
       this.prisma.issue.groupBy({
         by: ['severity'],
-        where: { deletedAt: null, OR: [{ assigneeId: userId }, { reportedBy: userId }] },
+        where: { deletedAt: null, project: { workspaceFlow: flow }, OR: [{ assigneeId: userId }, { reportedBy: userId }] },
         _count: { _all: true },
       }),
+      // "Where did your time go" — and it names the matters, so it is scoped like everything else
+      // that names one. A team-space entry has no project and stays in both flows.
       this.prisma.timesheet.findMany({
-        where: { userId, deletedAt: null, date: { gte: from, lt: to } },
+        where: { userId, deletedAt: null, ...timesheetInFlow(flow), date: { gte: from, lt: to } },
         select: {
           hoursLogged: true, billable: true,
           // Attribute by the timesheet's OWN project — that is the project the person logged
@@ -1045,8 +1138,10 @@ export class PerformanceService {
           },
         },
       }),
+      // Estimated-vs-actual names the TASKS, so an unfiltered read would put the other flow's
+      // work on the chart by title.
       this.prisma.task.findMany({
-        where: { deletedAt: null, assignees: { some: { userId } }, currentStatus: { type: 'OPEN' }, estimatedHours: { not: null } },
+        where: { deletedAt: null, ...taskInFlow(flow), assignees: { some: { userId } }, currentStatus: { type: 'OPEN' }, estimatedHours: { not: null } },
         select: { id: true, title: true, estimatedHours: true, timesheets: { where: { deletedAt: null }, select: { hoursLogged: true } } },
         orderBy: { dueDate: 'asc' },
         take: 8,
@@ -1101,6 +1196,7 @@ export class PerformanceService {
   /** Org-wide distributions + comparisons (set-based, no per-user loop). */
   async getOrgBreakdowns(organizationId: string, days = 30) {
     const { from, to } = windowRange(days);
+    const flow = await this.flows.flowOf(organizationId);
     const users = await this.prisma.user.findMany({
       where: { organizationId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true, designation: true, departmentMemberships: { select: { department: { select: { name: true } } }, take: 1 } },
@@ -1114,16 +1210,18 @@ export class PerformanceService {
     }
 
     const [hoursByUser, tasksByStatus, allStatuses, issues, projects] = await Promise.all([
+      // Hours per person, which the panel then divides by department against a capacity target —
+      // a delivery figure about the firm's work, not a record of anybody's day, so it is scoped.
       this.prisma.timesheet.groupBy({
         by: ['userId'],
-        where: { userId: { in: userIds }, deletedAt: null, ...notOtherTime(), date: { gte: from, lt: to } },
+        where: { userId: { in: userIds }, deletedAt: null, ...notOtherTime(), ...timesheetInFlow(flow), date: { gte: from, lt: to } },
         _sum: { hoursLogged: true },
       }),
       // Tallied in SQL. This previously fetched one row per task in the whole organisation, with
       // the status joined on, only to increment a counter per row and discard the rows.
       this.prisma.task.groupBy({
         by: ['currentWorkflowStatusId'],
-        where: { deletedAt: null, assignees: { some: { userId: { in: userIds } } } },
+        where: { deletedAt: null, ...taskInFlow(flow), assignees: { some: { userId: { in: userIds } } } },
         _count: { _all: true },
       }),
       // Statuses are a handful of rows in total, so fetching them all here keeps this to a single
@@ -1131,11 +1229,13 @@ export class PerformanceService {
       this.prisma.workflowStatus.findMany({ select: { id: true, name: true, type: true } }),
       this.prisma.issue.groupBy({
         by: ['severity'],
-        where: { deletedAt: null, project: { members: { some: { user: { organizationId } } } } },
+        where: { deletedAt: null, project: { workspaceFlow: flow, members: { some: { user: { organizationId } } } } },
         _count: { _all: true },
       }),
+      // The project-progress list is TITLES and percentages — the plainest thing on this page to
+      // leak, and the one a viewer would most obviously not recognise after a switch.
       this.prisma.project.findMany({
-        where: { deletedAt: null, members: { some: { user: { organizationId } } } },
+        where: { deletedAt: null, workspaceFlow: flow, members: { some: { user: { organizationId } } } },
         select: { id: true, title: true, completionPercentage: true, projectPhase: true },
         orderBy: { completionPercentage: 'desc' },
       }),
@@ -1270,7 +1370,8 @@ export class PerformanceService {
         addDept(k, deptOf.get(s.userId) ?? 'Unassigned', s.hoursLogged);
       }
     } else {
-      // live fallback when snapshots aren't built yet
+      // Live fallback where snapshots aren't built yet — cross-flow, like the snapshots above, so
+      // the same day reads the same either way. See the note on the class.
       const [sheets, events] = await Promise.all([
         this.prisma.timesheet.findMany({ where: { userId: { in: userIds }, deletedAt: null, ...notOtherTime(), date: { gte: since } }, select: { userId: true, date: true, hoursLogged: true, billable: true } }),
         this.prisma.analyticsEvent.findMany({ where: { organizationId, createdAt: { gte: since } }, select: { createdAt: true, eventType: true, payload: true } }),

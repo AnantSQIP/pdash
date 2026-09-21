@@ -1,29 +1,33 @@
 /**
- * Changing the workspace flow, both ways, on a database with something to convert.
+ * Changing the workspace flow, both ways, on a database with something to leave behind.
  *
- *   BASE=http://127.0.0.1:4047 PASSCODE=<org passcode> node tools/workspace-flow.e2e.mjs
+ *   BASE=http://127.0.0.1:4059 PASSCODE=<org passcode> node tools/workspace-flow.e2e.mjs
  *
- * A SCRATCH DATABASE OF ITS OWN. This converts the organisation twice: it closes running clocks,
- * cancels PID requests, retires reserved numbers, issues CIDs and moves everybody's Team Capacity
- * grants. Never point it at a database somebody is using, and — unlike its neighbours in tools/ —
- * never at the CLIENTS stack the other suites run against: it leaves the organisation in the
- * PROJECTS flow with the timer on, which is not what they expect to find.
+ * A SCRATCH DATABASE OF ITS OWN. This converts the organisation three times and leaves it in the
+ * CLIENTS flow; never point it at a database somebody is using, and — unlike its neighbours in
+ * tools/ — never at the CLIENTS stack the other suites run against.
  *
- * The conversion is the one thing in the whole flows design that cannot be checked by reading the
- * code, because what it does depends on what is in the database. So this suite puts the things the
- * design promises to deal with INTO the database first — a clock that is running, a PID nobody
- * ever attached, a project waiting for a number, a request in the pool — and then asks for each of
- * them afterwards (docs/WORKSPACE_FLOWS.md, "Changing the flow is a conversion, not a toggle").
+ * A conversion is a SETTINGS change now (docs/WORKSPACE_FLOWS.md, "Changing the flow changes
+ * settings, not work"). Every project/client row carries the flow it was made in, so switching
+ * hides one flow's work and shows the other's; the conversion moves the flow, the Team Capacity
+ * grants and the time mode, and touches no row of anybody's work. That is exactly the thing that
+ * cannot be checked by reading the code, because what a conversion does depends on what is in the
+ * database — so this suite puts into the database the four things the OLD conversion used to
+ * rewrite (a clock that is running, a PID nobody ever attached, a project waiting for a number, a
+ * request in the pool) and then asks for each of them afterwards, twice.
  *
- * Three things are being pinned, in this order:
+ * Four things are being pinned, in this order:
  *
  *   1. PREFLIGHT WRITES NOTHING. It is the conversion run as a dry run and rolled back, so it has
  *      to report exactly what the conversion will do and leave the database as it found it.
- *   2. THE CONVERSION KEEPS ITS PROMISES, and its own verification agrees.
- *   3. IT GOES BACK. A firm that converts by mistake is not stuck: PROJECTS → CLIENTS → PROJECTS
- *      returns the flow, the grants and the registry to something the PROJECTS screens can read.
+ *   2. THE CONVERSION KEEPS ITS PROMISES — the flow, the grants, the clocks and the time mode —
+ *      and its own verification agrees, including that not one row of work moved.
+ *   3. IT TOUCHED NOTHING ELSE: the held number is still held, the request is still pending, the
+ *      project is still waiting for its number.
+ *   4. IT GOES BACK. A firm that converts by mistake is not stuck: PROJECTS → CLIENTS → PROJECTS
+ *      returns the flow, the grants and every row of work exactly as they were.
  */
-const BASE = process.env.BASE || 'http://127.0.0.1:4047';
+const BASE = process.env.BASE || 'http://127.0.0.1:4059';
 const PW = process.env.PW || 'sqip@1234';
 const PASSCODE = process.env.PASSCODE || process.env.ORG_PASSCODE || 'cf-scratch-7713';
 const ADMIN = process.env.ADMIN || 'mohit@squarkip.com';   // Super Admin — the only role that may convert
@@ -33,6 +37,7 @@ let passed = 0; const fails = [];
 const ok = (n, c, d = '') => { if (c) { passed++; console.log('  ok  ' + n); } else { fails.push(n + (d ? '\n      ' + d : '')); console.log('  FAIL ' + n + (d ? '\n      ' + d : '')); } };
 const step = h => console.log('\n— ' + h + ' —');
 const brief = r => `${r.status} ${typeof r.data === 'string' ? r.data.slice(0, 200) : JSON.stringify(r.data)?.slice(0, 300)}`;
+const list = d => (Array.isArray(d) ? d : d?.items ?? []);
 
 function sess() {
   let cookie = '';
@@ -50,11 +55,12 @@ const idOf = async s => { const me = (await s('/auth/me')).data; return (me?.use
 const codesOf = async s => new Set(((await s('/me/effective-permissions')).data?.codes ?? []).map(x => (typeof x === 'string' ? x : x.code)));
 const stepOf = (report, key) => (report?.steps ?? []).find(s => s.key === key);
 const failed = report => (report?.verification?.invariants ?? []).filter(i => !i.ok).map(i => `${i.label} (${i.found})`);
+const invariant = (report, key) => (report?.verification?.invariants ?? []).find(i => i.key === key);
 
 (async () => {
   const admin = sess();
   ok('the Super Admin signs in', [200, 201].includes(await login(admin, ADMIN)));
-  const org = ((await admin('/organizations')).data ?? [])[0];
+  const org = list((await admin('/organizations')).data)[0];
   if (!org?.id) { console.log('no organisation on this stack'); process.exit(2); }
   const ORG = org.id;
   const flowState = () => admin(`/organizations/${ORG}/workspace-flow`);
@@ -72,7 +78,7 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
   ok('the organisation starts in the PROJECTS flow', (await flowState()).data?.flow === 'PROJECTS');
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
-  step('fixture: everything the conversion promises to deal with');
+  step('fixture: the four things the conversion used to rewrite');
 
   // (a) the timer, and a clock left running on a task.
   await admin(`/organizations/${ORG}/time-mode`, { method: 'PATCH', body: { mode: 'TIMER' }, passcode: PASSCODE });
@@ -80,15 +86,26 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
   // that window is answered by the flow that has just been left.
   await new Promise(done => setTimeout(done, 6000));
   const meId = await idOf(admin);
-  const myTasks = (await admin(`/tasks?userId=${meId}`)).data ?? [];
-  const open = (Array.isArray(myTasks) ? myTasks : myTasks.items ?? []).filter(t => t.currentStatus?.type !== 'CLOSED');
-  if (open.length) await admin(`/tasks/${open[0].id}/start`, { method: 'POST' });
-  const running = (await admin('/tasks/timer/running')).data ?? [];
+
+  // A project of this flow to hang the clock on — a clients-era database has none, because every
+  // row it holds is the other flow's, which is the whole point of the separation.
+  const seedPid = (await admin('/projects/generate-pid', { method: 'POST' })).data?.pid;
+  const home = await admin('/projects', { method: 'POST', body: { title: `Conversion fixture ${RUN}`, pid: seedPid, managerId: meId } });
+  ok('a project of this flow exists to work in', home.status < 300, brief(home));
+  const lists = list((await admin(`/projects/${home.data?.id}/tasklists`)).data);
+  const clockTask = await admin('/tasks', {
+    method: 'POST',
+    body: { title: `Conversion fixture task ${RUN}`, projectId: home.data?.id, taskListId: (lists.find(l => l.isDefault) ?? lists[0])?.id, createdBy: meId },
+  });
+  await admin(`/tasks/${clockTask.data?.id}/staffing`, { method: 'PUT', body: { assignees: [{ userId: meId, role: 'ANALYST', estimatedHours: 3 }] } });
+  await admin(`/tasks/${clockTask.data?.id}/start`, { method: 'POST' });
+  const running = list((await admin('/tasks/timer/running')).data);
   ok('a clock is running', running.length >= 1, JSON.stringify(running).slice(0, 120));
 
-  // (b) a PID generated and never attached — a RESERVED number the CLIENTS flow must retire.
+  // (b) a PID generated and never attached — the RESERVED number the old conversion retired.
   const held = await admin('/projects/generate-pid', { method: 'POST' });
   ok('a PID is generated and held', !!held.data?.pid, brief(held));
+  const heldPid = held.data?.pid;
 
   // (c) a project waiting for a number, and the request in the pool that is waiting with it.
   //     Somebody who may create a project but may not issue a number.
@@ -111,8 +128,19 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
     method: 'POST', body: { title: `Waiting for a number ${RUN}`, pidAssigneeId: meId, managerId: await idOf(requester) },
   });
   ok('a project is created with its PID pending', pending.status < 300 && !pending.data?.code, brief(pending));
-  const queue = (await admin('/projects/pid-requests')).data ?? [];
+  const queue = list((await admin('/projects/pid-requests')).data);
   ok('…and the request is in the authority’s queue', queue.some(q => q.projectId === pending.data?.id), `${queue.length} in the queue`);
+
+  /** The four fixtures, read back through the API: what must still be true afterwards. */
+  const fixtures = async () => ({
+    reservation: (await admin(`/projects/pid-reservation?pid=${encodeURIComponent(heldPid)}`)).data?.status
+      ?? list((await admin('/projects/pid-ledger')).data).find(r => r.pid === heldPid || r.cid === heldPid)?.status ?? null,
+    request: list((await admin('/projects/pid-requests')).data).find(q => q.projectId === pending.data?.id)?.status ?? null,
+    stillWaiting: list((await admin('/projects')).data).find(p => p.id === pending.data?.id)?.code ?? null,
+    projects: list((await admin('/projects')).data).length,
+  });
+  const fixtureBefore = await fixtures();
+  console.log(`  fixture: ${JSON.stringify(fixtureBefore)}`);
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
   step('1. the preflight says what would happen, and writes nothing');
@@ -123,19 +151,26 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
   ok('it is marked a dry run', d?.dryRun === true, String(d?.dryRun));
   ok('…from PROJECTS to CLIENTS', d?.from === 'PROJECTS' && d?.to === 'CLIENTS', `${d?.from} → ${d?.to}`);
   ok('it counts the running clock', (d?.survey?.runningClocks ?? 0) >= 1, String(d?.survey?.runningClocks));
-  ok('…the pending request', (d?.survey?.pendingPidRequests ?? 0) >= 1, String(d?.survey?.pendingPidRequests));
-  ok('…the project with no number', (d?.survey?.liveProjectsWithoutNumber ?? 0) >= 1, String(d?.survey?.liveProjectsWithoutNumber));
-  ok('…and the number nobody attached', (d?.survey?.registryByStatus?.RESERVED ?? 0) >= 1, JSON.stringify(d?.survey?.registryByStatus));
+  ok('…the pending request', (d?.survey?.work?.pidRequestsByStatus?.PENDING ?? 0) >= 1, JSON.stringify(d?.survey?.work?.pidRequestsByStatus));
+  ok('…the project with no number', (d?.survey?.work?.withoutNumber?.PROJECTS ?? 0) >= 1, JSON.stringify(d?.survey?.work?.withoutNumber));
+  ok('…and the number nobody attached', (d?.survey?.work?.registryByStatus?.RESERVED ?? 0) >= 1, JSON.stringify(d?.survey?.work?.registryByStatus));
+  ok('it says how much work is about to go out of sight',
+    (stepOf(d, 'work_kept')?.details?.projects ?? 0) >= 1, JSON.stringify(stepOf(d, 'work_kept')?.details));
   ok('it says the grants that would move', (stepOf(d, 'capacity')?.changed ?? 0) > 0, JSON.stringify(stepOf(d, 'capacity')));
   ok('nothing stops it', (d?.blockers ?? []).length === 0, JSON.stringify(d?.blockers));
   ok('and its own verification of the result passes', d?.verification?.ok === true, failed(d).join(' · '));
 
+  step('…and the steps it no longer takes are not there at all');
+  for (const gone of ['pid_requests', 'registry_register', 'registry_retire', 'registry_rederive', 'ledger_import', 'cid_backfill']) {
+    ok(`no step "${gone}"`, !stepOf(d, gone), JSON.stringify(stepOf(d, gone)));
+  }
+
   const after = (await flowState()).data;
   ok('the flow is untouched by a preflight', after?.flow === 'PROJECTS', String(after?.flow));
   ok('…the history has no new line', (after?.history ?? []).length === (before?.history ?? []).length);
-  ok('…the clock is still running', ((await admin('/tasks/timer/running')).data ?? []).length >= 1);
-  ok('…and the request is still in the queue',
-    ((await admin('/projects/pid-requests')).data ?? []).some(q => q.projectId === pending.data?.id));
+  ok('…the clock is still running', list((await admin('/tasks/timer/running')).data).length >= 1);
+  ok('…and every fixture is exactly as it was', JSON.stringify(await fixtures()) === JSON.stringify(fixtureBefore),
+    JSON.stringify(await fixtures()));
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
   step('2. PROJECTS → CLIENTS');
@@ -149,6 +184,8 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
   const r = done.data;
   ok('it is not a dry run', r?.dryRun === false, String(r?.dryRun));
   ok('the verification passes', r?.verification?.ok === true, failed(r).join(' · '));
+  ok('…including that not one row of work moved', invariant(r, 'work_untouched')?.ok === true,
+    JSON.stringify(invariant(r, 'work_untouched')));
   ok('…and it is recorded', !!r?.changeId, String(r?.changeId));
 
   const nowState = (await flowState()).data;
@@ -158,22 +195,18 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
     JSON.stringify((nowState?.history ?? [])[0]));
 
   step('…and every promise it made');
-  ok('running clocks are closed', ((await admin('/tasks/timer/running')).status === 404)
-    || (((await admin('/tasks/timer/running')).data ?? []).length === 0), 'the timer routes do not exist in CLIENTS');
+  ok('running clocks are closed', (await admin('/tasks/timer/running')).status === 404,
+    'the timer routes do not exist in CLIENTS');
   ok('time moved to MANUAL', nowState?.timeTrackingMode === 'MANUAL', String(nowState?.timeTrackingMode));
   ok('…written to the time-mode history',
-    ((await admin(`/organizations/${ORG}/time-mode/history`)).data ?? [])[0]?.toMode === 'MANUAL');
+    list((await admin(`/organizations/${ORG}/time-mode/history`)).data)[0]?.toMode === 'MANUAL');
   ok('the PID request pool does not exist here', (await admin('/projects/pid-requests')).status === 404);
-  ok('open PID requests were cancelled', (stepOf(r, 'pid_requests')?.changed ?? 0) >= 1, JSON.stringify(stepOf(r, 'pid_requests')));
-  ok('the held number was retired, never to be re-issued', (stepOf(r, 'registry_retire')?.changed ?? 0) >= 1, JSON.stringify(stepOf(r, 'registry_retire')));
-  ok('every existing number reached the CID ledger', (stepOf(r, 'ledger_import')?.changed ?? 0) >= 0, JSON.stringify(stepOf(r, 'ledger_import')));
-  ok('the project with no number was given one', (stepOf(r, 'cid_backfill')?.changed ?? 0) >= 1, JSON.stringify(stepOf(r, 'cid_backfill')));
-  const numbered = (await admin('/projects')).data ?? [];
-  const waiting = numbered.find(p => p.id === pending.data?.id);
-  ok('…and it carries that CID now', !!waiting?.code, JSON.stringify(waiting && { id: waiting.id, code: waiting.code }));
-  const ledger = (await admin('/projects/cid-ledger')).data ?? [];
-  ok('the CID ledger exists and holds it', ledger.some(x => x.cid === waiting?.code || (x.rounds ?? []).some(y => y.id === waiting?.id)),
-    `${ledger.length} rows`);
+  ok('the projects flow’s work is not listed here', list((await admin('/projects')).data)
+    .every(p => p.id !== pending.data?.id && p.id !== home.data?.id), 'a projects row is on the clients list');
+  ok('…and the project waiting for a number cannot be opened',
+    [403, 404].includes((await admin(`/projects/${pending.data?.id}`)).status),
+    String((await admin(`/projects/${pending.data?.id}`)).status));
+  ok('the CID ledger exists in this flow', (await admin('/projects/cid-ledger')).status === 200);
 
   step('…and Team Capacity belongs to the delivery ladder, plus HR');
   const hr = sess(); await login(hr, 'hr@squarkip.com');
@@ -195,11 +228,24 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
   const back = await convert('PROJECTS');
   ok('it converts back', back.status < 300, brief(back));
   ok('the verification passes', back.data?.verification?.ok === true, failed(back.data).join(' · '));
+  ok('…including that not one row of work moved', invariant(back.data, 'work_untouched')?.ok === true,
+    JSON.stringify(invariant(back.data, 'work_untouched')));
   const finalState = (await flowState()).data;
   ok('the organisation runs PROJECTS again', finalState?.flow === 'PROJECTS', String(finalState?.flow));
   ok('both conversions are on the record',
     (finalState?.history ?? []).slice(0, 2).map(h => h.toFlow).join(',') === 'PROJECTS,CLIENTS',
     JSON.stringify((finalState?.history ?? []).slice(0, 2).map(h => h.toFlow)));
+
+  step('…and every one of the four fixtures came back untouched');
+  const fixtureAfter = await fixtures();
+  ok('the held number is still held, not retired',
+    fixtureAfter.reservation === fixtureBefore.reservation, `${fixtureBefore.reservation} → ${fixtureAfter.reservation}`);
+  ok('the request is still pending, not cancelled',
+    fixtureAfter.request === fixtureBefore.request, `${fixtureBefore.request} → ${fixtureAfter.request}`);
+  ok('the project is still waiting for its number, not backfilled',
+    fixtureAfter.stillWaiting === fixtureBefore.stillWaiting, `${fixtureBefore.stillWaiting} → ${fixtureAfter.stillWaiting}`);
+  ok('…and the flow holds exactly the projects it held',
+    fixtureAfter.projects === fixtureBefore.projects, `${fixtureBefore.projects} → ${fixtureAfter.projects}`);
 
   ok('time stays MANUAL — an administrator may pick the timer up again afterwards',
     finalState?.timeTrackingMode === 'MANUAL', String(finalState?.timeTrackingMode));
@@ -208,9 +254,8 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
   ok('the PID request pool exists again', (await admin('/projects/pid-requests')).status === 200);
   ok('the CID ledger is gone from this flow', (await admin('/projects/cid-ledger')).status === 404);
   ok('the PID ledger answers instead', (await admin('/projects/pid-ledger')).status === 200);
-  ok('every registry number is in a state the PROJECTS screens know',
-    (back.data?.verification?.invariants ?? []).find(i => i.key === 'registry_states')?.ok !== false,
-    JSON.stringify((back.data?.verification?.invariants ?? []).find(i => i.key === 'registry_states')));
+  ok('every number is in a state the flow that owns its work knows',
+    invariant(back.data, 'registry_states')?.ok === true, JSON.stringify(invariant(back.data, 'registry_states')));
 
   step('…and Team Capacity is open to the whole firm again');
   const belowAfter = await codesOf(below);
@@ -222,8 +267,11 @@ const failed = report => (report?.verification?.invariants ?? []).filter(i => !i
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
   step('housekeeping');
-  if (pending.data?.id) await admin(`/projects/${pending.data.id}`, { method: 'DELETE' });
-  ok('the fixture project is cleared', true);
+  if (clockTask.data?.id) await admin(`/tasks/${clockTask.data.id}`, { method: 'DELETE' });
+  for (const id of [pending.data?.id, home.data?.id]) if (id) await admin(`/projects/${id}`, { method: 'DELETE' });
+  ok('the fixture is cleared', true);
+  // Left in CLIENTS, which is where a clients-era scratch database was restored.
+  ok('the stack is left in the flow it was restored in', (await convert('CLIENTS')).status < 300);
 
   console.log(`\n${fails.length ? '✗' : '✓'} workspace flow e2e: ${passed} passed, ${fails.length} failed`);
   if (fails.length) { fails.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

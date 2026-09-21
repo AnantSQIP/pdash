@@ -16,6 +16,7 @@ import { PermissionService } from '../permissions/permission.service';
 import { EventService } from '../audit-events/event.service';
 import { EVENTS } from '../../common/events/canonical-events';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
+import { projectInFlow } from '../../common/flow-scope';
 import { startOfIstDay, startOfUtcDay } from '../../common/dates';
 import { DeadlineVisibilityService, type DeadlineScope } from '../deadlines/deadline-visibility.service';
 import { DeadlineChangeService } from '../deadlines/deadline-change.service';
@@ -174,6 +175,13 @@ export class ClientsTaskListsService {
   }
 
   /**
+   * Task groups are a CLIENTS idea and this service is only ever reached in that flow — the
+   * controller sends the PROJECTS flow to TaskListsService, and /task-groups is
+   * @RequireFlow('CLIENTS') — so the flow is a constant here rather than a lookup.
+   */
+  private static readonly FLOW = 'CLIENTS' as const;
+
+  /**
    * CLIENTS-FLOW: create a task group — with the standard tasks of its type, and optionally staffed.
    *
    * Everything that can fail is checked BEFORE anything is written: the wall, the client being
@@ -186,7 +194,10 @@ export class ClientsTaskListsService {
     const actorId = this.actorId();
     await this.access.assertProjectAccess(actorId, projectId);
     await this.access.assertProjectWritable(projectId);
-    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true, title: true } });
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null, ...projectInFlow(ClientsTaskListsService.FLOW) },
+      select: { id: true, title: true },
+    });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
     const actor = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
     if (!actor) throw new ForbiddenException('You must be signed in.');
@@ -208,14 +219,24 @@ export class ClientsTaskListsService {
       });
       if (!person) throw new BadRequestException('The person chosen is not an active member of this organisation.');
       // The same rule staffing applies, asked up front so it cannot fail after the group exists.
-      const member = await this.prisma.projectMember.findFirst({ where: { projectId, userId: assigneeId, isActive: true }, select: { id: true } });
+      // Membership of the other flow's work is never membership of this client. The client was
+      // already held to this flow by assertProjectAccess above; naming the flow here keeps this
+      // check honest on its own, since it is what keeps strangers off a client's matters.
+      const member = await this.prisma.projectMember.findFirst({
+        where: { projectId, userId: assigneeId, isActive: true, project: projectInFlow(ClientsTaskListsService.FLOW) },
+        select: { id: true },
+      });
       if (!member && !(await this.access.hasOversight(actorId))) {
         throw new BadRequestException('You can only assign people who are on this client. Ask a manager to add them first.');
       }
     }
 
     const { list, taskIds } = await this.prisma.$transaction(async tx => {
-      const count = await tx.taskList.count({ where: { projectId, deletedAt: null } });
+      // The sequence a new group takes is a count of its neighbours, so it counts the rows the
+      // client's board will actually show.
+      const count = await tx.taskList.count({
+        where: { projectId, deletedAt: null, project: projectInFlow(ClientsTaskListsService.FLOW) },
+      });
       return this.projects.createTaskGroupTx(tx, { projectId, actorId, isDefault: false, sequence: count, group });
     });
 
@@ -261,14 +282,21 @@ export class ClientsTaskListsService {
   async list(projectId: string) {
     await this.access.assertProjectAccess(getActorId(), projectId);
     const lists = await this.prisma.taskList.findMany({
-      where: { projectId, deletedAt: null },
+      // A list is a LIST: no assert stands between the id in the URL and these rows, so it names
+      // the flow it means itself.
+      where: { projectId, deletedAt: null, project: projectInFlow(ClientsTaskListsService.FLOW) },
       orderBy: { sequence: 'asc' },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
     if (!lists.length) return lists;
     const open = await this.prisma.projectTask.groupBy({
       by: ['taskListId'],
-      where: { projectId, taskListId: { in: lists.map(l => l.id) }, task: { deletedAt: null, ...OPEN_TASK_WHERE } },
+      // The counts have to be counted over the same rows the headers above were built from.
+      where: {
+        projectId, taskListId: { in: lists.map(l => l.id) },
+        project: projectInFlow(ClientsTaskListsService.FLOW),
+        task: { deletedAt: null, ...OPEN_TASK_WHERE },
+      },
       _count: { _all: true },
     });
     const openBy = new Map(open.map(o => [o.taskListId, o._count._all]));
@@ -303,7 +331,10 @@ export class ClientsTaskListsService {
   async search(organizationId: string, q: TaskGroupQuery) {
     const actorId = this.actorId();
     const scope = await this.access.projectScopeWhere(actorId, organizationId);
-    const projectWhere = { deletedAt: null, ...scope } as Prisma.ProjectWhereInput;
+    // One filter for the whole search: `projectWhere` is ANDed under every query below — the page,
+    // the total and the "what the filters are hiding" count — so naming the flow once here is what
+    // keeps a cross-client search from becoming a directory of the other flow's work as well.
+    const projectWhere = { deletedAt: null, ...scope, ...projectInFlow(ClientsTaskListsService.FLOW) } as Prisma.ProjectWhereInput;
 
     const status = q.status === 'COMPLETED' || q.status === 'ALL' ? q.status : 'ACTIVE';
     const limit = Math.min(Math.max(q.limit ?? SEARCH_PAGE, 1), SEARCH_PAGE_MAX);
@@ -465,7 +496,9 @@ export class ClientsTaskListsService {
    */
   private async find(projectId: string, id: string) {
     const list = await this.prisma.taskList.findFirst({
-      where: { id, projectId, deletedAt: null },
+      // This is the lookup every mutation below goes through, so the flow belongs here: an edit,
+      // a complete or a delete aimed at the other flow's list finds nothing rather than finding it.
+      where: { id, projectId, deletedAt: null, project: projectInFlow(ClientsTaskListsService.FLOW) },
       include: { _count: { select: { projectTasks: { where: { task: { deletedAt: null } } } } } },
     });
     if (!list) throw new NotFoundException(`Task list ${id} not found`);
@@ -475,7 +508,13 @@ export class ClientsTaskListsService {
 
   private openTasksIn(projectId: string, taskListId: string) {
     return this.prisma.projectTask.count({
-      where: { projectId, taskListId, task: { deletedAt: null, ...OPEN_TASK_WHERE } },
+      // "Is anything still open in here" decides whether a group may be completed, so it counts
+      // the same rows the group itself is made of.
+      where: {
+        projectId, taskListId,
+        project: projectInFlow(ClientsTaskListsService.FLOW),
+        task: { deletedAt: null, ...OPEN_TASK_WHERE },
+      },
     });
   }
 
@@ -558,7 +597,12 @@ export class ClientsTaskListsService {
         });
         if (due) {
           const open = await tx.task.findMany({
-            where: { deletedAt: null, projectTasks: { some: { projectId, taskListId: id } }, ...OPEN_TASK_WHERE },
+            // These tasks are about to have their deadlines MOVED, so the link that selects them
+            // must be to this flow's client — a cascade must never reach into the other flow's work.
+            where: {
+              deletedAt: null, ...OPEN_TASK_WHERE,
+              projectTasks: { some: { projectId, taskListId: id, project: projectInFlow(ClientsTaskListsService.FLOW) } },
+            },
             select: { id: true, dueDate: true, startDate: true },
           });
           for (const t of open) {
@@ -656,7 +700,11 @@ export class ClientsTaskListsService {
     }
     // L2: move this list's tasks onto the default list instead of orphaning the
     // ProjectTask join rows (which pointed at a now-soft-deleted list).
-    const def = await this.prisma.taskList.findFirst({ where: { projectId, isDefault: true, deletedAt: null } });
+    // The tasks being rehomed are this client's, so the group they land on must be too — otherwise
+    // a delete here would quietly file them into the other flow's default group.
+    const def = await this.prisma.taskList.findFirst({
+      where: { projectId, isDefault: true, deletedAt: null, project: projectInFlow(ClientsTaskListsService.FLOW) },
+    });
     const moving = list._count.projectTasks;
     // CLIENTS-FLOW: if open work is about to land in a COMPLETED default group, that group is not
     // complete any more — re-open it in the same transaction, so the rule never breaks for an instant.

@@ -17,6 +17,7 @@ import { TaskTimeService } from '../tasks/task-time.service';
 import { istDayWindow, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { PermissionService } from '../permissions/permission.service';
 import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { otherFlow, taskInFlow } from '../../common/flow-scope';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -198,6 +199,7 @@ export class AttendanceService {
     private readonly notifications: NotificationsService,
     private readonly timesheets: TimesheetsService,
     private readonly taskTime: TaskTimeService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /** How long a "leaving early" reason may be. Long enough to explain, short enough to read. */
@@ -282,6 +284,11 @@ export class AttendanceService {
     const today = istDay(new Date());
     const from = new Date(today.getTime() - 7 * 86_400_000);
     const { from: todayFrom } = istDayWindow(today);
+    // The days themselves are this person's, whichever flow the work was in; the clocks below are
+    // listed BY TASK NAME, so only the flow the firm is running now may be named
+    // (docs/WORKSPACE_FLOWS.md). Entering CLIENTS closes every clock, so in practice this only
+    // hides a clock the sweep capped before a switch — named work the person can no longer open.
+    const flow = await this.flows.flowOfUser(userId);
     const [missingKeys, closedShifts, stillRunning] = await Promise.all([
       // One batched query rather than seven: on the ordinary day this returns nothing and the
       // banner costs almost nothing to ask for.
@@ -298,6 +305,7 @@ export class AttendanceService {
       this.prisma.taskWorkSession.findMany({
         where: {
           userId,
+          task: taskInFlow(flow),
           OR: [
             { endedAt: null, startedAt: { lt: todayFrom } },
             { startedAt: { gte: from }, endedAt: { not: null }, minutes: { gte: SESSION_CAP_MINUTES } },
@@ -1692,16 +1700,31 @@ export class LeaveService {
       where: { organizationId, status: 'PENDING' }, orderBy: { createdAt: 'asc' }, include: { user: this.userSelect },
     });
     if (!reqs.length) return [];
+    // The evidence for a comp-off is every hour the person logged that day, whichever flow it was
+    // in — a claim for a weekend worked before the firm switched flow is still a claim, and hiding
+    // its hours would get a fair one refused. What the reviewer is NOT shown is the other flow's
+    // work by name: those rows keep their hours and read like time logged against nothing
+    // (docs/WORKSPACE_FLOWS.md — no screen names the other flow's work).
+    const hidden = otherFlow(await this.flows.flowOf(organizationId));
     const evidence = await Promise.all(reqs.map(async r => {
       const day = utcDay(r.workDate);
       const next = new Date(day); next.setUTCDate(next.getUTCDate() + 1);
-      const [sheets, att] = await Promise.all([
+      const [rawSheets, att] = await Promise.all([
         this.prisma.timesheet.findMany({
           where: { userId: r.userId, deletedAt: null, date: { gte: day, lt: next } },
-          select: { hoursLogged: true, notes: true, task: { select: { title: true } } },
+          select: {
+            hoursLogged: true, notes: true,
+            project: { select: { workspaceFlow: true } },
+            task: { select: { title: true, projectTasks: { select: { project: { select: { workspaceFlow: true } } } } } },
+          },
         }),
         this.prisma.attendance.findFirst({ where: { userId: r.userId, date: day }, select: { checkIn: true, checkOut: true, totalHours: true } }),
       ]);
+      const sheets = rawSheets.map(s => {
+        const elsewhere = s.project?.workspaceFlow === hidden
+          || !!s.task?.projectTasks.some(pt => pt.project.workspaceFlow === hidden);
+        return elsewhere ? { hoursLogged: s.hoursLogged, notes: null, task: null } : s;
+      });
       return {
         id: r.id,
         timesheets: sheets.map(s => ({ task: s.task?.title ?? 'General', hours: s.hoursLogged, notes: s.notes ?? undefined })),

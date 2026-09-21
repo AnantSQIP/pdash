@@ -24,15 +24,21 @@ function seedFyLabel(instant: Date): string {
 const SEED_FLOW: 'PROJECTS' | 'CLIENTS' = process.env.SEED_WORKSPACE_FLOW === 'CLIENTS' ? 'CLIENTS' : 'PROJECTS';
 
 let seedSerial = 0;
-async function createSeedClient(org: { id: string; code: string }, data: Omit<Prisma.ProjectUncheckedCreateInput, 'code'>) {
+async function createSeedClient(
+  org: { id: string; code: string },
+  data: Omit<Prisma.ProjectUncheckedCreateInput, 'code' | 'workspaceFlow'>,
+) {
+  // The row is stamped with the flow it is made in, so that the other flow never lists it
+  // (docs/WORKSPACE_FLOWS.md).
+  const seeded = { ...data, workspaceFlow: SEED_FLOW };
   // PROJECTS: a seeded project is PID-pending, exactly as it always was — PIDs are generated or
   // requested through the app. Only the CLIENTS flow issues a number with the client.
-  if (SEED_FLOW === 'PROJECTS') return prisma.project.create({ data });
+  if (SEED_FLOW === 'PROJECTS') return prisma.project.create({ data: seeded });
   const fyLabel = seedFyLabel(new Date());
   const serial = ++seedSerial;
   const cid = `${seedCidPrefix(org.code)}_${fyLabel}_${String(serial).padStart(3, '0')}`;
   return prisma.$transaction(async tx => {
-    const project = await tx.project.create({ data: { ...data, code: cid, roundSeq: 1 } });
+    const project = await tx.project.create({ data: { ...seeded, code: cid, roundSeq: 1 } });
     await tx.pidReservation.create({
       data: {
         organizationId: org.id, fyLabel, serial, pid: cid, generatedById: data.createdBy,

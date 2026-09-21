@@ -5,8 +5,12 @@
 // and this script only parses flags and prints. Without --yes it prints the preflight — the conversion
 // run as a dry run and rolled back — and changes nothing.
 //
-// TAKE A BACKUP FIRST. The conversion is one transaction and verifies itself, but it reshapes data
-// (numbers issued, grants moved, clocks closed); the way back from a decision you regret is the dump.
+// A CONVERSION CHANGES SETTINGS, NOT WORK. Each flow's projects/clients, tasks, time and staffing
+// stay exactly where they are; switching hides one flow's work and shows the other's, and switching
+// back brings it all straight back (docs/WORKSPACE_FLOWS.md). What does change: the flow itself, who
+// holds Team Capacity, and — entering CLIENTS — the time mode, which closes any running clocks.
+// Take a backup anyway: it is the way back from a decision you regret, and the conversion asks for
+// one before it will run.
 //
 // Local:
 //   DATABASE_URL=... npx ts-node packages/db/prisma/convert-workspace-flow.ts --to CLIENTS
@@ -51,12 +55,17 @@ function print(report: ConversionReport, asJson: boolean) {
   console.log(`\n${report.dryRun ? 'PREFLIGHT (dry run — nothing written)' : 'CONVERTED'}: ${report.organizationName} (${s.organization.code})`);
   console.log(`  ${report.from} → ${report.to}${report.inUse ? '' : '   (not in use yet: nothing to convert)'}`);
   console.log(`  in use: ${s.inUse.projects} projects (${s.inUse.liveProjects} live), ${s.inUse.tasks} tasks, ${s.inUse.timesheets} timesheet entries`);
-  console.log(`  registry: ${Object.entries(s.registryByStatus).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty'}`);
+  const w = s.work;
+  for (const f of ['PROJECTS', 'CLIENTS'] as const) {
+    console.log(`  ${f.padEnd(8)} work: ${w.liveProjects[f]} live of ${w.projects[f]}, ${w.tasks[f]} tasks, ${w.timesheets[f]} timesheet entries, ${w.staffing[f]} staffing rows`);
+  }
+  console.log(`  shared:   ${w.shared.tasks} tasks and ${w.shared.timesheets} timesheet entries belong to no matter at all`);
+  console.log(`  registry: ${Object.entries(w.registryByStatus).map(([k, v]) => `${k} ${v}`).join(', ') || 'empty'}`);
   console.log('\n  steps:');
   for (const step of report.steps) {
     console.log(`   ${String(step.changed).padStart(5)}  ${step.label}`);
     const d = step.details ?? {};
-    for (const key of ['issued', 'rolesGranted', 'rolesRevoked', 'groupsRevoked', 'directGrantsRevoked', 'allowOverridesRevoked', 'numbers', 'mergedInto', 'projects']) {
+    for (const key of ['rolesGranted', 'rolesRevoked', 'groupsRevoked', 'directGrantsRevoked', 'allowOverridesRevoked']) {
       const list = d[key];
       if (Array.isArray(list) && list.length) console.log(`          ${key}: ${list.slice(0, 12).join(' · ')}${list.length > 12 ? ` · …(+${list.length - 12})` : ''}`);
     }
@@ -96,7 +105,9 @@ async function main() {
     if (!asJson) {
       console.log(report.blockers.length
         ? '\nNot converting: resolve the blockers above first.'
-        : `\nTo convert: take a backup (./scripts/backup.sh), then re-run with --as <super-admin-email> --backup-taken --yes`);
+        : `\nNo work is rewritten: the ${report.from} flow's matters stay as they are, out of sight, and are`
+          + `\nthere again unchanged if the flow is switched back.`
+          + `\nTo convert: take a backup (./scripts/backup.sh), then re-run with --as <super-admin-email> --backup-taken --yes`);
     }
     process.exit(report.blockers.length ? 1 : 0);
   }
@@ -131,7 +142,8 @@ async function main() {
       },
     });
     print(report, asJson);
-    if (!asJson) console.log('\nDone. Everyone signed in should reload the app — its whole shape follows the flow.');
+    if (!asJson) console.log('\nDone. Everyone signed in should reload the app — its whole shape follows the flow.'
+      + `\nThe ${report.from} flow's work is untouched and hidden; convert back to see it again.`);
   } catch (e) {
     if (e instanceof WorkspaceFlowConversionError) {
       if (e.report) print({ ...e.report, blockers: e.blockers ?? e.report.blockers }, asJson);

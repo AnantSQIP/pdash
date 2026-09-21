@@ -17,9 +17,11 @@ a Super Admin under **Settings → Workspace flow**:
 **PROJECTS must behave exactly as production does today.** Everything the clients flow changed is
 reachable only when the organisation's flow is CLIENTS. Code that did not diverge is shared.
 
-- The flow lives on `organization.workspaceFlow` (`PROJECTS` | `CLIENTS`, CHECK-constrained). Every
-  existing organisation is `PROJECTS` after the migration, so deploying this codebase changes nothing
-  for anybody until a Super Admin converts.
+- The flow lives on `organization.workspaceFlow` (`PROJECTS` | `CLIENTS`, CHECK-constrained). The
+  migration does not GUESS it: it reads it off the database (see "Which flow a database wakes up
+  in"), so a firm that has been through the clients era keeps the clients screens and a database
+  that never saw them keeps production's. Either way, deploying this codebase changes nothing for
+  anybody until a Super Admin converts.
 - The API asks `WorkspaceFlowService.flowOf(orgId)` (cached a few seconds, like the time mode).
   Routes that exist in only one flow carry `@RequireFlow('CLIENTS')` / `@RequireFlow('PROJECTS')`
   and answer 404 in the other. Services whose behaviour differs branch on the flow; where the two
@@ -29,42 +31,99 @@ reachable only when the organisation's flow is CLIENTS. Code that did not diverg
   (`Thing.tsx` = PROJECTS, `Thing.clients.tsx` = CLIENTS) behind a dispatcher; pages that exist in
   only one flow redirect in the other; the sidebar lists each flow's own items.
 
-## Changing the flow is a conversion, not a toggle
+## Each flow's work is its own
 
-A flow in use has data shaped for it, so switching is deliberately heavy. The Settings card shows
-the current flow and when it was chosen; switching runs a guided **conversion** (Super Admin, org
-passcode, typed confirmation, backup acknowledged):
+**The two flows never show each other's work.** The owner's rule: "I don't want the clients and
+projects data to collide, keep those data separate." So a project/client row carries the flow it was
+made in — `project.workspaceFlow`, stamped at creation, never rewritten — and every flow-scoped read
+filters on it:
 
-1. **Preflight** — what will change, counted: clients without a number, open PID requests, running
-   clocks, reserved numbers, permission grants that will move. Nothing is written.
+- in CLIENTS the firm sees exactly the clients, task groups, tasks, timesheets, capacity and reports
+  it has now;
+- switch to PROJECTS and the Projects module is empty, waiting to be built in;
+- switch back and the client work is there again, untouched, down to the last logged hour.
+
+Nothing else carries a copy of that fact. **Tasks, timesheets, staffing, task lists, documents,
+comments, issues and the number registry hang off a project row, so they follow their project** —
+written down at every read rather than assumed, through the helpers in
+`apps/api/src/common/flow-scope.ts` (`projectInFlow`, `taskInFlow`, `taskListInFlow`,
+`timesheetInFlow`, `taskAssigneeInFlow`, `workSessionInFlow`, and their SQL forms). The single wall
+the lists and detail screens lean on — `ProjectAccessService` — refuses the other flow's rows
+outright, so a bookmark, a stale link or a notification from before a switch gets the answer a
+deleted matter gets.
+
+**A row attached to no project at all belongs to neither flow and is shown in both.** That is how
+team spaces stay shared: a team task has no `ProjectTask`, so `taskInFlow` admits it. The filters
+are written as "not the other flow's", never as "is this flow's", precisely so that the shared case
+falls out rather than being special-cased — and where code treats "no links" as an allow, the
+emptiness is computed from an UNFILTERED query, so "filed nowhere" and "filed in the other flow's
+work" can never collapse into the same answer.
+
+Shared by both flows and deliberately never filtered: people, roles and permissions, attendance,
+leave, holidays, comp-off, expenses, teams and team spaces, channels, announcements, policies,
+appraisals, feedback, workflows and statuses. A handful of reads about ONE PERSON'S DAY rather than
+about a matter stay cross-flow on purpose, and say so where they are: the 16-hour day cap, the day
+target, the fill calendar's grading, the catch-up banner's "incomplete recent days", punch-out and
+the housekeeping sweep closing every clock, retention pruning, the comp-off evidence a reviewer
+weighs (its hours are kept, the other flow's matter is not named), the daily activity snapshots
+behind Performance's trend and heatmaps (`user_metric_daily` is one row per person per day, and
+half of what it holds comes from events and comments that have no matter behind them at all), and
+the purge's "is this row held up elsewhere?" question — a document or a task also held by the other
+flow must SURVIVE a purge, so that one question must see everything. Everything in Performance that
+names or counts WORK — deliveries, outstanding tasks, hours in a window, hours by matter, issues,
+the project list — is flow-scoped; the line is between a fact about a person's day and a claim
+about a matter.
+
+**One deliberate exception: the audit trail.** `/audit-logs` and its CSV export, behind
+`audit.view` / `audit.export`, are NOT flow-filtered. The audit log is the organisation's permanent
+record of everything that happened in it, the people who hold those codes are the same
+administrators who know the two flows exist, and a compliance record with half of itself hidden is
+worse than one that shows everything. The per-project Activity feed, which ordinary members reach,
+IS scoped: a project, task or issue of the other flow answers "not found" there.
+
+**Nobody outside Settings knows any of this exists.** The flow is a backend concept: it is in no
+payload a screen reads, there is no badge, column, filter, tooltip, export heading or notification
+wording for it, and an empty Projects module says "No projects yet". The only places a flow is named
+are the Settings card, the operator CLI and this document.
+
+## Changing the flow changes settings, not work
+
+Because each flow's work is its own, switching **hides one flow's work and reveals the other's** —
+it converts nothing. The Settings card shows the current flow and when it was chosen; switching runs
+a guided **conversion** (Super Admin, org passcode, typed confirmation, backup acknowledged):
+
+1. **Preflight** — what will change, counted: running clocks, the permission grants that will move,
+   and how much work is about to go out of sight. Nothing is written.
 2. **Convert** — one transaction, all or nothing.
 3. **Verify** — the invariants of the new flow are checked and the report is stored.
 
-PROJECTS → CLIENTS:
-- running clocks are closed (minutes kept) and time moves to MANUAL (recorded in the time-mode history);
-- open PID requests are cancelled;
-- the number registry is re-read: un-attached RESERVED / RELEASED / EXPIRED numbers are retired
-  (DISCONTINUED, never re-issued), every number is ATTACHED / DELETED / PURGED from the clients that
-  carry it, and every existing number is written to the CID ledger as IMPORTED;
-- every live project without a number gets the next CID (oldest first), recorded as BACKFILLED;
-- Team Capacity: `capacity.view` + `capacity.manage` for Super Admin / Admin / Manager / Senior
-  Consultant, and `capacity.view` for HR — the owner's amendment of 19 Sep 2026: who is loaded and
-  who is free is a people question too, but the board stays the ladder's to change. Both codes are
-  removed from every other role, every group, and the direct grants and ALLOW overrides of people
-  whose role carries neither;
-- the flow becomes CLIENTS.
+What a conversion changes, in either direction:
 
-CLIENTS → PROJECTS:
-- Team Capacity access goes back to the PROJECTS presets (everyone views; nobody holds `capacity.manage`);
-- registry statuses the PROJECTS screens do not know (DELETED, PURGED, MERGED) are mapped to the ones
-  they do (ATTACHED / DISCONTINUED); the CID ledger stays as history;
-- time stays MANUAL (an admin may switch PROJECTS to the timer afterwards);
-- client groups, task-group fields and billable flags stay in the database, unused;
-- the flow becomes PROJECTS.
+- **the flow itself**;
+- **Team Capacity**. CLIENTS: `capacity.view` + `capacity.manage` for Super Admin / Admin / Manager
+  / Senior Consultant, and `capacity.view` for HR — the owner's amendment of 19 Sep 2026: who is
+  loaded and who is free is a people question too, but the board stays the ladder's to change. Both
+  codes are removed from every other role, every group, and the direct grants and ALLOW overrides of
+  people whose role carries neither. PROJECTS: the presets production has always had — every role
+  sees the board, only a Super Admin manages it;
+- **the time mode**. PROJECTS may use the timer; CLIENTS is MANUAL only, so entering CLIENTS closes
+  any running clocks (minutes kept, capped at 12h) and records the switch in the time-mode history.
+  Going the other way time stays MANUAL, and an administrator may pick the timer up afterwards.
+
+And what it deliberately does NOT do, which is the point: it gives nothing a number, does not retire
+or re-read the number registry, does not write the CID ledger, does not cancel PID requests, and
+does not touch a project, task, timesheet or staffing row of either flow. A project still waiting
+for its PID is still waiting for it after a round trip; a held number is still held; the client work
+is still every hour of it.
+
+The conversion proves that rather than promising it: it counts both flows' work before it starts and
+again before it commits, and the `work_untouched` invariant rolls the whole transaction back if a
+single count moved. The work tables are locked against writers for the length of the transaction so
+that the count means something.
 
 Every conversion is recorded in `workspace_flow_change` with its preflight and verification reports.
 Before an organisation has any project, client or timesheet the same conversion runs with nothing to
-convert — choosing the flow for a new firm is one click.
+hide — choosing the flow for a new firm is one click.
 
 ## Work that is not a flow's own: availability
 
@@ -128,12 +187,53 @@ Web (`apps/web`):
   it was chosen, the conversions so far, and the guided conversion (preflight → confirmations →
   convert), which is the card the section above describes.
 
+## Which flow a database wakes up in
+
+`20261105090000_workspace_flow` decides each organisation's flow FROM EVIDENCE already in the
+database, not from a default. A blanket "everybody starts on PROJECTS" is right for a database that
+has only ever run the projects flow and catastrophic for one that has been through the clients era —
+the morning after the deploy the firm would find the projects screens over its client work. The
+evidence is the marks the clients era left behind and nothing else: no configuration, no environment
+variable, nobody having to remember.
+
+| | mark | scope |
+|---|---|---|
+| A | the migration `20261018110000_pid_request_backfill` is recorded as applied (this codebase deleted it, so nothing else can have run it) | the database |
+| B | `project` carries the CHECK `project_live_client_has_cid` | the database |
+| C | the PID request pool `pid_request` has been dropped | the database |
+| D | the CID ledger `cid_event` has a row for this organisation | the organisation |
+| E | this organisation files clients in `client_group` | the organisation |
+
+Any of A–C makes the whole database a clients-era one — its SCHEMA went through the clients era,
+whoever's rows are in it — and D or E make that one organisation a clients one. Everything else
+stays PROJECTS: a production database that never saw the clients flow, and a database migrated from
+scratch, where the rewritten clients-era migrations create `cid_event` and `client_group` EMPTY.
+The question is asked in `20261105090000` and not later because `20261106090000` drops B and puts C
+back one migration afterwards; A and D survive that, so a re-run reaches the same verdict. And an
+organisation that has ever been converted (`workspaceFlowChangedAt IS NOT NULL`) is never decided
+for again — once a Super Admin has chosen, that is the answer for ever.
+
+The same migration stamps every existing project/client row with the flow its organisation was just
+decided to be running, by the derived-organisation rule (creator's org, else earliest member's, else
+the first organisation) — which is what those rows were made in.
+
+`tools/workspace-flow-decision.spec.ts` runs that migration file, through `psql`, against a real
+clients-era database and a real never-clients one, and checks both verdicts, the stamping, the
+re-run and the "never overrule a person" rule.
+
 ## Schema and migrations
 
-All schema changes are additive and flow-neutral; data that belongs to one flow is shaped by the
-conversion, never by a migration. In particular the clients-flow migrations were rewritten before
-they ever reached production:
+All schema changes are additive and flow-neutral; which flow a row belongs to is decided once, when
+the row is made (or by the migration above, for rows that predate flows), and never rewritten. In
+particular the clients-flow migrations were rewritten before they ever reached production:
 
+- `project.workspaceFlow` — NOT NULL, CHECK-constrained, indexed with `deletedAt` because every
+  flow-scoped list starts with "the live rows of my flow". Deliberately without a Prisma `@default`,
+  so the compiler asks every create site which flow it is making work in.
+- `notification.workspaceFlow` — nullable; NULL means the notification is about neither flow (leave,
+  an expense, a mention in a team space) and it is shown in both. One that names a project row is
+  stamped with that row's flow when it is written, so the bell stops offering a firm links into work
+  it can no longer open. Invisible to the reader: it only decides whether the line is there.
 - `pid_request` is kept exactly as PROJECTS uses it (the clients flow does not read it).
 - `pid_reservation` gains `mergedIntoCid`, a nullable `expiresAt` and a status CHECK over the union
   of both flows' states.
@@ -160,7 +260,13 @@ nothing whatsoever to a database that never saw the old migrations.
   the availability suite, built entirely out of production's own routes (no `/capacity/tasks`).
 - `tools/workspace-flow.e2e.mjs` — the conversion both ways, on a scratch database: a running
   clock, a held PID, a project waiting for a number and a request in the pool are put there first,
-  and each of them is asked for afterwards.
+  and each of them is asked for afterwards — now to check that the conversion left every one of
+  them exactly as it found it, and moved only the flow, the grants and the time mode.
+- `tools/workspace-flow-separation.e2e.mjs` — the owner's rule, on the same scratch database: a
+  census of every client, task, timesheet and staffing row is taken, the organisation is taken
+  CLIENTS → PROJECTS → CLIENTS, and the census is taken again. Neither flow ever lists the other's
+  rows, and after the round trip every row is exactly as it was.
+- `tools/workspace-flow-decision.spec.ts` — which flow a database wakes up in (above).
 - `tools/workspace-flow-conversion.spec.ts` — the conversion's copies of things decided elsewhere
   (who holds Team Capacity in each flow, which registry states each flow knows) checked against the
   permissions catalog, so the two cannot drift.

@@ -10,6 +10,8 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { EVENTS } from '../../common/events/canonical-events';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { getActorId } from '../../common/context/request-context';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { taskInFlow } from '../../common/flow-scope';
 
 class CreateCommentDto {
   @IsString()
@@ -68,17 +70,30 @@ export class CommentsService {
     private readonly notifications: NotificationsService,
     private readonly documents: DocumentsService,
     private readonly access: ProjectAccessService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * A comment reaches its matter by a loose (entityType, entityId) pair rather than a foreign key,
+   * so every step that follows that pair back to a project says which workspace flow it is willing
+   * to land in. Otherwise the other flow's work answers these questions: its members become
+   * mentionable, its assignees get notified, its Files tab collects the attachments.
+   */
+  private flow() { return this.flows.currentFlow(); }
 
   /** The project a comment's entity belongs to — mentions are scoped to that project's members. */
   private async projectIdOfEntity(entityType: string, entityId: string): Promise<string | null> {
     if (entityType === 'PROJECT') return entityId;
     if (entityType === 'TASK') {
-      const pt = await this.prisma.projectTask.findFirst({ where: { taskId: entityId }, select: { projectId: true } });
+      const pt = await this.prisma.projectTask.findFirst({
+        where: { taskId: entityId, project: { workspaceFlow: await this.flow() } }, select: { projectId: true },
+      });
       return pt?.projectId ?? null;
     }
     if (entityType === 'ISSUE') {
-      const issue = await this.prisma.issue.findUnique({ where: { id: entityId }, select: { projectId: true } });
+      const issue = await this.prisma.issue.findFirst({
+        where: { id: entityId, project: { workspaceFlow: await this.flow() } }, select: { projectId: true },
+      });
       return issue?.projectId ?? null;
     }
     return null;
@@ -91,7 +106,9 @@ export class CommentsService {
     const projectId = await this.projectIdOfEntity(entityType, entityId);
     if (!projectId) return [];
     const members = await this.prisma.projectMember.findMany({
-      where: { projectId, isActive: true, userId: { in: [...new Set(requested)] } },
+      // The flow again, because a PROJECT entityId is taken at its word above: it is the id the
+      // caller typed, not one this service looked up.
+      where: { projectId, isActive: true, userId: { in: [...new Set(requested)] }, project: { workspaceFlow: await this.flow() } },
       select: { userId: true },
     });
     return members.map(m => m.userId);
@@ -100,11 +117,16 @@ export class CommentsService {
   /** Who to notify about a new comment: task assignees, or an issue's assignee + reporter. */
   private async commentRecipients(entityType: string, entityId: string): Promise<string[]> {
     const ids = new Set<string>();
+    const flow = await this.flow();
     if (entityType === 'TASK') {
-      const task = await this.prisma.task.findUnique({ where: { id: entityId }, select: { assignees: { select: { userId: true } } } });
+      const task = await this.prisma.task.findFirst({
+        where: { id: entityId, ...taskInFlow(flow) }, select: { assignees: { select: { userId: true } } },
+      });
       task?.assignees.forEach(a => ids.add(a.userId));
     } else if (entityType === 'ISSUE') {
-      const issue = await this.prisma.issue.findUnique({ where: { id: entityId }, select: { assigneeId: true, reportedBy: true } });
+      const issue = await this.prisma.issue.findFirst({
+        where: { id: entityId, project: { workspaceFlow: flow } }, select: { assigneeId: true, reportedBy: true },
+      });
       if (issue?.assigneeId) ids.add(issue.assigneeId);
       if (issue?.reportedBy) ids.add(issue.reportedBy);
     }
@@ -125,6 +147,9 @@ export class CommentsService {
   async list(entityType: string, entityId: string, limit = COMMENT_PAGE_DEFAULT) {
     // A comment thread is only for people who can access the underlying matter — otherwise
     // any user could read a confidential project/task/issue discussion by entityId (IDOR).
+    // That assert is itself bounded by the workspace flow — a project, task or issue of the other
+    // flow is refused there (common/access/project-access.module.ts) — so the thread query below
+    // needs no filter of its own; a Comment carries no project to filter on in any case.
     await this.access.assertEntityAccess(getActorId(), entityType, entityId);
 
     const take = Math.min(Math.max(Math.trunc(limit) || COMMENT_PAGE_DEFAULT, 1), COMMENT_PAGE_MAX);
@@ -154,15 +179,16 @@ export class CommentsService {
   private async linkAttachmentsToEntity(entityType: string, entityId: string, documentIds: string[]) {
     if (!documentIds.length) return;
     const type = entityType.toUpperCase();
+    const flow = await this.flow();
     if (type === 'PROJECT') {
-      const project = await this.prisma.project.findFirst({ where: { id: entityId, deletedAt: null }, select: { id: true } });
+      const project = await this.prisma.project.findFirst({ where: { id: entityId, deletedAt: null, workspaceFlow: flow }, select: { id: true } });
       if (!project) return;
       await this.prisma.projectDocument.createMany({
         data: documentIds.map(documentId => ({ projectId: entityId, documentId })),
         skipDuplicates: true,
       });
     } else if (type === 'TASK') {
-      const task = await this.prisma.task.findFirst({ where: { id: entityId, deletedAt: null }, select: { id: true } });
+      const task = await this.prisma.task.findFirst({ where: { id: entityId, deletedAt: null, ...taskInFlow(flow) }, select: { id: true } });
       if (!task) return;
       await this.prisma.taskDocument.createMany({
         data: documentIds.map(documentId => ({ taskId: entityId, documentId })),

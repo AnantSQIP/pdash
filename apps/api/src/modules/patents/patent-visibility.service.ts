@@ -170,14 +170,18 @@ export class PatentVisibilityService {
     const actorId = this.actorId();
     await this.access.assertProjectAccess(actorId, projectId);
 
+    // The patent portal exists only in the PROJECTS flow — its controller is @RequireFlow('PROJECTS'),
+    // so the constant is the flow, and injecting the service to re-derive it would only hide that.
+    // Stated in both reads because this route hands back REAL patent numbers, and the association
+    // between a number and the matter it is worked under is the thing the whole file protects.
     const project = await this.prisma.project.findFirst({
-      where: { id: projectId, deletedAt: null },
+      where: { id: projectId, deletedAt: null, workspaceFlow: 'PROJECTS' },
       select: { id: true, code: true, title: true },
     });
     if (!project) throw new NotFoundException('Project not found.');
 
     const links = await this.prisma.projectPatent.findMany({
-      where: { projectId, patent: { deletedAt: null, organizationId } },
+      where: { projectId, project: { workspaceFlow: 'PROJECTS' }, patent: { deletedAt: null, organizationId } },
       select: {
         patent: {
           select: { id: true, handle: true, serial: true, realNumber: true, formerHandles: true },

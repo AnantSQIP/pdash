@@ -12,10 +12,14 @@ type Db = PrismaClient | Prisma.TransactionClient;
  * is more to do, and the group saying "complete" over an open task would be the lie.
  *
  * Returns the groups it re-opened, so the caller can say so in the activity feed.
+ *
+ * Both callers ask this only when the organisation runs the CLIENTS flow — task groups exist
+ * nowhere else — so the flow is written here as the constant it is: a group this re-opens is
+ * always a client's.
  */
 export async function reactivateGroupsOfTask(db: Db, taskId: string): Promise<{ id: string; name: string; projectId: string | null }[]> {
   const links = await db.projectTask.findMany({
-    where: { taskId, taskList: { status: 'COMPLETED', deletedAt: null } },
+    where: { taskId, taskList: { status: 'COMPLETED', deletedAt: null }, project: { workspaceFlow: 'CLIENTS' } },
     select: { taskList: { select: { id: true, name: true, projectId: true } } },
   });
   const groups = links.map(l => l.taskList).filter((g): g is NonNullable<typeof g> => !!g);

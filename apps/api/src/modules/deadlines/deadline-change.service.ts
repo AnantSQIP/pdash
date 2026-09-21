@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getActorId } from '../../common/context/request-context';
 import { describeShift } from './deadline-shift';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import type { WorkspaceFlow } from '../../common/decorators/require-flow.decorator';
 
 // CLIENTS-FLOW: a TASK_GROUP's deadline is the client-facing commitment now, so its moves are
 // recorded too. Callers always pass projectId for it (the client the group belongs to).
@@ -49,7 +51,10 @@ export interface RecordShiftOptions {
 export class DeadlineChangeService {
   private readonly logger = new Logger(DeadlineChangeService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly flows: WorkspaceFlowService,
+  ) {}
 
   async record(opts: RecordShiftOptions): Promise<void> {
     const shift = describeShift(opts.previous, opts.next);
@@ -64,7 +69,7 @@ export class DeadlineChangeService {
         ? opts.projectId
         : opts.entityType === 'PROJECT'
           ? opts.entityId
-          : await this.primaryProjectForTask(db, opts.entityId);
+          : await this.primaryProjectForTask(db, opts.entityId, await this.flows.flowOfUser(changedById));
 
       const organizationId = opts.organizationId ?? await this.resolveOrg(db, changedById);
       if (!organizationId) {
@@ -103,10 +108,18 @@ export class DeadlineChangeService {
    * In practice all but a handful of tasks have exactly one project and the rule never bites;
    * it is written down so that the day a task is shared, the count does not quietly move between
    * projects depending on how Postgres felt like ordering the rows.
+   *
+   * Only links in the WRITER's own flow qualify. A shift filed against the other flow's project
+   * would be counted by that flow's Performance panel — a deadline it never moved, attributed to
+   * managers who were not asked — and it is the shift's own flow that made the change. With no
+   * qualifying link the row is still written, with no project: the shift happened, and an
+   * unattributed record of it is better than a misattributed one.
    */
-  private async primaryProjectForTask(db: Prisma.TransactionClient | PrismaService, taskId: string): Promise<string | null> {
+  private async primaryProjectForTask(
+    db: Prisma.TransactionClient | PrismaService, taskId: string, flow: WorkspaceFlow,
+  ): Promise<string | null> {
     const link = await db.projectTask.findFirst({
-      where: { taskId },
+      where: { taskId, project: { workspaceFlow: flow } },
       orderBy: { id: 'asc' },
       select: { projectId: true },
     });

@@ -4,6 +4,8 @@ import { ActorContextService } from '../../common/context/actor-context.service'
 import { PermissionService } from '../permissions/permission.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { getActorId } from '../../common/context/request-context';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { taskInFlow } from '../../common/flow-scope';
 
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true, designation: true };
 const EMPTY = { people: [], projects: [], tasks: [], channels: [], messages: [] };
@@ -25,6 +27,7 @@ export class SearchService {
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
     private readonly access: ProjectAccessService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   async search(actorId: string, organizationId: string, q: string) {
@@ -43,6 +46,10 @@ export class SearchService {
     // Scope projects to what the actor may actually reach (their memberships, or all for a
     // lead) — the conflict-wall. Previously search returned ANY org project with a member.
     const projectScope = can('project.view') ? await this.access.projectScopeWhere(actorId, organizationId) : null;
+    // The workspace flow the firm is running. Projects come back already bounded by it —
+    // projectScopeWhere carries `workspaceFlow` — but tasks reach the search bar by a route of
+    // their own (see below), so search has to say it for them.
+    const flow = await this.flows.flowOf(organizationId);
 
     const [people, projects, channels, messages, tasks] = await Promise.all([
       // People — only for those who can view the people directory (search links into the
@@ -73,17 +80,27 @@ export class SearchService {
       Promise.resolve([] as { id: string; name: string }[]),
       Promise.resolve([] as { id: string; channelId: string; content: string; createdAt: Date; channel: { name: string }; user: { firstName: string; lastName: string | null } }[]),
       // Tasks — task.view holders, further scoped to tasks the actor is assigned to or a
-      // member of the owning project.
+      // member of the owning project. The first arm of that OR asks only "am I staffed on it",
+      // which says nothing about the work it belongs to: a person staffed on a matter before the
+      // firm switched flows would keep finding it here, deep-link and all. taskInFlow() bounds the
+      // whole query to this flow's work while still admitting a team space's task, which has no
+      // project and therefore belongs to both.
       can('task.view')
         ? this.prisma.task.findMany({
             where: {
-              deletedAt: null, title: like,
+              deletedAt: null, title: like, ...taskInFlow(flow),
               OR: [
                 { assignees: { some: { userId: actorId } } },
                 { projectTasks: { some: { project: { members: { some: { userId: actorId } } } } } },
               ],
             },
-            select: { id: true, title: true, currentStatus: { select: { name: true } }, projectTasks: { select: { projectId: true }, take: 1 } },
+            // The single link that labels a result is filtered too. taskInFlow() already rules out
+            // a task with any link into the other flow, so this cannot change which rows come
+            // back; it is here so the label keeps agreeing with the filter if either is edited.
+            select: {
+              id: true, title: true, currentStatus: { select: { name: true } },
+              projectTasks: { where: { project: { workspaceFlow: flow } }, select: { projectId: true }, take: 1 },
+            },
             orderBy: { updatedAt: 'desc' }, take: 8,
           })
         : Promise.resolve([]),

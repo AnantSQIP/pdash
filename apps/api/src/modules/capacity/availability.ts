@@ -35,6 +35,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 // Types only — erased at compile time, so this file never imports the capacity module at runtime
 // and the two cannot form a cycle.
 import type { CapacityDay, CapacityRow } from './capacity.module';
@@ -379,16 +380,22 @@ export class AvailabilityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: ProjectAccessService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /**
    * Which clients this viewer may be told the name of — the same rule the clients list itself
    * uses (ProjectAccessService), so the board can never name a matter the list would hide.
+   *
+   * Membership of a matter in the OTHER flow grants nothing here. It could name nothing today —
+   * the board is flow-filtered before it reaches this file — but a permit for work this flow does
+   * not show is a permit waiting to be honoured by whatever reads this set next.
    */
   async visibility(actorId: string, organizationId: string): Promise<Visibility> {
     if (await this.access.hasOversight(actorId)) return { all: true, ids: new Set() };
+    const flow = await this.flows.flowOf(organizationId);
     const mine = await this.prisma.projectMember.findMany({
-      where: { userId: actorId, isActive: true, project: { deletedAt: null } },
+      where: { userId: actorId, isActive: true, project: { deletedAt: null, workspaceFlow: flow } },
       select: { projectId: true },
     });
     return { all: false, ids: new Set(mine.map(m => m.projectId)) };

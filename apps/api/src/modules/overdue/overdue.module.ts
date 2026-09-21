@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
 
@@ -38,7 +39,24 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * Of these people, the ones whose firm is running `flow` right now.
+   *
+   * WHY PER RECIPIENT. This sweep runs on a timer: there is no request, no actor and no
+   * organisation to ask "which flow?" of. The question only has an answer per PERSON — the flow
+   * of the firm they belong to — so it is asked once per recipient, against the flow of the
+   * project the alert is about. After a switch, the work of the other flow is hidden from them;
+   * an alert naming it would point at a task and a client they can no longer open.
+   * WorkspaceFlowService caches both halves of the answer, so asking per person is cheap.
+   */
+  private async inFlow(userIds: string[], flow: string): Promise<string[]> {
+    const out: string[] = [];
+    for (const id of userIds) if ((await this.flows.flowOfUser(id)) === flow) out.push(id);
+    return out;
+  }
 
   onModuleInit() {
     // Skip on replicas that aren't the designated background runner (multi-replica AWS) — set
@@ -88,7 +106,8 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
           select: {
             project: {
               select: {
-                id: true, title: true, deletedAt: true,
+                // workspaceFlow is read only to decide WHO may be told; no message ever names it.
+                id: true, title: true, deletedAt: true, workspaceFlow: true,
                 members: { where: { projectRole: 'MANAGER', isActive: true }, select: { userId: true } },
               },
             },
@@ -124,25 +143,54 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
     for (const task of tasks) {
       const projects = task.projectTasks.map(pt => pt.project).filter(p => p && !p.deletedAt);
       if (!projects.length) continue; // orphaned/archived — nothing to escalate to
-      const projectTitle = projects[0].title;
-      const managers = [...new Set(projects.flatMap(p => p.members.map(m => m.userId)))];
       const assignees = task.assignees.map(a => a.userId);
       const late = daysLate(task.dueDate!, today);
       const lateLabel = late === 1 ? '1 day' : `${late} days`;
 
-      // The person doing the work gets a nudge…
-      await this.notifications.notify(assignees, {
-        type: 'task.overdue',
-        title: 'Task overdue',
-        message: `"${task.title}" (${projectTitle}) passed its internal deadline ${lateLabel} ago and is ${task.completionPercentage}% done.`,
-      });
-      // …and the people accountable for delivery get told, so they can act.
-      const oversight = [...new Set([...managers, ...admins])].filter(uid => !assignees.includes(uid));
-      await this.notifications.notify(oversight, {
-        type: 'task.overdue',
-        title: 'Task overdue — action may be needed',
-        message: `"${task.title}" (${projectTitle}) is ${lateLabel} past its internal deadline at ${task.completionPercentage}%. Assignee has not completed it on time.`,
-      });
+      // One alert per flow the task's work sits in, each sent only to the people currently in
+      // that flow and naming only that flow's project. In practice a task is filed in one flow
+      // and this loop runs once; it is a loop so that the rare task linked into both can never
+      // put one flow's client name in front of somebody working in the other.
+      let told = false;
+      for (const flow of [...new Set(projects.map(p => p.workspaceFlow))]) {
+        const inThisFlow = projects.filter(p => p.workspaceFlow === flow);
+        const projectTitle = inThisFlow[0].title;
+        const managers = [...new Set(inThisFlow.flatMap(p => p.members.map(m => m.userId)))];
+
+        // The person doing the work gets a nudge…
+        const nudge = await this.inFlow(assignees, flow);
+        if (nudge.length) {
+          await this.notifications.notify(nudge, {
+            type: 'task.overdue',
+            title: 'Task overdue',
+            message: `"${task.title}" (${projectTitle}) passed its internal deadline ${lateLabel} ago and is ${task.completionPercentage}% done.`,
+          });
+          told = true;
+        }
+        // …and the people accountable for delivery get told, so they can act.
+        const oversight = await this.inFlow(
+          [...new Set([...managers, ...admins])].filter(uid => !assignees.includes(uid)), flow,
+        );
+        if (oversight.length) {
+          await this.notifications.notify(oversight, {
+            type: 'task.overdue',
+            title: 'Task overdue — action may be needed',
+            message: `"${task.title}" (${projectTitle}) is ${lateLabel} past its internal deadline at ${task.completionPercentage}%. Assignee has not completed it on time.`,
+          });
+          told = true;
+        }
+      }
+
+      // A task whose work belongs to NOBODY's current flow — the firm switched away from the flow
+      // it was made in — is skipped without being stamped. `overdueNotifiedAt` means "this slip
+      // has been announced", and it has not been: nobody who could act on it was told. Left
+      // unstamped, it is announced properly the first sweep after the firm switches back, rather
+      // than returning as work that silently went overdue while nobody was looking.
+      //
+      // A task with nobody to tell in ANY flow — no assignee, no manager, no admin — is not a flow
+      // question, and is stamped exactly as it always was, so the sweep does not revisit it hourly.
+      const anyoneAtAll = assignees.length > 0 || admins.length > 0 || projects.some(p => p.members.length > 0);
+      if (anyoneAtAll && !told) continue;
 
       await this.prisma.task.update({ where: { id: task.id }, data: { overdueNotifiedAt: new Date() } });
       sent++;
@@ -163,6 +211,11 @@ export class OverdueMonitorService implements OnModuleInit, OnModuleDestroy {
         const project = pt.project;
         if (!project || project.deletedAt) continue;
         for (const m of project.members) {
+          // Only the projects of the flow the manager's firm is in now — the same per-recipient
+          // rule as the alerts above. Managing a matter the firm has switched away from does not
+          // earn a daily reminder about work they cannot open, and a digest that is ALL such
+          // work is simply not sent.
+          if (!(await this.inFlow([m.userId], project.workspaceFlow)).length) continue;
           const arr = byManager.get(m.userId) ?? [];
           arr.push({ title: task.title, project: project.title, late: daysLate(task.dueDate!, today) });
           byManager.set(m.userId, arr);

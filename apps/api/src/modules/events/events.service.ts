@@ -5,6 +5,8 @@ import { PermissionService } from '../permissions/permission.service';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { getActorId } from '../../common/context/request-context';
 import { CreateEventDto, UpdateEventDto } from './dto';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { otherFlow } from '../../common/flow-scope';
 
 // A recurring series is materialised up front; this caps how many occurrences one request
 // can create. Exceeding it is rejected explicitly (it used to be silently truncated).
@@ -21,7 +23,43 @@ export class EventsService {
     private readonly notifications: NotificationsService,
     private readonly permissions: PermissionService,
     private readonly actor: ActorContextService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * Drop the meetings tagged to the OTHER workspace flow's work.
+   *
+   * A meeting names its matter with a plain column — `CalendarEvent.projectId` has no Prisma
+   * relation to Project — so unlike everywhere else the flow cannot be written into the `where`.
+   * It is applied to the rows instead: the project ids actually present are resolved in one query
+   * and only those belonging to the other flow are removed. Two things follow from doing it this
+   * way round rather than with an "ids of my flow" whitelist. A meeting tagged to NO project is
+   * everyone's — a standup, an all-hands — and survives untouched; and so does one whose project
+   * has since been destroyed, which is a meeting that happened, not a matter.
+   */
+  /**
+   * A meeting may only be tagged to a matter of the flow the firm is running. Checked on the way
+   * IN as well as on the way out: the read filters would hide such a meeting from everybody
+   * anyway, so accepting one would be quietly making a meeting nobody could ever see again.
+   */
+  private async assertProjectInFlow(projectId?: string | null): Promise<void> {
+    if (!projectId) return;
+    const p = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null, workspaceFlow: await this.flows.currentFlow() },
+      select: { id: true },
+    });
+    if (!p) throw new BadRequestException('That project could not be found.');
+  }
+
+  private async dropOtherFlow<T extends { projectId: string | null }>(rows: T[]): Promise<T[]> {
+    const ids = [...new Set(rows.map(r => r.projectId).filter((v): v is string => !!v))];
+    if (!ids.length) return rows;
+    const alien = new Set((await this.prisma.project.findMany({
+      where: { id: { in: ids }, workspaceFlow: otherFlow(await this.flows.currentFlow()) },
+      select: { id: true },
+    })).map(p => p.id));
+    return alien.size ? rows.filter(r => !r.projectId || !alien.has(r.projectId)) : rows;
+  }
 
   /** Reject an event whose end precedes its start, or a recurrence that ends before it begins. */
   private assertDateOrder(start?: Date | null, end?: Date | null, until?: Date | null) {
@@ -84,7 +122,7 @@ export class EventsService {
       orderBy: { startDate: 'asc' },
     });
     // Non-attendees see the meeting on the shared calendar but not its join link / private notes.
-    const real = events.map(e => this.redactEvent(e, viewerId));
+    const real = (await this.dropOtherFlow(events)).map(e => this.redactEvent(e, viewerId));
     const pending = await this.pendingAvailability(organizationId, fromD, toD);
     return [...real, ...pending];
   }
@@ -152,7 +190,11 @@ export class EventsService {
       include: { attendees: { include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } } } },
     });
     if (!event) throw new NotFoundException(`Event ${id} not found`);
-    return this.redactEvent(event, getActorId());
+    // And the same answer for a meeting tagged to the other flow's matter: not found. This is the
+    // gate update(), softDelete(), updateNotes() and respond() all reach the row through.
+    const [visible] = await this.dropOtherFlow([event]);
+    if (!visible) throw new NotFoundException(`Event ${id} not found`);
+    return this.redactEvent(visible, getActorId());
   }
 
   async create(dto: CreateEventDto) {
@@ -166,6 +208,7 @@ export class EventsService {
     const end = dto.endDate ? new Date(dto.endDate) : undefined;
     const until = recurrenceUntil ? new Date(recurrenceUntil) : undefined;
     this.assertDateOrder(start, end, until);
+    await this.assertProjectInFlow((rest as { projectId?: string | null }).projectId);
     const cleanUrl = this.cleanJoinUrl(joinUrl);
     if (recurrence && recurrence !== 'NONE') {
       const n = this.countOccurrences(start, recurrence, until);
@@ -259,6 +302,7 @@ export class EventsService {
     const start = dto.startDate ? new Date(dto.startDate) : existing.startDate;
     const end = dto.endDate ? new Date(dto.endDate) : existing.endDate;
     this.assertDateOrder(start, end);
+    await this.assertProjectInFlow((dto as { projectId?: string | null }).projectId);
     const { joinUrl, ...restDto } = dto;
     const cleanUrl = this.cleanJoinUrl(joinUrl);
     const event = await this.prisma.calendarEvent.update({
@@ -325,13 +369,16 @@ export class EventsService {
     const now = Date.now();
     const from = new Date(now - 30 * 86_400_000);
     const to = new Date(now + 120 * 86_400_000);
-    const events = await this.prisma.calendarEvent.findMany({
+    // An ICS file leaves the product: it lands in somebody's Outlook or Google Calendar, with the
+    // meeting's title and its join link, and nothing there is ever filtered again. So the export
+    // carries only this flow's tagged meetings, plus everything tagged to no matter at all.
+    const events = await this.dropOtherFlow(await this.prisma.calendarEvent.findMany({
       where: {
         organizationId, deletedAt: null, startDate: { gte: from, lte: to },
         OR: [{ createdBy: actorId }, { attendees: { some: { userId: actorId } } }],
       },
       orderBy: { startDate: 'asc' },
-    });
+    }));
     const fmt = (d: Date) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
     const esc = (s: string | null) => (s ?? '').replace(/([,;\\])/g, '\\$1').replace(/\r?\n/g, '\\n');
     const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Squark Dashboard//Calendar//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
@@ -385,6 +432,10 @@ export class EventsService {
     const fromD = new Date(from);
     const toD = new Date(to);
     const [events, leaves, blocks, compoffs] = await Promise.all([
+      // Deliberately NOT flow-scoped. Every title here is replaced with the word 'Busy' before it
+      // is returned (see below), so nothing of the other flow's work is disclosed — and an hour
+      // this person has already committed is an hour they cannot give you, whichever matter took
+      // it. Filtering would show them free at a time they are not.
       this.prisma.calendarEvent.findMany({
         where: {
           organizationId, deletedAt: null,
@@ -507,6 +558,7 @@ export class MeetingReminderService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   onModuleInit() {
@@ -528,7 +580,19 @@ export class MeetingReminderService implements OnModuleInit {
       where: { deletedAt: null, reminderMinutes: { not: null }, reminderSentAt: null, startDate: { gt: now } },
       include: { attendees: { select: { userId: true } } },
     });
+    // Which flow each tagged meeting's matter belongs to. There is no actor to ask here — this is
+    // a timer — so the flow comes from the meeting's own organisation.
+    const projectFlows = new Map((await this.prisma.project.findMany({
+      where: { id: { in: [...new Set(events.map(e => e.projectId).filter((v): v is string => !!v))] } },
+      select: { id: true, workspaceFlow: true },
+    })).map(p => [p.id, p.workspaceFlow]));
+
     for (const e of events) {
+      // A reminder for a matter the firm is not currently running would name it, in a notification,
+      // to people who cannot open it. Skipped rather than marked sent: if the firm switches back
+      // before the meeting starts, the next sweep reminds them as it always would have.
+      if (e.projectId && projectFlows.has(e.projectId)
+        && projectFlows.get(e.projectId) !== await this.flows.flowOf(e.organizationId)) continue;
       const remindAt = new Date(e.startDate.getTime() - (e.reminderMinutes ?? 0) * 60_000);
       if (remindAt > now) continue; // window not reached yet
       const when = new Date(e.startDate).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
