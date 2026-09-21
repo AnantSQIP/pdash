@@ -203,14 +203,20 @@ function SeatImpact({ seat, compact }: { seat: SeatPreview; compact?: boolean })
       </p>
 
       {seat.otherClients.length > 0 && (
+        // The four biggest, then a count. A partner can be on a dozen matters, and a line that
+        // lists all of them stops being read — the four that account for most of the week are
+        // what somebody deciding needs.
         <p className="mt-1 text-[11.5px] leading-snug text-gray-600">
           Also on:{' '}
-          {seat.otherClients.map((s, i) => (
+          {seat.otherClients.slice(0, 4).map((s, i) => (
             <span key={`${s.projectId ?? 'other'}-${i}`}>
               {i > 0 && ', '}
               <span className={clsx('tabular-nums', s.restricted && 'italic text-gray-500')}>{shareLabel(s)} {fmtHours(s.hours)}</span>
             </span>
           ))}
+          {seat.otherClients.length > 4 && (
+            <span className="text-gray-500"> and {seat.otherClients.length - 4} more, {fmtHours(seat.otherClients.slice(4).reduce((n, s) => n + s.hours, 0))} between them</span>
+          )}
         </p>
       )}
 
