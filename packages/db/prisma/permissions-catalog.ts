@@ -16,7 +16,8 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
+  // PROJECTS flow's word. The CLIENTS flow calls the same code "Change CID" (CLIENTS_ACTION_LABELS).
+  generate_pid: 'Generate PID',
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -115,14 +116,29 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'capacity.manage': 'Create, edit, assign and delete tasks from Team Capacity',
 };
 
-export const PERMISSIONS: PermissionDef[] = MODULES.flatMap(m =>
-  m.actions.map(action => ({
-    code: `${m.key}.${action}`,
-    name: `${m.label} — ${ACTION_LABELS[action] ?? action}`,
-    module: m.key,
-    description: PERMISSION_DESCRIPTIONS[`${m.key}.${action}`] ?? `${ACTION_LABELS[action] ?? action} on ${m.label}`,
-  })),
-);
+/**
+ * Where the CLIENTS workspace flow names an action differently (docs/WORKSPACE_FLOWS.md). The code
+ * stays `project.generate_pid` in both flows, so no grant ever has to move: in CLIENTS it no longer
+ * mints a number (CIDs are issued automatically) — it changes one.
+ */
+export const CLIENTS_ACTION_LABELS: Record<string, string> = {
+  generate_pid: 'Change CID',
+};
+
+/** The catalog as a flow names it — what seed.ts writes into the permission table. */
+export function permissionsFor(flow: 'PROJECTS' | 'CLIENTS'): PermissionDef[] {
+  const labels = flow === 'CLIENTS' ? { ...ACTION_LABELS, ...CLIENTS_ACTION_LABELS } : ACTION_LABELS;
+  return MODULES.flatMap(m =>
+    m.actions.map(action => ({
+      code: `${m.key}.${action}`,
+      name: `${m.label} — ${labels[action] ?? action}`,
+      module: m.key,
+      description: PERMISSION_DESCRIPTIONS[`${m.key}.${action}`] ?? `${labels[action] ?? action} on ${m.label}`,
+    })),
+  );
+}
+
+export const PERMISSIONS: PermissionDef[] = permissionsFor('PROJECTS');
 
 export const ALL_PERMISSION_CODES: string[] = PERMISSIONS.map(p => p.code);
 
@@ -137,9 +153,11 @@ const VIEW_BASICS = [
   code('tasklist', 'view'), code('timesheet', 'view'),
   code('issue', 'view'), code('comment', 'view'), code('document', 'view'),
   code('calendar', 'view'),
-  // capacity.view is NOT a basic any more. The matrix of 2026-08-12 opened the board to everyone;
-  // the owner closed it again in Sep 2026 — Team Capacity is visible only to Senior Consultant and
-  // above, who also get capacity.manage (task CRUD from the board). See DELIVERY_LEAD_CAPACITY.
+  // capacity.view is NOT a basic any more — in the CLIENTS flow. The matrix of 2026-08-12 opened
+  // the board to everyone; the owner closed it again in Sep 2026 — Team Capacity goes to Senior
+  // Consultant and above, who also get capacity.manage (task CRUD from the board), plus HR, which
+  // only reads it. See DELIVERY_LEAD_CAPACITY. The PROJECTS flow still opens the board to every
+  // role — rolePresetsFor('PROJECTS') puts capacity.view back for all of them.
   // Seeing the Team Spaces module is a basic: which space you can actually OPEN is decided by
   // membership, exactly as it is for projects, so this reveals nothing on its own.
   code('team', 'view'),
@@ -152,7 +170,8 @@ const VIEW_BASICS = [
 /**
  * Team Capacity, for the delivery ladder at or above Senior Consultant (Super Admin holds every code
  * implicitly; Admin's preset is every code, so it gets both through ADMIN_CODES). HR is people-ops,
- * not delivery, and is deliberately NOT on this ladder — it lost the board with this change.
+ * not delivery, so it is not on this ladder — it READS the board (capacity.view, in HR_CODES since
+ * 19 Sep 2026) and never edits it.
  */
 const DELIVERY_LEAD_CAPACITY = [code('capacity', 'view'), code('capacity', 'manage')];
 
@@ -388,5 +407,27 @@ export const ROLE_PRESETS: Record<string, string[] | '*'> = {
   'Business Development': BUSINESS_DEVELOPMENT_CODES,
   Employee: EMPLOYEE_CODES,
 };
+
+/**
+ * The presets for an organisation's WORKSPACE FLOW (docs/WORKSPACE_FLOWS.md).
+ *
+ *   CLIENTS  — ROLE_PRESETS above: Team Capacity (view + manage) for the delivery ladder only.
+ *   PROJECTS — what production has always run: every role sees Team Capacity (matrix 2026-08-12,
+ *              HR included) and nobody holds capacity.manage — the PROJECTS board has no task CRUD.
+ *
+ * The two differ in nothing else. seed.ts and regrant-roles.ts take the organisation's flow; the
+ * workspace-flow conversion moves the capacity grants of a live database without a regrant.
+ */
+export type PresetFlow = 'PROJECTS' | 'CLIENTS';
+export function rolePresetsFor(flow: PresetFlow): Record<string, string[] | '*'> {
+  if (flow === 'CLIENTS') return ROLE_PRESETS;
+  const out: Record<string, string[] | '*'> = {};
+  for (const [role, preset] of Object.entries(ROLE_PRESETS)) {
+    if (preset === '*') { out[role] = preset; continue; }
+    const codes = preset.filter(c => c !== 'capacity.manage');
+    out[role] = codes.includes('capacity.view') ? codes : [...codes, 'capacity.view'];
+  }
+  return out;
+}
 
 export const SUPER_ADMIN_ROLE = 'Super Admin';

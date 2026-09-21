@@ -16,7 +16,13 @@ export function financialYear(instant: Date, timeZone: string = IST): { startYea
   return { startYear, label }; // e.g. Apr-2026 → { 2026, "26_27" }
 }
 
-/** CID display form, e.g. SQ_26_27_001 (serial zero-padded to 3, grows past 999 naturally).
+/** PID display form (PROJECTS flow), e.g. SQ_26_27_001 (serial zero-padded to 3, grows past 999
+ *  naturally). The organisation code is used as it is — production's rule. */
+export function formatPid(orgCode: string, fyLabel: string, serial: number): string {
+  return `${orgCode}_${fyLabel}_${String(serial).padStart(3, '0')}`;
+}
+
+/** CID display form (CLIENTS flow), e.g. SQ_26_27_001 (serial zero-padded to 3, grows past 999 naturally).
  *  `prefix` must already be sanitised — see cidPrefix() in common/cid/cid.ts. */
 export function formatCid(prefix: string, fyLabel: string, serial: number): string {
   return `${prefix}_${fyLabel}_${String(serial).padStart(3, '0')}`;
@@ -28,7 +34,9 @@ export function formatPatentHandle(clientCode: string, serial: number): string {
 }
 
 // Canonical scope keys for the atomic allocator — the ONLY place these strings are built.
-// `legacyPidScope` is no longer allocated from (CIDs come from the registry under a lock), but an
+// PROJECTS flow: PIDs are allocated from this scope's counter (SequenceService).
+export const pidScope = (organizationId: string, fyLabel: string) => `pid:${organizationId}:${fyLabel}`;
+// CLIENTS flow: `legacyPidScope` is no longer allocated from (CIDs come from the registry under a lock), but an
 // existing counter row is still honoured as a floor so nothing it once issued can come back.
-export const legacyPidScope = (organizationId: string, fyLabel: string) => `pid:${organizationId}:${fyLabel}`;
+export const legacyPidScope = pidScope;
 export const patentScope = (clientId: string) => `pat:${clientId}`;

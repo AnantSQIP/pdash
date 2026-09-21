@@ -1,17 +1,8 @@
-# Squark Dashboard — Clients flow
+# pdash
 
-This is the **clients flow** as its own codebase. It was split out of the `pdash` repository
-(where it lived as the `clients-flow` branch; tag `split-from-pdash` marks the split point) so the
-two flows can move independently:
-
-| | Projects flow | Clients flow (this repo) |
-|---|---|---|
-| Code | `pdash` repo | this repo, branch `main` |
-| Local ports | web 3001 · API 4000 | web 3021 · API 4021 |
-| Database | `pdash` | `pdash_clients` |
-
-The remote `projects-flow` points at the pdash repo only so fixes can be cherry-picked across
-deliberately; nothing here is pushed there. See `docs/CLIENTS_FLOW.md` for what the clients flow is.
+A Zoho-Projects-style project management system (branded **SquarkIP**). See
+`docs/ARCHITECTURE.md` for the full plan and `docs/zoho-projects-complete-spec.md`
+for the researched feature dossier. **Running it fast: `docs/PERFORMANCE_SETUP.md`.**
 
 ## Stack
 TypeScript monorepo (npm workspaces): NestJS API · Prisma · PostgreSQL · Next.js 14.

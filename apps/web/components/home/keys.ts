@@ -21,6 +21,7 @@ export const homeKeys = {
   tasksMe: (userId?: string) => ['tasks-me', userId] as const,
   // Must match the Expenses page's own key, or approving there leaves this card stale.
   expensesMine: () => ['expenses-mine'] as const,
+  pidRequests: (orgId?: string) => ['pid-requests', orgId] as const,
 };
 
 /** Prefix keys a punch invalidates — a punch changes today's row, the month, and the org rollup. */

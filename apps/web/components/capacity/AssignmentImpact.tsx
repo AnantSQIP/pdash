@@ -3,7 +3,7 @@
 /**
  * "How free is this person, really?" — printed on every screen that hands out work.
  *
- * The owner's complaint: looking at one client, a person showed free hours in a week; they were
+ * The owner's complaint: looking at one matter, a person showed free hours in a week; they were
  * already booked solid on another matter, and somebody gave them a task on the strength of what
  * the screen said. The staffing form, the board's task editor, the add-task dialog and "assign
  * the N tasks" all offered hours with no idea of the person's week at all.
@@ -12,7 +12,7 @@
  * (POST /capacity/availability/preview → AvailabilityService). Nothing here computes free hours;
  * it only draws what the server said. The meter is the person's whole day-range at a glance:
  *
- *    ▓▓▓▓ other work   ████ this client   ░░░░ what you are about to add   ▁▁▁▁ still free
+ *    ▓▓▓▓ other work   ████ this matter   ░░░░ what you are about to add   ▁▁▁▁ still free
  *
  * Colour never carries the message on its own — the sentence under the meter says the same thing
  * in words, the segments are labelled, and the over-capacity tail is both a different colour and
@@ -30,14 +30,14 @@ import clsx from 'clsx';
 import { AlertTriangle, CheckCircle2, Loader, TriangleAlert, CalendarX2 } from 'lucide-react';
 import { api, type AssignmentPreview, type ClientShare, type ProposedSeat, type SeatPreview } from '@/lib/api';
 import { formatDate, fmtHours } from '@/lib/date';
-import { cidLabel } from '@/lib/mock-data';
+import { useNumberLabel, useWorkUnitName } from '@/lib/workspace-flow';
 
 // The four bands of the meter. Deliberately not the board's project hues: this is one person's
 // day, not a palette of matters, and the question is only "whose hours are these?".
 const BAND = {
-  /** Work on every other client — hatched slate, so it reads as load even in a client's own view. */
+  /** Work on every other matter — hatched slate, so it reads as load even in a matter's own view. */
   other: '#94a3b8',    // slate-400
-  /** This client's existing hours. */
+  /** This matter's existing hours. */
   mine: '#3d8de2',     // brand-600
   /** The hours about to be given. */
   adding: '#f59e0b',   // amber-500
@@ -119,10 +119,15 @@ export function useOverrideGate(over: boolean, signature: string): { allowed: bo
   };
 }
 
-function shareLabel(s: ClientShare): string {
+/**
+ * One line of "also on". The number in front of it is the one this firm uses — a PID in the
+ * PROJECTS flow, a CID in the CLIENTS flow — so the label is built with the flow's own formatter
+ * rather than hard-coding either.
+ */
+function shareLabel(s: ClientShare, numberLabel: (code?: string | null, round?: number | null) => string): string {
   if (s.restricted) return 'Other work';
   if (s.isTeamWork) return s.label;
-  return s.code ? `${cidLabel(s.code, s.round)} · ${s.label}` : s.label;
+  return s.code ? `${numberLabel(s.code, s.round)} · ${s.label}` : s.label;
 }
 
 /** The whole panel: one block per person named in the assignment. */
@@ -148,6 +153,8 @@ export function AssignmentImpact({ state, className, compact }: {
 }
 
 function SeatImpact({ seat, compact }: { seat: SeatPreview; compact?: boolean }) {
+  const numberLabel = useNumberLabel();
+  const unit = useWorkUnitName().toLowerCase(); // "project" or "client" — the same word the screens use
   const tone =
     seat.verdict === 'OVER' ? 'border-rose-200 bg-rose-50/60'
       : seat.verdict === 'NO_ROOM' ? 'border-amber-200 bg-amber-50/60'
@@ -167,7 +174,7 @@ function SeatImpact({ seat, compact }: { seat: SeatPreview; compact?: boolean })
   const scale = Math.max(cap, seat.committedHours + seat.requestedHours);
   const bands: { key: string; hours: number; color: string; hatch?: boolean; label: string }[] = [
     { key: 'other', hours: seat.otherHours, color: BAND.other, hatch: true, label: `${fmtHours(seat.otherHours)} on other work` },
-    { key: 'mine', hours: mine, color: BAND.mine, label: `${fmtHours(mine)} already on this client` },
+    { key: 'mine', hours: mine, color: BAND.mine, label: `${fmtHours(mine)} already on this ${unit}` },
     { key: 'adding', hours: fits, color: BAND.adding, label: `${fmtHours(fits)} you are adding` },
     { key: 'over', hours: over, color: BAND.over, hatch: true, label: `${fmtHours(over)} beyond their day` },
     { key: 'free', hours: free, color: BAND.free, label: `${fmtHours(free)} still free` },
@@ -211,7 +218,7 @@ function SeatImpact({ seat, compact }: { seat: SeatPreview; compact?: boolean })
           {seat.otherClients.slice(0, 4).map((s, i) => (
             <span key={`${s.projectId ?? 'other'}-${i}`}>
               {i > 0 && ', '}
-              <span className={clsx('tabular-nums', s.restricted && 'italic text-gray-500')}>{shareLabel(s)} {fmtHours(s.hours)}</span>
+              <span className={clsx('tabular-nums', s.restricted && 'italic text-gray-500')}>{shareLabel(s, numberLabel)} {fmtHours(s.hours)}</span>
             </span>
           ))}
           {seat.otherClients.length > 4 && (
@@ -237,9 +244,10 @@ function SeatImpact({ seat, compact }: { seat: SeatPreview; compact?: boolean })
 
 /** The legend, for the dialogs that show more than one person at a time. */
 export function ImpactLegend({ className }: { className?: string }) {
+  const unit = useWorkUnitName();
   const keys: [string, string, boolean][] = [
-    ['Other clients', BAND.other, true],
-    ['This client', BAND.mine, false],
+    [`Other ${unit.toLowerCase()}s`, BAND.other, true],
+    [`This ${unit.toLowerCase()}`, BAND.mine, false],
     ['Adding', BAND.adding, false],
     ['Over', BAND.over, true],
     ['Free', BAND.free, false],

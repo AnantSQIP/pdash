@@ -8,12 +8,12 @@ import clsx from 'clsx';
 import { api, type ChainGaps as Gaps } from '@/lib/api';
 
 /**
- * Where the chain from client → patent → CID → logged hour is broken.
+ * Where the chain from client → patent → PID → logged hour is broken.
  *
  * Those four things exist to make work traceable back to whoever it was done for. The links are
  * enforced when they are MADE — a project cannot hold patents belonging to two clients — but
  * nothing ever reported a link that was never made at all, and no single screen could show it:
- * the client ledger lists clients, the portal lists patents, the CID ledger lists numbers, and
+ * the client ledger lists clients, the portal lists patents, the PID ledger lists numbers, and
  * a missing join between them is visible from none of them.
  *
  * Ordered by consequence, not by count. A project with no client is the only one of the three
@@ -80,7 +80,7 @@ export function ChainGaps() {
           {data.projectsWithoutClient.count > 0 && (
             <section>
               <h4 className="text-xs font-semibold text-amber-800 mb-1">
-                {data.projectsWithoutClient.count} project{data.projectsWithoutClient.count === 1 ? '' : 's'} with a CID but no client
+                {data.projectsWithoutClient.count} project{data.projectsWithoutClient.count === 1 ? '' : 's'} with a PID but no client
               </h4>
               <p className="text-[11px] text-gray-500 mb-2">
                 <b>{stranded.toLocaleString()} hours</b> are logged against these. Until a client is
@@ -135,7 +135,7 @@ export function ChainGaps() {
               <p className="text-[11px] text-gray-500 mb-2">
                 Minted but never attached to a project. Not necessarily wrong — a portfolio can be
                 registered ahead of the work — but until one is tagged, nothing connects it to a
-                CID or an hour.
+                PID or an hour.
               </p>
               <ul className="flex flex-wrap gap-1.5">
                 {data.unusedPatents.items.slice(0, 24).map(p => (

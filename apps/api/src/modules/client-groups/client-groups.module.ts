@@ -6,6 +6,7 @@ import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'cla
 import { Transform } from 'class-transformer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { PermissionService } from '../permissions/permission.service';
 import { EventService } from '../audit-events/event.service';
@@ -112,6 +113,9 @@ export class ClientGroupsService {
       where: { organizationId: me.organizationId, ...(includeArchived && mayManage ? {} : { archivedAt: null }) },
       orderBy: [{ sequence: 'asc' }, { name: 'asc' }],
     });
+    // projectScopeWhere carries the workspace flow (`workspaceFlow`, the caller's — CLIENTS, since
+    // this controller is @RequireFlow('CLIENTS')), so the count is already this flow's clients only.
+    // Not repeated here: the scope is the one place that decides which rows the caller can see.
     const scope = await this.access.projectScopeWhere(me.id, me.organizationId);
     const counts = await this.prisma.project.groupBy({
       by: ['clientGroupId'],
@@ -183,8 +187,13 @@ export class ClientGroupsService {
     const g = await this.find(me.organizationId, id);
     if (g.archivedAt) return { ...g, movedClients: 0 };
     const [moved, archived] = await this.prisma.$transaction(async tx => {
-      const clients = await tx.project.findMany({ where: { clientGroupId: id }, select: { id: true, code: true, title: true } });
-      const un = await tx.project.updateMany({ where: { clientGroupId: id }, data: { clientGroupId: null } });
+      // CLIENTS-flow rows only — the literal is safe because this controller is
+      // @RequireFlow('CLIENTS'). The read and the write carry the same filter so the ledger entries
+      // written below describe exactly the rows that moved: a CID event is a CLIENTS-flow record,
+      // and writing one against the other flow's row would put its number into the CID ledger.
+      const inFlow = { clientGroupId: id, workspaceFlow: 'CLIENTS' as const };
+      const clients = await tx.project.findMany({ where: inFlow, select: { id: true, code: true, title: true } });
+      const un = await tx.project.updateMany({ where: inFlow, data: { clientGroupId: null } });
       const done = await tx.clientGroup.update({ where: { id }, data: { archivedAt: new Date() } });
       // Each client's move to "ungrouped" is a change to that client, and the CID ledger keeps it.
       for (const c of clients) {
@@ -222,7 +231,9 @@ export class ClientGroupsService {
   }
 }
 
+/** CLIENTS flow only — PROJECTS has no client groups; every route answers 404 there. */
 @Controller('client-groups')
+@RequireFlow('CLIENTS')
 class ClientGroupsController {
   constructor(private readonly service: ClientGroupsService) {}
 

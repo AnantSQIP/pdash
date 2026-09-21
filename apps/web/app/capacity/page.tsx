@@ -2,27 +2,22 @@
 
 // Team Capacity — "who is busy, who is free, and when".
 //
-// Every person × every day across ALL clients. A working day is a pale green box; the work in it
-// is drawn as segments — one per task, width = hours, hue = client, depth = priority, a rail
+// Every person × every day across ALL projects. A working day is a green box; the work in it
+// is drawn as segments — one per task, width = hours, hue = project, depth = priority, a rail
 // when the deadline is close — so the green left showing is the free hours. Hover a day for
 // what fills it; click a name (or a day) for the whole plan. The most available people sort
-// to the top.
-//
-// Visible only to Senior Consultant and above (capacity.view). The same people hold
-// capacity.manage, and for them the board is also where tasks are created, edited, reassigned and
-// deleted — "New task" in the header, "+" on a row, and Edit / Reassign / Delete on any task in a
-// person's panel or hover card (components/capacity/TaskEditor.tsx).
+// to the top, and assigning into a free window is one click from the panel.
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge, Search, CalendarPlus,
-  ChevronsDownUp, ChevronsUpDown, Plus, Building2,
+  Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge, X, Search, CalendarPlus,
+  ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 
-import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type CoverageRisk, type CoverageRiskTask, type TeamHistory, type HistoryRow } from '@/lib/api';
+import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type ApiTask, type CoverageRisks, type CoverageRisk, type TeamHistory, type HistoryRow } from '@/lib/api';
 
 /** How often the board re-reads the server while it is on screen. */
 const POLL_MS = 30_000;
@@ -30,7 +25,7 @@ const POLL_MS = 30_000;
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
-import { PersonPanel, ExtendMenu, applyExtend, type ExtendScope } from '@/components/capacity/PersonPanel';
+import { PersonPanel, ExtendMenu, type ExtendScope } from '@/components/capacity/PersonPanel';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 import { STATE_STYLE, DOW, DayCell, dayOfWeek, dayNum, isToday, projectsOf, holidaysOf } from '@/components/capacity/grid';
@@ -40,13 +35,13 @@ import { LiveStatus } from '@/components/capacity/LiveStatus';
 import { assignProjectHues } from '@/lib/project-colors';
 import { todayIST, plural } from '@/lib/date';
 import {
-  resolveWindow, countWorkingDays, daysOf, weekdayOf, weekdayName, WEEKDAYS_IN_ORDER, defaultWindowMode,
+  resolveWindow, countWorkingDays, daysOf, weekdayName, WEEKDAYS_IN_ORDER, defaultWindowMode,
   type Weekday, type WindowChoice,
 } from '@/lib/work-week';
-import { cidLabel } from '@/lib/mock-data';
+import { pidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
-import { useCapacityTaskActions } from '@/components/capacity/TaskEditor';
-import { NewClientWorkModal } from '@/components/capacity/NewClientWorkModal';
+import { byFlow } from '@/lib/workspace-flow';
+import ClientsCapacityPage from './page.clients';
 
 /**
  * The window the board plans over.
@@ -86,10 +81,17 @@ function choiceFor(range: RangeKey, weekStartsOn: Weekday, start: string, length
  * re-ranged, and then used in the meeting.
  */
 function defaultRange(today: string): RangeKey {
+  // Shared fix (both flows): at the weekend "this work week" already rolls forward to the coming
+  // Monday, so answering "next work week" there skipped a week — see defaultWindowMode.
   return defaultWindowMode(today);
 }
 
-export default function CapacityPage() {
+/**
+ * Team Capacity — the PROJECTS flow (production's board: everyone with capacity.view, the dark
+ * palette, assigning into a free window with AssignTaskFlow). The CLIENTS flow's board (light
+ * palette, task CRUD for capacity.manage) is ./page.clients.tsx.
+ */
+function ProjectsCapacityPage() {
   const { org } = useOrg();
   const { can, loading: permLoading } = usePermissions();
   const qc = useQueryClient();
@@ -132,17 +134,11 @@ export default function CapacityPage() {
     });
   }
   const [dept, setDept] = useState('');
-  const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a client's team
+  const [projectId, setProjectId] = useState(''); // '' = whole org; else scope to a project's team
   // The selected PERSON, not a snapshot of their row: the panel then re-reads the row from the
   // latest payload, so an Extend done inside it is reflected without closing and reopening.
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  // Task CRUD from the board — null without capacity.manage, and then the board is read-only.
-  const { actions: taskActions, dialogs: taskDialogs } = useCapacityTaskActions();
-  // …and a whole new piece of client work. Starting a CLIENT is project.create; doing it from the
-  // board is capacity.manage. The button is drawn only for somebody who holds both, and the server
-  // checks both again (see capacity-client-setup.ts) — the screen is never the gate.
-  const [newClientWork, setNewClientWork] = useState(false);
-  const canStartClientWork = !!taskActions && can('project.create');
+  const [assignTo, setAssignTo] = useState<{ row: CapacityRow; start?: string; due?: string } | null>(null);
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [focusDate, setFocusDate] = useState<string | undefined>();
   const today = todayIST();
@@ -178,7 +174,7 @@ export default function CapacityPage() {
     staleTime: 60_000,
   });
 
-  // Clients the manager can assign INTO (approved/active work).
+  // Projects the manager can assign INTO (approved/active work).
   const { data: projects = [] } = useQuery<ApiProject[]>({
     queryKey: ['projects', org?.id],
     queryFn: () => api.projects.list(org!.id),
@@ -205,7 +201,7 @@ export default function CapacityPage() {
   const hues = useMemo(() => assignProjectHues(projectsOf(fwdRows)), [fwdRows]);
   const holidays = useMemo(() => holidaysOf(fwdRows), [fwdRows]);
   const selected = useMemo(() => fwdRows.find(r => r.userId === selectedUserId) ?? null, [fwdRows, selectedUserId]);
-  // A pinned client belongs to the board it was pinned on.
+  // A pinned project belongs to the board it was pinned on.
   useEffect(() => { setFocusProjectId(null); }, [win.start, win.days, projectId]);
   // What the window actually contains: how many of its days anybody can be given work on, and
   // how many of the team's hours are already spoken for. Both are read off the same payload the
@@ -307,7 +303,7 @@ export default function CapacityPage() {
             </div>
             {!capacityHeaderCollapsed && (
               <p className="text-[13px] leading-snug text-gray-500 mt-0.5 max-w-3xl">
-                Who is on what, when, and how much — across every client. Hover a day for what fills it; click a name for the whole plan.
+                Who is on what, when, and how much — across every project. Hover a day for what fills it; click a name for the whole plan.
               </p>
             )}
             {/* What this window IS — said in dates, because a length alone ("next 7 days") is
@@ -334,7 +330,7 @@ export default function CapacityPage() {
                     className={clsx(
                       'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
                       allocation.pct === null ? 'bg-gray-50 text-gray-500 ring-gray-300/40'
-                        : allocation.pct > 100 ? 'bg-rose-50 text-rose-700 ring-rose-600/20'
+                        : allocation.pct > 100 ? 'bg-gray-900 text-white ring-gray-900/20'
                           : allocation.pct >= 75 ? 'bg-amber-50 text-amber-700 ring-amber-600/15'
                             : 'bg-brand-50 text-brand-700 ring-brand-600/15',
                     )}
@@ -353,12 +349,12 @@ export default function CapacityPage() {
                 className="pl-8 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400 w-40"
               />
             </div>
-            {/* Client filter — scope the board to one client's team (forward view only). */}
+            {/* Project filter — scope the board to one project's team (forward view only). */}
             <select value={projectId} onChange={e => setProjectId(e.target.value)} disabled={isPast}
-              title={isPast ? 'Client filter applies to the forward view' : 'Filter by client team'}
+              title={isPast ? 'Project filter applies to the forward view' : 'Filter by project team'}
               className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white disabled:opacity-50 max-w-[180px]">
-              <option value="">All clients</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${cidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}</option>)}
+              <option value="">All projects</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} — ` : ''}{p.title}</option>)}
             </select>
             {departments.length > 0 && (
               <select value={dept} onChange={e => setDept(e.target.value)}
@@ -428,24 +424,6 @@ export default function CapacityPage() {
                 {LENGTH_OPTIONS.map(n => <option key={n} value={n}>{n} days</option>)}
               </select>
             )}
-            {canStartClientWork && (
-              <button
-                onClick={() => setNewClientWork(true)}
-                title="Start a whole piece of client work: a new client, its task groups, their tasks and who does each one"
-                className="inline-flex items-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100"
-              >
-                <Building2 size={13} /> New client work
-              </button>
-            )}
-            {taskActions && (
-              <button
-                onClick={() => taskActions.create()}
-                title="Create a task for any client and assign it to anyone"
-                className="inline-flex items-center gap-1 rounded-lg bg-brand-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700"
-              >
-                <Plus size={13} /> New task
-              </button>
-            )}
             {!isPast && <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => { refetch(); qc.invalidateQueries({ queryKey: ['coverage-risks'] }); }} intervalMs={POLL_MS} className="ml-1" />}
             {/* Last in the control row, and visually quieter than the filters: it changes how much
                 of the header you see, not what the board is showing. */}
@@ -501,11 +479,11 @@ export default function CapacityPage() {
                     <div key={d.date}
                       title={holiday ? `Holiday${d.note ? ` — ${d.note}` : ''}` : weekend ? 'Weekend' : formatDate(d.date, { weekday: 'long', month: 'short', day: 'numeric' })}
                       className={clsx('text-center rounded-md py-0.5',
-                        holiday && 'bg-amber-50',
-                        weekend && 'bg-slate-50',
-                        isToday(d.date) && 'bg-brand-100 ring-1 ring-inset ring-brand-300')}>
-                      <div className={clsx('text-[9px] uppercase', isToday(d.date) ? 'text-brand-600' : holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
-                      <div className={clsx('text-[11px] font-medium', isToday(d.date) ? 'text-brand-800 font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
+                        holiday && 'bg-amber-100',
+                        weekend && 'bg-gray-100',
+                        isToday(d.date) && 'bg-gray-900')}>
+                      <div className={clsx('text-[9px] uppercase', isToday(d.date) ? 'text-gray-300' : holiday ? 'text-amber-600' : 'text-gray-400')}>{DOW[dayOfWeek(d.date)]}</div>
+                      <div className={clsx('text-[11px] font-medium', isToday(d.date) ? 'text-white font-bold' : holiday ? 'text-amber-700' : 'text-gray-600')}>{dayNum(d.date)}</div>
                     </div>
                   );
                 })}
@@ -534,13 +512,10 @@ export default function CapacityPage() {
             focusProjectId={focusProjectId}
             onFocus={setFocusProjectId}
             onSelectPerson={(userId, date) => { setFocusDate(date); setSelectedUserId(userId); }}
-            onAssign={taskActions
-              ? row => taskActions.create({ person: { userId: row.userId, name: row.name }, start: row.nextFreeDate ?? undefined })
-              : undefined}
+            onAssign={row => setAssignTo({ row, start: row.nextFreeDate ?? undefined, due: row.nextFreeDate ?? undefined })}
             emptyText="No one matches those filters."
             fill
-            hoverSuppressed={!!selected}
-            taskActions={taskActions}
+            hoverSuppressed={!!selected || !!assignTo}
           />
         )}
       </div>
@@ -550,25 +525,28 @@ export default function CapacityPage() {
         <PersonPanel
           row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
           onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
-          // Opened over the panel, which stays put: after saving, the panel re-reads the row and
-          // shows the new work where it landed.
-          onAssign={taskActions ? () => {
+          onAssign={() => {
             const start = focusDate ?? selected.nextFreeDate ?? undefined;
-            taskActions.create({ person: { userId: selected.userId, name: selected.name }, start });
-          } : undefined}
-          taskActions={taskActions}
+            setAssignTo({ row: selected, start, due: start });
+            setSelectedUserId(null); setFocusDate(undefined);
+          }}
         />
       )}
 
-      {/* New / edit / reassign / delete — capacity.manage only. */}
-      {taskDialogs}
-
-      {/* A whole new piece of client work — the client, its task groups, their tasks and the
-          people on them, in one call that either all lands or leaves nothing behind. */}
-      {newClientWork && (
-        <NewClientWorkModal
-          onClose={() => setNewClientWork(false)}
-          onCreated={() => { refetch(); qc.invalidateQueries({ queryKey: ['coverage-risks'] }); }}
+      {/* Assign into their free window */}
+      {assignTo && (
+        <AssignTaskFlow
+          row={assignTo.row}
+          projects={projects}
+          startDate={assignTo.start}
+          dueDate={assignTo.due}
+          onClose={() => setAssignTo(null)}
+          onDone={() => {
+            setAssignTo(null);
+            invalidateTaskCaches(qc);
+            // The coverage board reads its own key; a reassignment must not leave it stale.
+            qc.invalidateQueries({ queryKey: ['coverage-risks'] });
+          }}
         />
       )}
     </div>
@@ -601,7 +579,7 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
   const { toast } = useToast();
   const canAssign = can('task.assign');
   const canTask = can('task.update');
-  const canGroup = can('tasklist.update');
+  const canProject = can('project.update');
   const [busy, setBusy] = useState('');
 
   function refresh() {
@@ -644,17 +622,23 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
     } finally { setBusy(''); }
   }
 
-  async function extend(scope: ExtendScope, task: CoverageRiskTask, day: string, person: { userId: string; name: string }) {
+  async function extend(scope: ExtendScope, task: { id: string; projectId?: string }, iso: string, userId: string) {
     setBusy(task.id);
     try {
-      const said = await applyExtend(scope, task, day, person);
+      if (scope === 'project') {
+        if (!task.projectId) throw new Error('This task has no project.');
+        await api.projects.update(task.projectId, { dueDate: iso });
+      } else if (scope === 'task') {
+        await api.tasks.update(task.id, { dueDate: iso });
+      } else {
+        await api.tasks.setAssigneeDeadline(task.id, userId, iso);
+      }
       refresh();
-      toast(said, 'success');
+      toast(scope === 'person' ? `Their deadline on this task moved to ${formatDate(iso)} — nobody else's changed` : `Deadline extended to ${formatDate(iso)}`, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
     } finally { setBusy(''); }
   }
-
 
   return (
     <div className="bg-white rounded-xl border border-amber-200 overflow-hidden">
@@ -690,8 +674,8 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {canTask && (
-                      <ExtendMenu task={t} person={{ userId: risk.userId, name: risk.name }} canGroup={canGroup} disabled={busy === t.id}
-                        onExtend={(scope, day) => extend(scope, t, day, { userId: risk.userId, name: risk.name })} />
+                      <ExtendMenu task={t} person={{ userId: risk.userId, name: risk.name }} canProject={canProject} disabled={busy === t.id}
+                        onExtend={(scope, iso) => extend(scope, t, iso, risk.userId)} />
                     )}
                     {canAssign && (
                       <select
@@ -701,7 +685,7 @@ function CoveragePanel({ data }: { data: CoverageRisks }) {
                         className="text-[11px] border border-gray-200 rounded-md px-1.5 py-1 max-w-[170px] text-gray-600 disabled:opacity-40"
                         title="Give this work to somebody else — while they are away, or for good"
                       >
-                        <option value="">Give this to… (free hours are across every client)</option>
+                        <option value="">Give this to… (free hours are across every project)</option>
                         {/* The two things you can mean by "somebody else does it": only while
                             they are out, or from now on. They are different decisions and the
                             old single Reassign could only ever express the second. */}
@@ -753,3 +737,189 @@ function HistoryRowView({ row }: { row: HistoryRow }) {
     </div>
   );
 }
+
+
+/**
+ * Assigning from the board: pick which project the work belongs to, then reuse the
+ * normal AddTaskModal with the person and their free window pre-filled.
+ */
+/**
+ * Single-person task allocation from the capacity board. You clicked ONE person, so this window
+ * allocates a role on a task to THAT person only — there is no org-wide assignee picker. Flow:
+ * pick a project → pick an existing task under it (or "＋ New task") → role + hours + deadline.
+ * Existing task: the person is added to their role via setStaffing, preserving everyone else.
+ * New task: a task is created and the person is placed in the role.
+ */
+function AssignTaskFlow({ row, projects, startDate, dueDate, onClose, onDone }: {
+  row: CapacityRow; projects: ApiProject[]; startDate?: string; dueDate?: string;
+  onClose: () => void; onDone: () => void;
+}) {
+  const NEW = '__new__';
+  const { toast } = useToast();
+  const [projectId, setProjectId] = useState('');
+  const [taskId, setTaskId] = useState('');      // '' | existing id | NEW
+  const [newTitle, setNewTitle] = useState('');
+  const [role, setRole] = useState<'PM' | 'REVIEWER' | 'ANALYST'>('ANALYST');
+  const [hours, setHours] = useState('');
+  const [due, setDue] = useState(dueDate ?? '');
+  // Prefilled from the day that was clicked on the board. It used to be shown in the header and
+  // then thrown away for anything but a brand-new task; now it is the seat's start, so clicking
+  // a free day and assigning into it puts the work on that day.
+  const [start, setStart] = useState(startDate ?? '');
+  const [perDay, setPerDay] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const assignable = projects.filter(p => !['ARCHIVED', 'CANCELLED'].includes(p.projectPhase));
+  const { data: project } = useQuery<ApiProject>({ queryKey: ['project', projectId], queryFn: () => api.projects.get(projectId), enabled: !!projectId });
+  const { data: tasks = [], isLoading: tasksLoading } = useQuery<ApiTask[]>({ queryKey: ['project-tasks', projectId], queryFn: () => api.tasks.list(projectId), enabled: !!projectId });
+  const taskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
+
+  const roleLabel = role === 'PM' ? 'Project Manager' : role === 'REVIEWER' ? 'Reviewer' : 'Analyst';
+  const canSubmit = !!projectId && (taskId === NEW ? !!newTitle.trim() && !!taskList : !!taskId) && !saving;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setSaving(true);
+    try {
+      const entry = {
+        userId: row.userId, role,
+        estimatedHours: hours ? parseFloat(hours) : 0,
+        dueDate: due || null,
+        startDate: start || null,
+        hoursPerDay: perDay ? parseFloat(perDay) : null,
+      };
+      if (taskId === NEW) {
+        const created = await api.tasks.create({
+          title: newTitle.trim(), projectId, taskListId: taskList!.id,
+          createdBy: row.userId, startDate: start || undefined, dueDate: due || undefined,
+        });
+        await api.tasks.setStaffing(created.id, [entry]);
+      } else {
+        // Add this person to an EXISTING task without disturbing the current staffing. Every
+        // other seat is re-sent exactly as it stands — including its own start and ceiling, which
+        // would otherwise be wiped by the very act of adding somebody else to the task.
+        const t = await api.tasks.get(taskId);
+        const existing = (t.assignees ?? [])
+          .filter(a => a.role && !(a.userId === row.userId && a.role === role))
+          .map(a => ({
+            userId: a.userId, role: a.role as 'PM' | 'REVIEWER' | 'ANALYST',
+            estimatedHours: a.estimatedHours ?? 0,
+            dueDate: a.dueDate ?? null,
+            startDate: a.startDate ?? null,
+            hoursPerDay: a.hoursPerDay ?? null,
+          }));
+        await api.tasks.setStaffing(taskId, [...existing, entry]);
+      }
+      toast(`Assigned ${row.name.split(' ')[0]} as ${roleLabel}`, 'success');
+      onDone();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not assign the task', 'error');
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ')[1], profilePhoto: row.profilePhoto }} size={36} />
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Assign a task to {row.name.split(' ')[0]}</h2>
+              <p className="text-xs text-gray-500">{startDate ? `From ${formatDate(startDate)}` : 'Pick a project and task'}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button>
+        </div>
+        <div className="px-6 py-5 space-y-3.5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
+            <select autoFocus value={projectId} onChange={e => { setProjectId(e.target.value); setTaskId(''); }}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+              <option value="">Select a project…</option>
+              {assignable.map(p => <option key={p.id} value={p.id}>{p.code ? `${pidLabel(p.code, p.roundSeq)} · ` : ''}{p.title}</option>)}
+            </select>
+          </div>
+
+          {projectId && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Task</label>
+              <select value={taskId} onChange={e => setTaskId(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                <option value="">{tasksLoading ? 'Loading tasks…' : 'Select a task…'}</option>
+                {tasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+                <option value={NEW}>＋ New task…</option>
+              </select>
+            </div>
+          )}
+
+          {taskId === NEW && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">New task title</label>
+              <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="e.g. Prior-art search"
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+            </div>
+          )}
+
+          {projectId && (taskId && (taskId !== NEW || newTitle.trim())) && (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <select value={role} onChange={e => setRole(e.target.value as 'PM' | 'REVIEWER' | 'ANALYST')}
+                    className="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:border-brand-500">
+                    <option value="PM">PM</option>
+                    <option value="REVIEWER">Reviewer</option>
+                    <option value="ANALYST">Analyst</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Hours</label>
+                  <input type="number" min="0" step="0.25" value={hours} onChange={e => setHours(e.target.value)} placeholder="0"
+                    className="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+                  <input type="date" value={due} onChange={e => setDue(e.target.value)}
+                    className="w-full px-2 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+              </div>
+              {/* The start is what puts the hours on a DAY. Without it the board can only spread
+                  them between now and the deadline, which is why 7h due in 10 days used to show
+                  as 0.7h every day instead of a day's work on the day it was meant to happen. */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Starts</label>
+                  <input type="date" value={start} max={due || undefined} onChange={e => setStart(e.target.value)}
+                    className="w-full px-2 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Hours a day <span className="font-normal text-gray-400">· optional</span></label>
+                  <input type="number" min="0" max="24" step="0.5" value={perDay} onChange={e => setPerDay(e.target.value)} placeholder="fills the day"
+                    className="w-full px-2.5 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500" />
+                </div>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                {row.name.split(' ')[0]} will be added as <span className="font-medium">{roleLabel}</span>
+                {due ? ` · due ${formatDate(due)}` : ''}.
+                {start
+                  ? ` Their ${hours || '0'}h are placed from ${formatDate(start)}${perDay ? `, at ${perDay}h a day` : ''}.`
+                  : ' With no start date the hours are spread evenly up to the deadline.'}
+              </p>
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-3 py-2 text-sm font-medium text-gray-500 hover:text-gray-700">Cancel</button>
+            <button onClick={submit} disabled={!canSubmit}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+              {saving ? <Loader size={14} className="animate-spin" /> : null} Assign
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default byFlow(ProjectsCapacityPage, ClientsCapacityPage);

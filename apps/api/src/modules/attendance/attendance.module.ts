@@ -16,6 +16,8 @@ import { TasksModule } from '../tasks/tasks.module';
 import { TaskTimeService } from '../tasks/task-time.service';
 import { istDayWindow, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { PermissionService } from '../permissions/permission.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { otherFlow, taskInFlow } from '../../common/flow-scope';
 
 // ── date helpers (UTC day boundaries) ───────────────────────────────────────────
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -113,7 +115,7 @@ const MARK_STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'ON_LEAVE', 'HOLIDAY', '
 const REG_TYPES = ['MISSED_PUNCH', 'LATE', 'ON_DUTY', 'WFH', 'PAST_MIDNIGHT', 'OTHER'];
 // Upper bounds on free-text so a single request can't store/broadcast a novel-length blob.
 const MAX_REASON = 2000;
-const MAX_CID_REF = 120;
+const MAX_PID = 120; // the PID (PROJECTS) or CID (CLIENTS) a comp-off claim names
 const MAX_NAME = 160;
 // A comp-off claim must be reasonably recent — no farming weekends from years ago.
 const COMPOFF_MAX_AGE_DAYS = 90;
@@ -197,6 +199,7 @@ export class AttendanceService {
     private readonly notifications: NotificationsService,
     private readonly timesheets: TimesheetsService,
     private readonly taskTime: TaskTimeService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /** How long a "leaving early" reason may be. Long enough to explain, short enough to read. */
@@ -281,6 +284,11 @@ export class AttendanceService {
     const today = istDay(new Date());
     const from = new Date(today.getTime() - 7 * 86_400_000);
     const { from: todayFrom } = istDayWindow(today);
+    // The days themselves are this person's, whichever flow the work was in; the clocks below are
+    // listed BY TASK NAME, so only the flow the firm is running now may be named
+    // (docs/WORKSPACE_FLOWS.md). Entering CLIENTS closes every clock, so in practice this only
+    // hides a clock the sweep capped before a switch — named work the person can no longer open.
+    const flow = await this.flows.flowOfUser(userId);
     const [missingKeys, closedShifts, stillRunning] = await Promise.all([
       // One batched query rather than seven: on the ordinary day this returns nothing and the
       // banner costs almost nothing to ask for.
@@ -297,6 +305,7 @@ export class AttendanceService {
       this.prisma.taskWorkSession.findMany({
         where: {
           userId,
+          task: taskInFlow(flow),
           OR: [
             { endedAt: null, startedAt: { lt: todayFrom } },
             { startedAt: { gte: from }, endedAt: { not: null }, minutes: { gte: SESSION_CAP_MINUTES } },
@@ -1066,6 +1075,7 @@ export class LeaveService {
     private readonly notifications: NotificationsService,
     private readonly capacity: CapacityService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   private async orgOf(userId: string): Promise<string | null> {
@@ -1642,10 +1652,12 @@ export class LeaveService {
   }
 
   async requestCompOff(userId: string, data: { workDate: string; reason: string; hoursWorked?: number; projectRef?: string; dayType?: string }) {
+    // The number a claim names is the flow's: a PID in PROJECTS, a CID in CLIENTS.
+    const clients = (await this.flows.flowOfUser(userId)) === 'CLIENTS';
     if (!data?.reason?.trim()) throw new BadRequestException('Tell us what you worked on.');
-    if (!data?.projectRef?.trim()) throw new BadRequestException('A client ID (CID) is required.');
+    if (!data?.projectRef?.trim()) throw new BadRequestException(clients ? 'A client ID (CID) is required.' : 'A Project ID (PID) is required.');
     if (data.reason.length > MAX_REASON) throw new BadRequestException('Reason is too long.');
-    if (data.projectRef.length > MAX_CID_REF) throw new BadRequestException('The CID is too long.');
+    if (data.projectRef.length > MAX_PID) throw new BadRequestException(clients ? 'The CID is too long.' : 'Project ID is too long.');
     const dayType = data.dayType === 'HALF' ? 'HALF' : 'FULL';
     if (data.hoursWorked != null && (!(data.hoursWorked > 0) || data.hoursWorked > 24)) {
       throw new BadRequestException('Hours worked must be between 0 and 24.');
@@ -1670,7 +1682,7 @@ export class LeaveService {
     // Comp-off routes to HR + Managers + Yash.
     await this.notifications.notify(await this.compOffApproverIds(organizationId), {
       type: 'compoff.requested', title: 'Comp-off to review',
-      message: `${name} claims comp-off for working ${dayKey(workDate)} (CID ${req.projectRef}): ${req.reason}`,
+      message: `${name} claims comp-off for working ${dayKey(workDate)} (${clients ? 'CID' : 'PID'} ${req.projectRef}): ${req.reason}`,
       link: '/attendance',
     });
     return req;
@@ -1688,16 +1700,31 @@ export class LeaveService {
       where: { organizationId, status: 'PENDING' }, orderBy: { createdAt: 'asc' }, include: { user: this.userSelect },
     });
     if (!reqs.length) return [];
+    // The evidence for a comp-off is every hour the person logged that day, whichever flow it was
+    // in — a claim for a weekend worked before the firm switched flow is still a claim, and hiding
+    // its hours would get a fair one refused. What the reviewer is NOT shown is the other flow's
+    // work by name: those rows keep their hours and read like time logged against nothing
+    // (docs/WORKSPACE_FLOWS.md — no screen names the other flow's work).
+    const hidden = otherFlow(await this.flows.flowOf(organizationId));
     const evidence = await Promise.all(reqs.map(async r => {
       const day = utcDay(r.workDate);
       const next = new Date(day); next.setUTCDate(next.getUTCDate() + 1);
-      const [sheets, att] = await Promise.all([
+      const [rawSheets, att] = await Promise.all([
         this.prisma.timesheet.findMany({
           where: { userId: r.userId, deletedAt: null, date: { gte: day, lt: next } },
-          select: { hoursLogged: true, notes: true, task: { select: { title: true } } },
+          select: {
+            hoursLogged: true, notes: true,
+            project: { select: { workspaceFlow: true } },
+            task: { select: { title: true, projectTasks: { select: { project: { select: { workspaceFlow: true } } } } } },
+          },
         }),
         this.prisma.attendance.findFirst({ where: { userId: r.userId, date: day }, select: { checkIn: true, checkOut: true, totalHours: true } }),
       ]);
+      const sheets = rawSheets.map(s => {
+        const elsewhere = s.project?.workspaceFlow === hidden
+          || !!s.task?.projectTasks.some(pt => pt.project.workspaceFlow === hidden);
+        return elsewhere ? { hoursLogged: s.hoursLogged, notes: null, task: null } : s;
+      });
       return {
         id: r.id,
         timesheets: sheets.map(s => ({ task: s.task?.title ?? 'General', hours: s.hoursLogged, notes: s.notes ?? undefined })),

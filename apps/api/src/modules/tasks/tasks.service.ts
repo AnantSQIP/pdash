@@ -13,6 +13,9 @@ import { startOfUtcDay, resolveDate } from '../../common/dates';
 import { reactivateGroupsOfTask } from '../../common/task-groups';
 import { OPEN_TASK_WHERE } from '../../common/task-state';
 import { TaskTimeService } from './task-time.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import type { WorkspaceFlow } from '../../common/decorators/require-flow.decorator';
+import { taskInFlow } from '../../common/flow-scope';
 
 /** Who a task's assignment adds to its client, decided before anything is written. */
 type MembershipPlan = { primary: string; outsiders: string[]; reactivate: string[]; create: string[] };
@@ -43,7 +46,26 @@ export class TasksService {
     private readonly deadlineChanges: DeadlineChangeService,
     private readonly access: ProjectAccessService,
     private readonly time: TaskTimeService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * Whether the caller's organisation runs the CLIENTS flow. Task groups (their status and
+   * deadlines) exist only there; in PROJECTS a task list is a plain list, as it always was.
+   */
+  private clientsFlow(): Promise<boolean> {
+    return this.flows.currentIsClients();
+  }
+
+  /**
+   * The flow the caller is working in. Tasks reach their flow through the project they are filed
+   * in, so every read that walks `projectTasks` narrows the project to this flow — otherwise a
+   * board, a My Tasks row or a membership check would reach across into the other flow's work,
+   * which is precisely what the two flows exist to prevent.
+   */
+  private flow(): Promise<WorkspaceFlow> {
+    return this.flows.currentFlow();
+  }
 
   /**
    * Bring a task's assignee rows to `wanted`, KEEPING the rows that survive.
@@ -193,7 +215,9 @@ export class TasksService {
   /** The live task group(s) a task sits in — for the rule above. */
   private async groupsOfTask(taskId: string) {
     const links = await this.prisma.projectTask.findMany({
-      where: { taskId, taskList: { deletedAt: null } },
+      // Only groups of the flow being worked in: a task the other flow also files somewhere must
+      // not have that flow's deadline imposed on the date being saved here.
+      where: { taskId, taskList: { deletedAt: null }, project: { workspaceFlow: await this.flow() } },
       select: { taskList: { select: { id: true, name: true, dueDate: true } } },
     });
     return links.map(l => l.taskList).filter((g): g is NonNullable<typeof g> => !!g);
@@ -230,8 +254,11 @@ export class TasksService {
    */
   private async planMembershipAdds(projectIds: string[], assigneeIds: string[], opts: AccessOpts = {}): Promise<MembershipPlan | null> {
     if (!assigneeIds.length || !projectIds.length) return null;
+    const flow = await this.flow();
     const rows = await this.prisma.projectMember.findMany({
-      where: { projectId: { in: projectIds }, userId: { in: assigneeIds } },
+      // Membership of the OTHER flow's work is not membership here: being on a client must not
+      // quietly excuse somebody from being added to the project they are actually being staffed on.
+      where: { projectId: { in: projectIds }, userId: { in: assigneeIds }, project: { workspaceFlow: flow } },
       select: { id: true, userId: true, isActive: true },
     });
     const active = new Set(rows.filter(r => r.isActive).map(r => r.userId));
@@ -240,7 +267,9 @@ export class TasksService {
 
     const actorId = getActorId();
     if (!actorId || !(opts.oversight || await this.access.hasOversight(actorId))) {
-      throw new BadRequestException('You can only assign people who are on this client. Ask a manager to add them first.');
+      throw new BadRequestException(await this.clientsFlow()
+        ? 'You can only assign people who are on this client. Ask a manager to add them first.'
+        : 'You can only assign people who are members of the project. Ask a manager to add them first.');
     }
 
     // Add the outsiders to the primary project — validate they are active, same-org users. The
@@ -248,7 +277,10 @@ export class TasksService {
     // actor's: never "any organisation", which is what an unresolved one used to mean here.
     const primary = projectIds[0];
     const anchor = await this.prisma.projectMember.findFirst({
-      where: { projectId: primary }, select: { user: { select: { organizationId: true } } },
+      // The anchor must come from this flow's copy of the work, so the organisation it settles on
+      // is the one whose people are about to be added.
+      where: { projectId: primary, project: { workspaceFlow: flow } },
+      select: { user: { select: { organizationId: true } } },
     });
     const orgId = anchor?.user?.organizationId ?? await this.orgOfActor();
     const valid = new Set((await this.prisma.user.findMany({
@@ -283,17 +315,25 @@ export class TasksService {
    * can't happen. Previously the add left no trace and no notice. Called once the add committed.
    */
   private async announceMembershipAdds(plan: MembershipPlan) {
-    const project = await this.prisma.project.findUnique({ where: { id: plan.primary }, select: { title: true } });
+    // findFirst, not findUnique, so the name that goes into the event and the notice can be pinned
+    // to the flow the add was made in — a title is the one part of a matter that reaches a person.
+    const project = await this.prisma.project.findFirst({
+      where: { id: plan.primary, workspaceFlow: await this.flow() },
+      select: { title: true },
+    });
     await this.events.emit({
       action: EVENTS.PROJECT_MEMBER_ADDED,
       entityType: 'PROJECT',
       entityId: plan.primary,
       metadata: { addedUserIds: plan.outsiders, via: 'task-assignment', projectTitle: project?.title },
     });
+    const clients = await this.clientsFlow();
     await this.notifications.notify(plan.outsiders, {
       type: 'project.member_added',
-      title: 'Added to a client',
-      message: `You were added to the client "${project?.title ?? 'a client'}" because you were assigned work on it.`,
+      title: clients ? 'Added to a client' : 'Added to a project',
+      message: clients
+        ? `You were added to the client "${project?.title ?? 'a client'}" because you were assigned work on it.`
+        : `You were added to "${project?.title ?? 'a project'}" because you were assigned work on it.`,
       link: `/projects/${plan.primary}`,
     });
   }
@@ -318,7 +358,12 @@ export class TasksService {
 
   /** Resolve the project(s) a task belongs to (for assignee-membership checks). */
   private async projectIdsForTask(taskId: string): Promise<string[]> {
-    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
+    const links = await this.prisma.projectTask.findMany({
+      // Only this flow's matters: the ids go on to decide who is added as a member, and nobody
+      // should be enrolled on the other flow's work because of an assignment made here.
+      where: { taskId, project: { workspaceFlow: await this.flow() } },
+      select: { projectId: true },
+    });
     return links.map(l => l.projectId);
   }
 
@@ -331,13 +376,16 @@ export class TasksService {
     await this.access.assertProjectAccess(getActorId(), dto.projectId);
     await this.access.assertProjectWritable(dto.projectId); // no new tasks on completed/closed projects
     const taskList = await this.prisma.taskList.findFirst({
-      where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null },
+      // assertProjectAccess above has already refused the other flow's project; naming the flow
+      // here as well keeps the group's flow a property of this query rather than of a call above it.
+      where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null, project: { workspaceFlow: await this.flow() } },
     });
     if (!taskList) {
       throw new BadRequestException(`TaskList ${dto.taskListId} not found in project ${dto.projectId}`);
     }
     // CLIENTS-FLOW: a completed task group holds no open work — reopen it to add more.
-    if (taskList.status === 'COMPLETED') {
+    const clients = await this.clientsFlow();
+    if (clients && taskList.status === 'COMPLETED') {
       throw new BadRequestException(`The task group "${taskList.name}" is complete. Reopen it to add work to it.`);
     }
 
@@ -364,9 +412,9 @@ export class TasksService {
     // A task has a single deadline (dueDate). Client-facing deadlines live only on the
     // project now — tasks no longer carry one.
     // CLIENTS-FLOW (deadlines): with no date of its own, a task in a dated group takes the group's.
-    const internalDue = dto.dueDate ? new Date(dto.dueDate) : (taskList.dueDate ?? undefined);
+    const internalDue = dto.dueDate ? new Date(dto.dueDate) : clients ? (taskList.dueDate ?? undefined) : undefined;
     this.assertTaskDateOrder(dto.startDate ? new Date(dto.startDate) : undefined, internalDue);
-    this.assertWithinGroup(taskList, internalDue);
+    if (clients) this.assertWithinGroup(taskList, internalDue);
     // Assign = staff: a lead assigning a not-yet-member auto-adds them to the project.
     await this.ensureAssigneesAreMembers([dto.projectId], dto.assigneeIds ?? []);
 
@@ -456,10 +504,14 @@ export class TasksService {
     await this.access.assertProjectAccess(actorId, dto.projectId, opts);
     await this.access.assertProjectWritable(dto.projectId);
 
+    // The three ways of finding the group all carry the flow: assertProjectAccess has already
+    // refused the other flow's project, and saying it again here means the default group this
+    // falls back to can only ever be one of THIS flow's.
+    const inFlow = { project: { workspaceFlow: await this.flow() } };
     const taskList = dto.taskListId
-      ? await this.prisma.taskList.findFirst({ where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null } })
-      : (await this.prisma.taskList.findFirst({ where: { projectId: dto.projectId, deletedAt: null, isDefault: true } }))
-        ?? await this.prisma.taskList.findFirst({ where: { projectId: dto.projectId, deletedAt: null, status: 'ACTIVE' }, orderBy: { sequence: 'asc' } });
+      ? await this.prisma.taskList.findFirst({ where: { id: dto.taskListId, projectId: dto.projectId, deletedAt: null, ...inFlow } })
+      : (await this.prisma.taskList.findFirst({ where: { projectId: dto.projectId, deletedAt: null, isDefault: true, ...inFlow } }))
+        ?? await this.prisma.taskList.findFirst({ where: { projectId: dto.projectId, deletedAt: null, status: 'ACTIVE', ...inFlow }, orderBy: { sequence: 'asc' } });
     if (!taskList) {
       throw new BadRequestException(dto.taskListId
         ? 'That task group is not part of this client.'
@@ -517,7 +569,9 @@ export class TasksService {
   }): void {
     this.assertTaskDateOrder(args.startDate ?? undefined, args.dueDate ?? undefined);
     this.assertWithinGroup(args.group, args.dueDate ?? undefined);
-    this.validateStaffing(args.seats);
+    // Both doors into this are CLIENTS-only — the board's task CRUD and the board's "start a whole
+    // piece of client work" — so its refusals speak the CLIENTS flow's words.
+    this.validateStaffing(args.seats, true);
   }
 
   /** Everyone named for a seat is a real, ACTIVE person of the actor's organisation. */
@@ -644,7 +698,12 @@ export class TasksService {
     await this.access.assertTaskAccess(actorId, taskId);
     await this.access.assertProjectAccess(actorId, projectId);
     await this.access.assertProjectWritable(projectId);
-    const moving = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { dueDate: true } });
+    // taskInFlow, not a project filter: a team-space task can be filed into a client's group, and
+    // it belongs to neither flow, so it must still be readable here.
+    const moving = await this.prisma.task.findFirst({
+      where: { id: taskId, deletedAt: null, ...taskInFlow(await this.flow()) },
+      select: { dueDate: true },
+    });
     const move = await this.planMove(taskId, taskListId, moving?.dueDate ?? null, projectId);
     if (!move.noop) {
       await this.prisma.$transaction(tx => this.applyMove(move, tx));
@@ -662,13 +721,18 @@ export class TasksService {
    * names it); otherwise the group itself says which of the task's clients it belongs to.
    */
   private async planMove(taskId: string, taskListId: string, due: Date | null, projectId?: string) {
+    const flow = await this.flow();
     const links = await this.prisma.projectTask.findMany({
-      where: { taskId, ...(projectId ? { projectId } : {}), task: { deletedAt: null } },
+      // Without the flow, a task filed in both a client and a project could be moved from one
+      // flow's group into the other's — the one move that would make the two flows' work collide.
+      where: { taskId, ...(projectId ? { projectId } : {}), task: { deletedAt: null }, project: { workspaceFlow: flow } },
       select: { id: true, projectId: true, taskListId: true, task: { select: { title: true } } },
     });
     if (!links.length) throw new NotFoundException('That task is not in this client.');
     const target = await this.prisma.taskList.findFirst({
-      where: { id: taskListId, deletedAt: null, projectId: { in: links.map(l => l.projectId) } },
+      // The candidate projects are already this flow's; naming it again keeps the destination's
+      // flow a property of this query rather than of the one above it.
+      where: { id: taskListId, deletedAt: null, projectId: { in: links.map(l => l.projectId) }, project: { workspaceFlow: flow } },
       select: { id: true, name: true, status: true, dueDate: true, projectId: true },
     });
     if (!target) throw new BadRequestException('That task group is not part of this client.');
@@ -709,6 +773,7 @@ export class TasksService {
 
   async list(projectId: string, opts: { taskListId?: string } = {}) {
     await this.access.assertProjectAccess(getActorId(), projectId);
+    const flow = await this.flow();
     const tasks = await this.prisma.task.findMany({
       where: {
         deletedAt: null,
@@ -716,6 +781,9 @@ export class TasksService {
           some: {
             projectId,
             taskListId: opts.taskListId,
+            // The board is a LIST, which no access assert stands in front of, so it says which
+            // flow's matter it means itself rather than trusting the id it was handed.
+            project: { workspaceFlow: flow },
           },
         },
       },
@@ -739,7 +807,11 @@ export class TasksService {
         // Only tasks in a project the user is STILL an active member of. A leftover
         // TaskAssignee row after someone is removed from a project used to surface that
         // project on their Home — where the chip then 403s on click. Gate it at the source.
-        projectTasks: { some: { project: { members: { some: { userId, isActive: true } } } } },
+        // `workspaceFlow` narrows that same link to the flow being worked in, so My Tasks shows
+        // the work of the flow the person is looking at and nothing from the other one. The
+        // filter deliberately stays inside this `some`: widening it would start admitting
+        // team-space tasks, which this list has never shown.
+        projectTasks: { some: { project: { workspaceFlow: await this.flow(), members: { some: { userId, isActive: true } } } } },
       },
       orderBy: { dueDate: 'asc' },
       include: {
@@ -793,7 +865,7 @@ export class TasksService {
     const effectiveStart = dto.startDate === undefined ? before.startDate : resolveDate(dto.startDate, null);
     this.assertTaskDateOrder(effectiveStart, internalDue);
     const move = opts.moveToTaskListId ? await this.planMove(id, opts.moveToTaskListId, internalDue ?? null) : null;
-    if (dto.dueDate !== undefined && internalDue) {
+    if (dto.dueDate !== undefined && internalDue && (move || await this.clientsFlow())) {
       let groups: { id: string; name: string; dueDate: Date | null }[] = await this.groupsOfTask(id);
       if (move && !move.noop) groups = [...groups.filter(g => g.id !== move.link.taskListId), move.target];
       for (const g of groups) this.assertWithinGroup(g, internalDue);
@@ -973,7 +1045,7 @@ export class TasksService {
         entityId: id,
         metadata: { projectId, title: task.title, status: status.name },
       });
-      await this.reopenedGroups(id, task.title);
+      if (await this.clientsFlow()) await this.reopenedGroups(id, task.title);
     }
     // `settle` rides along so the screen can say what was filed without a second round trip.
     return Object.assign(updated as object, { settle }) as typeof updated & { settle: typeof settle };
@@ -1050,7 +1122,7 @@ export class TasksService {
    * The rules a set of seats keeps, wherever it comes from (PUT /tasks/:id/staffing, the capacity
    * board's create and reassign). Throws in words before anything is written.
    */
-  private validateStaffing(entries: SeatInput[]) {
+  private validateStaffing(entries: SeatInput[], clients: boolean) {
     // A person may hold MULTIPLE roles on one task, but only once PER ROLE (the unique key is
     // taskId+userId+role). Dedupe by that pair; hours are optional (0 allowed).
     const seen = new Set<string>();
@@ -1067,7 +1139,7 @@ export class TasksService {
       if (e.hoursPerDay != null && e.hoursPerDay < 0) throw new BadRequestException('Hours per day cannot be negative.');
     }
     if (entries.filter(e => e.role === 'PM').length > 1) {
-      throw new BadRequestException('A task can have only one manager.');
+      throw new BadRequestException(clients ? 'A task can have only one manager.' : 'A task can have only one Project Manager.');
     }
   }
 
@@ -1093,7 +1165,8 @@ export class TasksService {
     const before = await this.getRaw(id);
 
     const entries = dto.assignees ?? [];
-    this.validateStaffing(entries);
+    const clients = await this.clientsFlow();
+    this.validateStaffing(entries, clients);
     if (opts.activeOrgUsersOnly) await this.assertActiveOrgUsers(entries.map(e => e.userId));
 
     // Worked out (and refused, if it must be) before anything is written; applied inside the
@@ -1119,7 +1192,8 @@ export class TasksService {
     await this.notifications.notify(added, {
       type: 'task.assigned', title: 'New task assigned',
       message: `You were assigned to "${before.title}".`,
-      link: `/tasks?taskId=${id}`,
+      // CLIENTS: the notification opens the task (the board's reassign sends people here).
+      ...(clients ? { link: `/tasks?taskId=${id}` } : {}),
     });
     await this.events.emit({
       action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: id,
@@ -1146,7 +1220,9 @@ export class TasksService {
     const earliest = startOfUtcDay(new Date(starts[0]));
 
     const deps = await this.prisma.taskDependency.findMany({
-      where: { successorTaskId: taskId },
+      // A warning names the predecessor's title, so the predecessor has to be work this flow is
+      // allowed to see — taskInFlow, so a team-space predecessor still raises its warning.
+      where: { successorTaskId: taskId, predecessor: taskInFlow(await this.flow()) },
       select: { predecessor: { select: { title: true, dueDate: true, currentStatus: { select: { type: true } } } } },
     });
     const warnings: string[] = [];
@@ -1252,7 +1328,13 @@ export class TasksService {
    * ProjectTask, so a single status change/edit/delete can move several progress bars.
    */
   private async recomputeForTask(taskId: string, tx: Prisma.TransactionClient | PrismaService = this.prisma): Promise<void> {
-    const links = await tx.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
+    const links = await tx.projectTask.findMany({
+      // Only this flow's parents: a progress bar belonging to the other flow is not this change's
+      // to move, and no task is filed in both flows anyway — every link is written beside the task
+      // that was just created, for one project.
+      where: { taskId, project: { workspaceFlow: await this.flow() } },
+      select: { projectId: true },
+    });
     const projectIds = [...new Set(links.map(l => l.projectId))];
     // Sequential, not Promise.all: an interactive transaction is one connection, and concurrent
     // statements on it interleave in whatever order they arrive.

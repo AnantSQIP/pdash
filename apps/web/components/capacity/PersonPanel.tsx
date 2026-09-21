@@ -1,24 +1,23 @@
 'use client';
 
 // The per-person capacity drill-down drawer — shows what someone is working on and lets
-// you extend a task's or its task group's deadline to relieve their load. Shared by the full
-// Team Capacity board and the per-client Capacity tab so the two never drift apart.
+// you extend a task's or project's deadline to relieve their load. Shared by the full
+// Team Capacity board and the per-project Capacity tab so the two never drift apart.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
-import { X, Plus, ArrowRight, CalendarPlus, ChevronDown, AlertTriangle, Pencil, UserRoundCog, Trash2 } from 'lucide-react';
+import { X, Plus, ArrowRight, CalendarPlus, ChevronDown, AlertTriangle } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, type CapacityRow, type CapacityOpenTask } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
-import { formatDate, shiftDay, toUtcDay, todayIST } from '@/lib/date';
-import { cidLabel } from '@/lib/mock-data';
+import { formatDate } from '@/lib/date';
+import { pidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
-import { type ProjectHue, NO_PROJECT_HUE, segmentFill, segmentRing, textureStyle, deadlineState, railStyle, urgencyOrder } from '@/lib/project-colors';
-import type { TaskActions } from './TaskEditor';
+import { type ProjectHue, NO_PROJECT_HUE, segmentFill, textureStyle, deadlineState, railStyle, urgencyOrder } from '@/lib/project-colors';
 import { DayCell, DOW, dayNum, dayOfWeek, isToday, segmentsFor } from './grid';
 import { dueText, priorityWord } from './HoverCard';
 
@@ -28,80 +27,36 @@ const EXTEND_PRESETS: { label: string; days: number }[] = [
   { label: '+1 day', days: 1 }, { label: '+3 days', days: 3 }, { label: '+1 week', days: 7 },
 ];
 
-/** newDeadline = max(currentDue, today) + days, as a calendar day (YYYY-MM-DD). Never moves a
- *  deadline into the past even if the current one is already overdue. A day, not an instant: an
- *  instant built from local midnight lands on the previous UTC day in IST. */
-function extendedDay(currentDue: string | null | undefined, days: number): string {
-  const today = todayIST();
-  const from = currentDue ? toUtcDay(currentDue) : today;
-  return shiftDay(from > today ? from : today, days);
+/** newDeadline = max(currentDue, today) + days, as an ISO string. Never moves a deadline
+ *  into the past even if the current one is already overdue. */
+function extendedISO(currentDue: string | null | undefined, days: number): string {
+  const from = currentDue ? new Date(currentDue) : new Date();
+  const base = new Date(Math.max(from.getTime(), Date.now()));
+  base.setDate(base.getDate() + days);
+  return base.toISOString();
 }
 
-type ExtendTarget = {
-  id: string; dueDate?: string | null; projectId?: string | null;
-  /** The task's own deadline, when `dueDate` is one person's. */
-  taskDueDate?: string | null;
-  taskGroupId?: string | null; taskGroup?: string | null; taskGroupDueDate?: string | null;
-};
-/**
- * CLIENTS-FLOW (deadlines): what an extension moves.
- *   person — one person's own deadline on the task; may run past the task and its group by design.
- *   task   — the task's deadline for everyone; it cannot pass its task group's.
- *   group  — the task group's deadline; open tasks due on the old date move with it.
- * "Client" used to be here and pushed a project-wide date; a client has no deadline of its own now.
- */
-export type ExtendScope = 'person' | 'task' | 'group';
+type ExtendTarget = { id: string; dueDate?: string | null; projectId?: string | null };
+export type ExtendScope = 'person' | 'task' | 'project';
 
-/** Apply an extension and say, in words, what moved. Shared by every Extend menu. */
-export async function applyExtend(scope: ExtendScope, task: ExtendTarget, day: string, person?: { userId: string; name: string }): Promise<string> {
-  if (scope === 'group') {
-    if (!task.projectId || !task.taskGroupId) throw new Error('This task is not in a task group.');
-    const r = await api.taskLists.update(task.projectId, task.taskGroupId, { dueDate: day });
-    const moved = r.movedTasks ?? 0;
-    return `“${task.taskGroup ?? 'The task group'}” is now due ${formatDate(day)}${moved ? ` — ${moved} task${moved === 1 ? '' : 's'} moved with it` : ''}`;
-  }
-  if (scope === 'task') {
-    await api.tasks.update(task.id, { dueDate: day });
-    return `Deadline extended to ${formatDate(day)}`;
-  }
-  if (!person) throw new Error('Whose deadline?');
-  await api.tasks.setAssigneeDeadline(task.id, person.userId, day);
-  return `${person.name.split(' ')[0]}'s deadline on this task moved to ${formatDate(day)} — nobody else's changed`;
-}
-
-export function ExtendMenu({ task, person, canGroup, disabled, onExtend }: {
+export function ExtendMenu({ task, person, canProject, disabled, onExtend }: {
   task: ExtendTarget;
   /** The person whose plan is on screen: the default scope moves THEIR deadline only. */
   person?: { userId: string; name: string };
-  /** May move a task group's deadline (tasklist.update). */
-  canGroup: boolean;
+  canProject: boolean;
   disabled: boolean;
-  onExtend: (scope: ExtendScope, day: string) => void;
+  onExtend: (scope: ExtendScope, iso: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState<ExtendScope>(person ? 'person' : 'task');
   const first = person?.name.split(' ')[0] ?? '';
   const [custom, setCustom] = useState('');
-  const groupDue = task.taskGroupDueDate ?? null;
-  // Only a group that HAS a deadline can be extended. Offering it for one with none turned
-  // "+1 day" into "invent a deadline from this task's date" — and the server then pulls every
-  // later task in the group in to it, dragging colleagues' work backwards by weeks.
-  const offerGroup = canGroup && !!task.projectId && !!task.taskGroupId && !!groupDue;
-  // Where the presets count from: the thing being moved.
-  const base = scope === 'group' ? groupDue : scope === 'task' ? (task.taskDueDate ?? task.dueDate) : task.dueDate;
-  // A task cannot be due after its group — say so here rather than let the save be refused.
-  const pastGroup = (day: string) => scope === 'task' && !!groupDue && day > groupDue;
-  // "Extend" only ever moves a deadline outwards. Pulling a GROUP's deadline in from here would
-  // drag every later task in it forward, which is not what the word says; that is an edit on the
-  // task group itself, where the dialog spells out what moves.
-  const earlierGroup = (day: string) => scope === 'group' && !!groupDue && day < groupDue;
-  const apply = (day: string) => {
-    if (pastGroup(day) || earlierGroup(day)) return;
-    onExtend(scope, day); setOpen(false); setCustom('');
+  const applyPreset = (days: number) => { onExtend(scope, extendedISO(task.dueDate, days)); setOpen(false); };
+  const applyCustom = () => {
+    if (!custom) return;
+    onExtend(scope, new Date(`${custom}T00:00:00`).toISOString());
+    setOpen(false); setCustom('');
   };
-  const tab = (s: ExtendScope, label: string) => (
-    <button onClick={() => setScope(s)} className={clsx('flex-1 py-1 rounded', scope === s ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>{label}</button>
-  );
   return (
     <div className="relative">
       <button
@@ -115,47 +70,33 @@ export function ExtendMenu({ task, person, canGroup, disabled, onExtend }: {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-1 z-50 w-64 bg-white rounded-lg border border-gray-200 shadow-lg p-3">
-            {(person || offerGroup) && (
+          <div className="absolute right-0 mt-1 z-50 w-56 bg-white rounded-lg border border-gray-200 shadow-lg p-3">
+            {(person || (canProject && task.projectId)) && (
               <div className="flex gap-0.5 mb-2 bg-gray-100 rounded-md p-0.5 text-[11px] font-medium">
-                {person && tab('person', `Only ${first}`)}
-                {tab('task', 'Whole task')}
-                {offerGroup && tab('group', 'Task group')}
+                {person && <button onClick={() => setScope('person')} className={clsx('flex-1 py-1 rounded', scope === 'person' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Only {first}</button>}
+                <button onClick={() => setScope('task')} className={clsx('flex-1 py-1 rounded', scope === 'task' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Whole task</button>
+                {canProject && task.projectId && <button onClick={() => setScope('project')} className={clsx('flex-1 py-1 rounded', scope === 'project' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500')}>Project</button>}
               </div>
             )}
             <p className="text-[11px] text-gray-400 mb-1.5">
               {scope === 'person' ? `Give ${first} more time on this task — nobody else's deadline moves`
-                : scope === 'group' ? `Move “${task.taskGroup}” (due ${formatDate(groupDue!)}) — every task due on that date moves with it`
+                : scope === 'project' ? 'Push the project deadline'
                   : 'Push this task’s deadline for everyone on it'}
             </p>
             <div className="flex gap-1 mb-2">
-              {EXTEND_PRESETS.map(p => {
-                const day = extendedDay(base, p.days);
-                const blocked = pastGroup(day);
-                return (
-                  <button key={p.days} onClick={() => apply(day)} disabled={blocked}
-                    title={blocked ? `After the task group’s deadline (${formatDate(groupDue!)})` : formatDate(day)}
-                    className="flex-1 text-[11px] font-medium px-1.5 py-1.5 rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100 disabled:opacity-40 disabled:hover:bg-brand-50">
-                    {p.label}
-                  </button>
-                );
-              })}
+              {EXTEND_PRESETS.map(p => (
+                <button key={p.days} onClick={() => applyPreset(p.days)}
+                  className="flex-1 text-[11px] font-medium px-1.5 py-1.5 rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100">
+                  {p.label}
+                </button>
+              ))}
             </div>
             <div className="flex items-center gap-1">
               <input type="date" value={custom} onChange={e => setCustom(e.target.value)}
-                max={scope === 'task' && groupDue ? groupDue : undefined}
-                // Extending never moves a deadline EARLIER: on a task group that pulls other
-                // people's tasks in with it.
-                min={scope === 'group' && groupDue ? groupDue : undefined}
                 className="flex-1 min-w-0 text-xs border border-gray-200 rounded-md px-2 py-1.5" />
-              <button onClick={() => custom && apply(custom)} disabled={!custom || pastGroup(custom) || earlierGroup(custom)}
+              <button onClick={applyCustom} disabled={!custom}
                 className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-gray-800 text-white hover:bg-black disabled:opacity-40">Set</button>
             </div>
-            {scope === 'task' && groupDue && (
-              <p className="mt-2 text-[11px] text-amber-700">
-                Its task group is due {formatDate(groupDue)}.{offerGroup ? ' To go past that, extend the task group.' : ''}
-              </p>
-            )}
           </div>
         </>
       )}
@@ -180,12 +121,12 @@ function rangeText(f: Footprint | undefined): string {
  * Everything one person is on, in the colours the board uses.
  *
  * The person's own day strip sits at the top so the colour scheme is read in context; the
- * tasks below are grouped by client under the same swatch, each with its task group, allocated range,
+ * tasks below are grouped by project under the same swatch, each with its allocated range,
  * hours per day, hours left and deadline. The three summary tiles, the availability pill and the
  * completion percentage that used to be here all restated things the strip now shows.
  */
 export function PersonPanel({
-  row, hues, holidays, today, focusDate, onClose, onAssign, taskActions,
+  row, hues, holidays, today, focusDate, onClose, onAssign,
 }: {
   row: CapacityRow;
   hues: Map<string, ProjectHue>;
@@ -195,8 +136,6 @@ export function PersonPanel({
   focusDate?: string;
   onClose: () => void;
   onAssign?: () => void;
-  /** capacity.manage: Edit / Reassign / Delete on every task listed. */
-  taskActions?: TaskActions | null;
 }) {
   const { can } = usePermissions();
   const { users } = useOrg();
@@ -215,18 +154,10 @@ export function PersonPanel({
   const [focus, setFocus] = useState<string | undefined>(focusDate);
   useEffect(() => { setFocus(focusDate); }, [focusDate]);
   const canTask = can('task.update');
-  const canGroup = can('tasklist.update');
+  const canProject = can('project.update');
 
-  const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    // Escape belongs to whatever is on top: with the task editor or a confirmation open over the
-    // panel, it closes THAT, not the panel underneath as well.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      const dialogs = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')];
-      if (dialogs.some(d => d !== panelRef.current)) return;
-      onClose();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -250,7 +181,7 @@ export function PersonPanel({
     return m;
   }, [row.days]);
 
-  // Tasks grouped by client, most hours in the window first; within a group, most urgent first.
+  // Tasks grouped by project, most hours in the window first; within a group, most urgent first.
   const groups = useMemo(() => {
     type Group = { key: string; id?: string; pid: string | null; round?: number; title: string; isTeam: boolean;
       projectDueDate?: string | null; projectPriority?: string; hue: ProjectHue; hours: number; tasks: CapacityOpenTask[] };
@@ -259,7 +190,7 @@ export function PersonPanel({
       const key = t.projectId ?? '__none';
       const g = m.get(key) ?? {
         key, id: t.projectId, pid: t.isTeamWork ? null : (t.projectPid ?? null), round: t.projectRound,
-        title: t.project ?? (t.isTeamWork ? 'Team space' : 'No client'), isTeam: !!t.isTeamWork,
+        title: t.project ?? (t.isTeamWork ? 'Team space' : 'No project'), isTeam: !!t.isTeamWork,
         projectDueDate: t.projectDueDate, projectPriority: t.projectPriority,
         hue: (t.projectId && !t.isTeamWork && hues.get(t.projectId)) || NO_PROJECT_HUE, hours: 0, tasks: [],
       };
@@ -303,14 +234,21 @@ export function PersonPanel({
     return () => clearTimeout(t);
   }, [focusIds]);
 
-  async function extend(scope: ExtendScope, task: CapacityRow['openTasks'][number], day: string) {
+  async function extend(scope: ExtendScope, task: CapacityRow['openTasks'][number], iso: string) {
     setBusyTaskId(task.id);
     try {
-      const said = await applyExtend(scope, task, day, { userId: row.userId, name: row.name });
+      if (scope === 'project') {
+        if (!task.projectId) throw new Error('This task has no project.');
+        await api.projects.update(task.projectId, { dueDate: iso });
+      } else if (scope === 'task') {
+        await api.tasks.update(task.id, { dueDate: iso });
+      } else {
+        // This person's seat only: the task's deadline and everyone else's stay where they are.
+        await api.tasks.setAssigneeDeadline(task.id, row.userId, iso);
+      }
       invalidateTaskCaches(qc);
       qc.invalidateQueries({ queryKey: ['coverage-risks'] });
-      if (scope === 'group') qc.invalidateQueries({ queryKey: ['task-groups'] });
-      toast(said, 'success');
+      toast(scope === 'person' ? `${row.name.split(' ')[0]}'s deadline on this task moved to ${formatDate(iso)} — nobody else's changed` : `Deadline extended to ${formatDate(iso)}`, 'success');
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not extend the deadline', 'error');
     } finally {
@@ -318,12 +256,10 @@ export function PersonPanel({
     }
   }
 
-
   const over = row.overCommittedHours > 0.05;
   let firstFocusAssigned = false;
 
-  /** `withClient`: the row sits outside its client's section, so it names the client too. */
-  const taskRow = (t: CapacityOpenTask, hue: ProjectHue, scheduled: boolean, withClient = false) => {
+  const taskRow = (t: CapacityOpenTask, hue: ProjectHue, scheduled: boolean) => {
     const fill = segmentFill(hue, t.priority);
     const deadline = deadlineState(t.dueDate, today, holidays);
     const rail = railStyle(deadline);
@@ -335,9 +271,9 @@ export function PersonPanel({
         key={t.id}
         ref={ref}
         className={clsx('group/task flex gap-2.5 px-1 py-2 transition-shadow',
-          focused && flash && 'rounded-md ring-2 ring-brand-400')}
+          focused && flash && 'rounded-md ring-2 ring-gray-900')}
       >
-        <span className="relative mt-0.5 h-6 w-3 shrink-0 rounded-[2px]" style={{ backgroundColor: fill, ...textureStyle(hue.texture), boxShadow: segmentRing(hue) }}>
+        <span className="relative mt-0.5 h-6 w-3 shrink-0 rounded-[2px]" style={{ backgroundColor: fill, ...textureStyle(hue.texture), boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.18)' }}>
           {rail && <span className="absolute inset-x-0 bottom-0 h-[3px] border-t border-white" style={{ background: rail }} />}
         </span>
         <div className="min-w-0 flex-1">
@@ -345,17 +281,6 @@ export function PersonPanel({
             <p className="min-w-0 truncate text-[13px] font-medium text-gray-900" title={t.title}>{t.title}</p>
             <span className="shrink-0 text-[11px] tabular-nums text-gray-500">{t.remainingHours}h left</span>
           </div>
-          {(t.taskGroup || (withClient && t.project)) && (
-            <p className="truncate text-[10.5px] text-gray-400" title={t.taskGroup ? 'Task group' : undefined}>
-              {withClient && t.project && (
-                <span className="text-gray-500">
-                  {t.projectPid && !t.isTeamWork ? `${cidLabel(t.projectPid, t.projectRound)} · ` : ''}{t.project}
-                  {t.taskGroup ? ' · ' : ''}
-                </span>
-              )}
-              {t.taskGroup}
-            </p>
-          )}
           <p className="mt-0.5 text-[11px] text-gray-500">
             <span className="text-gray-600">{priorityWord(t.priority)}</span>
             {' · '}<span className={due.cls}>{due.text}</span>
@@ -394,23 +319,9 @@ export function PersonPanel({
             </p>
           )}
         </div>
-        {(canTask || (taskActions && !t.isTeamWork)) && (
-          // Revealed on hover where there IS hover; always shown on a touch screen, where a control
-          // that only appears on hover is a control nobody can find.
-          <div className="flex shrink-0 flex-col items-end gap-1.5 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/task:opacity-100 focus-within:opacity-100">
-            {canTask && (
-              <ExtendMenu task={t} person={{ userId: row.userId, name: row.name }} canGroup={canGroup} disabled={busyTaskId === t.id} onExtend={(scope, day) => extend(scope, t, day)} />
-            )}
-            {taskActions && !t.isTeamWork && (
-              <div className="flex items-center gap-2.5 text-[11px] font-medium">
-                <button type="button" onClick={() => taskActions.edit(t)} title="Edit this task"
-                  className="inline-flex items-center gap-1 text-gray-500 hover:text-brand-700"><Pencil size={11} /> Edit</button>
-                <button type="button" onClick={() => taskActions.reassign(t, row.userId)} title={`Give ${row.name.split(' ')[0]}'s part to someone else`}
-                  className="inline-flex items-center gap-1 text-gray-500 hover:text-brand-700"><UserRoundCog size={11} /> Reassign</button>
-                <button type="button" onClick={() => taskActions.remove(t)} title="Delete this task" aria-label={`Delete ${t.title}`}
-                  className="inline-flex items-center gap-1 text-gray-500 hover:text-rose-600"><Trash2 size={11} /></button>
-              </div>
-            )}
+        {canTask && (
+          <div className="shrink-0 opacity-0 transition-opacity group-hover/task:opacity-100 focus-within:opacity-100">
+            <ExtendMenu task={t} person={{ userId: row.userId, name: row.name }} canProject={canProject} disabled={busyTaskId === t.id} onExtend={(scope, iso) => extend(scope, t, iso)} />
           </div>
         )}
       </div>
@@ -420,7 +331,7 @@ export function PersonPanel({
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/20" onClick={onClose} />
-      <div ref={panelRef} className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[460px]" role="dialog" aria-modal="true" aria-label={`${row.name}'s plan`}>
+      <div className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-2xl sm:w-[460px]" role="dialog" aria-modal="true" aria-label={`${row.name}'s plan`}>
         <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <Avatar user={{ id: row.userId, firstName: row.name.split(' ')[0], lastName: row.name.split(' ').slice(1).join(' '), profilePhoto: row.profilePhoto }} size={40} />
@@ -448,11 +359,11 @@ export function PersonPanel({
           <p className="mt-2 text-[11.5px] text-gray-600 tabular-nums">
             <span className="font-medium text-gray-900">{row.committedHours}h</span> planned of {row.capacityHours}h in this window
             {' · '}<span className={row.freeHours > 0 ? 'text-emerald-700' : 'text-gray-500'}>{row.freeHours}h free</span>
-            {over && <>{' · '}<span className="font-medium text-rose-700">{row.overCommittedHours}h over on some days</span></>}
+            {over && <>{' · '}<span className="font-medium text-red-700">{row.overCommittedHours}h over on some days</span></>}
             {row.nextFreeDate && !row.availableNow && <>{' · '}free from {formatDate(row.nextFreeDate)}</>}
             {row.availableNow && <>{' · '}<span className="text-emerald-700">free now</span></>}
           </p>
-          {/* Where those planned hours actually went. Opened from one client, the answer is
+          {/* Where those planned hours actually went. Opened from one project, the answer is
               usually "mostly somewhere else" — and that is the number that decides whether this
               person can take another task. */}
           {(row.byClient?.length ?? 0) > 1 && (
@@ -462,7 +373,7 @@ export function PersonPanel({
                 <span key={`${c.projectId ?? 'other'}-${i}`}>
                   {i > 0 && ', '}
                   <span className={clsx('tabular-nums', c.restricted && 'italic text-gray-400')}>
-                    {c.restricted ? 'Other work' : c.code ? `${cidLabel(c.code, c.round)} · ${c.label}` : c.label} {c.hours}h
+                    {c.restricted ? 'Other work' : c.code ? `${pidLabel(c.code, c.round)} · ${c.label}` : c.label} {c.hours}h
                   </span>
                 </span>
               ))}
@@ -472,11 +383,11 @@ export function PersonPanel({
           {overDays.length > 0 && (
             <ul className="mt-2 space-y-1" aria-label="Days planned beyond capacity">
               {overDays.map(d => (
-                <li key={d.date} className="flex items-center justify-between gap-2 rounded-md bg-rose-50/60 px-2 py-1 text-[11px] text-gray-600">
+                <li key={d.date} className="flex items-center justify-between gap-2 rounded-md bg-gray-50 px-2 py-1 text-[11px] text-gray-600">
                   <span className="inline-flex items-center gap-1.5">
-                    <AlertTriangle size={11} className="text-rose-500" />
+                    <AlertTriangle size={11} className="text-gray-900" />
                     <span className="font-medium text-gray-900">{formatDate(d.date, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
-                    {' · '}{d.load}h planned · <span className="font-medium text-rose-700">{Math.round((d.load - d.capacity) * 10) / 10}h over</span>
+                    {' · '}{d.load}h planned · <span className="font-medium text-gray-900">{Math.round((d.load - d.capacity) * 10) / 10}h over</span>
                   </span>
                   <button type="button" onClick={() => setFocus(d.date)} className="shrink-0 font-medium text-brand-600 hover:underline">See the tasks</button>
                 </li>
@@ -486,7 +397,7 @@ export function PersonPanel({
         </div>
 
         {/* When each task lands: one block per day it puts hours on, in its own colour — the plan
-            as a timeline, across every client at once. */}
+            as a timeline, across every project at once. */}
         {timeline.length > 0 && (
           <div className="border-b border-gray-100 px-5 py-2">
             <button onClick={() => setShowTimeline(v => !v)}
@@ -505,15 +416,15 @@ export function PersonPanel({
                     <div key={t.id} className="flex items-center gap-2">
                       <button type="button" onClick={() => setFocus(f.days[0])} title={`${t.title} — ${rangeText(f)}`}
                         className="w-[104px] shrink-0 truncate text-left text-[10.5px] text-gray-600 hover:text-gray-900">
-                        <span className="mr-1 inline-block h-2 w-2 rounded-[2px] align-middle" style={{ backgroundColor: fill, boxShadow: segmentRing(hue) }} />{t.title}
+                        <span className="mr-1 inline-block h-2 w-2 rounded-[2px] align-middle" style={{ backgroundColor: fill }} />{t.title}
                       </button>
                       <div className="grid flex-1 gap-[3px]" style={{ gridTemplateColumns: `repeat(${row.days.length}, minmax(0, 1fr))` }}>
                         {row.days.map(d => {
                           const h = byDay.get(d.date);
                           return (
                             <div key={d.date} title={h ? `${formatDate(d.date, { weekday: 'short', day: 'numeric' })} · ${Math.round(h * 10) / 10}h` : undefined}
-                              className={clsx('relative h-2.5 rounded-[2px]', isToday(d.date) && 'ring-1 ring-brand-400')}
-                              style={h ? { backgroundColor: fill, ...textureStyle(hue.texture), boxShadow: segmentRing(hue) } : { backgroundColor: d.capacity > 0 ? '#f3f4f6' : 'transparent' }}>
+                              className={clsx('relative h-2.5 rounded-[2px]', isToday(d.date) && 'ring-1 ring-gray-900/40')}
+                              style={h ? { backgroundColor: fill, ...textureStyle(hue.texture), boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.18)' } : { backgroundColor: d.capacity > 0 ? '#f3f4f6' : 'transparent' }}>
                               {h && rail && <span className="absolute inset-x-0 bottom-0 h-[2px]" style={{ background: rail }} />}
                             </div>
                           );
@@ -537,8 +448,8 @@ export function PersonPanel({
               {groups.filter(g => !itemised || g.tasks.some(t => (footprints.get(t.id)?.hours ?? 0) > 0)).map(g => (
                 <section key={g.key}>
                   <div className="flex items-center gap-2 rounded-md px-1 py-1.5" style={{ backgroundColor: g.hue.tint }}>
-                    <span className="h-3 w-4 shrink-0 rounded-sm" style={{ backgroundColor: g.hue.high, boxShadow: segmentRing(g.hue), ...textureStyle(g.hue.texture) }} />
-                    {g.pid && <span className="font-mono text-[11px] font-semibold" style={{ color: g.hue.ink }}>{cidLabel(g.pid, g.round)}</span>}
+                    <span className="h-3 w-4 shrink-0 rounded-sm" style={{ backgroundColor: g.hue.medium, ...textureStyle(g.hue.texture) }} />
+                    {g.pid && <span className="font-mono text-[11px] font-semibold" style={{ color: g.hue.critical }}>{pidLabel(g.pid, g.round)}</span>}
                     {g.id && !g.isTeam
                       ? <Link href={`/projects/${g.id}`} className="min-w-0 truncate text-[12.5px] font-medium text-gray-800 hover:underline">{g.title}</Link>
                       : <span className="min-w-0 truncate text-[12.5px] font-medium text-gray-800">{g.title}</span>}
@@ -546,7 +457,7 @@ export function PersonPanel({
                   </div>
                   {(g.projectDueDate || g.projectPriority) && (
                     <p className="px-1 pt-1 text-[10.5px] text-gray-400">
-                      {g.projectDueDate && <>Overall due {formatDate(g.projectDueDate)}</>}
+                      {g.projectDueDate && <>Project due {formatDate(g.projectDueDate)}</>}
                       {g.projectDueDate && g.projectPriority && ' · '}
                       {g.projectPriority && <>{priorityWord(g.projectPriority)} priority</>}
                     </p>
@@ -566,7 +477,7 @@ export function PersonPanel({
                   </button>
                   {showUnscheduled && (
                     <div className="divide-y divide-gray-100">
-                      {unscheduled.map(t => taskRow(t, (t.projectId && !t.isTeamWork && hues.get(t.projectId)) || NO_PROJECT_HUE, false, true))}
+                      {unscheduled.map(t => taskRow(t, (t.projectId && !t.isTeamWork && hues.get(t.projectId)) || NO_PROJECT_HUE, false))}
                     </div>
                   )}
                 </section>
@@ -582,7 +493,7 @@ export function PersonPanel({
           <div className="border-t border-gray-100 px-5 py-4">
             <button
               onClick={onAssign}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-700"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
             >
               <Plus size={15} /> Assign a task to {row.name.split(' ')[0]}
               <ArrowRight size={14} />

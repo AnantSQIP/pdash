@@ -18,6 +18,15 @@
  *   · `visibility()` + `redact()` keep confidentiality: a viewer who may not open a client never
  *     learns its name from this board. Its hours still count — they are simply "Other work".
  *
+ * BOTH WORKSPACE FLOWS (docs/WORKSPACE_FLOWS.md). How loaded somebody is, and how much of their
+ * week belongs to some other matter, is the same question whether the firm calls the work a
+ * project or a client, so nothing here carries @RequireFlow and every capacity route goes through
+ * it in either flow. The PROJECTS board needs the redaction most of all: it is open to the whole
+ * firm, so a viewer who may not open a matter is the ordinary case there, not the exception. The
+ * names below are this repository's clients vocabulary (ClientShare, otherClients); nothing a
+ * person reads is — the sentences say "other work" and "all their work", and the screens ask the
+ * flow for the word.
+ *
  * Nothing about the work-week is re-derived here. Weekends, company holidays, a person's approved
  * optional holiday, full-day and half-day leave are all already baked into each day's `capacity`
  * by CapacityService.team(); this file only ever reads it. The placement of a proposed seat goes
@@ -26,6 +35,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ProjectAccessService } from '../../common/access/project-access.module';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 // Types only — erased at compile time, so this file never imports the capacity module at runtime
 // and the two cannot form a cycle.
 import type { CapacityDay, CapacityRow } from './capacity.module';
@@ -370,16 +380,22 @@ export class AvailabilityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: ProjectAccessService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /**
    * Which clients this viewer may be told the name of — the same rule the clients list itself
    * uses (ProjectAccessService), so the board can never name a matter the list would hide.
+   *
+   * Membership of a matter in the OTHER flow grants nothing here. It could name nothing today —
+   * the board is flow-filtered before it reaches this file — but a permit for work this flow does
+   * not show is a permit waiting to be honoured by whatever reads this set next.
    */
   async visibility(actorId: string, organizationId: string): Promise<Visibility> {
     if (await this.access.hasOversight(actorId)) return { all: true, ids: new Set() };
+    const flow = await this.flows.flowOf(organizationId);
     const mine = await this.prisma.projectMember.findMany({
-      where: { userId: actorId, isActive: true, project: { deletedAt: null } },
+      where: { userId: actorId, isActive: true, project: { deletedAt: null, workspaceFlow: flow } },
       select: { projectId: true },
     });
     return { all: false, ids: new Set(mine.map(m => m.projectId)) };

@@ -8,6 +8,7 @@ import { api, type SearchResults } from '@/lib/api';
 import { domainLabelOf } from '@/components/projects/TechnologyDomainPicker';
 import { Avatar } from '@/components/Avatar';
 import { fullName } from '@/lib/avatar';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 export const OPEN_SEARCH_EVENT = 'squark:open-search';
 
@@ -18,6 +19,7 @@ const PHASE_TINT: Record<string, string> = {
 
 export function GlobalSearch() {
   const router = useRouter();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -59,7 +61,7 @@ export function GlobalSearch() {
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100">
           <Search size={17} className="text-gray-400 shrink-0" />
           <input autoFocus value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Search people, clients, tasks, discussions…"
+            placeholder={clients ? 'Search people, clients, tasks, discussions…' : 'Search people, projects, tasks, discussions…'}
             className="flex-1 text-sm text-gray-800 placeholder-gray-400 focus:outline-none" />
           {isFetching && <Loader size={15} className="animate-spin text-gray-300" />}
           <button onClick={() => setOpen(false)} className="p-1 rounded-md text-gray-400 hover:bg-gray-100"><X size={16} /></button>
@@ -84,12 +86,12 @@ export function GlobalSearch() {
                 </Group>
               )}
               {data && data.projects.length > 0 && (
-                <Group label="Clients">
+                <Group label={clients ? 'Clients' : 'Projects'}>
                   {data.projects.map(p => (
                     <Row key={p.id} onClick={() => go(`/projects/${p.id}`)}>
                       <FolderKanban size={16} className="text-brand-500 shrink-0" />
                       <span className="text-sm text-gray-800 truncate">{p.title}</span>
-                      {/* Say WHY a client matched when the hit came from its domain rather than
+                      {/* Say WHY a project matched when the hit came from its domain rather than
                           its name — otherwise searching "medical" returns titles with no medical
                           in them and looks broken. */}
                       {p.technologyDomain && (

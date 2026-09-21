@@ -24,6 +24,7 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { TasksService, type SeatInput, type StaffingOpts } from '../tasks/tasks.service';
 import { TASK_ASSIGNEE_ROLES, TASK_PRIORITIES } from '../tasks/dto';
@@ -122,6 +123,11 @@ const toSeats = (seats: CapacitySeatDto[]): SeatInput[] =>
  * What the board's task editor chooses from: every client of the organisation that can still take
  * work, with its task groups, and every active person. One read, scoped to the caller's
  * organisation from the session — never from the request.
+ *
+ * THE FLOW IS THE CONSTANT `'CLIENTS'` throughout this service. Every method is reached only from
+ * CapacityTasksController, which carries @RequireFlow('CLIENTS') on the controller itself, so a
+ * caller in the other flow was already answered 404 by the guard before any of this ran. Asking
+ * WorkspaceFlowService again could only produce the same answer, one round trip later.
  */
 @Injectable()
 export class CapacityTaskOptionsService {
@@ -133,6 +139,7 @@ export class CapacityTaskOptionsService {
         where: {
           deletedAt: null,
           closedAt: null,
+          workspaceFlow: 'CLIENTS',
           projectPhase: { notIn: ['COMPLETED', 'CLOSED', 'ARCHIVED', 'CANCELLED'] },
           members: { some: { user: { organizationId } } },
         },
@@ -167,7 +174,7 @@ export class CapacityTaskOptionsService {
     const task = await this.prisma.task.findFirst({
       where: {
         id: taskId, deletedAt: null,
-        projectTasks: { some: { project: { deletedAt: null, members: { some: { user: { organizationId } } } } } },
+        projectTasks: { some: { project: { deletedAt: null, workspaceFlow: 'CLIENTS', members: { some: { user: { organizationId } } } } } },
       },
       select: { id: true },
     });
@@ -177,14 +184,16 @@ export class CapacityTaskOptionsService {
   /** A live client of this organisation, or a 404. */
   async assertClientInOrg(projectId: string, organizationId: string) {
     const client = await this.prisma.project.findFirst({
-      where: { id: projectId, deletedAt: null, members: { some: { user: { organizationId } } } },
+      where: { id: projectId, deletedAt: null, workspaceFlow: 'CLIENTS', members: { some: { user: { organizationId } } } },
       select: { id: true },
     });
     if (!client) throw new NotFoundException('Client not found.');
   }
 }
 
+/** CLIENTS flow only: the PROJECTS board assigns through the ordinary task routes (404 here). */
 @Controller('capacity/tasks')
+@RequireFlow('CLIENTS')
 export class CapacityTasksController {
   constructor(
     private readonly tasks: TasksService,

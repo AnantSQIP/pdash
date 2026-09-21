@@ -10,6 +10,8 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { EventService } from '../audit-events/event.service';
 import { TimeModeService } from '../time-mode/time-mode.module';
 import { reactivateGroupsOfTask } from '../../common/task-groups';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { taskInFlow } from '../../common/flow-scope';
 import { EVENTS } from '../../common/events/canonical-events';
 
 /**
@@ -48,6 +50,7 @@ export class TaskTimeService {
     private readonly access: ProjectAccessService,
     private readonly events: EventService,
     private readonly timeMode: TimeModeService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   private actor(): string {
@@ -64,7 +67,10 @@ export class TaskTimeService {
    */
   private async assertMine(taskId: string, userId: string) {
     const task = await this.prisma.task.findFirst({
-      where: { id: taskId, deletedAt: null },
+      // taskInFlow rather than a project filter: a team space's task has no project and belongs to
+      // neither flow, and people time that work in both — only a task filed in the OTHER flow's
+      // matters is out of reach here.
+      where: { id: taskId, deletedAt: null, ...taskInFlow(await this.flows.currentFlow()) },
       select: {
         id: true, title: true, actualHours: true,
         completedAt: true, startedAt: true, reopenedCount: true,
@@ -94,7 +100,12 @@ export class TaskTimeService {
    * emitted without it is written, and then never shown to anybody.
    */
   private async projectIdOf(taskId: string): Promise<string | undefined> {
-    const link = await this.prisma.projectTask.findFirst({ where: { taskId }, select: { projectId: true } });
+    const link = await this.prisma.projectTask.findFirst({
+      // The id decides which activity feed the event lands in, so it must be a matter of the flow
+      // the event was raised in — never the other flow's history.
+      where: { taskId, project: { workspaceFlow: await this.flows.currentFlow() } },
+      select: { projectId: true },
+    });
     return link?.projectId;
   }
 
@@ -129,6 +140,8 @@ export class TaskTimeService {
   private async reconcileStale(userId: string): Promise<number> {
     const cutoff = new Date(Date.now() - MAX_SESSION_MINUTES * 60_000);
     const stale = await this.prisma.taskWorkSession.findMany({
+      // Deliberately NOT scoped to a flow: this is housekeeping on one person's clocks, and a
+      // clock left running on the other flow's work still invents hours at the twelve-hour cap.
       where: { userId, endedAt: null, startedAt: { lt: cutoff } },
       select: { id: true, startedAt: true },
     });
@@ -160,7 +173,10 @@ export class TaskTimeService {
   async running(userId = this.actor()) {
     await this.reconcileStale(userId);
     const open = await this.prisma.taskWorkSession.findMany({
-      where: { userId, endedAt: null },
+      // The stopwatch exists only in PROJECTS — the route carrying this is @RequireFlow('PROJECTS'),
+      // so the constant is the flow the reader is in — and the header it feeds names each task, so
+      // a clock left on the other flow's work must not be named here. A team-space clock still is.
+      where: { userId, endedAt: null, task: taskInFlow('PROJECTS') },
       orderBy: { startedAt: 'asc' },
       select: { id: true, taskId: true, startedAt: true, task: { select: { id: true, title: true } } },
     });
@@ -300,6 +316,8 @@ export class TaskTimeService {
   async pauseAll(userId: string): Promise<{ stopped: number; minutes: number }> {
     await this.reconcileStale(userId);
     const now = new Date();
+    // Deliberately NOT scoped to a flow: punching out and the end-of-day sweep are facts about
+    // one person's day, and a clock this missed would go on running into tomorrow.
     const open = await this.prisma.taskWorkSession.findMany({ where: { userId, endedAt: null } });
     let minutes = 0;
     for (const s of open) {
@@ -365,6 +383,12 @@ export class TaskTimeService {
    *
    * expectedHours is recomputed from whatever the totals now are, so it can never disagree
    * with them, and is rounded once, here.
+   *
+   * A standard is keyed on (organisation, titleKey, role) and carries no flow on purpose: it is a
+   * fact about a KIND of work and the words people use for it — how long a novelty search takes
+   * someone in this role — not about any one matter. A firm that keeps clients and projects apart
+   * still does the same work in both, and splitting the averages would halve the samples behind
+   * them for no gain. Nothing identifying a matter is stored here, so nothing crosses over.
    */
   private async applyDelta(
     tx: any, organizationId: string, titleKey: string, role: string, displayTitle: string,
@@ -642,7 +666,9 @@ export class TaskTimeService {
       metadata: { projectId: await this.projectIdOf(taskId), title: task.title },
     });
     // CLIENTS-FLOW: the same rule setStatus keeps — a completed group re-opens with its task.
-    for (const g of await reactivateGroupsOfTask(this.prisma, taskId)) {
+    // (Task groups have no status in the PROJECTS flow.)
+    const groups = (await this.flows.currentIsClients()) ? await reactivateGroupsOfTask(this.prisma, taskId) : [];
+    for (const g of groups) {
       await this.events.emit({
         action: EVENTS.TASKGROUP_REOPENED,
         entityType: 'TASK_GROUP',
@@ -663,6 +689,8 @@ export class TaskTimeService {
   async standards() {
     const organizationId = await this.orgOf(this.actor());
     const rows = await this.prisma.taskStandard.findMany({
+      // Shared across both flows on purpose (see applyDelta): a standard names a kind of work and
+      // the role that does it, never a client or a project, so there is nothing here to keep apart.
       where: { organizationId },
       orderBy: [{ completions: 'desc' }, { displayTitle: 'asc' }],
     });

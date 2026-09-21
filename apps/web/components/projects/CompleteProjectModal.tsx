@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2, X, Loader, Clock, Truck } from 'lucide-react';
 import { api } from '@/lib/api';
 import { todayIST } from '@/lib/date';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 /**
  * Marking a project complete is the one moment anyone actually knows two things the system can't
@@ -26,6 +27,7 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
   onConfirm: (v: { clientDeliveryDate: string; workingHours: number; actualHours?: number }) => void;
   busy?: boolean;
 }) {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client, its number a CID
   // A date input wants the org's calendar day, not a UTC instant (which rolls over at
   // 05:30 IST and would offer "yesterday" to anyone signing off late in the evening).
   const [delivery, setDelivery] = useState(todayIST);
@@ -114,8 +116,13 @@ export function CompleteProjectModal({ projectId, projectTitle, onClose, onConfi
           </div>
 
           <p className="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
-            Completing locks the client&apos;s work. Its CID is kept, and it can be re-initialized later for a
-            returning engagement under the same CID.
+            {clients ? (
+              <>Completing locks the client&apos;s work. Its CID is kept, and it can be re-initialized later for a
+              returning engagement under the same CID.</>
+            ) : (
+              <>Completing locks the project&apos;s work. Its Project ID is kept, and it can be re-initialized later for a
+            returning client under the same PID.</>
+            )}
           </p>
         </div>
 

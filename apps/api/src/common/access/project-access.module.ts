@@ -1,6 +1,9 @@
 import { ForbiddenException, Global, Injectable, Module } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../../modules/permissions/permission.service';
+import { WorkspaceFlowService } from '../../modules/workspace-flow/workspace-flow.service';
+import type { WorkspaceFlow } from '../decorators/require-flow.decorator';
+import { taskInFlow } from '../flow-scope';
 
 /**
  * Object-level authorization for the delivery domain (projects → tasks → issues).
@@ -17,6 +20,13 @@ import { PermissionService } from '../../modules/permissions/permission.service'
  *   • MEMBER — anyone with an active ProjectMember row on P.
  * Everyone else is denied. Reads and writes use the SAME rule; the permission decorator
  * still gates the action type on top of it.
+ *
+ * AND THE WORKSPACE FLOW. Both rules are then bounded by the flow the organisation is running
+ * (docs/WORKSPACE_FLOWS.md): a project row carries the flow it was made in, and a matter of the
+ * OTHER flow is not "forbidden" — it is not there. Oversight does not reach across it and neither
+ * does membership, so a stale link, a bookmark or a notification from before a switch lands on the
+ * same answer a deleted matter gives. This is the single wall the lists, the detail screens, the
+ * comments, the documents, the issues and the activity feed all lean on.
  */
 /**
  * How a caller is acting. `oversight: true` says the caller has ALREADY been authorised to act on
@@ -33,7 +43,18 @@ export class ProjectAccessService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /** The flow an actor's organisation runs; the caller's own when there is no actor to ask about. */
+  private async flowOf(actorId?: string | null): Promise<WorkspaceFlow> {
+    return actorId ? this.flows.flowOfUser(actorId) : this.flows.currentFlow();
+  }
+
+  /** "project" (PROJECTS flow, production's word) or "client" (CLIENTS flow) — for the refusals. */
+  private async unit(actorId?: string | null): Promise<'project' | 'client'> {
+    return (await this.flowOf(actorId)) === 'CLIENTS' ? 'client' : 'project';
+  }
 
   /** Delivery leads/partners who may oversee every matter (super-admin or project.approve). */
   async hasOversight(actorId: string): Promise<boolean> {
@@ -43,7 +64,8 @@ export class ProjectAccessService {
 
   async isMember(actorId: string, projectId: string): Promise<boolean> {
     const m = await this.prisma.projectMember.findFirst({
-      where: { projectId, userId: actorId, isActive: true }, select: { id: true },
+      where: { projectId, userId: actorId, isActive: true, project: { workspaceFlow: await this.flowOf(actorId) } },
+      select: { id: true },
     });
     return !!m;
   }
@@ -58,7 +80,10 @@ export class ProjectAccessService {
    */
   async isProjectManager(actorId: string, projectId: string): Promise<boolean> {
     const m = await this.prisma.projectMember.findFirst({
-      where: { projectId, userId: actorId, projectRole: 'MANAGER', isActive: true },
+      where: {
+        projectId, userId: actorId, projectRole: 'MANAGER', isActive: true,
+        project: { workspaceFlow: await this.flowOf(actorId) },
+      },
       select: { id: true },
     });
     return !!m;
@@ -85,7 +110,19 @@ export class ProjectAccessService {
     return !actor || actor.organizationId === projectOrg;
   }
 
+  /**
+   * Is this project NOT the other flow's? Only a row that exists and belongs to the other flow is
+   * refused here. A row that is not there at all passes, so that a project which has been purged —
+   * or never existed — still reaches the caller's own "not found", exactly as it did before flows:
+   * answering "forbidden" for an id nobody has would be a new refusal, and a worse one.
+   */
+  private async withinFlow(actorId: string, projectId: string): Promise<boolean> {
+    const p = await this.prisma.project.findUnique({ where: { id: projectId }, select: { workspaceFlow: true } });
+    return !p || p.workspaceFlow === await this.flowOf(actorId);
+  }
+
   async canAccessProject(actorId: string, projectId: string, opts: AccessOpts = {}): Promise<boolean> {
+    if (!(await this.withinFlow(actorId, projectId))) return false;
     if (opts.oversight || await this.hasOversight(actorId)) return this.withinTenant(actorId, await this.projectOrg(projectId));
     // A member is same-org by construction (addMember validates org), so no extra tenant check.
     return this.isMember(actorId, projectId);
@@ -94,7 +131,7 @@ export class ProjectAccessService {
   async assertProjectAccess(actorId: string | null, projectId: string, opts: AccessOpts = {}): Promise<void> {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
     if (!(await this.canAccessProject(actorId, projectId, opts))) {
-      throw new ForbiddenException('You do not have access to this client.');
+      throw new ForbiddenException(`You do not have access to this ${await this.unit(actorId)}.`);
     }
   }
 
@@ -103,23 +140,34 @@ export class ProjectAccessService {
    * every org project for a lead, only their own memberships otherwise.
    */
   async projectScopeWhere(actorId: string, organizationId: string): Promise<Record<string, unknown>> {
+    // The flow first: whatever else a lead oversees, it is never the other flow's work.
+    const workspaceFlow = await this.flowOf(actorId);
     if (await this.hasOversight(actorId)) {
-      return { members: { some: { user: { organizationId } } } };
+      return { workspaceFlow, members: { some: { user: { organizationId } } } };
     }
-    return { members: { some: { userId: actorId, isActive: true } } };
+    return { workspaceFlow, members: { some: { userId: actorId, isActive: true } } };
   }
 
   /** Access to a task via the project(s) it is linked to (ProjectTask join). */
   async canAccessTask(actorId: string, taskId: string, opts: AccessOpts = {}): Promise<boolean> {
-    const links = await this.prisma.projectTask.findMany({ where: { taskId }, select: { projectId: true } });
+    // Read the links WITHOUT the flow filter first. "Filed in no project at all" — a team space's
+    // task — is a real answer that must stay true in both flows; "filed only in the other flow's
+    // work" is a different answer, and a filtered query would make the two look alike and let the
+    // second through.
+    const links = await this.prisma.projectTask.findMany({
+      where: { taskId }, select: { projectId: true, project: { select: { workspaceFlow: true } } },
+    });
+    const flow = await this.flowOf(actorId);
+    const mine = links.filter(l => l.project.workspaceFlow === flow);
+    if (links.length && !mine.length) return false;
     if (opts.oversight || await this.hasOversight(actorId)) {
       // Oversight is still bounded to the actor's own org — check each linked project's tenant.
-      for (const l of links) {
+      for (const l of mine) {
         if (await this.withinTenant(actorId, await this.projectOrg(l.projectId))) return true;
       }
-      return links.length === 0; // a task with no live project link isn't cross-tenant
+      return links.length === 0; // a task with no project link isn't cross-tenant and isn't a flow's
     }
-    for (const l of links) {
+    for (const l of mine) {
       if (await this.isMember(actorId, l.projectId)) return true;
     }
     return false;
@@ -134,7 +182,9 @@ export class ProjectAccessService {
 
   /** Is this user an assignee (PM / reviewer / analyst / plain) of the task? */
   async isTaskAssignee(userId: string, taskId: string): Promise<boolean> {
-    const a = await this.prisma.taskAssignee.findFirst({ where: { taskId, userId }, select: { id: true } });
+    const a = await this.prisma.taskAssignee.findFirst({
+      where: { taskId, userId, task: taskInFlow(await this.flowOf(userId)) }, select: { id: true },
+    });
     return !!a;
   }
 
@@ -159,7 +209,10 @@ export class ProjectAccessService {
   /** Access to an issue via its project. */
   async assertIssueAccess(actorId: string | null, issueId: string): Promise<void> {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
-    const issue = await this.prisma.issue.findFirst({ where: { id: issueId, deletedAt: null }, select: { projectId: true } });
+    const issue = await this.prisma.issue.findFirst({
+      where: { id: issueId, deletedAt: null, project: { workspaceFlow: await this.flowOf(actorId) } },
+      select: { projectId: true },
+    });
     if (!issue) throw new ForbiddenException('You do not have access to this issue.');
     if (await this.hasOversight(actorId)) {
       if (await this.withinTenant(actorId, await this.projectOrg(issue.projectId))) return;
@@ -190,11 +243,13 @@ export class ProjectAccessService {
    */
   async assertProjectWritable(projectId: string): Promise<void> {
     const project = await this.prisma.project.findFirst({
-      where: { id: projectId }, select: { projectPhase: true, deletedAt: true },
+      where: { id: projectId, workspaceFlow: await this.flowOf() }, select: { projectPhase: true, deletedAt: true },
     });
-    if (!project || project.deletedAt) throw new ForbiddenException('Client not found.');
+    if (!project || project.deletedAt) {
+      throw new ForbiddenException((await this.unit()) === 'client' ? 'Client not found.' : 'Project not found.');
+    }
     if (project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED') {
-      throw new ForbiddenException('This client is completed or closed — reopen it to add work or log time.');
+      throw new ForbiddenException(`This ${await this.unit()} is completed or closed — reopen it to add work or log time.`);
     }
   }
 
@@ -204,14 +259,19 @@ export class ProjectAccessService {
    * just creating new work, is blocked on a closed matter (the create-only lock was half-real).
    */
   async assertTaskWritable(taskId: string): Promise<void> {
+    // Unfiltered for the same reason canAccessTask is: "no live project" and "a live project of
+    // the other flow" must not collapse into one answer.
     const links = await this.prisma.projectTask.findMany({
       where: { taskId, project: { deletedAt: null } },
-      select: { project: { select: { projectPhase: true } } },
+      select: { project: { select: { projectPhase: true, workspaceFlow: true } } },
     });
     if (!links.length) return; // no live project link — don't over-block edge/standalone tasks
-    const anyWritable = links.some(l => l.project.projectPhase !== 'COMPLETED' && l.project.projectPhase !== 'CLOSED');
+    const flow = await this.flowOf();
+    const mine = links.filter(l => l.project.workspaceFlow === flow);
+    if (!mine.length) throw new ForbiddenException('You do not have access to this task.');
+    const anyWritable = mine.some(l => l.project.projectPhase !== 'COMPLETED' && l.project.projectPhase !== 'CLOSED');
     if (!anyWritable) {
-      throw new ForbiddenException('This task belongs to a completed or closed client — reopen it to make changes.');
+      throw new ForbiddenException(`This task belongs to a completed or closed ${await this.unit()} — reopen it to make changes.`);
     }
   }
 }

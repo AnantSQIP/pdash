@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 // Proxy /api/* to the NestJS API so the browser only ever talks to the web origin.
 // This keeps the auth cookies first-party (SameSite=Lax) with zero CORS in dev & prod.
-const API_ORIGIN = process.env.API_ORIGIN ?? 'http://localhost:4021';
+const API_ORIGIN = process.env.API_ORIGIN ?? 'http://localhost:4000';
 
 const nextConfig = {
   // Self-contained server bundle for small, portable production Docker images.

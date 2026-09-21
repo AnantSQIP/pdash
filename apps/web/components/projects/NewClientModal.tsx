@@ -14,7 +14,7 @@ import { ClientGroupPicker } from './ClientGroups';
 import { DateField } from '@/components/ui/DateField';
 import { fullName } from '@/lib/avatar';
 import { patentMatches, matchedFormerHandle } from '@/lib/patent-search';
-import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
+import { CLIENTS_PATENTS_AND_CLIENT_CODES as PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 
 interface NewClientModalProps {
   onClose: () => void;

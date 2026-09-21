@@ -7,6 +7,7 @@ import { useOrg } from '@/lib/org-context';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { fmtHours } from '@/lib/date';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from '@/components/capacity/AssignmentImpact';
 
 type Row = { userId: string; hours: string; start: string; due: string; perDay: string };
@@ -45,6 +46,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
   task: ApiTask; readOnly?: boolean; canAssign: boolean; defaultManagerId?: string | null; onSaved?: (t: ApiTask) => void;
 }) {
   const { users } = useOrg();
+  const clientsFlow = useIsClientsFlow();
   const { toast } = useToast();
   const [pm, setPm] = useState<Row>(() => pmOf(task, defaultManagerId));
   const [reviewers, setReviewers] = useState<Row[]>(() => rowsFor(task, 'REVIEWER'));
@@ -62,7 +64,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
     return all.map(h => parseFloat(h)).filter(n => Number.isFinite(n)).reduce((s, n) => s + n, 0);
   }, [pm, reviewers, analysts]);
 
-  // What this staffing would actually do to these people's weeks — across EVERY client they are
+  // What this staffing would actually do to these people's weeks — across EVERY matter they are
   // on, not just this one. A person holding two roles on the task is one seat here: their hours
   // add up, because that is how the board will place them.
   const proposed = useMemo(() => {
@@ -213,7 +215,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
 
       {/* Project Manager — one */}
       <section>
-        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-2"><UserCog size={15} className="text-brand-600" /> Manager</h3>
+        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2 mb-2"><UserCog size={15} className="text-brand-600" /> {clientsFlow ? 'Manager' : 'Project Manager'}</h3>
         <PersonRow row={pm} onChange={setPm} onRemove={pm.userId ? () => setPm({ ...EMPTY_ROW }) : undefined} />
       </section>
 
@@ -255,7 +257,7 @@ export function TaskStaffing({ task, readOnly, canAssign, defaultManagerId, onSa
         </div>
       </section>
 
-      {/* What this does to their weeks — across every client, not just this one. */}
+      {/* What this does to their weeks — across every matter, not just this one. */}
       {editable && (impact.isLoading || impact.seats.length > 0) && (
         <section className="border-t border-gray-100 pt-4">
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">

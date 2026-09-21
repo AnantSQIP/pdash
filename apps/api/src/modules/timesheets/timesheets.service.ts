@@ -10,6 +10,8 @@ import { getActorId } from '../../common/context/request-context';
 import { startOfIstDay } from '../../common/dates';
 import { istDayWindow, overlapMinutes, ceilQuarter, minutesToHours, SESSION_CAP_MINUTES } from '../../common/work-time';
 import { NotificationsService } from '../notifications/notifications.module';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { taskInFlow, timesheetInFlow } from '../../common/flow-scope';
 import { CreateTimesheetDto, UpdateTimesheetDto } from './dto';
 import { TIMESHEET_SOURCE } from '../time-mode/time-mode.module';
 
@@ -55,7 +57,26 @@ export class TimesheetsService {
     private readonly permissions: PermissionService,
     private readonly access: ProjectAccessService,
     private readonly notifications: NotificationsService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * Who decides whether a TASK entry is billable. PROJECTS: the person logging it, per entry
+   * (dto.billable), as it always was. CLIENTS: the task (Task.billable), read under a lock.
+   */
+  private async taskDecidesBillable(userId: string): Promise<boolean> {
+    return (await this.flows.flowOfUser(userId)) === 'CLIENTS';
+  }
+
+  /**
+   * The flow the caller is working in. An entry reaches its flow through the project it names and
+   * the task it is filed against, so the reads that are about WORK — the ledger, a matter's time,
+   * a task lookup — narrow on it. The reads that are about a person's DAY do not: see the comments
+   * on the cap, the target, the calendar and the catch-up banner below.
+   */
+  private flow() {
+    return this.flows.currentFlow();
+  }
 
   private async actor() {
     const actorId = getActorId();
@@ -94,6 +115,9 @@ export class TimesheetsService {
       );
     }
     const day = parseDay(dayKey(entryDay));
+    // Deliberately NOT scoped to a flow, here and in every other backdate read: a request names a
+    // person and a range of DAYS, never a matter. "May this person fill in that week" has one
+    // answer, and splitting it would make a Super Admin approve the same fortnight twice.
     const covering = await this.prisma.timesheetBackdateRequest.findFirst({
       where: { userId: ownerId, status: 'APPROVED', fromDate: { lte: day }, toDate: { gte: day } },
       select: { id: true },
@@ -124,6 +148,8 @@ export class TimesheetsService {
    */
   private async recomputeTaskActualHours(taskId: string, tx: Prisma.TransactionClient | PrismaService = this.prisma): Promise<void> {
     const agg = await tx.timesheet.aggregate({
+      // Deliberately NOT scoped to a flow: this is the task's total, written by its one writer.
+      // A task is filed in one flow only, so a filter could only ever make the sum wrong.
       where: { taskId, deletedAt: null },
       _sum: { hoursLogged: true },
     });
@@ -134,7 +160,11 @@ export class TimesheetsService {
    *  project, so logging by task keeps task-level progress AND records the CID/type. */
   private async projectOfTask(taskId: string): Promise<{ projectId: string | null; projectType: string | null }> {
     const pt = await this.prisma.projectTask.findFirst({
-      where: { taskId, project: { deletedAt: null } },
+      // This is the id STAMPED on the entry, so it decides which flow's ledger the hours join and
+      // which matter's totals they move — the one read in this file where the flow matters most.
+      // Callers reach it only after the task itself has been held to the flow, so an empty answer
+      // here still means what it always meant: team-space work, or time waiting for its CID.
+      where: { taskId, project: { deletedAt: null, workspaceFlow: await this.flow() } },
       select: { project: { select: { id: true, projectType: true } } },
     });
     return { projectId: pt?.project.id ?? null, projectType: pt?.project.projectType ?? null };
@@ -175,6 +205,8 @@ export class TimesheetsService {
     tx: Prisma.TransactionClient | PrismaService = this.prisma,
   ): Promise<void> {
     const dayAgg = await tx.timesheet.aggregate({
+      // Deliberately NOT scoped to a flow: the cap is a fact about a person's day — nobody works
+      // sixteen hours in each flow — and a filtered total would let the same day be filled twice.
       where: { userId, date, deletedAt: null, ...(excludeId ? { id: { not: excludeId } } : {}) },
       _sum: { hoursLogged: true },
     });
@@ -232,6 +264,8 @@ export class TimesheetsService {
     // bug rather than as "you have run out of day".
     const adding = rows.reduce((sum, r) => sum + r.hoursLogged, 0);
     const already = (await this.prisma.timesheet.aggregate({
+      // Unfiltered for the same reason assertDayCap is: this is the day's whole total, and the
+      // sheet has to be refused against everything already on the day, not against part of it.
       where: { userId: actorId, date: entryDay, deletedAt: null },
       _sum: { hoursLogged: true },
     }))._sum.hoursLogged ?? 0;
@@ -268,9 +302,13 @@ export class TimesheetsService {
     // A project's full time ledger (every member's hours/billable/notes) is only for
     // people ON the project (or a delivery lead) — not any timesheet.view holder.
     await this.access.assertProjectAccess(await this.actor(), projectId);
+    // Both lists are gathered by id alone, and the ids they produce are what the ledger below is
+    // selected by — so each says which flow's matter it means rather than trusting the id it was
+    // handed.
+    const flow = await this.flow();
     const [projectTasks, issues] = await Promise.all([
-      this.prisma.projectTask.findMany({ where: { projectId }, select: { taskId: true } }),
-      this.prisma.issue.findMany({ where: { projectId, deletedAt: null }, select: { id: true } }),
+      this.prisma.projectTask.findMany({ where: { projectId, project: { workspaceFlow: flow } }, select: { taskId: true } }),
+      this.prisma.issue.findMany({ where: { projectId, deletedAt: null, project: { workspaceFlow: flow } }, select: { id: true } }),
     ]);
     const taskIds = projectTasks.map((pt) => pt.taskId);
     const issueIds = issues.map((i) => i.id);
@@ -296,7 +334,11 @@ export class TimesheetsService {
     const userId = requestedUserId ?? actorId;
     await this.assertOwnerOrPrivileged(userId); // ?userId is scoped to self unless Super Admin
     return this.prisma.timesheet.findMany({
-      where: { userId, deletedAt: null },
+      // The timesheet list itself. timesheetInFlow keeps two kinds of row: this flow's work, and
+      // time attached to no project at all — the buffer entry waiting for its CID, "other" time,
+      // team-space work. Those belong to neither flow and are the person's own day either way, so
+      // dropping them would hide hours somebody had filed rather than merely file them elsewhere.
+      where: { userId, deletedAt: null, ...timesheetInFlow(await this.flow()) },
       include: INCLUDE,
       orderBy: { date: 'desc' },
       take: PAGE_CAP,
@@ -332,10 +374,12 @@ export class TimesheetsService {
     if (entryDay > today) throw new BadRequestException('You cannot log time for a future date.');
     // Backdating windows: free within ~1 month, Super-Admin-approved 1–3 months, blocked beyond.
     await this.assertBackfillAllowed(actorId, entryDay);
-    // Billability of TASK time is the task's (Task.billable) and is read under a lock below; the
-    // person's own choice applies only where there is no task: a client call or an entry still
-    // waiting for its task. Defaults to billable when not specified.
+    // PROJECTS: each person decides whether their own logged time is billable — there is no
+    // project-level override or admin authority. CLIENTS: billability of TASK time is the task's
+    // (Task.billable), read under a lock below; the person's own choice applies only where there
+    // is no task: a client call or an entry still waiting for its task. Defaults to billable.
     const billable = dto.billable ?? true;
+    const clients = await this.taskDecidesBillable(actorId);
 
     // ── "Other" entry: miscellaneous NON-PROJECT time (admin, internal meetings, training).
     //    Always non-billable, never tied to a project/task, and never a CID buffer to assign —
@@ -374,19 +418,21 @@ export class TimesheetsService {
     if (dto.category === 'CLIENT_CALL') {
       const title = dto.title?.trim();
       if (!title) throw new BadRequestException('Say what the call was about.');
-      if (!dto.projectId) throw new BadRequestException('Choose the client the call was about.');
+      if (!dto.projectId) throw new BadRequestException(clients ? 'Choose the client the call was about.' : 'Choose the PID the call was about.');
       // The CID must be one that exists in the caller's own organisation — this is the only
-      // check left, so it is the one that stops time being booked to another firm's matter.
+      // check left, so it is the one that stops time being booked to another firm's matter, and
+      // the flow goes in beside it: a call can only have been about a matter this flow can see.
       const me = await this.prisma.user.findUnique({ where: { id: actorId }, select: { organizationId: true } });
       const organizationId = me?.organizationId ?? undefined;
       const project = await this.prisma.project.findFirst({
         where: {
           id: dto.projectId, deletedAt: null,
+          workspaceFlow: await this.flow(),
           members: { some: { user: { organizationId } } },
         },
         select: { id: true, projectType: true },
       });
-      if (!project) throw new NotFoundException('That client could not be found.');
+      if (!project) throw new NotFoundException(clients ? 'That client could not be found.' : 'That project could not be found.');
       const entry = await serialize(this.prisma, dayKeyFor(actorId, entryDay), async tx => {
         await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
         return tx.timesheet.create({
@@ -430,7 +476,9 @@ export class TimesheetsService {
     // ── Task entry: the task determines the project (keeps task-level progress) and records
     //    the CID (projectId) + project type snapshot. ──
     const task = await this.prisma.task.findFirst({
-      where: { id: dto.taskId, deletedAt: null },
+      // taskInFlow, not a project filter: team-space work has no project and is logged against in
+      // both flows, so only a task filed in the OTHER flow's matters is out of reach here.
+      where: { id: dto.taskId, deletedAt: null, ...taskInFlow(await this.flow()) },
       select: { id: true },
     });
     if (!task) throw new NotFoundException(`Task ${dto.taskId} not found`);
@@ -458,9 +506,9 @@ export class TimesheetsService {
         if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
       }
       await this.assertDayCap(actorId, entryDay, dto.hoursLogged, undefined, tx);
-      // The task decides. Read under a share lock so a concurrent "mark non-billable" either
-      // waits for this entry (and re-marks it) or has already committed (and is read here).
-      const taskBillable = await this.taskBillable(tx, taskId);
+      // CLIENTS: the task decides. Read under a share lock so a concurrent "mark non-billable"
+      // either waits for this entry (and re-marks it) or has already committed (and is read here).
+      const entryBillable = clients ? await this.taskBillable(tx, taskId) : billable;
 
       const created = await tx.timesheet.create({
         data: {
@@ -472,8 +520,10 @@ export class TimesheetsService {
           source: opts.source ?? dto.source ?? null,
           date: entryDay,
           hoursLogged: dto.hoursLogged,
-          // The task's own flag; internal (team-space) work is never billable whatever it says.
-          billable: teamId ? false : taskBillable,
+          // Internal (team-space) work has no client to bill, so it is non-billable regardless of
+          // what was asked for — or of what the task says. Leaving the choice open would let HR
+          // and BD hours land in billable totals.
+          billable: teamId ? false : entryBillable,
           notes: dto.notes,
         },
         include: INCLUDE,
@@ -495,7 +545,10 @@ export class TimesheetsService {
   /** Assign a CID (task) to a buffer entry that was logged without one. The task fixes the
    *  project + type; task-level progress is recomputed. Owner-or-Super-Admin only. */
   async assign(id: string, taskId: string) {
-    const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
+    const flow = await this.flow();
+    // The entry being moved must be one this flow may touch — a buffer row, which belongs to
+    // neither flow, still is — and so must the task it is being attached to.
+    const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null, ...timesheetInFlow(flow) } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
     // Same backdating rule as create/update: attaching a CID to an old buffer entry shifts its
@@ -505,9 +558,21 @@ export class TimesheetsService {
     // never gain a taskId too (breaks the "task XOR issue" invariant + double-counts hours).
     if (entry.taskId || entry.issueId) throw new BadRequestException('This entry already has a project/task assigned.');
     // "Other" (non-project) time is terminal, not a buffer — it can't be attached to a CID.
-    if (entry.category === 'OTHER') throw new BadRequestException('“Other” time is non-project and cannot be assigned to a client.');
-    if (entry.category === 'CLIENT_CALL') throw new BadRequestException('A client call already records its client — there is nothing to assign.');
-    const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
+    const clients = await this.taskDecidesBillable(entry.userId);
+    if (entry.category === 'OTHER') {
+      throw new BadRequestException(clients
+        ? '“Other” time is non-project and cannot be assigned to a client.'
+        : '“Other” time is non-project and cannot be assigned to a PID.');
+    }
+    if (entry.category === 'CLIENT_CALL') {
+      throw new BadRequestException(clients
+        ? 'A client call already records its client — there is nothing to assign.'
+        : 'A client call already records its PID — there is nothing to assign.');
+    }
+    const task = await this.prisma.task.findFirst({
+      where: { id: taskId, deletedAt: null, ...taskInFlow(flow) },
+      select: { id: true },
+    });
     if (!task) throw new NotFoundException('Task not found.');
     // The entry's OWNER must be ASSIGNED to the task (same rule as logging directly against it).
     await this.access.assertTaskAssignee(entry.userId, taskId);
@@ -527,11 +592,13 @@ export class TimesheetsService {
         select: { id: true },
       });
       if (dupe) throw new BadRequestException('An identical entry already exists for that task, day and duration.');
-      // Once it has a task, the entry is billable exactly when the task is (never, for team work).
-      const taskBillable = await this.taskBillable(tx, taskId);
+      // Internal work cannot be billable — see create(). PROJECTS: otherwise the entry keeps the
+      // person's own choice. CLIENTS: once it has a task, the entry is billable exactly when the
+      // task is.
+      const billable = teamId ? false : clients ? await this.taskBillable(tx, taskId) : undefined;
       const updated = await tx.timesheet.update({
         where: { id },
-        data: { taskId, projectId, teamId, projectType, billable: teamId ? false : taskBillable },
+        data: { taskId, projectId, teamId, projectType, ...(billable !== undefined ? { billable } : {}) },
         include: INCLUDE,
       });
       await this.recomputeTaskActualHours(taskId, tx);
@@ -540,7 +607,9 @@ export class TimesheetsService {
   }
 
   async update(id: string, dto: UpdateTimesheetDto) {
-    const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
+    // An entry is edited from the flow it was filed in: the hours it carries belong to that
+    // flow's ledger, and a row with no project at all is the person's own either way.
+    const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null, ...timesheetInFlow(await this.flow()) } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
     // Same backdating rule as create(): editing an entry more than a month old needs approval
@@ -551,9 +620,11 @@ export class TimesheetsService {
     if (entry.projectId) await this.access.assertProjectWritable(entry.projectId);
 
     // An issue-raised entry AND "Other" (non-project) time are non-billable by rule — neither
-    // can ever be flipped to billable. A TASK entry follows its task (resolved in the lock below);
-    // only a client call or an entry still waiting for its task keeps a choice of its own.
+    // can ever be flipped to billable. PROJECTS: every other entry is the person's own choice.
+    // CLIENTS: a TASK entry follows its task (resolved in the lock below); only a client call or
+    // an entry still waiting for its task keeps a choice of its own.
     const ownChoice = (entry.issueId || entry.category === 'OTHER') ? false : dto.billable;
+    const clients = await this.taskDecidesBillable(entry.userId);
 
     // Re-enforce the daily cap when the hours change, in the same locked transaction as the
     // write. This used to be a second copy of the cap arithmetic sitting outside any transaction,
@@ -562,7 +633,7 @@ export class TimesheetsService {
     const raising = dto.hoursLogged !== undefined && dto.hoursLogged !== entry.hoursLogged;
     const updated = await serialize(this.prisma, dayKeyFor(entry.userId, entry.date), async tx => {
       if (raising) await this.assertDayCap(entry.userId, entry.date, dto.hoursLogged!, id, tx);
-      const billable = entry.taskId
+      const billable = clients && entry.taskId
         ? (entry.teamId ? false : await this.taskBillable(tx, entry.taskId))
         : ownChoice;
       const u = await tx.timesheet.update({
@@ -581,7 +652,9 @@ export class TimesheetsService {
   }
 
   async softDelete(id: string) {
-    const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null } });
+    // Same rule as the edit above: a row is deleted from the flow that filed it, because taking
+    // hours out of a matter's total is a change to that matter.
+    const entry = await this.prisma.timesheet.findFirst({ where: { id, deletedAt: null, ...timesheetInFlow(await this.flow()) } });
     if (!entry) throw new NotFoundException(`Timesheet ${id} not found`);
     await this.assertOwnerOrPrivileged(entry.userId);
     // A closed matter's ledger is frozen — deleting an entry would silently change its billed total.
@@ -631,6 +704,9 @@ export class TimesheetsService {
       this.prisma.attendance.findMany({ where: { userId, date: { gte: first, lte: last } }, select: { date: true, status: true } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lte: last }, endDate: { gte: first } }, select: { startDate: true, endDate: true, dayType: true } }),
       orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: first, lte: last } }, select: { date: true } }) : Promise.resolve([]),
+      // Deliberately NOT scoped to a flow: the calendar grades a DAY as filled or not, against a
+      // target that is the same eight hours whatever the work was. Counting only one flow's hours
+      // would colour a fully filled day red and chase somebody for time they had already logged.
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: first, lte: last } }, select: { date: true, hoursLogged: true } }),
       // Comp-off: a non-working day the user WORKED. Approved → a required working day here; pending
       // → shown with an asterisk (not yet required).
@@ -709,6 +785,8 @@ export class TimesheetsService {
    * door can never disagree.
    */
   async dayTarget(userId: string, dayMarker: Date): Promise<number> {
+    // Deliberately NOT scoped to a flow: what a person owes a day comes from attendance, leave,
+    // holidays and comp-off — all shared — and is one number however their work is split.
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { organizationId: true } });
     const [att, leaves, holiday, comp] = await Promise.all([
       this.prisma.attendance.findFirst({ where: { userId, date: dayMarker }, select: { status: true } }),
@@ -744,23 +822,37 @@ export class TimesheetsService {
     const now = new Date();
     const { from, to } = istDayWindow(dayMarker);
     const cap = SESSION_CAP_MINUTES;
+    // The flow of the person whose day this is, not of whoever is asking: the punch-out gate and
+    // the end-of-day sweep ask about somebody's day too, and not always from inside their request.
+    const flow = await this.flows.flowOfUser(userId);
     const [target, entries, sessions] = await Promise.all([
       this.dayTarget(userId, dayMarker),
       this.prisma.timesheet.findMany({
+        // Deliberately NOT scoped to a flow: `logged` and `missing` are the day's whole total held
+        // against the day's target, and the punch-out gate must not ask for hours already filed
+        // against work the other flow can see.
         where: { userId, date: dayMarker, deletedAt: null },
         select: { taskId: true, hoursLogged: true },
       }),
       this.prisma.taskWorkSession.findMany({
         // Overlapping the day, not starting in it: a sitting begun before midnight still owns
-        // part of this day.
-        where: { userId, startedAt: { lt: to }, OR: [{ endedAt: null }, { endedAt: { gt: from } }] },
+        // part of this day. The ROWS are this flow's clocks (and team-space ones, which are
+        // every flow's): each is offered as a button that files time against its task, and a
+        // button for the other flow's work would file into a ledger this flow cannot see.
+        where: { userId, startedAt: { lt: to }, OR: [{ endedAt: null }, { endedAt: { gt: from } }], task: taskInFlow(flow) },
         select: {
           taskId: true, startedAt: true, endedAt: true, minutes: true,
           task: {
             select: {
               id: true, title: true, completedAt: true,
               currentStatus: { select: { type: true } },
-              projectTasks: { take: 1, select: { project: { select: { id: true, title: true, code: true, roundSeq: true } } } },
+              // The label a row wears. `take: 1` keeps whichever link comes first, so the flow is
+              // in the filter here too — a row must never be named after the other flow's matter.
+              projectTasks: {
+                take: 1,
+                where: { project: { workspaceFlow: flow } },
+                select: { project: { select: { id: true, title: true, code: true, roundSeq: true } } },
+              },
             },
           },
         },
@@ -822,6 +914,8 @@ export class TimesheetsService {
       this.prisma.attendance.findMany({ where: { userId, date: { gte: from, lt: todayStart } }, select: { date: true, status: true } }),
       this.prisma.leaveRequest.findMany({ where: { userId, status: 'APPROVED', startDate: { lt: todayStart }, endDate: { gte: from } }, select: { startDate: true, endDate: true, dayType: true } }),
       orgId ? this.prisma.holiday.findMany({ where: { organizationId: orgId, date: { gte: from, lt: todayStart } }, select: { date: true } }) : Promise.resolve([]),
+      // Deliberately NOT scoped to a flow: the catch-up banner asks whether each DAY was filled,
+      // and a day filled with the other flow's work is still a filled day.
       this.prisma.timesheet.findMany({ where: { userId, deletedAt: null, date: { gte: from, lt: todayStart } }, select: { date: true, hoursLogged: true } }),
     ]);
     const dk = (d: Date) => d.toISOString().slice(0, 10);
@@ -849,6 +943,8 @@ export class TimesheetsService {
   // ── Backdate (backfill) approval ─────────────────────────────────────────────
   // Filling a day 1–3 months old needs Super-Admin sign-off. An employee requests a date range
   // + reason; a Super Admin approves/rejects; an APPROVED request unlocks logging for those days.
+  // None of the reads below is scoped to a flow, on purpose: a request names a person and a range
+  // of days, never a matter, so it is the same request whichever flow the firm is looking at.
 
   private readonly userSelect = { id: true, firstName: true, lastName: true } as const;
 

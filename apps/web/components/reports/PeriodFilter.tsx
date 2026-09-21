@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { CalendarRange, X } from 'lucide-react';
 import clsx from 'clsx';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 /**
  * Choosing a period, which the Reports page could not do at all.
@@ -76,6 +77,7 @@ export function PeriodFilter({
   value, onChange, matched, total,
 }: { value: Period; onChange: (p: Period) => void; matched: number; total: number }) {
   const periods = useMemo(buildPeriods, []);
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [showCustom, setShowCustom] = useState(false);
@@ -119,7 +121,7 @@ export function PeriodFilter({
 
       {value.key !== 'all' && (
         <span className="text-[11px] text-gray-500 ml-1">
-          {matched} of {total} {total === 1 ? 'client' : 'clients'} were live in this period
+          {matched} of {total} {clients ? (total === 1 ? 'client' : 'clients') : (total === 1 ? 'project' : 'projects')} were live in this period
         </span>
       )}
 

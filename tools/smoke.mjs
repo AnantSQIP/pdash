@@ -91,6 +91,9 @@ async function main() {
   const project = await prisma.project.create({
     data: {
       title: 'Apollo',
+      // The flow this matter belongs to (docs/WORKSPACE_FLOWS.md) — the smoke test builds a
+      // projects-flow matter, which is what a fresh database runs.
+      workspaceFlow: 'PROJECTS',
       projectPhase: 'PLANNING',
       createdBy: emp.id,
       members: { create: { userId: emp.id, projectRole: 'MANAGER' } },

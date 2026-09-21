@@ -33,6 +33,12 @@ export const TASK_INVALIDATES = [
   'analytics-dashboard', // Home stats (open/overdue counts)
   'perf-me',         // Home "My Performance" card: completed / overdue counts
   'activity',        // activity feed entries
+  // PROJECTS (TIMER mode) — My Tasks' day bar: what the clock tracked today, what the timesheet
+  // has of it, and what the day still owes. It is the figure that changes the moment time is
+  // logged, and it was the one cache no mutation cleared — so logging time from a task row left
+  // the bar showing the old unfiled total until its own poll came round, and the page looked
+  // stuck until it was reloaded by hand.
+  'timer-today',
   // The day sheet's list (what was planned, what is already logged, what was finished recently)
   // changes the moment a task is finished or reopened.
   'my-plan',

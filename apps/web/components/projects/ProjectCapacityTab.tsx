@@ -1,18 +1,18 @@
 'use client';
 
-// Per-client availability — the Team Capacity board, scoped to this client's members.
+// Per-project availability — the Team Capacity board, scoped to this project's members.
 //
 // The same board, the same colours, the same hover and panel as the full page (it is the same
-// component), with two things only a client can add: its own work is pinned so everyone else's
+// component), with two things only a project can add: its own work is pinned so everyone else's
 // reads as context, and a summary that answers the question the deadline poses — does what is
-// left on this client fit into the hours these people have before it is due?
+// left on this project fit into the hours these people have before it is due?
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Users, Loader, ArrowRight, CalendarRange, Flag, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { api, type CapacityRow, type TaskGroup } from '@/lib/api';
+import { api, type CapacityRow } from '@/lib/api';
 import { Board } from '@/components/capacity/Board';
 import { LiveStatus } from '@/components/capacity/LiveStatus';
 import { PersonPanel } from '@/components/capacity/PersonPanel';
@@ -21,8 +21,8 @@ import { assignProjectHues, deadlineState } from '@/lib/project-colors';
 import { formatDate, todayIST } from '@/lib/date';
 import { AddTaskModal } from '@/components/tasks/AddTaskModal';
 import { invalidateTaskCaches } from '@/lib/task-cache';
-import { useToast } from '@/components/ui/Toast';
-import { useCapacityTaskActions } from '@/components/capacity/TaskEditor';
+import { byFlow } from '@/lib/workspace-flow';
+import { ClientsProjectCapacityTab } from './ProjectCapacityTab.clients';
 
 const RANGES = [7, 14, 30] as const;
 const POLL_MS = 30_000;
@@ -41,20 +41,17 @@ function workingDaysBetween(from: string, to: string, holidays: ReadonlySet<stri
   return n;
 }
 
-export function ProjectCapacityTab({ projectId }: { projectId: string }) {
+/** PROJECTS flow: the board scoped to this project's members (dark palette); adding work opens the add-task flow. */
+function ProjectsProjectCapacityTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
-  const { toast } = useToast();
   const [days, setDays] = useState<number>(14);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   // Adding work: the add-task flow, pre-assigned to that person on that day.
   const [assign, setAssign] = useState<{ userId: string; date: string } | null>(null);
-  // This client starts pinned: its segments at full strength, everything else faded to context.
+  // This project starts pinned: its segments at full strength, everything else faded to context.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(projectId);
   const [focusDate, setFocusDate] = useState<string | undefined>();
   const today = todayIST();
-  // capacity.manage: the full board's task editor, pinned to this client. Without it, adding work
-  // falls back to the ordinary add-task flow (task.create) and existing tasks are read-only here.
-  const { actions: taskActions, dialogs: taskDialogs } = useCapacityTaskActions({ projectId });
 
   const { data, isLoading, isError, dataUpdatedAt, isFetching, refetch } = useQuery({
     queryKey: ['capacity', 'project', projectId, days],
@@ -68,39 +65,12 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
     staleTime: 60_000,
   });
   const defaultTaskList = project?.taskLists?.find(tl => tl.isDefault) ?? project?.taskLists?.[0];
-  // CLIENTS-FLOW: new work goes into a task group that is still open — the default one when it
-  // is, otherwise the first open one. `undefined` = not loaded yet (fall back to the default
-  // list, as before); `null` = loaded, and the client has no open group to file work in.
-  const { data: groups } = useQuery<TaskGroup[]>({
-    queryKey: ['task-groups', projectId],
-    queryFn: () => api.taskLists.list(projectId),
-    staleTime: 60_000,
-  });
-  const openGroup = useMemo(() => {
-    if (!groups) return undefined;
-    const active = groups.filter(g => g.status === 'ACTIVE').sort((a, b) => a.sequence - b.sequence);
-    return active.find(g => g.isDefault) ?? active[0] ?? null;
-  }, [groups]);
-  const targetListId = openGroup === undefined ? defaultTaskList?.id : openGroup?.id;
-  /** Open the add-task flow for that person and day — or say why there is nowhere to put it. */
-  function startAssign(userId: string, date: string) {
-    if (taskActions) {
-      const r = rows.find(x => x.userId === userId);
-      taskActions.create({ person: { userId, name: r?.name ?? '' }, start: date });
-      return;
-    }
-    if (openGroup === null) {
-      toast('This client has no open task group — create or reopen one in the task list first.', 'error');
-      return;
-    }
-    setAssign({ userId, date });
-  }
   const rows: CapacityRow[] = useMemo(() => data?.rows ?? [], [data]);
   const hues = useMemo(() => assignProjectHues(projectsOf(rows)), [rows]);
   const holidays = useMemo(() => holidaysOf(rows), [rows]);
   const selected = useMemo(() => rows.find(r => r.userId === selectedUserId) ?? null, [rows, selectedUserId]);
 
-  // Does what is left on this client fit before its deadline, in the hours these people have?
+  // Does what is left on this project fit before its deadline, in the hours these people have?
   const summary = useMemo(() => {
     const due = project?.dueDate ? project.dueDate.slice(0, 10) : null;
     const windowEnd = rows[0]?.days[rows[0].days.length - 1]?.date ?? today;
@@ -111,7 +81,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
       for (const t of mine) { remaining += t.remainingHours; if (t.overdue) overdueTasks++; }
       for (const d of r.days) {
         if (d.capacity <= 0 || (due && d.date > due)) continue;
-        // This client's share of the day comes from the API's availability service, which is the
+        // This project's share of the day comes from the API's availability service, which is the
         // same split the cells and the assignment dialogs draw. Re-totalling it from the day's
         // task list here was a second derivation of a number that has to agree with itself.
         plannedBefore += d.focusHours ?? 0;
@@ -128,7 +98,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
       remaining: r1(remaining), plannedBefore: r1(plannedBefore), freeBefore: r1(freeBefore), capacityBefore: r1(capacityBefore),
       perDay: workdays ? r1(remaining / workdays) : null, shortBy: r1(shortBy), people, overdueTasks,
       // Hours these same people owe OTHER matters inside the window. The free hours above are
-      // already net of it — the server has always counted every client — but saying it out loud
+      // already net of it — the server has always counted every project — but saying it out loud
       // is what keeps "18h free" from being read as "18h free for us".
       elsewhere: r1(rows.reduce((s, r) => s + (r.otherHours ?? 0), 0)),
       elsewhereHidden: rows.some(r => (r.restrictedHours ?? 0) > 0.05),
@@ -157,7 +127,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
   const verdict = !summary.due
     ? null
     : summary.remaining === 0
-      ? { tone: 'ok' as const, text: 'Nothing left on this client.' }
+      ? { tone: 'ok' as const, text: 'Nothing left on this project.' }
       : summary.state === 'overdue'
         ? { tone: 'bad' as const, text: `${summary.remaining}h still left after the deadline — extend it, or add people.` }
         : summary.beyondWindow
@@ -170,8 +140,8 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-gray-500">
-          When each member of this client is free — across <span className="font-medium text-gray-700">all</span> their clients,
-          so you can see who has real room for more of this one. This client&apos;s work is drawn in its own colours;
+          When each member of this project is free — across <span className="font-medium text-gray-700">all</span> their projects,
+          so you can see who has real room for more of this one. This project&apos;s work is drawn in its own colours;
           everything else they are on is the slate block beside it, at its full size. Hover a day to see what it is.
         </p>
         <div className="flex items-center gap-2 flex-wrap">
@@ -196,13 +166,13 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
       {rows.length > 0 && (
         // The deadline against the hours: what is left, what the team can give it before then.
         <div className={clsx('rounded-xl border px-4 py-3 text-sm',
-          verdict?.tone === 'bad' ? 'border-rose-200 bg-rose-50/50' : verdict?.tone === 'ok' ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-white')}>
+          verdict?.tone === 'bad' ? 'border-gray-900/20 bg-gray-50' : verdict?.tone === 'ok' ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-white')}>
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
             <span className={clsx('inline-flex items-center gap-1.5 font-medium', summary.state === 'overdue' || summary.state === 'today' ? 'text-red-700' : summary.state === 'soon' ? 'text-amber-700' : 'text-gray-800')}>
               <Flag size={14} /> {dueWords}
               {summary.workdays != null && summary.state !== 'overdue' && <span className="font-normal text-gray-500"> · {summary.workdays} working {summary.workdays === 1 ? 'day' : 'days'} left</span>}
             </span>
-            <span className="text-gray-700 tabular-nums"><span className="font-semibold text-gray-900">{summary.remaining}h</span> left on this client across {summary.people} {summary.people === 1 ? 'person' : 'people'}</span>
+            <span className="text-gray-700 tabular-nums"><span className="font-semibold text-gray-900">{summary.remaining}h</span> left on this project across {summary.people} {summary.people === 1 ? 'person' : 'people'}</span>
             {summary.due && summary.remaining > 0 && summary.perDay != null && (
               <span className="text-gray-700 tabular-nums"><span className="font-semibold text-gray-900">{summary.perDay}h</span> a day needed to finish in time</span>
             )}
@@ -212,7 +182,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
               </span>
             )}
             {summary.elsewhere > 0.05 && (
-              <span className="text-gray-700 tabular-nums" title="Hours these same people owe other clients inside this window. The free hours above are already net of it.">
+              <span className="text-gray-700 tabular-nums" title="Hours these same people owe other projects inside this window. The free hours above are already net of it.">
                 <span className="font-semibold text-slate-700">{summary.elsewhere}h</span> of their window is on other work
                 {summary.elsewhereHidden && <span className="text-gray-400"> (some not named to you)</span>}
               </span>
@@ -220,7 +190,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
             {summary.overdueTasks > 0 && <span className="text-red-700">{summary.overdueTasks} overdue {summary.overdueTasks === 1 ? 'task' : 'tasks'}</span>}
           </div>
           {verdict && (
-            <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[12.5px]', verdict.tone === 'bad' ? 'font-medium text-rose-800' : verdict.tone === 'ok' ? 'text-emerald-800' : 'text-gray-600')}>
+            <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[12.5px]', verdict.tone === 'bad' ? 'font-medium text-gray-900' : verdict.tone === 'ok' ? 'text-emerald-800' : 'text-gray-600')}>
               {verdict.tone === 'bad' ? <AlertTriangle size={13} /> : verdict.tone === 'ok' ? <CheckCircle2 size={13} /> : null}
               {verdict.text}
             </p>
@@ -231,7 +201,7 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
       {rows.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-14 text-center text-gray-400">
           <CalendarRange size={30} className="mb-2" />
-          This client has no active members yet.
+          This project has no active members yet.
         </div>
       ) : (
         <Board
@@ -244,10 +214,9 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
           highlightProjectId={projectId}
           aggregateOthers
           onSelectPerson={(userId, date) => { setFocusDate(date); setSelectedUserId(userId); }}
-          onAssign={row => startAssign(row.userId, row.nextFreeDate ?? today)}
-          emptyText="This client has no active members yet."
+          onAssign={row => setAssign({ userId: row.userId, date: row.nextFreeDate ?? today })}
+          emptyText="This project has no active members yet."
           hoverSuppressed={!!selected || !!assign}
-          taskActions={taskActions}
         />
       )}
 
@@ -256,31 +225,27 @@ export function ProjectCapacityTab({ projectId }: { projectId: string }) {
         <PersonPanel
           row={selected} hues={hues} holidays={holidays} today={today} focusDate={focusDate}
           onClose={() => { setSelectedUserId(null); setFocusDate(undefined); }}
-          onAssign={() => {
-            const r = selected;
-            // The editor opens over the panel; the old flow needs the panel out of the way.
-            if (!taskActions) { setSelectedUserId(null); setFocusDate(undefined); }
-            startAssign(r.userId, focusDate ?? r.nextFreeDate ?? today);
-          }}
-          taskActions={taskActions}
+          onAssign={() => { const r = selected; setSelectedUserId(null); setFocusDate(undefined); setAssign({ userId: r.userId, date: focusDate ?? r.nextFreeDate ?? today }); }}
         />
       )}
-      {taskDialogs}
 
-      {/* Add a task into THIS client (its open task group), pre-assigned to that person + day. */}
-      {assign && targetListId && (
+      {/* Add a task into THIS project, pre-assigned to that person + day. */}
+      {assign && defaultTaskList && (
         <AddTaskModal
           projectId={projectId}
-          taskListId={targetListId}
+          taskListId={defaultTaskList.id}
           workflowId={project?.workflowId}
           initialAssigneeIds={[assign.userId]}
           initialStartDate={assign.date}
           initialDueDate={assign.date}
           onClose={() => setAssign(null)}
-          // A new task moves this board, the full board, the task lists and the client's progress.
+          // A new task moves this board, the full board, the task lists and the project's progress.
           onSuccess={() => { setAssign(null); invalidateTaskCaches(qc); }}
         />
       )}
     </div>
   );
 }
+
+/** One component, two flows: the PROJECTS implementation above (production's), ./ProjectCapacityTab.clients.tsx for CLIENTS. */
+export const ProjectCapacityTab = byFlow(ProjectsProjectCapacityTab, ClientsProjectCapacityTab);

@@ -1,8 +1,8 @@
 {
-  "name": "squark-clients",
+  "name": "pdash",
   "version": "0.1.0",
   "private": true,
-  "description": "Squark Dashboard — clients flow (standalone codebase, split from pdash)",
+  "description": "Zoho-Projects-style project management system",
   "workspaces": [
     "packages/*",
     "apps/*"

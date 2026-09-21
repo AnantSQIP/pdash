@@ -239,7 +239,10 @@ export class ClientLedgerService {
         where: { organizationId, deletedAt: null },
         select: {
           id: true, code: true, name: true, archivedAt: true,
-          _count: { select: { projects: true, patents: true } },
+          // The CID ledger is a PROJECTS-flow screen (@RequireFlow('PROJECTS') on its controller),
+          // so the flow is the literal here and in every read below. "A client with no projects" is
+          // a gap worth reporting only when it is a gap in the work this workspace is running.
+          _count: { select: { projects: { where: { workspaceFlow: 'PROJECTS' } }, patents: true } },
         },
         orderBy: { code: 'asc' },
       }),
@@ -252,7 +255,7 @@ export class ClientLedgerService {
           // report agreeing with the patent portal, which computes the same "unused" flag from
           // live projects — the two screens previously disagreed about whether a patent whose
           // only project had been deleted was still in use.
-          projectLinks: { where: { project: { deletedAt: null } }, select: { projectId: true } },
+          projectLinks: { where: { project: { deletedAt: null, workspaceFlow: 'PROJECTS' } }, select: { projectId: true } },
         },
         orderBy: { serial: 'asc' },
       }),
@@ -260,7 +263,7 @@ export class ClientLedgerService {
       // every other query in the system scopes one.
       this.prisma.project.findMany({
         where: {
-          deletedAt: null, clientId: null,
+          deletedAt: null, clientId: null, workspaceFlow: 'PROJECTS',
           members: { some: { user: { organizationId } } },
         },
         select: { id: true, code: true, roundSeq: true, title: true, projectPhase: true },
@@ -314,8 +317,12 @@ export class ClientLedgerService {
     const userIds = orgUsers.map(u => u.id);
     if (!userIds.length) return EMPTY_UNATTRIBUTED();
 
+    // Clientless projects of this flow only (the ledger is @RequireFlow('PROJECTS')): a CLIENTS-flow
+    // row never carries a Client, so without the filter every one of them would count here as
+    // "time that should have reached a client and did not". The `projectId: null` arm below stays
+    // as it is — time logged against no project at all belongs to neither flow.
     const clientlessIds = (await this.prisma.project.findMany({
-      where: { clientId: null, deletedAt: null }, select: { id: true },
+      where: { clientId: null, deletedAt: null, workspaceFlow: 'PROJECTS' }, select: { id: true },
     })).map(p => p.id);
 
     const rows = await this.prisma.timesheet.findMany({
@@ -326,7 +333,7 @@ export class ClientLedgerService {
         // "hours that should have reached a client but did not".
         teamId: null,
         OR: [
-          { projectId: null },                              // still inside the assign-later buffer
+          { projectId: null },                              // still inside the PID buffer
           ...(clientlessIds.length ? [{ projectId: { in: clientlessIds } }] : []),
         ],
       },
@@ -361,7 +368,7 @@ export class ClientLedgerService {
       this.derive([clientId]),
       this.overridesFor([clientId]),
       this.prisma.project.findMany({
-        where: { clientId, deletedAt: null },
+        where: { clientId, deletedAt: null, workspaceFlow: 'PROJECTS' },
         select: {
           id: true, code: true, title: true, projectPhase: true, projectType: true,
           startDate: true, dueDate: true, completedAt: true, workingHours: true, actualHours: true,
@@ -369,6 +376,11 @@ export class ClientLedgerService {
           // two rows carrying the identical code and nothing to tell them apart, which reads as a
           // duplicate rather than as round 1 and round 2.
           roundSeq: true,
+          // A project can exist before its PID does — created while a PID request sits with an
+          // authority, or created and never given one at all. The ledger showed both as a bare
+          // dash, which says "no data" when the truth is either "waiting on Ritik" or "nobody
+          // ever asked". Those need different actions, so they need different words.
+          pidRequest: { select: { status: true, assigneeId: true, createdAt: true } },
         },
         orderBy: [{ code: 'asc' }, { roundSeq: 'asc' }],
       }),
@@ -402,12 +414,17 @@ export class ClientLedgerService {
       effective: this.effective(d, o, client),
       projects: projects.map(p => {
         const h = hoursByProject.get(p.id) ?? { billable: 0, nonBillable: 0 };
+        const { pidRequest, ...rest } = p;
         return {
-          ...p,
-          // CLIENTS-FLOW: every client is given its CID when it is created, so a live one always
-          // reads 'assigned'. 'missing' is kept for rows that predate the backfill.
-          pidStatus: p.code ? 'assigned' : 'missing',
-          pidRequestedAt: null,
+          ...rest,
+          /**
+           * Why there is no PID, in one word the screen can act on:
+           *   'assigned'  — it has one;
+           *   'requested' — a request is open with a PID authority;
+           *   'missing'   — nobody has asked, and these hours are one step from being stranded.
+           */
+          pidStatus: p.code ? 'assigned' : pidRequest?.status === 'PENDING' ? 'requested' : 'missing',
+          pidRequestedAt: p.code ? null : pidRequest?.createdAt ?? null,
           billableHours: round2(h.billable),
           nonBillableHours: round2(h.nonBillable),
           totalHours: round2(h.billable + h.nonBillable),
@@ -427,8 +444,12 @@ export class ClientLedgerService {
     const out = new Map<string, DerivedLedger>();
     for (const id of clientIds) out.set(id, EMPTY_LEDGER());
 
+    // THE read every figure in the ledger descends from — project counts, and through
+    // `clientOfProject` every hour and every value. Bounded to the PROJECTS flow (the only flow this
+    // ledger is served in), so a client's totals are the work this workspace did for it and never
+    // quietly include the other flow's matters filed under the same client.
     const projects = await this.prisma.project.findMany({
-      where: { clientId: { in: clientIds }, deletedAt: null },
+      where: { clientId: { in: clientIds }, deletedAt: null, workspaceFlow: 'PROJECTS' },
       select: { id: true, clientId: true, projectPhase: true },
     });
     const clientOfProject = new Map(projects.map(p => [p.id, p.clientId!]));

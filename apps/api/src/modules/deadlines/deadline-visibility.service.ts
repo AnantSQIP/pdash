@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../permissions/permission.service';
 import { getActorId } from '../../common/context/request-context';
 import { DeadlineChangeService } from './deadline-change.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 
 /**
  * Governs the CLIENT-facing deadline (`clientDueDate` on Project/Task), which is
@@ -31,16 +32,25 @@ export class DeadlineVisibilityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
-  /** Resolve what the CURRENT actor may see. Call once per request, reuse for a list. */
+  /**
+   * Resolve what the CURRENT actor may see. Call once per request, reuse for a list.
+   *
+   * `managed` is scoped to the flow the firm is in. Running a matter in the other flow says
+   * nothing about what may be read in this one — the matter is hidden, not handed over — and
+   * `canSee` is a plain "is this id in the set?" test, so an id that should not be there would
+   * unlock the client deadline on any row that happened to carry it.
+   */
   async scope(actorId?: string | null): Promise<DeadlineScope> {
     const id = actorId ?? getActorId();
     if (!id) return { global: false, managed: new Set() };
+    const flow = await this.flows.flowOfUser(id);
     const [global, memberships] = await Promise.all([
       this.permissions.check(id, 'deadline.view.client'),
       this.prisma.projectMember.findMany({
-        where: { userId: id, projectRole: 'MANAGER', isActive: true },
+        where: { userId: id, projectRole: 'MANAGER', isActive: true, project: { workspaceFlow: flow } },
         select: { projectId: true },
       }),
     ]);

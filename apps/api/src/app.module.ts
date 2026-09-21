@@ -1,3 +1,6 @@
+import { FlowGuard } from './common/guards/flow.guard';
+import { WorkspaceFlowModule } from './modules/workspace-flow/workspace-flow.service';
+import { WorkspaceFlowConversionModule } from './modules/workspace-flow/workspace-flow-conversion.module';
 import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
@@ -51,9 +54,9 @@ import { CompanyModule } from './modules/company/company.module';
 import { AppraisalsModule } from './modules/appraisals/appraisals.module';
 import { SequenceModule } from './common/sequence/sequence.module';
 import { CidModule } from './common/cid/cid.service';
-// CLIENTS-FLOW: commented out — the patent portal, patent IDs, client codes and the client ledger
-// (all in this one module) are switched off. See common/features.ts.
-// import { PatentsModule } from './modules/patents/patents.module';
+// The patent portal, patent IDs, client codes and the client ledger — PROJECTS flow only; every
+// route in the module carries @RequireFlow('PROJECTS'). See common/features.ts.
+import { PatentsModule } from './modules/patents/patents.module';
 import { TeamsModule } from './modules/teams/teams.module';
 import { DealsModule } from './modules/deals/deals.module';
 import { OptionalHolidaysModule } from './modules/optional-holidays/optional-holidays.module';
@@ -123,8 +126,10 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     LifecycleModule,
     // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
     SequenceModule,
+    WorkspaceFlowModule, // which flow each organisation runs — PROJECTS or CLIENTS
+    WorkspaceFlowConversionModule, // Settings → Workspace flow: preflight + conversion between the two
     CidModule, // the CID registry + ledger — every client write that touches a CID goes through it
-    // PatentsModule, // CLIENTS-FLOW: commented out
+    PatentsModule, // PROJECTS flow only (@RequireFlow('PROJECTS') on its controllers)
     TeamsModule,
     DealsModule,
     OptionalHolidaysModule,
@@ -134,6 +139,10 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // 1) Global authentication (deny-by-default; @Public() opts out).
     { provide: APP_GUARD, useClass: AuthGuard },
+    // 1b) Global, opt-in workspace flow: a route marked @RequireFlow(x) exists only for an
+    //     organisation running flow x, and answers 404 to the other (docs/WORKSPACE_FLOWS.md).
+    //     Before the permission check, so a route that is not there is not reported as forbidden.
+    { provide: APP_GUARD, useClass: FlowGuard },
     // 2) Global, opt-in authorization (enforces only where @RequirePermission is set).
     { provide: APP_GUARD, useClass: PermissionGuard },
     // 3) Global, opt-in step-up: "big change" routes marked @RequirePasscode() also

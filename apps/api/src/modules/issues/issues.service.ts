@@ -8,6 +8,7 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { serialize, dayKeyFor } from '../../common/db/serialize';
 import { startOfIstDay } from '../../common/dates';
 import { MAX_HOURS_PER_DAY } from '../timesheets/timesheets.service';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 
 // A person cannot log more than a full day across all entries — same cap as timesheets.
 const USER_SELECT = { id: true, firstName: true, lastName: true, email: true, profilePhoto: true };
@@ -24,11 +25,23 @@ export class IssuesService {
     private readonly prisma: PrismaService,
     private readonly events: EventService,
     private readonly access: ProjectAccessService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /**
+   * An issue hangs off exactly one project, so it belongs to whichever workspace flow that project
+   * was raised in (docs/WORKSPACE_FLOWS.md). Every read below carries the flow in its own `where`
+   * rather than leaning on the access assert that follows it: an issue of the other flow's work is
+   * not "forbidden", it is not there, and the reads that find nothing say so as a 404.
+   */
+  private flow() { return this.flows.currentFlow(); }
 
   /** Resolve an issue's project, then assert the actor may access that project. */
   private async assertIssueAccess(id: string): Promise<{ projectId: string }> {
-    const issue = await this.prisma.issue.findFirst({ where: { id, deletedAt: null }, select: { projectId: true } });
+    const issue = await this.prisma.issue.findFirst({
+      where: { id, deletedAt: null, project: { workspaceFlow: await this.flow() } },
+      select: { projectId: true },
+    });
     if (!issue) throw new NotFoundException(`Issue ${id} not found`);
     await this.access.assertProjectAccess(getActorId(), issue.projectId);
     return issue;
@@ -49,7 +62,7 @@ export class IssuesService {
     if (!projectId) return [];
     await this.access.assertProjectAccess(getActorId(), projectId);
     const rows = await this.prisma.issue.findMany({
-      where: { projectId, deletedAt: null },
+      where: { projectId, deletedAt: null, project: { workspaceFlow: await this.flow() } },
       include: this.include,
       orderBy: { createdAt: 'desc' },
     });
@@ -58,7 +71,10 @@ export class IssuesService {
 
   async get(id: string) {
     await this.assertIssueAccess(id);
-    const issue = await this.prisma.issue.findFirst({ where: { id, deletedAt: null }, include: this.include });
+    const issue = await this.prisma.issue.findFirst({
+      where: { id, deletedAt: null, project: { workspaceFlow: await this.flow() } },
+      include: this.include,
+    });
     if (!issue) throw new NotFoundException(`Issue ${id} not found`);
     return this.shape(issue);
   }
@@ -83,6 +99,9 @@ export class IssuesService {
     // saw the same total and all passed.
     const issue = await serialize(this.prisma, dayKeyFor(reportedBy, entryDay), async (tx) => {
       if (hours > 0) {
+        // Deliberately NOT flow-scoped: this is a cap on one person's day, not on a matter. A
+        // person has one day however many flows the firm runs, and hours logged elsewhere still
+        // fill it — filtering here would hand back a second sixteen hours.
         const dayAgg = await tx.timesheet.aggregate({
           where: { userId: reportedBy, date: entryDay, deletedAt: null }, _sum: { hoursLogged: true },
         });
@@ -112,7 +131,10 @@ export class IssuesService {
 
   async update(id: string, dto: UpdateIssueDto) {
     await this.get(id);
-    const cur = await this.prisma.issue.findFirst({ where: { id, deletedAt: null }, select: { projectId: true } });
+    const cur = await this.prisma.issue.findFirst({
+      where: { id, deletedAt: null, project: { workspaceFlow: await this.flow() } },
+      select: { projectId: true },
+    });
     if (cur) await this.access.assertProjectWritable(cur.projectId); // no edits on a completed/closed matter
     const issue = await this.prisma.issue.update({
       where: { id },

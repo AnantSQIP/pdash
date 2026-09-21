@@ -39,6 +39,7 @@ import {
   MODULES as CATALOG_MODULES,
   ROLE_PRESETS,
   SUPER_ADMIN_ONLY_CODES,
+  rolePresetsFor,
 } from '../packages/db/prisma/permissions-catalog';
 
 let passed = 0;
@@ -220,6 +221,33 @@ check('…or manages tasks from it', BELOW.map(r => holds(r, 'capacity.manage'))
 check('HR sees the board', holds('HR', 'capacity.view'), true);
 check('…but never manages tasks from it', holds('HR', 'capacity.manage'), false);
 check('every preset is accounted for by the three lists', Object.keys(ROLE_PRESETS).sort(), [...LADDER, ...BELOW, 'HR'].sort());
+
+// ── the same question, asked of the PROJECTS flow ───────────────────────────
+// ROLE_PRESETS above IS the CLIENTS flow. The PROJECTS flow is what production has always run —
+// the matrix of 2026-08-12: every role sees Team Capacity, HR included, and nobody holds
+// capacity.manage, because that board has no task CRUD to hand out. rolePresetsFor is where the
+// two part company, and the workspace-flow conversion moves a live database between them, so if
+// this drifts the conversion moves grants to the wrong place. See docs/WORKSPACE_FLOWS.md.
+const PROJECTS_PRESETS = rolePresetsFor('PROJECTS');
+const holdsInProjects = (role: string, c: string) => {
+  const p = PROJECTS_PRESETS[role];
+  return p === '*' || (p as string[]).includes(c);
+};
+const EVERY_ROLE = Object.keys(ROLE_PRESETS);
+check('PROJECTS: the same roles exist', Object.keys(PROJECTS_PRESETS).sort(), EVERY_ROLE.slice().sort());
+check('PROJECTS: every role sees the board — HR included',
+  EVERY_ROLE.map(r => holdsInProjects(r, 'capacity.view')), EVERY_ROLE.map(() => true));
+check('PROJECTS: only the implicit-all role manages tasks from it',
+  EVERY_ROLE.filter(r => holdsInProjects(r, 'capacity.manage')), ['Super Admin']);
+check('PROJECTS: nothing else about the presets changes',
+  EVERY_ROLE.map(r => {
+    const c = PROJECTS_PRESETS[r], p = ROLE_PRESETS[r];
+    if (c === '*' || p === '*') return c === p;
+    const strip = (x: string[]) => x.filter(v => !v.startsWith('capacity.')).sort().join(',');
+    return strip(c as string[]) === strip(p as string[]);
+  }),
+  EVERY_ROLE.map(() => true));
+check('CLIENTS is the catalog itself, unchanged', rolePresetsFor('CLIENTS'), ROLE_PRESETS);
 
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length) {

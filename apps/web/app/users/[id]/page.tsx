@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api, type UserSummary, type TeamCapacity, type CapacityRow } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { Avatar } from '@/components/Avatar';
 import { formatDate } from '@/lib/date';
 
@@ -43,6 +44,7 @@ export default function UserDetailPage() {
   // so somebody without capacity.view gets told that, not a blank "no work" that reads as fact.
   const { can, isSuperAdmin } = usePermissions();
   const canSeeLoad = can('capacity.view');
+  const clientsFlow = useIsClientsFlow(); // CLIENTS flow: a project is a client
   // Access administration lives on its own screen. This page is about the work; linking across
   // stops the two feeling like unrelated halves to whoever can see both.
   const canManageAccess = isSuperAdmin || can('user.manage_access');
@@ -103,8 +105,8 @@ export default function UserDetailPage() {
           <>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <Tile label="Committed" value={`${row.committedHours}h`} sub="next 14 days" tint="bg-brand-50 text-brand-700" Icon={Clock} />
-              {/* Across every client — the same figure the board and the assignment dialogs use. */}
-              <Tile label="Free" value={`${row.freeHours}h`} sub={`all clients · ${row.availableNow ? 'available now' : row.nextFreeDate ? `free from ${formatDate(row.nextFreeDate)}` : 'no clear run'}`} tint="bg-green-50 text-green-700" Icon={CalendarCheck} />
+              {/* Across every matter — the same figure the board and the assignment dialogs use. */}
+              <Tile label="Free" value={`${row.freeHours}h`} sub={`${clientsFlow ? 'all clients' : 'all projects'} · ${row.availableNow ? 'available now' : row.nextFreeDate ? `free from ${formatDate(row.nextFreeDate)}` : 'no clear run'}`} tint="bg-green-50 text-green-700" Icon={CalendarCheck} />
               <Tile label="Utilisation" value={`${row.utilization}%`} sub="of capacity" tint="bg-amber-50 text-amber-700" Icon={Clock} />
               <Tile label="Overdue" value={row.overdueCount} sub={row.overdueCount === 1 ? 'task past due' : 'tasks past due'} tint={row.overdueCount > 0 ? 'bg-red-50 text-red-700' : 'bg-gray-50 text-gray-500'} Icon={AlertTriangle} />
             </div>
@@ -122,7 +124,7 @@ export default function UserDetailPage() {
                     <thead>
                       <tr className="text-left text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100 bg-gray-50/60">
                         <th className="px-5 py-2.5 font-semibold">Task</th>
-                        <th className="px-3 py-2.5 font-semibold">Client</th>
+                        <th className="px-3 py-2.5 font-semibold">{clientsFlow ? 'Client' : 'Project'}</th>
                         <th className="px-3 py-2.5 font-semibold">Priority</th>
                         <th className="px-3 py-2.5 font-semibold">Deadline</th>
                         <th className="px-5 py-2.5 font-semibold text-right">Remaining</th>
@@ -160,13 +162,16 @@ export default function UserDetailPage() {
               )}
             </div>
           </>
-        ) : canSeeLoad ? (
+        ) : canSeeLoad || !clientsFlow ? (
+          // PROJECTS: everyone holds capacity.view, and a rare DENY still says why it is empty.
           <div className="bg-white rounded-xl border border-gray-200 px-5 py-10 text-center">
-            <p className="text-sm text-gray-400">No capacity information for this person.</p>
-            <p className="text-xs text-gray-400 mt-1">They may be inactive, or have no assigned work in the next fortnight.</p>
+            <p className="text-sm text-gray-400">
+              {canSeeLoad ? 'No capacity information for this person.' : 'You do not have access to workload information.'}
+            </p>
+            {canSeeLoad && <p className="text-xs text-gray-400 mt-1">They may be inactive, or have no assigned work in the next fortnight.</p>}
           </div>
-        ) : null /* Workload is Team Capacity's, which is Senior Consultant and above: nothing to show,
-                    and no box saying so on every profile everybody else opens. */}
+        ) : null /* CLIENTS: workload is Team Capacity's, which is Senior Consultant and above: nothing
+                    to show, and no box saying so on every profile everybody else opens. */}
 
         {canSeeLoad && (
           <p className="text-[11px] text-gray-400">

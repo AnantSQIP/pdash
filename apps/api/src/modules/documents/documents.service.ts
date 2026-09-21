@@ -12,6 +12,8 @@ import { ProjectAccessService } from '../../common/access/project-access.module'
 import { EVENTS } from '../../common/events/canonical-events';
 import { getActorId } from '../../common/context/request-context';
 import { documentStorage } from './document-storage';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import { taskInFlow } from '../../common/flow-scope';
 
 /** Per-file upload cap. Multer enforces it at the transport layer too. */
 export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -55,6 +57,7 @@ export class DocumentsService {
     private readonly events: EventService,
     private readonly permissions: PermissionService,
     private readonly access: ProjectAccessService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   private actor(): string {
@@ -83,12 +86,16 @@ export class DocumentsService {
 
     const projectId = opts.projectId?.trim() || undefined;
     const taskId = opts.taskId?.trim() || undefined;
+    // Both ids arrive from the client, so both are checked against the flow the firm is running:
+    // a file must not be parked on the other flow's matter, where nobody in this one can reach it
+    // to take it down again. A task with no project is a team space's and belongs to both.
+    const flow = await this.flows.currentFlow();
     if (projectId) {
-      const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true } });
+      const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null, workspaceFlow: flow }, select: { id: true } });
       if (!project) throw new NotFoundException(`Project ${projectId} not found`);
     }
     if (taskId) {
-      const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null }, select: { id: true } });
+      const task = await this.prisma.task.findFirst({ where: { id: taskId, deletedAt: null, ...taskInFlow(flow) }, select: { id: true } });
       if (!task) throw new NotFoundException(`Task ${taskId} not found`);
     }
 
@@ -248,6 +255,11 @@ export class DocumentsService {
       });
       if (member) return;
     }
+    // The next three arms authorise a file THROUGH the matter it hangs off, so a link into the
+    // other workspace flow's work must not authorise anything. It cannot: canAccessProject,
+    // canAccessTask and canAccessEntity are each bounded by the actor's flow and answer false for
+    // a matter of the other one (common/access/project-access.module.ts). Deliberately no second
+    // filter here — one wall, in the place that already owns the question.
     // Project file → project member/lead.
     for (const pd of doc.projectDocuments) {
       if (await this.access.canAccessProject(actorId, pd.projectId)) return;
@@ -289,19 +301,22 @@ export class DocumentsService {
     // Without this any document.view holder could enumerate another matter's filenames + task
     // titles by id — and for a patent firm a filename can itself be a confidential real number.
     await this.access.assertProjectAccess(getActorId(), projectId);
-    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null }, select: { id: true } });
+    // …and the matter has to be one of this flow's. Asking for the other flow's project by id gets
+    // the same answer a matter that was never there gets, rather than a refusal that confirms it.
+    const flow = await this.flows.currentFlow();
+    const project = await this.prisma.project.findFirst({ where: { id: projectId, deletedAt: null, workspaceFlow: flow }, select: { id: true } });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
     const docSelect = { ...DOC_SELECT, _count: { select: { commentAttachments: true } } } as const;
     const [projLinks, taskLinks] = await Promise.all([
       this.prisma.projectDocument.findMany({
-        where: { projectId, document: { deletedAt: null } },
+        where: { projectId, document: { deletedAt: null }, project: { workspaceFlow: flow } },
         select: { document: { select: docSelect } },
       }),
       this.prisma.taskDocument.findMany({
         where: {
           document: { deletedAt: null },
-          task: { deletedAt: null, projectTasks: { some: { projectId } } },
+          task: { deletedAt: null, ...taskInFlow(flow), projectTasks: { some: { projectId } } },
         },
         select: { document: { select: docSelect }, task: { select: { id: true, title: true } } },
       }),

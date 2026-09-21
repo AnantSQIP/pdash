@@ -1,4 +1,5 @@
-import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
+import { patentsAndClientCodes } from '../../common/features';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import {
   BadRequestException, Body, Controller, ForbiddenException, Get, Injectable, Module,
   NotFoundException, Param, Post, Query,
@@ -10,6 +11,7 @@ import { EventService } from '../audit-events/event.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { getActorId } from '../../common/context/request-context';
+import { taskInFlow } from '../../common/flow-scope';
 
 /**
  * Employment lifecycle — probation, confirmation and leaving.
@@ -81,6 +83,7 @@ export class LifecycleService {
     private readonly actor: ActorContextService,
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   private actorId(): string {
@@ -288,12 +291,23 @@ export class LifecycleService {
     });
     if (!u) throw new NotFoundException('Person not found.');
 
+    // CLIENTS flow: client records (client codes) do not exist there and their screens (the client
+    // ledger) are off, so nothing in the product could clear that blocker — it is still reported,
+    // not blocking. The words follow the flow's unit of work. Resolved before the reads because
+    // the reads need it too: what a leaver is still HOLDING is work, and work belongs to a flow.
+    // Somebody who was staffed on matters before the firm switched is not still holding them, and
+    // a release blocked on matters nobody in this flow can even open would never clear.
+    const flow = await this.flows.flowOf(organizationId);
+    const clientCodes = patentsAndClientCodes(flow);
+
     const [openTasks, managedProjects, memberProjects, unsubmitted, pendingLeave, ownedClients] =
       await Promise.all([
-        // Tasks still assigned to them and not closed.
+        // Tasks still assigned to them and not closed. taskInFlow() keeps a team space's task in
+        // the list — it has no project, so it is this firm's work whichever flow is running.
         this.prisma.task.findMany({
           where: {
             deletedAt: null,
+            ...taskInFlow(flow),
             assignees: { some: { userId } },
             OR: [{ currentStatus: { type: { not: 'CLOSED' } } }, { currentStatus: null }],
           },
@@ -309,6 +323,7 @@ export class LifecycleService {
         this.prisma.project.findMany({
           where: {
             deletedAt: null,
+            workspaceFlow: flow,
             members: { some: { userId, projectRole: 'MANAGER', isActive: true } },
             projectPhase: { notIn: ['COMPLETED', 'CLOSED', 'CANCELLED'] },
           },
@@ -318,12 +333,16 @@ export class LifecycleService {
         this.prisma.project.findMany({
           where: {
             deletedAt: null,
+            workspaceFlow: flow,
             members: { some: { userId, projectRole: { not: 'MANAGER' }, isActive: true } },
             projectPhase: { notIn: ['COMPLETED', 'CLOSED', 'CANCELLED'] },
           },
           select: { id: true, code: true, title: true, projectPhase: true },
         }),
         // Time logged against no PID yet — it stops being recoverable once they are gone.
+        // Deliberately NOT flow-scoped, and it cannot be: `projectId: null, teamId: null` IS the
+        // filter, and an entry attached to neither a matter nor a team belongs to neither flow.
+        // These hours are the leaver's, not a flow's, and they are the ones nobody can recover.
         this.prisma.timesheet.findMany({
           where: { userId, deletedAt: null, projectId: null, teamId: null },
           select: { id: true, date: true, hoursLogged: true, notes: true },
@@ -335,21 +354,21 @@ export class LifecycleService {
           select: { id: true, leaveType: true, startDate: true, endDate: true, numDays: true },
         }),
         // Client relationships in their name — an account manager who has left is worse than none,
-        // because the ledger still shows somebody to ask.
-        this.prisma.client.findMany({
-          where: { organizationId, deletedAt: null, accountManagerId: userId },
-          select: { id: true, code: true, name: true },
-        }),
+        // because the ledger still shows somebody to ask. Clients are a PROJECTS-flow record, so in
+        // CLIENTS the question is not asked at all rather than asked and then explained away.
+        clientCodes
+          ? this.prisma.client.findMany({
+              where: { organizationId, deletedAt: null, accountManagerId: userId },
+              select: { id: true, code: true, name: true },
+            })
+          : Promise.resolve([] as { id: string; code: string; name: string | null }[]),
       ]);
 
     const items = [
       { key: 'projectsManaged', label: 'Projects they manage', count: managedProjects.length, blocking: true },
       { key: 'openTasks', label: 'Open tasks assigned to them', count: openTasks.length, blocking: true },
-      // CLIENTS-FLOW: commented out as a BLOCKER — the client records it counts belong to the
-      // switched-off client-code system, whose screens (the client ledger) are switched off too,
-      // so nothing in the product could clear it. It is still reported.
-      { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: PATENTS_AND_CLIENT_CODES },
-      { key: 'unsubmittedTime', label: 'Time logged with no client attached', count: unsubmitted.length, blocking: false },
+      { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: clientCodes },
+      { key: 'unsubmittedTime', label: flow === 'CLIENTS' ? 'Time logged with no client attached' : 'Time logged with no PID attached', count: unsubmitted.length, blocking: false },
       { key: 'pendingLeave', label: 'Leave requests still pending', count: pendingLeave.length, blocking: false },
       { key: 'projectsMember', label: 'Other projects they are on', count: memberProjects.length, blocking: false },
     ];

@@ -4,8 +4,8 @@
  * Works identically on Linux, WSL, macOS and Windows.
  *
  * Starts:
- *   - the built NestJS API   (apps/api/dist/main.js)  on API_PORT   (default 4021)
- *   - the Next.js prod server (next start)            on WEB_PORT   (default 3021)
+ *   - the built NestJS API   (apps/api/dist/main.js)  on API_PORT   (default 4000)
+ *   - the Next.js prod server (next start)            on WEB_PORT   (default 3001)
  *
  * Prereq: run a production build first ->  npm run build:all
  * Usage:  node scripts/serve.mjs   (or: npm run serve)
@@ -21,8 +21,8 @@ import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const API_PORT = process.env.API_PORT || '4021';
-const WEB_PORT = process.env.WEB_PORT || '3021';
+const API_PORT = process.env.API_PORT || '4000';
+const WEB_PORT = process.env.WEB_PORT || '3001';
 const API_ORIGIN = process.env.API_ORIGIN || `http://localhost:${API_PORT}`;
 const isWin = process.platform === 'win32';
 
@@ -62,7 +62,7 @@ function launch(name, cmd, args, env) {
 
 // API — plain node on the compiled output (fast, no ts-node).
 launch('api', process.execPath, [apiEntry], { API_PORT });
-// Web — Next.js production server via the workspace start script (next start -p 3021).
+// Web — Next.js production server via the workspace start script (next start -p 3001).
 const npm = isWin ? 'npm.cmd' : 'npm';
 launch('web', npm, ['run', 'start', '--workspace=apps/web'], { API_ORIGIN, PORT: WEB_PORT });
 

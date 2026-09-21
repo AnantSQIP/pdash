@@ -10,6 +10,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import clsx from 'clsx';
 import { RiInformationLine } from '@remixicon/react';
 import type { BreachCount, HoursKpi, DeadlineKpi, StreakKpi } from '@/lib/api';
@@ -148,6 +149,25 @@ export const KPI_HELP = {
     'Everything finished inside the period, against the work that was due to be finished by the end of it and '
     + 'is still open.',
   deadlineShifts:
+    'Requirement 18 — how many times a project\'s deadline was moved in the period, from the recorded deadline '
+    + 'changes. A project with no recorded change shows zero: the ledger only holds moves made since it was '
+    + 'introduced, so zero means "none recorded", not "provably never".',
+  pmPerformance:
+    'A project\'s aggregated overshoot set against its aggregated delivery, rolled up per project manager. '
+    + 'A co-managed project counts in full for each manager rather than being split — each of them is wholly '
+    + 'answerable for it.',
+  importantOverrun:
+    'Requirement 19 — the same over-run arithmetic restricted to the HIGH and CRITICAL tasks. A project can '
+    + 'look calm in aggregate while every critical piece of it doubled.',
+};
+
+/**
+ * The same definitions in the CLIENTS workspace flow's words (docs/WORKSPACE_FLOWS.md), where a
+ * project is a client and a task group's deadline is the commitment that moves.
+ */
+export const CLIENTS_KPI_HELP: typeof KPI_HELP = {
+  ...KPI_HELP,
+  deadlineShifts:
     'Requirement 18 — how many times a client\'s deadline was moved in the period, from the recorded deadline '
     + 'changes. A client with no recorded change shows zero: the ledger only holds moves made since it was '
     + 'introduced, so zero means "none recorded", not "provably never".',
@@ -160,8 +180,14 @@ export const KPI_HELP = {
     + 'look calm in aggregate while every critical piece of it doubled.',
 };
 
+/** The definitions in the words of the firm's workspace flow. */
+export function useKpiHelp(): typeof KPI_HELP {
+  return useIsClientsFlow() ? CLIENTS_KPI_HELP : KPI_HELP;
+}
+
 /** The two KPIs written out, shown at the foot of each view. */
 export function KpiGlossary() {
+  const KPI_HELP = useKpiHelp();
   const rows: { label: string; help: string }[] = [
     { label: 'KPI 1 · Time vs allocated', help: KPI_HELP.overrun },
     { label: 'KPI 1 · Breaches', help: KPI_HELP.hoursBreaches },

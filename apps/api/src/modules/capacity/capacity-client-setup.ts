@@ -17,14 +17,14 @@
  * behind holding a number nobody asked for.
  *
  * Prisma's interactive transactions do not nest, so "create the client, then write its work" —
- * two calls, two transactions — was never an option. ProjectsService.createWithin() opens the one
+ * two calls, two transactions — was never an option. ClientsProjectsService.createWithin() opens the one
  * transaction and hands it back: the client, its CID, its ledger row, its members, its task groups,
  * their tasks and every seat are written on the same `tx`, and anything thrown in here rolls all of
  * it back together.
  *
  * ── Nothing is decided here ─────────────────────────────────────────────────────────────────
  *
- * Not one business rule lives in this file. The client is ProjectsService's to create (the CID, the
+ * Not one business rule lives in this file. The client is ClientsProjectsService's to create (the CID, the
  * manager's authority, the client-deadline permission); a task group is prepareTaskGroup() +
  * createTaskGroupTx() (its type, its standard tasks, its domain, its dates); a task and its seats
  * are TasksService's (a task never due after its group, at most one PM, one seat per person per
@@ -47,7 +47,7 @@ import {
   MaxLength, MinLength, ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { ProjectsService } from '../projects/projects.service';
+import { ClientsProjectsService } from '../projects/projects.clients.service';
 import { TasksService, type SeatInput } from '../tasks/tasks.service';
 import { PermissionService } from '../permissions/permission.service';
 import { EventService } from '../audit-events/event.service';
@@ -55,7 +55,10 @@ import { EVENTS } from '../../common/events/canonical-events';
 import { DeadlineVisibilityService } from '../deadlines/deadline-visibility.service';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
-import { CustomDomainDto, CustomTypeDto, OFFICES, PROJECT_PRIORITIES, type CreateProjectDto } from '../projects/dto';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
+// The CLIENTS flow's own definitions: a client, its task groups and their fields. The PROJECTS
+// flow's are ../projects/dto.ts, and nothing here is reachable from that flow.
+import { CustomDomainDto, CustomTypeDto, OFFICES, PROJECT_PRIORITIES, type CreateProjectDto } from '../projects/dto.clients';
 import { TASK_PRIORITIES } from '../tasks/dto';
 import { CapacitySeatDto } from './capacity-tasks';
 
@@ -158,7 +161,7 @@ export class CapacityNewClientDto {
 
 /** A task group and its tasks, resolved and refused-if-wrong before the transaction opens. */
 type PlannedGroup = {
-  group: Awaited<ReturnType<ProjectsService['prepareTaskGroup']>>;
+  group: Awaited<ReturnType<ClientsProjectsService['prepareTaskGroup']>>;
   tasks: {
     title: string; description?: string; priority?: string;
     startDate: Date | null; dueDate: Date | null; seats: SeatInput[];
@@ -171,7 +174,7 @@ const toSeats = (seats: CapacitySeatDto[] | undefined): SeatInput[] =>
 @Injectable()
 export class CapacityClientSetupService {
   constructor(
-    private readonly projects: ProjectsService,
+    private readonly projects: ClientsProjectsService,
     private readonly tasks: TasksService,
     private readonly permissions: PermissionService,
     private readonly events: EventService,
@@ -304,7 +307,13 @@ export class CapacityClientSetupService {
   }
 }
 
+/**
+ * CLIENTS flow only (docs/WORKSPACE_FLOWS.md). A client, its client group, its task groups and its
+ * CID are CLIENTS ideas; the PROJECTS board has no task CRUD at all, so it does not offer this and
+ * the route answers 404 there.
+ */
 @Controller('capacity/clients')
+@RequireFlow('CLIENTS')
 export class CapacityClientSetupController {
   constructor(private readonly setup: CapacityClientSetupService) {}
 

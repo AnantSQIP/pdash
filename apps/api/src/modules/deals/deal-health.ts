@@ -1,4 +1,3 @@
-import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import { DealStage, OPEN_STAGES } from '../../common/deal-stages';
 
 /**
@@ -92,8 +91,11 @@ export function daysInCurrentStage(input: DealHealthInput, now = new Date()): nu
  * Closed deals get one flag at most: a won deal still waiting for its client record. Nothing else
  * applies — chasing a lost deal for inactivity would be noise, and that noise is what makes people
  * stop reading warnings.
+ *
+ * `clientCodes` — whether the organisation's workspace flow has client codes at all
+ * (patentsAndClientCodes: PROJECTS yes, CLIENTS no).
  */
-export function assessDeal(input: DealHealthInput, now = new Date()): DealFlag[] {
+export function assessDeal(input: DealHealthInput, now = new Date(), clientCodes = true): DealFlag[] {
   const flags: DealFlag[] = [];
   const isOpen = OPEN_STAGES.includes(input.stage as DealStage);
 
@@ -101,9 +103,9 @@ export function assessDeal(input: DealHealthInput, now = new Date()): DealFlag[]
     // Won, but nobody created the client record. The deal is finished and the handover is not:
     // minting a client needs the confidential-client permission, so BD cannot do it themselves
     // and the request is easily forgotten by whoever can.
-    // CLIENTS-FLOW: commented out while client codes are switched off — a won deal no longer
-    // creates a client record, so this would nag about a step that no longer exists.
-    if (PATENTS_AND_CLIENT_CODES && input.stage === 'WON' && !input.clientId) {
+    // Only where client codes exist (`clientCodes`, the PROJECTS flow): in the CLIENTS flow a won
+    // deal creates no client record, so this would nag about a step that does not exist.
+    if (clientCodes && input.stage === 'WON' && !input.clientId) {
       flags.push({
         kind: 'AWAITING_CLIENT',
         severity: 'warn',

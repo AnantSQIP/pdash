@@ -1,13 +1,11 @@
 'use client';
 
 // Shared visual language for capacity grids, used by both the full Team Capacity board and the
-// per-client availability tab so the two never drift apart. Light since Sep 2026: pastel fills, a
-// paler free base, and the non-working states (leave, holiday, weekend, comp-off) as tints rather
-// than solid blocks — see lib/project-colors.ts.
+// per-project availability tab so the two never drift apart.
 //
 // A working day is the owner's "green box". Work is drawn INTO it as segments — one per task,
 // width proportional to the hours that task puts on the day — so the green left showing is
-// literally the free hours. Each segment is its client's hue at its priority's depth, with a
+// literally the free hours. Each segment is its project's hue at its priority's depth, with a
 // rail along the bottom when its deadline is close. See lib/project-colors.ts for the rules.
 
 import clsx from 'clsx';
@@ -16,25 +14,25 @@ import { Plane, Flag } from 'lucide-react';
 import type { CapacityDay, CapacityOpenTask, CapacityRow, DayState } from '@/lib/api';
 import { formatDate, todayIST } from '@/lib/date';
 import {
-  type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED,
-  segmentFill, segmentRing, textOnFill, textureStyle, deadlineState, railStyle, urgencyOrder, type DeadlineState,
+  type ProjectHue, NO_PROJECT_HUE, FREE_BASE, OVER_COMMITTED, SEGMENT_RING,
+  segmentFill, textOnFill, textureStyle, deadlineState, railStyle, urgencyOrder, type DeadlineState,
 } from '@/lib/project-colors';
 
-/** Cell classes for the day states that are NOT drawn as segments. Tints, never solid blocks. */
+/** Cell classes for the day states that are NOT drawn as segments. */
 export const STATE_STYLE: Record<DayState, { cell: string; label: string; dot: string }> = {
-  FREE:          { cell: '',                                                     label: 'Free',            dot: 'bg-emerald-100 ring-1 ring-inset ring-emerald-300' },
-  LIGHT:         { cell: '',                                                     label: 'Light',           dot: 'bg-emerald-100 ring-1 ring-inset ring-emerald-300' },
-  BUSY:          { cell: '',                                                     label: 'Busy',            dot: 'bg-emerald-100 ring-1 ring-inset ring-emerald-300' },
-  LEAVE:         { cell: 'bg-purple-50 border-purple-200',                       label: 'On leave',        dot: 'bg-purple-100 ring-1 ring-inset ring-purple-300' },
-  LEAVE_PENDING: { cell: 'border-purple-300 border-dashed',                      label: 'Leave (pending)', dot: 'bg-white ring-1 ring-inset ring-purple-300' },
-  HOLIDAY:       { cell: 'bg-amber-50 border-amber-200',                         label: 'Holiday',         dot: 'bg-amber-100 ring-1 ring-inset ring-amber-300' },
-  WEEKEND:       { cell: 'bg-slate-50 border-slate-100',                         label: 'Weekend',         dot: 'bg-slate-100 ring-1 ring-inset ring-slate-200' },
-  // Past (actual-attendance) states:
-  PRESENT:       { cell: 'bg-emerald-100 hover:bg-emerald-200 border-emerald-200', label: 'Present',       dot: 'bg-emerald-200 ring-1 ring-inset ring-emerald-400' },
-  ABSENT:        { cell: 'bg-rose-50 border-rose-200',                           label: 'Absent',          dot: 'bg-rose-100 ring-1 ring-inset ring-rose-300' },
-  COMPOFF:       { cell: 'bg-indigo-100 hover:bg-indigo-200 border-indigo-300',  label: 'Worked (comp-off)', dot: 'bg-indigo-200 ring-1 ring-inset ring-indigo-400' },
+  FREE:          { cell: '',                                                   label: 'Free',            dot: 'bg-emerald-200' },
+  LIGHT:         { cell: '',                                                   label: 'Light',           dot: 'bg-emerald-200' },
+  BUSY:          { cell: '',                                                   label: 'Busy',            dot: 'bg-emerald-200' },
+  LEAVE:         { cell: 'bg-purple-100 border-purple-200',                    label: 'On leave',        dot: 'bg-purple-300' },
+  LEAVE_PENDING: { cell: 'border-purple-400 border-dashed',                    label: 'Leave (pending)', dot: 'bg-purple-200' },
+  HOLIDAY:       { cell: 'bg-amber-100 border-amber-200',                      label: 'Holiday',         dot: 'bg-amber-300' },
+  WEEKEND:       { cell: 'bg-gray-50 border-gray-100',                         label: 'Weekend',         dot: 'bg-gray-200' },
+  // Past (actual-attendance) states — unchanged:
+  PRESENT:       { cell: 'bg-emerald-200 hover:bg-emerald-300 border-emerald-300', label: 'Present',     dot: 'bg-emerald-500' },
+  ABSENT:        { cell: 'bg-red-100 border-red-200',                          label: 'Absent',          dot: 'bg-red-300' },
+  COMPOFF:       { cell: 'bg-indigo-500 hover:bg-indigo-600 border-indigo-600', label: 'Worked (comp-off)', dot: 'bg-indigo-500' },
   // Nothing recorded yet — neutral, never green (green would assert presence).
-  NOT_MARKED:    { cell: 'bg-white border-gray-200 border-dashed',               label: 'Not marked',      dot: 'bg-white ring-1 ring-inset ring-gray-300' },
+  NOT_MARKED:    { cell: 'bg-white border-gray-200 border-dashed',             label: 'Not marked',      dot: 'bg-gray-200' },
 };
 
 export const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -45,9 +43,9 @@ export function isToday(iso: string) { return iso === todayIST(); }
 export const DAILY_CAPACITY = 8;
 
 /**
- * The words printed INSIDE a segment when it is wide enough to hold them: the CID's serial
+ * The words printed INSIDE a segment when it is wide enough to hold them: the PID's serial
  * ("003"), or the space for team work. A legend is what you consult when a label will not fit;
- * a label is what you read without looking away. The full CID and title are always in the hover.
+ * a label is what you read without looking away. The full PID and title are always in the hover.
  */
 export function segmentLabel(task: CapacityOpenTask): string | null {
   if (task.id === OTHER_WORK_TASK_ID) return 'other';
@@ -57,7 +55,7 @@ export function segmentLabel(task: CapacityOpenTask): string | null {
     const serial = task.projectPid.split(/[_\-/]/).pop() ?? task.projectPid;
     return task.projectRound && task.projectRound > 1 ? `${serial}·P${task.projectRound}` : serial;
   }
-  // No CID yet (a client still waiting for one): the initials of its title's first words.
+  // No PID yet (a project still waiting for one): the initials of its title's first words.
   const words = (task.project ?? '').split(/[^A-Za-z0-9]+/).filter(w => w.length > 2);
   return words.length ? words.slice(0, 3).map(w => w[0].toUpperCase()).join('') : null;
 }
@@ -84,7 +82,7 @@ export function holidaysOf(rows: { days: CapacityDay[] }[]): Set<string> {
 }
 
 /**
- * The neutral block every other client's work collapses into inside ONE client's view.
+ * The neutral block every other project's work collapses into inside ONE project's view.
  *
  * A day drawn per-task, with everyone else's segments faded to a quarter of their opacity, reads
  * as an empty day — which is exactly how somebody came to be handed work they had no room for.
@@ -93,16 +91,16 @@ export function holidaysOf(rows: { days: CapacityDay[] }[]): Set<string> {
  * real tasks behind it, named where this viewer is allowed to know them.
  */
 export const OTHER_WORK_HUE: ProjectHue = {
-  name: 'other', h: 215,
+  name: 'other', h: 215, s: 0.26,
   // One depth at every priority: this block is not one task and has no urgency of its own. Slate
-  // 600 rather than the family's pastels, because it has to read as MASS — and because the label
-  // written on it is white, which needs 6.2:1 on this fill (the pastels could not carry it).
+  // 600 rather than the palette's own slate, so a day's "everything else" cannot be mistaken for
+  // the matter that happens to have been given the slate hue.
   critical: '#475569', high: '#475569', medium: '#475569', low: '#475569',
-  edge: '#1e293b', ink: '#ffffff', tint: '#f1f5f9', ring: '#cbd5e1', texture: 'backhatch',
+  tint: '#f1f5f9', ring: '#cbd5e1', texture: 'backhatch',
 };
 export const OTHER_WORK_TASK_ID = '~other';
 
-/** Every client a board's rows mention, for hue assignment. */
+/** Every project a board's rows mention, for hue assignment. */
 export function projectsOf(rows: { openTasks: CapacityOpenTask[] }[]): { id: string; pid: string | null }[] {
   const m = new Map<string, { id: string; pid: string | null }>();
   for (const r of rows) for (const t of r.openTasks) {
@@ -137,13 +135,13 @@ export function segmentsFor(
 }
 
 /**
- * The same day, drawn for ONE client: its own segments as they are, and every other client's
+ * The same day, drawn for ONE project: its own segments as they are, and every other project's
  * hours rolled into a single neutral block at the end.
  *
- * One block rather than many is deliberate. Inside a client's view the question is not "which
+ * One block rather than many is deliberate. Inside a project's view the question is not "which
  * seven other matters is she on" — the hover answers that — it is "how much of Tuesday is already
  * gone". A single measured block answers it in one glance, and it cannot be mistaken for this
- * client's work however many other matters there happen to be.
+ * project's work however many other matters there happen to be.
  */
 export function focusSegments(segments: Segment[] | null, focusProjectId: string): Segment[] | null {
   if (!segments) return null;
@@ -175,7 +173,7 @@ export function DayCell({
   day: CapacityDay;
   /** null = no itemisation in the payload → plain fill; [] = a genuinely free day. */
   segments: Segment[] | null;
-  /** When set, segments of every OTHER client fade — the legend's hover/pin. */
+  /** When set, segments of every OTHER project fade — the legend's hover/pin. */
   focusProjectId?: string | null;
   /** The person panel's own strip: shorter cells. */
   compact?: boolean;
@@ -240,12 +238,12 @@ export function DayCell({
         working && pendingLeave && s.cell,
         working && 'cursor-pointer hover:shadow-sm',
         !working && 'cursor-default',
-        today && 'border-l-2 border-l-brand-500',
+        today && 'border-l-2 border-l-gray-900',
       )}
       style={{
         ...(working ? { backgroundColor: FREE_BASE.bg } : {}),
         // The legacy fill, only when the API gave no itemisation: darker green = fuller day.
-        ...(legacy ? { backgroundImage: `linear-gradient(90deg, rgba(16,185,129,0.28) ${Math.min(100, day.utilization * 100)}%, transparent ${Math.min(100, day.utilization * 100)}%)` } : {}),
+        ...(legacy ? { backgroundImage: `linear-gradient(90deg, rgba(5,150,105,0.35) ${Math.min(100, day.utilization * 100)}%, transparent ${Math.min(100, day.utilization * 100)}%)` } : {}),
       }}
     >
       {working && shown && shown.length > 0 && (
@@ -263,14 +261,14 @@ export function DayCell({
                   width: `max(6px, ${(seg.hours / scale) * 100}%)`,
                   backgroundColor: seg.fill,
                   ...textureStyle(seg.hue.texture),
-                  boxShadow: segmentRing(seg.hue),
+                  boxShadow: SEGMENT_RING,
                   opacity: faded ? 0.25 : 1,
                 }}
               >
                 {text && (
                   <span
                     className="pointer-events-none absolute inset-x-0 top-0 truncate px-1 font-mono text-[9px] leading-[14px]"
-                    style={{ color: textOnFill(seg.hue), bottom: seg.rail ? 3 : 0 }}
+                    style={{ color: textOnFill(seg.task.priority), bottom: seg.rail ? 3 : 0 }}
                   >
                     {text}{hours && <span className="opacity-80"> {hours}</span>}
                   </span>
@@ -288,18 +286,18 @@ export function DayCell({
             <div
               className="relative h-full shrink-0 rounded-[2px]"
               title={`+${hidden} more`}
-              style={{ width: '6px', background: 'repeating-linear-gradient(45deg, #94a3b8 0 2px, #ffffff 2px 4px)', boxShadow: 'inset 0 0 0 1px #94a3b8' }}
+              style={{ width: '6px', background: 'repeating-linear-gradient(45deg, #374151 0 2px, #ffffff 2px 4px)', boxShadow: SEGMENT_RING }}
             />
           )}
         </div>
       )}
-      {/* More than the day's hours planned: a rose line UNDER the box — the overloaded mark.
-          Under, not on, so the green box and the work in it stay exactly as drawn. */}
+      {/* More than the day's hours planned: a black line UNDER the box — the overloaded mark.
+          Under, not on, so the green box and the work in it stay exactly as drawn. Not red. */}
       {over && (
         <span className="pointer-events-none absolute inset-x-0.5 h-[3px] rounded-full" style={{ bottom: -5, backgroundColor: OVER_COMMITTED }} aria-hidden />
       )}
-      {day.state === 'LEAVE' && <Plane size={11} className="absolute inset-0 m-auto text-purple-400" />}
-      {pendingLeave && <Plane size={10} className="absolute top-1 right-1 text-purple-400" />}
+      {day.state === 'LEAVE' && <Plane size={11} className="absolute inset-0 m-auto text-purple-500" />}
+      {pendingLeave && <Plane size={10} className="absolute top-1 right-1 text-purple-500" />}
       {day.state === 'HOLIDAY' && <Flag size={11} className="absolute inset-0 m-auto text-amber-500" />}
     </button>
   );

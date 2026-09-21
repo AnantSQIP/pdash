@@ -4,12 +4,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plus, Check, Search, X as XIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
-import { api, type TaskGroup, type WorkflowStatus } from '@/lib/api';
+import { api, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 import { OPEN_TYPE } from '@/lib/tasks';
-import { formatDate } from '@/lib/date';
+import { byFlow } from '@/lib/workspace-flow';
+import { ClientsAddTaskModal } from './AddTaskModal.clients';
 import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from '@/components/capacity/AssignmentImpact';
 
 interface AddTaskModalProps {
@@ -29,7 +30,8 @@ interface AddTaskModalProps {
   assignDue?: string;
 }
 
-export function AddTaskModal({
+/** PROJECTS flow: add a task to a project's task list. */
+function ProjectsAddTaskModal({
   projectId, taskListId, initialStatusId, workflowId, onClose, onSuccess,
   initialAssigneeIds, initialStartDate, initialDueDate, assignRole, assignHours, assignDue,
 }: AddTaskModalProps) {
@@ -43,34 +45,6 @@ export function AddTaskModal({
   const [estimatedHours, setEstimatedHours] = useState('');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(initialAssigneeIds ?? []);
   const [memberQuery, setMemberQuery] = useState('');
-  // CLIENTS-FLOW: which task group the task goes into. Starts on the one the caller named; the
-  // picker only appears when the client has more than one group that is still taking work.
-  const [groupId, setGroupId] = useState(taskListId);
-  const { data: groups = [] } = useQuery<TaskGroup[]>({
-    queryKey: ['task-groups', projectId],
-    queryFn: () => api.taskLists.list(projectId),
-    staleTime: 30_000,
-  });
-  const openGroups = groups.filter(g => g.status !== 'COMPLETED');
-  // If the caller's pick turns out to be a completed group, start on one that takes work instead
-  // of letting the save fail.
-  useEffect(() => {
-    if (!groups.length) return;
-    const current = groups.find(g => g.id === groupId);
-    if (current && current.status !== 'COMPLETED') return;
-    const fallback = openGroups.find(g => g.isDefault) ?? openGroups[0];
-    if (fallback) setGroupId(fallback.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups]);
-  // CLIENTS-FLOW (deadlines): a task inside a group is due no later than the group. Until somebody
-  // picks a date, the task takes the group's deadline — the server does the same when none is sent.
-  const groupDue = (() => {
-    const g = groups.find(x => x.id === groupId);
-    return g?.dueDate ? String(g.dueDate).slice(0, 10) : '';
-  })();
-  const [dueTouched, setDueTouched] = useState(!!initialDueDate);
-  useEffect(() => { if (!dueTouched) setDueDate(groupDue); }, [groupDue, dueTouched]);
-  const dueAfterGroup = !!groupDue && !!dueDate && dueDate > groupDue;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -120,7 +94,6 @@ export function AddTaskModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (dueAfterGroup) { setError(`The deadline cannot be after the task group’s (${formatDate(groupDue)}).`); return; }
     setLoading(true);
     setError('');
     try {
@@ -141,7 +114,7 @@ export function AddTaskModal({
         dueDate: dueDate || undefined,
         estimatedHours: estimatedHours ? parseFloat(estimatedHours) : undefined,
         projectId,
-        taskListId: groupId || taskListId,
+        taskListId,
         createdBy: currentUser?.id ?? 'system', // server derives the real creator from the cookie actor
         currentWorkflowStatusId,
         assigneeIds: assigneeIds.length ? assigneeIds : undefined,
@@ -163,7 +136,7 @@ export function AddTaskModal({
     }
   }
 
-  // The hours being handed out, against every client these people are already on. The estimate is
+  // The hours being handed out, against every project these people are already on. The estimate is
   // the task's total, so with more than one person on it each carries an even share — which is
   // exactly what the board does with a task whose people have no hours of their own.
   const proposed = useMemo(() => {
@@ -208,22 +181,13 @@ export function AddTaskModal({
       }
     >
         <form id="add-task-form" onSubmit={handleSubmit} className="space-y-5">
-          {openGroups.length > 1 && (
-            <div>
-              <label htmlFor="add-task-group" className="block text-sm font-medium text-gray-700 mb-1.5">Task group</label>
-              <select id="add-task-group" value={groupId} onChange={e => setGroupId(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white">
-                {openGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
-            </div>
-          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Title <span className="text-red-500">*</span>
             </label>
             <input
               type="text" required autoFocus value={title} onChange={e => setTitle(e.target.value)}
-              placeholder="e.g. Search claim 7 variants"
+              placeholder="e.g. Implement login page"
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
             />
           </div>
@@ -279,22 +243,12 @@ export function AddTaskModal({
             </div>
           </div>
 
-          {/* A task has a single deadline — the team's. The date promised to the client lives on its
-              task group, and the task's must fall inside the group's. */}
+          {/* A task has a single deadline. Client-facing dates live on the project only. */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Deadline</label>
-            <DateField type="date" value={dueDate} max={groupDue || undefined}
-              onChange={e => { setDueDate(e.target.value); setDueTouched(true); }}
-              className={clsx('w-full px-3.5 py-2.5 text-sm border rounded-lg focus:outline-none focus:border-brand-500 transition',
-                dueAfterGroup ? 'border-red-300' : 'border-gray-300')}
+            <DateField type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
             />
-            {groupDue && (
-              <p className={clsx('text-[11px] mt-1', dueAfterGroup ? 'text-red-600' : 'text-gray-400')}>
-                {dueAfterGroup
-                  ? `After the task group’s deadline (${formatDate(groupDue)}) — pick that date or earlier.`
-                  : `The task group is due ${formatDate(groupDue)}; the task can be due then or earlier.`}
-              </p>
-            )}
           </div>
 
 
@@ -372,3 +326,6 @@ export function AddTaskModal({
     </Modal>
   );
 }
+
+/** One component, two flows: the PROJECTS implementation above (production's), ./AddTaskModal.clients.tsx for CLIENTS. */
+export const AddTaskModal = byFlow(ProjectsAddTaskModal, ClientsAddTaskModal);

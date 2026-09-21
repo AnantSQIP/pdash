@@ -2,7 +2,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { hash as argonHash } from '@node-rs/argon2';
 import { randomBytes } from 'node:crypto';
-import { PERMISSIONS, ROLE_PRESETS, ALL_PERMISSION_CODES } from './permissions-catalog';
+import { permissionsFor, rolePresetsFor, ALL_PERMISSION_CODES } from './permissions-catalog';
 
 const prisma = new PrismaClient();
 
@@ -19,13 +19,26 @@ function seedFyLabel(instant: Date): string {
   const start = m >= 4 ? y : y - 1;
   return `${String(start % 100).padStart(2, '0')}_${String((start + 1) % 100).padStart(2, '0')}`;
 }
+// Which workspace flow the seeded organisation runs (docs/WORKSPACE_FLOWS.md). PROJECTS by default
+// — what production runs; SEED_WORKSPACE_FLOW=CLIENTS seeds a clients-flow organisation directly.
+const SEED_FLOW: 'PROJECTS' | 'CLIENTS' = process.env.SEED_WORKSPACE_FLOW === 'CLIENTS' ? 'CLIENTS' : 'PROJECTS';
+
 let seedSerial = 0;
-async function createSeedClient(org: { id: string; code: string }, data: Omit<Prisma.ProjectUncheckedCreateInput, 'code'>) {
+async function createSeedClient(
+  org: { id: string; code: string },
+  data: Omit<Prisma.ProjectUncheckedCreateInput, 'code' | 'workspaceFlow'>,
+) {
+  // The row is stamped with the flow it is made in, so that the other flow never lists it
+  // (docs/WORKSPACE_FLOWS.md).
+  const seeded = { ...data, workspaceFlow: SEED_FLOW };
+  // PROJECTS: a seeded project is PID-pending, exactly as it always was — PIDs are generated or
+  // requested through the app. Only the CLIENTS flow issues a number with the client.
+  if (SEED_FLOW === 'PROJECTS') return prisma.project.create({ data: seeded });
   const fyLabel = seedFyLabel(new Date());
   const serial = ++seedSerial;
   const cid = `${seedCidPrefix(org.code)}_${fyLabel}_${String(serial).padStart(3, '0')}`;
   return prisma.$transaction(async tx => {
-    const project = await tx.project.create({ data: { ...data, code: cid, roundSeq: 1 } });
+    const project = await tx.project.create({ data: { ...seeded, code: cid, roundSeq: 1 } });
     await tx.pidReservation.create({
       data: {
         organizationId: org.id, fyLabel, serial, pid: cid, generatedById: data.createdBy,
@@ -112,6 +125,10 @@ async function main() {
     data: {
       name: 'Squark IP', code: 'pdash-demo', status: 'ACTIVE',
       securityPasscodeHash: await argonHash(orgPasscode),
+      workspaceFlow: SEED_FLOW,
+      // The CLIENTS flow records time by logging it; PROJECTS keeps the stopwatch it always had.
+      timeTrackingMode: SEED_FLOW === 'CLIENTS' ? 'MANUAL' : 'TIMER',
+      workspaceFlowChangedAt: SEED_FLOW === 'CLIENTS' ? new Date() : null,
     },
   });
   if (!process.env.SEED_ORG_PASSCODE) {
@@ -134,7 +151,7 @@ async function main() {
   // inserts capacity.manage so a deployed database gets it without a regrant). Migrations run
   // before the seed on a fresh database, and a duplicate code would otherwise abort the seed.
   await prisma.permission.createMany({
-    data: PERMISSIONS.map(p => ({ code: p.code, name: p.name, description: p.description })),
+    data: permissionsFor(SEED_FLOW).map(p => ({ code: p.code, name: p.name, description: p.description })),
     skipDuplicates: true,
   });
   const allPerms = await prisma.permission.findMany();
@@ -152,7 +169,7 @@ async function main() {
   };
   const rolePermRows: { roleId: string; permissionId: string }[] = [];
   for (const [roleName, roleId] of Object.entries(roleByName)) {
-    const preset = ROLE_PRESETS[roleName];
+    const preset = rolePresetsFor(SEED_FLOW)[roleName];
     const codes = preset === '*' ? ALL_PERMISSION_CODES : preset;
     for (const c of codes) {
       const pid = permIdByCode.get(c);

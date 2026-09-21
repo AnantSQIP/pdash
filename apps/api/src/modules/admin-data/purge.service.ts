@@ -7,6 +7,9 @@ import { getActorId } from '../../common/context/request-context';
 import { documentStorage } from '../documents/document-storage';
 import { CidService } from '../../common/cid/cid.service';
 import { isRetiredCid } from '../../common/cid/cid';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
+import type { WorkspaceFlow } from '../../common/decorators/require-flow.decorator';
+import { taskInFlow } from '../../common/flow-scope';
 import {
   PROJECT_PURGE_ORDER, TASK_PURGE_ORDER,
   type ProjectPurgeModel, type TaskPurgeModel,
@@ -59,6 +62,7 @@ export class PurgeService {
     private readonly events: EventService,
     private readonly time: TaskTimeService,
     private readonly cid: CidService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   // ── Soft-deleted inventory (the Admin → Data screen) ───────────────────────
@@ -66,11 +70,17 @@ export class PurgeService {
   /**
    * Everything currently in the bin. Projects and tasks with `deletedAt` set — the only things
    * a permanent delete can be pointed at, so this list IS the screen.
+   *
+   * Scoped to the flow the firm is running, and this is the most important place in the module for
+   * it: the screen is the only route to Restore and to Delete Permanently, so anything listed here
+   * is something an admin can bring back into the wrong flow or destroy for good. The other flow's
+   * bin is its own, and it is waiting for the day the firm switches back.
    */
   async listDeleted() {
+    const flow = await this.flows.currentFlow();
     const [projects, tasks] = await Promise.all([
       this.prisma.project.findMany({
-        where: { deletedAt: { not: null } },
+        where: { deletedAt: { not: null }, workspaceFlow: flow },
         orderBy: { deletedAt: 'desc' },
         select: {
           id: true, title: true, code: true, projectPhase: true, deletedAt: true,
@@ -79,12 +89,14 @@ export class PurgeService {
         },
       }),
       this.prisma.task.findMany({
-        where: { deletedAt: { not: null } },
+        where: { deletedAt: { not: null }, ...taskInFlow(flow) },
         orderBy: { deletedAt: 'desc' },
         take: 500,
         select: {
           id: true, title: true, priority: true, dueDate: true, deletedAt: true,
-          projectTasks: { select: { project: { select: { id: true, title: true, code: true } } }, take: 1 },
+          // The link that names the row's matter carries the flow as well, so the label can never
+          // disagree with the filter that admitted the row.
+          projectTasks: { where: { project: { workspaceFlow: flow } }, select: { project: { select: { id: true, title: true, code: true } } }, take: 1 },
           _count: { select: { subtasks: true, timesheets: true, assignees: true } },
         },
       }),
@@ -116,8 +128,55 @@ export class PurgeService {
    * purpose weeks before.
    */
   async restoreProject(id: string) {
-    const project = await this.prisma.project.findUnique({
-      where: { id }, select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true },
+    // The CLIENTS flow restores a client with its CID and the phase it held (restoreClient); the
+    // PROJECTS flow restores production's way, below.
+    const flow = await this.flows.currentFlow();
+    if (flow === 'CLIENTS') return this.restoreClient(id);
+    // findFirst, not findUnique: the id comes off a screen, and restoring the OTHER flow's matter
+    // would put live work back into a workspace that is not showing it — invisible here, and a
+    // surprise to whoever switches back. Not found is the honest answer.
+    const project = await this.prisma.project.findFirst({
+      where: { id, workspaceFlow: flow }, select: { id: true, title: true, code: true, deletedAt: true },
+    });
+    if (!project) throw new NotFoundException('Project not found.');
+    if (!project.deletedAt) throw new BadRequestException('That project is not deleted.');
+    const deletedAt = project.deletedAt;
+
+    const restored = await this.prisma.$transaction(async tx => {
+      // Back to ACTIVE rather than to whatever phase it held: softDelete OVERWROTE the phase
+      // with ARCHIVED, so the original is genuinely unrecoverable. ACTIVE is the honest default
+      // — the project is back on the books and whoever runs it can set the phase again.
+      const p = await tx.project.update({
+        where: { id },
+        data: { deletedAt: null, projectPhase: 'ACTIVE' },
+      });
+      await tx.issue.updateMany({ where: { projectId: id, deletedAt }, data: { deletedAt: null } });
+      const links = await tx.projectTask.findMany({ where: { projectId: id }, select: { taskId: true } });
+      const taskIds = links.map(l => l.taskId);
+      let tasks = 0;
+      if (taskIds.length) {
+        // Same-instant match: these are the tasks the project's own delete archived.
+        tasks = (await tx.task.updateMany({ where: { id: { in: taskIds }, deletedAt }, data: { deletedAt: null } })).count;
+      }
+      return { project: p, tasks };
+    });
+    await this.events.emit({
+      action: 'project.restored', entityType: 'PROJECT', entityId: id,
+      metadata: { title: project.title, code: project.code, tasksRestored: restored.tasks },
+    });
+    return { id, title: project.title, tasksRestored: restored.tasks };
+  }
+
+  /**
+   * CLIENTS flow: restore a client — back under its CID when the number is still its own, in the
+   * phase it held before the delete (read from the CID ledger), and recorded in the ledger.
+   */
+  private async restoreClient(id: string) {
+    // Reached only from the CLIENTS branch of restoreProject, so the flow is that literal — and it
+    // is stated here rather than assumed, because everything below mints and re-registers a CID.
+    const project = await this.prisma.project.findFirst({
+      where: { id, workspaceFlow: 'CLIENTS' },
+      select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true },
     });
     if (!project) throw new NotFoundException('Project not found.');
     if (!project.deletedAt) throw new BadRequestException('That project is not deleted.');
@@ -159,7 +218,9 @@ export class PurgeService {
       } else {
         // Rounds still live under the number may have been renumbered while this one was in the
         // bin; it rejoins at the end rather than sharing a round number.
-        const live = await tx.project.findMany({ where: { code, deletedAt: null }, select: { roundSeq: true } });
+        // Only CLIENTS-flow rounds can be carrying this CID — the other flow's numbering is the
+        // PID registry, and a round of it must not push this one down the sequence.
+        const live = await tx.project.findMany({ where: { code, deletedAt: null, workspaceFlow: 'CLIENTS' }, select: { roundSeq: true } });
         if (live.some(r => r.roundSeq === roundSeq)) roundSeq = Math.max(...live.map(r => r.roundSeq)) + 1;
       }
 
@@ -175,7 +236,7 @@ export class PurgeService {
         // Same-instant match: these are the tasks the project's own delete archived.
         tasks = (await tx.task.updateMany({ where: { id: { in: taskIds }, deletedAt }, data: { deletedAt: null } })).count;
       }
-      await this.cid.syncRegistryInTx(tx, organizationId, code!);
+      await this.cid.syncRegistryInTx(tx, organizationId, code!, 'CLIENTS');
       await this.cid.recordInTx(tx, {
         organizationId, cid: code!, projectId: id, clientTitle: p.title, type: 'RESTORED',
         ...(reissuedFrom !== undefined ? { fromCid: reissuedFrom ?? null } : {}), toCid: code!,
@@ -197,8 +258,11 @@ export class PurgeService {
   }
 
   async restoreTask(id: string) {
-    const task = await this.prisma.task.findUnique({
-      where: { id },
+    // taskInFlow() rather than a bare id: a task filed in the other flow's work is not restorable
+    // from here. A task with no project — a team space's — belongs to neither flow and stays
+    // restorable in both, which is why this is not a plain project-flow test.
+    const task = await this.prisma.task.findFirst({
+      where: { id, ...taskInFlow(await this.flows.currentFlow()) },
       select: { id: true, title: true, deletedAt: true, projectTasks: { select: { project: { select: { id: true, deletedAt: true } } } } },
     });
     if (!task) throw new NotFoundException('Task not found.');
@@ -223,8 +287,12 @@ export class PurgeService {
    * `confirmTitle` must match its title exactly.
    */
   async purgeTask(id: string, confirmTitle: string) {
-    const task = await this.prisma.task.findUnique({
-      where: { id },
+    // The flow is part of the gate, not a display filter: this is the irreversible one, and an id
+    // is all it takes to aim it. A task filed in the other flow's work cannot be destroyed from a
+    // workspace that is not even showing it.
+    const flow = await this.flows.currentFlow();
+    const task = await this.prisma.task.findFirst({
+      where: { id, ...taskInFlow(flow) },
       select: {
         id: true, title: true, deletedAt: true, dueDate: true, estimatedHours: true, actualHours: true,
         createdBy: true, createdAt: true,
@@ -244,7 +312,7 @@ export class PurgeService {
     const files = await this.doomedDocuments(null, [id], new Set<string>());
 
     const counts = await this.prisma.$transaction(async tx => {
-      await this.assertStillDeleted(tx, 'task', id, 'task');
+      await this.assertStillDeleted(tx, 'task', id, 'task', flow);
       const c = await this.deleteTaskRows(tx, [id]);
       this.mergeCounts(c, await this.destroyDocuments(tx, files));
       await this.writeTombstone(tx, 'TASK', id, {
@@ -269,8 +337,10 @@ export class PurgeService {
    * ProjectsService.softDelete already decides when it archives children.
    */
   async purgeProject(id: string, confirmTitle: string) {
-    const project = await this.prisma.project.findUnique({
-      where: { id },
+    // Same gate as purgeTask, and for the same reason — nothing below this line is recoverable.
+    const flow = await this.flows.currentFlow();
+    const project = await this.prisma.project.findFirst({
+      where: { id, workspaceFlow: flow },
       select: {
         id: true, title: true, code: true, roundSeq: true, office: true, projectPhase: true,
         projectType: true, technologyDomain: true, clientId: true, deletedAt: true,
@@ -284,6 +354,10 @@ export class PurgeService {
     // Which tasks die with the project, and which are only unlinked.
     const links = await this.prisma.projectTask.findMany({ where: { projectId: id }, select: { taskId: true } });
     const taskIds = [...new Set(links.map(l => l.taskId))];
+    // Deliberately NOT flow-scoped. The question is "is any live project still doing this work?",
+    // and a project of the OTHER flow is exactly that — it is hidden from this workspace, not gone,
+    // and the day the firm switches back it needs its task. Filtering here would answer "no" and
+    // destroy work the other flow is relying on, which is the one mistake this module cannot undo.
     const shared = taskIds.length
       ? (await this.prisma.projectTask.findMany({
           where: { taskId: { in: taskIds }, projectId: { not: id }, project: { deletedAt: null } },
@@ -304,16 +378,19 @@ export class PurgeService {
 
     // What the CID ledger keeps of the client after its rows are gone: enough for the ledger to
     // go on showing it — name, hours, task groups, who ran it — when nothing else in the system can.
-    const organizationId = await this.cid.ledgerOrg(this.prisma, id);
-    const snapshot = await this.ledgerSnapshot(id, project.deletedAt);
+    // CLIENTS flow only — the PROJECTS flow has no CID ledger (its PID ledger is the registry,
+    // which deleteProjectRows marks DISCONTINUED, as production does).
+    const clients = flow === 'CLIENTS';
+    const organizationId = clients ? await this.cid.ledgerOrg(this.prisma, id) : null;
+    const snapshot = clients ? await this.ledgerSnapshot(id, project.deletedAt) : null;
 
     const counts = await this.prisma.$transaction(async tx => {
-      await this.assertStillDeleted(tx, 'project', id, 'project');
+      await this.assertStillDeleted(tx, 'project', id, 'project', flow);
       // Every doomed task in ONE pass per table rather than a full pass per task. A project with
       // forty tasks is otherwise ~900 round trips inside a transaction, which is how a purge
       // starts timing out on the matters big enough that somebody wants them gone.
       const c: PurgeCounts = doomed.length ? await this.deleteTaskRows(tx, doomed) : {};
-      this.mergeCounts(c, await this.deleteProjectRows(tx, id));
+      this.mergeCounts(c, await this.deleteProjectRows(tx, id, clients));
       this.mergeCounts(c, await this.destroyDocuments(tx, files));
       await this.writeTombstone(tx, 'PROJECT', id, {
         title: project.title, code: project.code, roundSeq: project.roundSeq, office: project.office,
@@ -326,10 +403,10 @@ export class PurgeService {
       }, c);
       // The number stays taken forever: the registry reads PURGED once nothing carries it (another
       // round, live or in the bin, keeps it ATTACHED or DELETED), and the ledger keeps the client.
-      const cidStatus = project.code ? await this.cid.syncRegistryInTx(tx, organizationId, project.code) : null;
-      if (project.code) {
+      const cidStatus = clients && project.code ? await this.cid.syncRegistryInTx(tx, organizationId!, project.code, flow) : null;
+      if (clients && project.code) {
         await this.cid.recordInTx(tx, {
-          organizationId, cid: project.code, projectId: id, clientTitle: project.title, type: 'PURGED',
+          organizationId: organizationId!, cid: project.code, projectId: id, clientTitle: project.title, type: 'PURGED',
           metadata: {
             ...snapshot, roundSeq: project.roundSeq, office: project.office, projectType: project.projectType,
             technologyDomain: project.technologyDomain, startDate: project.startDate, dueDate: project.dueDate,
@@ -414,6 +491,11 @@ export class PurgeService {
    * something else, to a leave request, to an expense claim, to a published policy, or to a
    * patent — and any one of those is a reason it must survive with only its link gone. This asks
    * that question directly rather than assuming the matter was its only home.
+   *
+   * None of it is flow-scoped, on purpose. "Is anything else holding this file up?" has to see
+   * EVERYTHING: a document also attached to the other flow's project is held, and the bytes must
+   * survive with only this link gone. Narrowing the question to one flow would turn a held file
+   * into an orphan and delete it off the volume, and for a patent firm the file is the artefact.
    */
   private async doomedDocuments(projectId: string | null, taskIds: string[], keptTaskIds: Set<string>) {
     const linked = await this.prisma.document.findMany({
@@ -479,9 +561,13 @@ export class PurgeService {
 
   private async assertStillDeleted(
     tx: Prisma.TransactionClient, table: 'project' | 'task', id: string, kind: 'project' | 'task',
+    flow: WorkspaceFlow,
   ) {
+    // The project form carries the flow as well, so this last gate before the deletes cannot be
+    // satisfied by the other flow's row. The task form has no column to carry — a task's flow lives
+    // on the projects it is linked to — and its caller has already established it with taskInFlow().
     const rows = table === 'project'
-      ? await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "project" WHERE id = ${id} FOR UPDATE`
+      ? await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "project" WHERE id = ${id} AND "workspaceFlow" = ${flow} FOR UPDATE`
       : await tx.$queryRaw<{ deletedAt: Date | null }[]>`SELECT "deletedAt" FROM "task" WHERE id = ${id} FOR UPDATE`;
     if (!rows.length) throw new NotFoundException(`${kind === 'project' ? 'Project' : 'Task'} not found.`);
     if (!rows[0].deletedAt) {
@@ -548,7 +634,7 @@ export class PurgeService {
   }
 
   /** Every row belonging to one project, child-first in PROJECT_PURGE_ORDER. */
-  private async deleteProjectRows(tx: Tx, id: string): Promise<PurgeCounts> {
+  private async deleteProjectRows(tx: Tx, id: string, clients: boolean): Promise<PurgeCounts> {
     const del: Record<ProjectPurgeModel, () => Promise<{ count: number }>> = {
       // Timesheets point at the project with onDelete: SetNull, so without an explicit delete
       // they would SURVIVE with a null projectId — indistinguishable from an entry still inside
@@ -562,6 +648,8 @@ export class PurgeService {
       projectDepartment: () => tx.projectDepartment.deleteMany({ where: { projectId: id } }),
       projectTeam:       () => tx.projectTeam.deleteMany({ where: { projectId: id } }),
       projectPatent:     () => tx.projectPatent.deleteMany({ where: { projectId: id } }),
+      // PROJECTS flow's PID requests (the CLIENTS flow never writes one, so there it finds none).
+      pidRequest:        () => tx.pidRequest.deleteMany({ where: { projectId: id } }),
       approvalAction:    () => tx.approvalAction.deleteMany({ where: { approval: { entityId: id } } }),
       approval:          () => tx.approval.deleteMany({ where: { entityId: id } }),
       commentAttachment: () => tx.commentAttachment.deleteMany({ where: { comment: { entityId: id } } }),
@@ -578,9 +666,22 @@ export class PurgeService {
     const counts = await this.runOrdered(PROJECT_PURGE_ORDER, del);
 
     // ── Things that are CHANGED rather than destroyed ─────────────────────────
-    // The CID registry row is not touched here: purgeProject re-reads it after this (PURGED once
-    // nothing carries the number) and the ledger's PURGED event keeps the client. Deleting the
-    // registry row would free the number for reissue, which is the one thing it must never do.
+    if (!clients) {
+      // PROJECTS flow (production's rule). The PID ledger is the authority on which serials have
+      // ever existed, and its whole purpose is that a serial is never silently reused. Deleting the
+      // reservation would free the number for reissue and erase the history of what it was for;
+      // DISCONTINUED is the status the model already defines for a retired serial that leaves a
+      // permanent gap.
+      const pid = await tx.pidReservation.updateMany({
+        where: { projectId: id, status: { in: ['RESERVED', 'ATTACHED'] } },
+        data: { status: 'DISCONTINUED', resolvedAt: new Date() },
+      });
+      if (pid.count) counts.pidReservationsDiscontinued = pid.count;
+    }
+    // CLIENTS flow: the CID registry row is not touched here: purgeProject re-reads it after this
+    // (PURGED once nothing carries the number) and the ledger's PURGED event keeps the client.
+    // Deleting the registry row would free the number for reissue, which is the one thing it must
+    // never do.
     // A meeting that happened is an organisation-level fact with its own attendees; it is tagged
     // to a project, not owned by one. Untag it rather than delete somebody's calendar history.
     const events = await tx.calendarEvent.updateMany({ where: { projectId: id }, data: { projectId: null } });
