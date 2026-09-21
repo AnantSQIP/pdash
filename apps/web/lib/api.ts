@@ -290,6 +290,41 @@ export type CapacityTaskPatch = {
   title?: string; description?: string; priority?: string; startDate?: string | null; dueDate?: string | null;
   estimatedHours?: number; taskListId?: string;
 };
+/**
+ * POST /capacity/clients — a whole piece of client work started from the board: the client, its
+ * task groups, the tasks inside them and the people on each one, in ONE call. All of it lands or
+ * none of it does, so a refused seat never leaves a half-made client holding a CID.
+ */
+export type CapacityNewClientTask = {
+  title: string; description?: string; priority?: string;
+  /** Left out, the task takes its group's. */
+  startDate?: string | null; dueDate?: string | null;
+  seats?: CapacitySeat[];
+};
+export type CapacityNewClientGroup = {
+  name: string; description?: string; groupType?: string;
+  customType?: { label: string; tasks: string[]; save?: boolean };
+  technologyDomain?: string; customDomain?: { label: string; save?: boolean };
+  startDate?: string | null; dueDate?: string | null; clientDueDate?: string | null;
+  /** Sent, these ARE the group's tasks; left empty, a typed group still brings its standard ones. */
+  tasks?: CapacityNewClientTask[];
+};
+export type CapacityNewClientInput = {
+  title: string; description?: string; clientGroupId?: string; managerId?: string;
+  priority?: string; office?: string;
+  groups: CapacityNewClientGroup[];
+};
+export type CapacityNewClientResult = {
+  client: ApiProject;
+  groups: { id: string; name: string; taskCount: number }[];
+  taskCount: number;
+  staffedTaskCount: number;
+  people: string[];
+  /** People the seats put on the client because they were not on it. */
+  addedToClient: string[];
+  scheduleWarnings: string[];
+};
+
 /** GET /capacity/tasks/options — what the board's task editor chooses from. */
 export type CapacityTaskOptions = {
   clients: {
@@ -3136,6 +3171,13 @@ export const api = {
      */
     previewAssignment: (body: { seats: ProposedSeat[]; projectId?: string | null; excludeTaskId?: string | null }) =>
       req<AssignmentPreview>('/capacity/availability/preview', { method: 'POST', body: JSON.stringify(body) }),
+    /**
+     * Start a WHOLE piece of client work: a new client, its task groups, their tasks and who does
+     * each one — one call, one transaction. Needs capacity.manage (the board) and project.create
+     * (starting a client); the server checks both.
+     */
+    createClientWork: (body: CapacityNewClientInput) =>
+      req<CapacityNewClientResult>('/capacity/clients', { method: 'POST', body: JSON.stringify(body) }),
     /** Availability of one project's members — the capacity view opened from a project. */
     forProject: (projectId: string, days = 14, from?: string) =>
       req<TeamCapacity & { project: { id: string; title: string } }>(

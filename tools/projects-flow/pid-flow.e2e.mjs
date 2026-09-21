@@ -146,6 +146,10 @@ const idOf = async s => { const me = (await s('/auth/me')).data; return (me?.use
     // task lists, inside one matter — so the whole controller is absent here rather than answering
     // with an empty list, which would read as "no work found" (docs/WORKSPACE_FLOWS.md).
     ['GET', '/task-groups'], ['GET', '/task-groups?search=claim'],
+    // "Start a whole piece of client work from the board" — a client, its client group, its task
+    // groups and its CID in one call. Every noun in that sentence is a CLIENTS one, and the
+    // PROJECTS board has no task CRUD to hang it off.
+    ['POST', '/capacity/clients'], ['POST', '/capacity/tasks'],
     ['GET', `/projects/${p1.data?.id}/cid-move?mode=REASSIGN`], ['GET', `/projects/${p1.data?.id}/cid-move/targets`],
     ['POST', `/projects/${p1.data?.id}/cid/reassign`], ['POST', `/projects/${p1.data?.id}/tasklists/${tl.data?.id}/complete`],
   ]) {

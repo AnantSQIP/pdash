@@ -12,6 +12,8 @@ import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.m
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
 import { TasksModule } from '../tasks/tasks.module';
 import { CapacityTasksController, CapacityTaskOptionsService } from './capacity-tasks';
+import { ProjectsModule } from '../projects/projects.module';
+import { CapacityClientSetupController, CapacityClientSetupService } from './capacity-client-setup';
 import {
   compareScheduled, placeForward, hoursInWindow, daysOutsideWindow, inCoverageWindow,
   type ScheduledSeat, type Placement,
@@ -1855,12 +1857,15 @@ export interface CreateCoverageDto {
   // OptionalHolidaysModule supplies the per-person approved-optional-holiday days, which the
   // board treats exactly like approved leave: off for that person, nobody else.
   // TasksModule: the board's task CRUD (capacity-tasks.ts) goes through TasksService's own rules.
-  imports: [OptionalHolidaysModule, TasksModule],
-  controllers: [CapacityController, CapacityTasksController],
+  // ProjectsModule: a whole new piece of client work (capacity-client-setup.ts) is created through
+  // ProjectsService's own create, inside the transaction it opens. Projects imports nothing, so
+  // this cannot cycle.
+  imports: [OptionalHolidaysModule, TasksModule, ProjectsModule],
+  controllers: [CapacityController, CapacityTasksController, CapacityClientSetupController],
   // AvailabilityService is the one place a person's free hours are split, redacted and reported;
   // exported so anything else that has to answer "how free is this person?" asks it rather than
   // deriving a second answer of its own.
-  providers: [CapacityService, CapacityTaskOptionsService, AvailabilityService],
+  providers: [CapacityService, CapacityTaskOptionsService, AvailabilityService, CapacityClientSetupService],
   exports: [CapacityService, AvailabilityService],
 })
 export class CapacityModule {}
