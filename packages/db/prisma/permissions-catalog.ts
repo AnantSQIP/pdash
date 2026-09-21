@@ -301,7 +301,10 @@ const HR_CODES = [
   code('comment', 'view'), code('comment', 'create'),
   // Matrix 2026-08-11: may remove a file they attached.
   code('document', 'view'), code('document', 'create'), code('document', 'delete'),
-  // No capacity.view since Sep 2026: the board is for the delivery ladder (Senior Consultant and up).
+  // Team Capacity: the board is the delivery ladder's to MANAGE (capacity.manage, Senior Consultant
+  // and up), but HR may SEE it — the owner's call, 19 Sep 2026: who is loaded and who is free is a
+  // people question too. View only; it stays a tick in Admin → Access Control either way.
+  code('capacity', 'view'),
   code('calendar', 'view'), code('channel', 'view'),
   // matrix: HR manages their own calendar + logs/deletes their own time.
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
