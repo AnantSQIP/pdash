@@ -7,6 +7,22 @@ import { PermissionService } from '../permissions/permission.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { Actor } from '../../common/decorators/actor.decorator';
 
+/**
+ * The brute-force ceiling on the sign-in routes, per minute per address.
+ *
+ * A number here rather than a constant because a TEST stack runs the whole suite through these
+ * routes: every suite logs in as half a dozen people, and at 30/min the runs had to be spaced 45
+ * seconds apart — half an hour of waiting per verification pass, and a 429 storm that reads like a
+ * bug. AUTH_LOGIN_RATE_LIMIT lifts it for those stacks ONLY; unset — which is what production is —
+ * keeps the limit exactly as it was, and NODE_ENV=production refuses to read the variable at all,
+ * so a stray value in a deployed environment cannot widen the door.
+ */
+function loginLimit(fallback: number): number {
+  if (process.env.NODE_ENV === 'production') return fallback;
+  const n = Number(process.env.AUTH_LOGIN_RATE_LIMIT);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 const isProd = process.env.NODE_ENV === 'production';
 const ACCESS_COOKIE = 'access_token';
 const REFRESH_COOKIE = 'refresh_token';
@@ -41,7 +57,7 @@ export class AuthController {
 
   @Public()
   @UseGuards(ThrottlerGuard)
-  @Throttle({ default: { limit: 30, ttl: 60_000 } }) // brute-force guard (+ account lockout in the service)
+  @Throttle({ default: { limit: loginLimit(30), ttl: 60_000 } }) // brute-force guard (+ account lockout in the service)
   @Post('login')
   async login(@Body() body: { email?: string; password?: string }, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const { user, accessToken, refreshToken } = await this.auth.login(body?.email ?? '', body?.password ?? '', reqCtx(req));
@@ -51,7 +67,7 @@ export class AuthController {
 
   @Public()
   @UseGuards(ThrottlerGuard)
-  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Throttle({ default: { limit: loginLimit(60), ttl: 60_000 } })
   @Post('refresh')
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const raw = (req as any).cookies?.[REFRESH_COOKIE];
