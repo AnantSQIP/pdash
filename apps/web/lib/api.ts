@@ -524,6 +524,47 @@ export type TaskGroup = {
   openTaskCount?: number;
 };
 
+/**
+ * CLIENTS-FLOW: one task group as the CROSS-CLIENT list returns it — the group, the client it
+ * belongs to, and, when a search was run, WHY it matched.
+ */
+export type TaskGroupHit = TaskGroup & {
+  projectId: string | null;
+  project: {
+    id: string; title: string; code: string | null; roundSeq: number | null; projectPhase: string;
+    clientGroup: { id: string; name: string } | null;
+  } | null;
+  taskCount: number;
+  overdueTaskCount: number;
+  /** The tasks whose titles the search matched — named so a match is never inexplicable. */
+  matchedTasks: { id: string; title: string }[];
+  /** Which of name / description / type / domain / client / task the search hit. Empty with no search. */
+  matchedOn: string[];
+};
+
+export type TaskGroupSearch = {
+  items: TaskGroupHit[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  /** Task groups the reader may see with NO filters — what an empty result is being measured against. */
+  inScope: number;
+};
+
+/** CLIENTS-FLOW: what the cross-client task-group list accepts. Nothing here widens what is visible. */
+export type TaskGroupQuery = {
+  search?: string;
+  status?: 'ACTIVE' | 'COMPLETED' | 'ALL';
+  groupType?: string;
+  technologyDomain?: string;
+  clientId?: string;
+  overdue?: boolean;
+  mine?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
 /** CLIENTS-FLOW: a named, optional grouping of clients. */
 export type ClientGroup = {
   id: string; name: string; description?: string | null; sequence: number;
@@ -2152,6 +2193,28 @@ export const api = {
     },
     // Passcode-gated blob (opened via an object URL); a plain link can't carry the passcode.
     downloadDocument: (id: string) => blobReq(`/patents/${id}/document/content`),
+  },
+
+  /**
+   * CLIENTS-FLOW: task groups ACROSS clients — "where is the FTO on the wafer bonding", asked
+   * without knowing whose matter it is. Scoped on the server exactly like the clients list, so
+   * this can only ever show work the reader could already reach through /projects.
+   */
+  taskGroups: {
+    search: (q: TaskGroupQuery = {}) => {
+      const p = new URLSearchParams();
+      if (q.search) p.set('search', q.search);
+      if (q.status) p.set('status', q.status);
+      if (q.groupType) p.set('groupType', q.groupType);
+      if (q.technologyDomain) p.set('technologyDomain', q.technologyDomain);
+      if (q.clientId) p.set('clientId', q.clientId);
+      if (q.overdue) p.set('overdue', 'true');
+      if (q.mine) p.set('mine', 'true');
+      if (q.limit) p.set('limit', String(q.limit));
+      if (q.offset) p.set('offset', String(q.offset));
+      const qs = p.toString();
+      return req<TaskGroupSearch>(`/task-groups${qs ? `?${qs}` : ''}`);
+    },
   },
 
   taskLists: {
