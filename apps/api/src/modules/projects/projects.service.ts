@@ -684,6 +684,34 @@ export class ProjectsService {
    * partial failure never leaves a half-built client.
    */
   async create(dto: CreateProjectDto) {
+    return (await this.createWithin(dto)).project;
+  }
+
+  /**
+   * The same create — with a seam for work that must land IN ITS TRANSACTION.
+   *
+   * "Start a whole piece of client work from the Team Capacity board" (owner, Sep 2026) makes a
+   * client, its task groups, their tasks and the people on them in one act, and a half-made client
+   * is exactly what it must never leave behind. Prisma's interactive transactions do not nest: a
+   * caller that ran `create()` and then wrote the groups would be in a SECOND transaction, and a
+   * refused seat would strand a client with a CID minted for it.
+   *
+   * So the client's own create is not copied anywhere. `inside` runs on the same `tx`, after the
+   * client, its CID, its ledger row and its members exist and before the transaction commits —
+   * anything it throws rolls the client back with it. `ownTaskGroups` says the caller is bringing
+   * the client's task groups itself, so the empty "General" list is not created underneath them.
+   *
+   * @returns the redacted client as `create()` returns it, plus whatever `inside` returned.
+   */
+  async createWithin<T = undefined>(
+    dto: CreateProjectDto,
+    inside?: (
+      tx: Prisma.TransactionClient,
+      created: { id: string },
+      ctx: { creatorId: string; organizationId: string; managerId: string; memberIds: string[] },
+    ) => Promise<T>,
+    opts: { ownTaskGroups?: boolean } = {},
+  ): Promise<{ project: any; projectId: string; organizationId: string; extra: T }> {
     // Identity & org come from the verified cookie actor — never the client body
     // (fixes spoofable createdBy and the email-vs-id create bug).
     const actorId = getActorId();
@@ -826,7 +854,11 @@ export class ProjectsService {
           //
           // CLIENTS-FLOW: a client created WITH a first task group gets that group as its default
           // instead — same reasoning, one level down.
-          ...(template?.tasks?.length || firstGroup
+          //
+          // …and a caller that brings its OWN task groups (`ownTaskGroups`, the capacity board's
+          // "start a piece of client work") gets none either: its groups are created by `inside`,
+          // a few lines below, and an empty "General" above them would be the same noise.
+          ...(template?.tasks?.length || firstGroup || opts.ownTaskGroups
             ? {}
             : { taskLists: { create: { name: 'General', isDefault: true, sequence: 0 } } }),
         },
@@ -857,22 +889,33 @@ export class ProjectsService {
         });
       }
 
+      // Everything the caller needs to land WITH the client — its own task groups, their tasks,
+      // the seats on them. It throws, the client never existed.
+      const extra = inside
+        ? await inside(tx, created, {
+          creatorId: creator.id,
+          organizationId,
+          managerId: managerIsCreator ? creator.id : managerId,
+          memberIds: members.map(m => m.userId),
+        })
+        : (undefined as T);
+
       // Re-read the groups: `include` above ran BEFORE the type's group and the first task group
       // were created in this same transaction, so the create response said the client had none.
-      return { ...created, taskLists: await tx.taskList.findMany({
+      return { row: { ...created, taskLists: await tx.taskList.findMany({
         where: { projectId: created.id, deletedAt: null },
         orderBy: { sequence: 'asc' },
-      }) };
+      }) }, extra };
     }, CID_TX);
 
     await this.events.emit({
       action: EVENTS.PROJECT_CREATED,
       entityType: 'PROJECT',
-      entityId: project.id,
+      entityId: project.row.id,
       organizationId,
       actorId: creator.id,
       metadata: {
-        projectId: project.id, title: project.title, cid: project.code,
+        projectId: project.row.id, title: project.row.title, cid: project.row.code,
         ...(clientGroup ? { clientGroup: clientGroup.name } : {}),
         ...(firstGroup ? { firstTaskGroup: firstGroup.name } : {}),
       },
@@ -880,7 +923,12 @@ export class ProjectsService {
 
     // Projects are billable by default; billability is decided per time entry by each
     // logger, so there is no admin billable-review step on creation any more.
-    return this.redactProjectOut(project as any, scope);
+    return {
+      project: await this.redactProjectOut(project.row as any, scope),
+      projectId: project.row.id,
+      organizationId,
+      extra: project.extra,
+    };
   }
 
   // ── Correcting a CID: reassign / split / merge ────────────────────────────────────

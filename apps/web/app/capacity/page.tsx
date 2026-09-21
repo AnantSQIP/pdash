@@ -19,7 +19,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Users, Loader, CalendarRange, Sparkles, AlertTriangle, Gauge, Search, CalendarPlus,
-  ChevronsDownUp, ChevronsUpDown, Plus,
+  ChevronsDownUp, ChevronsUpDown, Plus, Building2,
 } from 'lucide-react';
 
 import { api, type TeamCapacity, type CapacityRow, type DayState, type ApiProject, type CoverageRisks, type CoverageRisk, type CoverageRiskTask, type TeamHistory, type HistoryRow } from '@/lib/api';
@@ -46,6 +46,7 @@ import {
 import { cidLabel } from '@/lib/mock-data';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { useCapacityTaskActions } from '@/components/capacity/TaskEditor';
+import { NewClientWorkModal } from '@/components/capacity/NewClientWorkModal';
 
 /**
  * The window the board plans over.
@@ -137,6 +138,11 @@ export default function CapacityPage() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   // Task CRUD from the board — null without capacity.manage, and then the board is read-only.
   const { actions: taskActions, dialogs: taskDialogs } = useCapacityTaskActions();
+  // …and a whole new piece of client work. Starting a CLIENT is project.create; doing it from the
+  // board is capacity.manage. The button is drawn only for somebody who holds both, and the server
+  // checks both again (see capacity-client-setup.ts) — the screen is never the gate.
+  const [newClientWork, setNewClientWork] = useState(false);
+  const canStartClientWork = !!taskActions && can('project.create');
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [focusDate, setFocusDate] = useState<string | undefined>();
   const today = todayIST();
@@ -422,6 +428,15 @@ export default function CapacityPage() {
                 {LENGTH_OPTIONS.map(n => <option key={n} value={n}>{n} days</option>)}
               </select>
             )}
+            {canStartClientWork && (
+              <button
+                onClick={() => setNewClientWork(true)}
+                title="Start a whole piece of client work: a new client, its task groups, their tasks and who does each one"
+                className="inline-flex items-center gap-1 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100"
+              >
+                <Building2 size={13} /> New client work
+              </button>
+            )}
             {taskActions && (
               <button
                 onClick={() => taskActions.create()}
@@ -547,6 +562,15 @@ export default function CapacityPage() {
 
       {/* New / edit / reassign / delete — capacity.manage only. */}
       {taskDialogs}
+
+      {/* A whole new piece of client work — the client, its task groups, their tasks and the
+          people on them, in one call that either all lands or leaves nothing behind. */}
+      {newClientWork && (
+        <NewClientWorkModal
+          onClose={() => setNewClientWork(false)}
+          onCreated={() => { refetch(); qc.invalidateQueries({ queryKey: ['coverage-risks'] }); }}
+        />
+      )}
     </div>
   );
 }

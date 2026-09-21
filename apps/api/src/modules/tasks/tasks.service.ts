@@ -471,65 +471,149 @@ export class TasksService {
 
     const start = dto.startDate ? new Date(dto.startDate) : undefined;
     const internalDue = dto.dueDate ? new Date(dto.dueDate) : (taskList.dueDate ?? undefined);
-    this.assertTaskDateOrder(start, internalDue);
-    this.assertWithinGroup(taskList, internalDue);
-
     const seats = dto.seats ?? [];
-    this.validateStaffing(seats);
+    this.assertTaskAndSeats({ group: taskList, startDate: start, dueDate: internalDue, seats });
     if (opts.activeOrgUsersOnly) await this.assertActiveOrgUsers(seats.map(e => e.userId));
     const people = [...new Set(seats.map(e => e.userId))];
     const membership = await this.planMembershipAdds([dto.projectId], people, opts);
 
-    const wf = await this.prisma.workflow.findFirst({ where: { type: 'GLOBAL' }, orderBy: { name: 'asc' }, select: { id: true } });
+    const workflowId = await this.globalWorkflowId();
     const title = dto.title.trim();
 
-    const task = await this.prisma.$transaction(async tx => {
+    const taskId = await this.prisma.$transaction(async tx => {
       if (membership) await this.applyMembershipAdds(membership, tx);
-      const created = await tx.task.create({
-        data: {
-          title,
-          description: dto.description,
-          priority: dto.priority ?? 'MEDIUM',
-          startDate: start,
-          dueDate: internalDue,
-          // As setStaffing: the task's estimate is the sum of its seats' hours.
-          estimatedHours: seats.reduce((s, e) => s + (e.estimatedHours ?? 0), 0),
-          createdBy: actorId ?? 'system',
-          assignedById: seats.length ? actorId : null,
-          workflowId: wf?.id,
-        },
-        select: { id: true },
+      return this.writeTaskWithSeatsTx(tx, {
+        projectId: dto.projectId, taskListId: taskList.id, title,
+        description: dto.description, priority: dto.priority,
+        startDate: start, dueDate: internalDue, seats, actorId, workflowId,
       });
-      const sequence = await tx.projectTask.count({ where: { taskListId: taskList.id } });
-      await tx.projectTask.create({
-        data: { projectId: dto.projectId, taskId: created.id, taskListId: taskList.id, sequence },
-      });
-      if (seats.length) await this.reconcileAssignees(created.id, title, this.seatRows(seats), tx);
-      return created;
     });
 
     if (membership) await this.announceMembershipAdds(membership);
+    await this.announceTaskCreated({ taskId, projectId: dto.projectId, title, people });
+    await this.recomputeProjectProgress(dto.projectId); // a new task dilutes/updates progress
+    const full = await this.getRaw(taskId);
+    return Object.assign(full as object, { scheduleWarnings: await this.scheduleWarnings(taskId, seats) });
+  }
+
+  // ── The seam a whole piece of client work is built through ──────────────────────────────────
+  //
+  // "Start a whole piece of client work from the Team Capacity board" creates a client, its task
+  // groups, their tasks and the people on them in ONE transaction, so none of it can half-happen.
+  // The group it puts a task in does not exist yet when the rules have to be checked, and its
+  // transaction is opened by ProjectsService, so createWithSeats() above cannot simply be called.
+  //
+  // What follows is therefore createWithSeats() taken apart rather than copied: the rules, the
+  // write and the announcement, each in one place, used by both doors. See capacity-client-setup.ts.
+
+  /**
+   * Every rule a task and its seats must keep before anything is written: the deadline order, the
+   * group's deadline bounding the task's, one PM, one seat per person per role, a seat that does
+   * not start after it is due. Throws in the words the board shows.
+   */
+  assertTaskAndSeats(args: {
+    group?: { name: string; dueDate: Date | null } | null;
+    startDate?: Date | null; dueDate?: Date | null; seats: SeatInput[];
+  }): void {
+    this.assertTaskDateOrder(args.startDate ?? undefined, args.dueDate ?? undefined);
+    this.assertWithinGroup(args.group, args.dueDate ?? undefined);
+    this.validateStaffing(args.seats);
+  }
+
+  /** Everyone named for a seat is a real, ACTIVE person of the actor's organisation. */
+  async assertStaffable(userIds: string[]): Promise<void> {
+    await this.assertActiveOrgUsers(userIds);
+  }
+
+  /** The organisation's GLOBAL workflow, which every task created from the board opens in. */
+  async globalWorkflowId(): Promise<string | undefined> {
+    const wf = await this.prisma.workflow.findFirst({
+      where: { type: 'GLOBAL' }, orderBy: { name: 'asc' }, select: { id: true },
+    });
+    return wf?.id;
+  }
+
+  /**
+   * Write one task, its place in a task group and its seats, inside an open transaction. The
+   * single writer for both doors — the task's estimate is the sum of its seats' hours here and
+   * nowhere else, and the seats go through reconcileAssignees like every other staffing change.
+   */
+  async writeTaskWithSeatsTx(tx: Prisma.TransactionClient, args: {
+    projectId: string; taskListId: string; title: string; description?: string | null;
+    priority?: string | null; startDate?: Date | null; dueDate?: Date | null;
+    seats: SeatInput[]; actorId: string | null; workflowId?: string;
+    /** Position in the group. Counted from the group when not given. */
+    sequence?: number;
+  }): Promise<string> {
+    const seats = args.seats ?? [];
+    const created = await tx.task.create({
+      data: {
+        title: args.title,
+        description: args.description ?? undefined,
+        priority: args.priority ?? 'MEDIUM',
+        startDate: args.startDate ?? undefined,
+        dueDate: args.dueDate ?? undefined,
+        // As setStaffing: the task's estimate is the sum of its seats' hours.
+        estimatedHours: seats.reduce((s, e) => s + (e.estimatedHours ?? 0), 0),
+        createdBy: args.actorId ?? 'system',
+        assignedById: seats.length ? args.actorId : null,
+        workflowId: args.workflowId,
+      },
+      select: { id: true },
+    });
+    const sequence = args.sequence ?? await tx.projectTask.count({ where: { taskListId: args.taskListId } });
+    await tx.projectTask.create({
+      data: { projectId: args.projectId, taskId: created.id, taskListId: args.taskListId, sequence },
+    });
+    if (seats.length) await this.reconcileAssignees(created.id, args.title, this.seatRows(seats), tx);
+    return created.id;
+  }
+
+  /**
+   * People a client gains BECAUSE work on it was handed to them — the "assign = staff" rule, for
+   * a client that does not exist yet.
+   *
+   * planMembershipAdds() above reads who is already on the client through `this.prisma`, which a
+   * client still inside an uncommitted transaction is not in; and the authority question it asks
+   * ("may this actor add them?") is already answered by capacity.manage, the permission the route
+   * requires. So the caller says who the client already has and this writes the rest, through the
+   * same applyMembershipAdds the board's own staffing uses.
+   */
+  async addMembersForWorkTx(tx: Prisma.TransactionClient, plan: { primary: string; outsiders: string[] }) {
+    if (!plan.outsiders.length) return;
+    await this.applyMembershipAdds({ ...plan, reactivate: [], create: plan.outsiders }, tx);
+  }
+
+  /** The governance half of the above, once it has committed: the audit event and the notice. */
+  async announceMembersAdded(plan: { primary: string; outsiders: string[] }) {
+    if (!plan.outsiders.length) return;
+    await this.announceMembershipAdds({ ...plan, reactivate: [], create: plan.outsiders });
+  }
+
+  /** Progress after work was added to a client inside somebody else's transaction. */
+  async recomputeProgressFor(projectId: string): Promise<void> {
+    await this.recomputeProjectProgress(projectId);
+  }
+
+  /** What is said once a task created from the board has committed: the trail, and the people. */
+  async announceTaskCreated(args: { taskId: string; projectId: string; title: string; people: string[] }) {
     await this.events.emit({
       action: EVENTS.TASK_CREATED,
       entityType: 'TASK',
-      entityId: task.id,
-      metadata: { projectId: dto.projectId, title, via: 'capacity' },
+      entityId: args.taskId,
+      metadata: { projectId: args.projectId, title: args.title, via: 'capacity' },
     });
-    if (people.length) {
-      await this.events.emit({
-        action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: task.id,
-        metadata: { projectId: dto.projectId, title, added: people, staffing: true },
-      });
-      await this.notifications.notify(people, {
-        type: 'task.assigned',
-        title: 'New task assigned',
-        message: `You were assigned to "${title}".`,
-        link: `/tasks?taskId=${task.id}`,
-      });
-    }
-    await this.recomputeProjectProgress(dto.projectId); // a new task dilutes/updates progress
-    const full = await this.getRaw(task.id);
-    return Object.assign(full as object, { scheduleWarnings: await this.scheduleWarnings(task.id, seats) });
+    if (!args.people.length) return;
+    await this.events.emit({
+      action: EVENTS.TASK_ASSIGNED, entityType: 'TASK', entityId: args.taskId,
+      metadata: { projectId: args.projectId, title: args.title, added: args.people, staffing: true },
+    });
+    await this.notifications.notify(args.people, {
+      type: 'task.assigned',
+      title: 'New task assigned',
+      message: `You were assigned to "${args.title}".`,
+      link: `/tasks?taskId=${args.taskId}`,
+    });
   }
 
   /**
@@ -1053,7 +1137,7 @@ export class TasksService {
    * lead has decided to take), so it is said rather than blocked; the person planning is better
    * placed than the server to know whether the two really can run together.
    */
-  private async scheduleWarnings(
+  async scheduleWarnings(
     taskId: string,
     entries: { userId: string; startDate?: string | null }[],
   ): Promise<string[]> {

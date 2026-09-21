@@ -20,9 +20,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader, Plus, Trash2, X, AlertTriangle } from 'lucide-react';
+import { Loader, Trash2, AlertTriangle } from 'lucide-react';
 import {
-  api, type ApiTask, type CapacityOpenTask, type CapacitySeat, type CapacityTaskOptions, type TaskRole,
+  api, type ApiTask, type CapacityOpenTask, type CapacityTaskOptions, type TaskRole,
 } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
@@ -32,6 +32,10 @@ import { formatDate } from '@/lib/date';
 import { cidLabel } from '@/lib/mock-data';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from './AssignmentImpact';
+import {
+  Field, INPUT, SeatList, buildSeats, day, mergeProposed, newSeatKey, seatSig, seatsToProposed,
+  type SeatRow,
+} from './SeatList';
 
 // ── what opens the editor ───────────────────────────────────────────────────────────────────
 
@@ -142,52 +146,16 @@ export function useCapacityTaskActions(opts: { projectId?: string } = {}): { act
 
 // ── the editor ──────────────────────────────────────────────────────────────────────────────
 
-type SeatRow = { key: string; userId: string; role: TaskRole; hours: string; start: string; due: string; perDay: string };
-const ROLES: { value: TaskRole; label: string }[] = [
-  { value: 'ANALYST', label: 'Analyst' }, { value: 'REVIEWER', label: 'Reviewer' }, { value: 'PM', label: 'PM' },
-];
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-const day = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
-let seatKey = 0;
-const newKey = () => `s${++seatKey}`;
 
 function seatsOf(task: ApiTask): SeatRow[] {
   return (task.assignees ?? []).map(a => ({
-    key: newKey(), userId: a.userId, role: (a.role ?? 'ANALYST') as TaskRole,
+    key: newSeatKey(), userId: a.userId, role: (a.role ?? 'ANALYST') as TaskRole,
     hours: a.estimatedHours != null ? String(a.estimatedHours) : '',
     start: day(a.startDate), due: day(a.dueDate),
     perDay: a.hoursPerDay != null ? String(a.hoursPerDay) : '',
   }));
 }
-
-/** Seats as the API takes them, or the reason they cannot be sent. Empty person rows are skipped. */
-function buildSeats(rows: SeatRow[]): CapacitySeat[] | string {
-  const out: CapacitySeat[] = [];
-  const seen = new Set<string>();
-  for (const r of rows) {
-    if (!r.userId) continue;
-    const k = `${r.userId}|${r.role}`;
-    if (seen.has(k)) return 'The same person is in the same role twice.';
-    seen.add(k);
-    const h = r.hours.trim() === '' ? 0 : Number(r.hours);
-    if (!Number.isFinite(h) || h < 0) return 'Hours cannot be negative.';
-    if (r.start && r.due && r.start > r.due) return 'A person’s start cannot be after their deadline.';
-    const cap = r.perDay.trim() === '' ? null : Number(r.perDay);
-    if (cap !== null && (!Number.isFinite(cap) || cap < 0 || cap > 24)) return 'Hours a day must be between 0 and 24.';
-    out.push({ userId: r.userId, role: r.role, estimatedHours: h, startDate: r.start || null, dueDate: r.due || null, hoursPerDay: cap });
-  }
-  if (out.filter(s => s.role === 'PM').length > 1) return 'A task can have only one PM.';
-  return out;
-}
-
-const seatSig = (s: CapacitySeat[]) => JSON.stringify(
-  [...s].map(x => [x.userId, x.role, x.estimatedHours ?? 0, x.startDate ?? null, x.dueDate ?? null, x.hoursPerDay ?? null]).sort(),
-);
-
-const INPUT = 'w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/15 disabled:bg-gray-50 disabled:text-gray-500';
-// No width here: each use sets its own, so a width class never has to out-rank another one.
-const SMALL_BASE = 'rounded-md border border-gray-300 bg-white px-2 py-1.5 text-[13px] focus:border-brand-500 focus:outline-none';
-const SMALL = `w-full ${SMALL_BASE}`;
 
 function TaskEditor({ target, onClose, onSaved, onDelete }: {
   target: EditorTarget;
@@ -217,7 +185,7 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
   const [due, setDue] = useState('');
   const [estimate, setEstimate] = useState('');
   const [seats, setSeats] = useState<SeatRow[]>(() => target.mode === 'create' && target.person
-    ? [{ key: newKey(), userId: target.person.userId, role: 'ANALYST', hours: '', start: target.start ?? '', due: '', perDay: '' }]
+    ? [{ key: newSeatKey(), userId: target.person.userId, role: 'ANALYST', hours: '', start: target.start ?? '', due: '', perDay: '' }]
     : []);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -282,25 +250,11 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
   // A seat with no dates of its own inherits the task's, because that is what the server does
   // with it — otherwise the check would be about a different fortnight from the one being saved.
   const proposed = useMemo(() => {
-    const merged = new Map<string, { userId: string; hours: number; startDate: string | null; dueDate: string | null; hoursPerDay: number | null }>();
-    for (const r of seats) {
-      if (!r.userId) continue;
-      const h = Number(r.hours);
-      const cap = Number(r.perDay);
-      const prev = merged.get(r.userId);
-      merged.set(r.userId, {
-        userId: r.userId,
-        hours: (prev?.hours ?? 0) + (r.hours.trim() !== '' && Number.isFinite(h) ? h : 0),
-        startDate: [prev?.startDate, r.start || start || null].filter(Boolean).sort()[0] ?? null,
-        dueDate: [prev?.dueDate, r.due || due || null].filter(Boolean).sort().pop() ?? null,
-        hoursPerDay: r.perDay.trim() !== '' && Number.isFinite(cap) ? (prev?.hoursPerDay ?? 0) + cap : prev?.hoursPerDay ?? null,
-      });
-    }
+    const list = mergeProposed(seatsToProposed(seats, { start, due }));
     // Nobody carries hours yet: the task's own estimate is what the board will split between them,
     // so check THAT rather than reporting that nothing is being asked of anyone.
-    const list = [...merged.values()];
     const named = list.length;
-    if (named > 0 && list.every(s => s.hours === 0)) {
+    if (named > 0 && list.every(s => !s.hours)) {
       const est = Number(seatHours > 0 ? seatHours : estimate);
       if (Number.isFinite(est) && est > 0) for (const s of list) s.hours = est / named;
     }
@@ -312,10 +266,6 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
     enabled: !clientGone && loaded,
   });
   const gate = useOverrideGate(impact.over, impact.seats.map(s => `${s.userId}:${s.overHours}`).join('|'));
-
-  function setSeat(key: string, patch: Partial<SeatRow>) {
-    setSeats(rows => rows.map(r => (r.key === key ? { ...r, ...patch } : r)));
-  }
 
   async function save() {
     setError('');
@@ -471,60 +421,14 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
             </p>
           )}
 
-          <div ref={seatsRef} className="rounded-xl border border-gray-200">
-            <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-2">
-              <p className="text-sm font-medium text-gray-800">People</p>
-              <button type="button"
-                onClick={() => setSeats(rows => [...rows, { key: newKey(), userId: '', role: 'ANALYST', hours: '', start: start, due: '', perDay: '' }])}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-brand-700 hover:bg-brand-50">
-                <Plus size={13} /> Add person
-              </button>
-            </div>
-            {seats.length === 0 ? (
-              <p className="px-3 py-4 text-center text-xs text-gray-400">Nobody yet — the task will be unassigned.</p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {seats.map(r => (
-                  <li key={r.key} className={clsx('px-3 py-2.5', reassignFrom && r.userId === reassignFrom && 'bg-brand-50/60')}>
-                    <div className="flex items-center gap-2">
-                      <select value={r.userId} data-seat-user={r.userId} onChange={e => setSeat(r.key, { userId: e.target.value })}
-                        className={clsx(SMALL_BASE, 'w-0 min-w-0 flex-1')} aria-label="Person">
-                        <option value="">Pick a person…</option>
-                        {people.map(p => (
-                          <option key={p.id} value={p.id}>{p.firstName} {p.lastName}{p.designation ? ` — ${p.designation}` : ''}</option>
-                        ))}
-                      </select>
-                      <select value={r.role} onChange={e => setSeat(r.key, { role: e.target.value as TaskRole })} className={clsx(SMALL_BASE, 'w-28 shrink-0')} aria-label="Role">
-                        {ROLES.map(x => <option key={x.value} value={x.value}>{x.label}</option>)}
-                      </select>
-                      <button type="button" onClick={() => setSeats(rows => rows.filter(x => x.key !== r.key))}
-                        className="shrink-0 rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-rose-600" aria-label="Remove this person" title="Remove">
-                        <X size={14} />
-                      </button>
-                    </div>
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      <label className="text-[11px] text-gray-500">Hours
-                        <input type="number" min={0} step={0.25} value={r.hours} placeholder="0" onChange={e => setSeat(r.key, { hours: e.target.value })} className={SMALL} />
-                      </label>
-                      <label className="text-[11px] text-gray-500">Starts
-                        <DateField type="date" value={r.start} max={r.due || undefined} onChange={e => setSeat(r.key, { start: e.target.value })} className={SMALL} />
-                      </label>
-                      <label className="text-[11px] text-gray-500">Their deadline
-                        <DateField type="date" value={r.due} min={r.start || undefined} onChange={e => setSeat(r.key, { due: e.target.value })} className={SMALL} />
-                      </label>
-                      <label className="text-[11px] text-gray-500">Hours a day
-                        <input type="number" min={0} max={24} step={0.5} value={r.perDay} placeholder="fills the day" onChange={e => setSeat(r.key, { perDay: e.target.value })} className={SMALL} />
-                      </label>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="border-t border-gray-100 px-3 py-2 text-[11px] leading-snug text-gray-400">
-              A start places their hours on those days; without one the hours are spread up to the deadline. Their own deadline
-              may run past the task’s — it moves nobody else’s.
-            </p>
-          </div>
+          <SeatList
+            containerRef={seatsRef}
+            rows={seats}
+            people={people}
+            onChange={setSeats}
+            defaultStart={start}
+            highlightUserId={reassignFrom}
+          />
 
           {/* Free on this client is not free. Every other matter they are on is in here too. */}
           {(impact.isLoading || impact.seats.length > 0) && (
@@ -542,17 +446,5 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
         </div>
       )}
     </Modal>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <label className="block">
-      <span className="mb-1 flex items-baseline justify-between gap-2 text-sm font-medium text-gray-700">
-        {label}
-        {hint && <span className="text-[11px] font-normal text-gray-400">{hint}</span>}
-      </span>
-      {children}
-    </label>
   );
 }
