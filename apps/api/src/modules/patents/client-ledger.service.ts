@@ -326,7 +326,7 @@ export class ClientLedgerService {
         // "hours that should have reached a client but did not".
         teamId: null,
         OR: [
-          { projectId: null },                              // still inside the assign-later buffer
+          { projectId: null },                              // still inside the PID buffer
           ...(clientlessIds.length ? [{ projectId: { in: clientlessIds } }] : []),
         ],
       },
@@ -369,6 +369,11 @@ export class ClientLedgerService {
           // two rows carrying the identical code and nothing to tell them apart, which reads as a
           // duplicate rather than as round 1 and round 2.
           roundSeq: true,
+          // A project can exist before its PID does — created while a PID request sits with an
+          // authority, or created and never given one at all. The ledger showed both as a bare
+          // dash, which says "no data" when the truth is either "waiting on Ritik" or "nobody
+          // ever asked". Those need different actions, so they need different words.
+          pidRequest: { select: { status: true, assigneeId: true, createdAt: true } },
         },
         orderBy: [{ code: 'asc' }, { roundSeq: 'asc' }],
       }),
@@ -402,12 +407,17 @@ export class ClientLedgerService {
       effective: this.effective(d, o, client),
       projects: projects.map(p => {
         const h = hoursByProject.get(p.id) ?? { billable: 0, nonBillable: 0 };
+        const { pidRequest, ...rest } = p;
         return {
-          ...p,
-          // CLIENTS-FLOW: every client is given its CID when it is created, so a live one always
-          // reads 'assigned'. 'missing' is kept for rows that predate the backfill.
-          pidStatus: p.code ? 'assigned' : 'missing',
-          pidRequestedAt: null,
+          ...rest,
+          /**
+           * Why there is no PID, in one word the screen can act on:
+           *   'assigned'  — it has one;
+           *   'requested' — a request is open with a PID authority;
+           *   'missing'   — nobody has asked, and these hours are one step from being stranded.
+           */
+          pidStatus: p.code ? 'assigned' : pidRequest?.status === 'PENDING' ? 'requested' : 'missing',
+          pidRequestedAt: p.code ? null : pidRequest?.createdAt ?? null,
           billableHours: round2(h.billable),
           nonBillableHours: round2(h.nonBillable),
           totalHours: round2(h.billable + h.nonBillable),

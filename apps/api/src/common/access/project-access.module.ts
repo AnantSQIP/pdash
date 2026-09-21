@@ -1,6 +1,7 @@
 import { ForbiddenException, Global, Injectable, Module } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionService } from '../../modules/permissions/permission.service';
+import { WorkspaceFlowService } from '../../modules/workspace-flow/workspace-flow.service';
 
 /**
  * Object-level authorization for the delivery domain (projects → tasks → issues).
@@ -33,7 +34,14 @@ export class ProjectAccessService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissions: PermissionService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
+
+  /** "project" (PROJECTS flow, production's word) or "client" (CLIENTS flow) — for the refusals. */
+  private async unit(actorId?: string | null): Promise<'project' | 'client'> {
+    const flow = actorId ? await this.flows.flowOfUser(actorId) : await this.flows.currentFlow();
+    return flow === 'CLIENTS' ? 'client' : 'project';
+  }
 
   /** Delivery leads/partners who may oversee every matter (super-admin or project.approve). */
   async hasOversight(actorId: string): Promise<boolean> {
@@ -94,7 +102,7 @@ export class ProjectAccessService {
   async assertProjectAccess(actorId: string | null, projectId: string, opts: AccessOpts = {}): Promise<void> {
     if (!actorId) throw new ForbiddenException('Not authenticated.');
     if (!(await this.canAccessProject(actorId, projectId, opts))) {
-      throw new ForbiddenException('You do not have access to this client.');
+      throw new ForbiddenException(`You do not have access to this ${await this.unit(actorId)}.`);
     }
   }
 
@@ -192,9 +200,11 @@ export class ProjectAccessService {
     const project = await this.prisma.project.findFirst({
       where: { id: projectId }, select: { projectPhase: true, deletedAt: true },
     });
-    if (!project || project.deletedAt) throw new ForbiddenException('Client not found.');
+    if (!project || project.deletedAt) {
+      throw new ForbiddenException((await this.unit()) === 'client' ? 'Client not found.' : 'Project not found.');
+    }
     if (project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED') {
-      throw new ForbiddenException('This client is completed or closed — reopen it to add work or log time.');
+      throw new ForbiddenException(`This ${await this.unit()} is completed or closed — reopen it to add work or log time.`);
     }
   }
 
@@ -211,7 +221,7 @@ export class ProjectAccessService {
     if (!links.length) return; // no live project link — don't over-block edge/standalone tasks
     const anyWritable = links.some(l => l.project.projectPhase !== 'COMPLETED' && l.project.projectPhase !== 'CLOSED');
     if (!anyWritable) {
-      throw new ForbiddenException('This task belongs to a completed or closed client — reopen it to make changes.');
+      throw new ForbiddenException(`This task belongs to a completed or closed ${await this.unit()} — reopen it to make changes.`);
     }
   }
 }

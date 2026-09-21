@@ -16,7 +16,8 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
+  // PROJECTS flow's word. The CLIENTS flow calls the same code "Change CID" (CLIENTS_ACTION_LABELS).
+  generate_pid: 'Generate PID',
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -115,14 +116,29 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'capacity.manage': 'Create, edit, assign and delete tasks from Team Capacity',
 };
 
-export const PERMISSIONS: PermissionDef[] = MODULES.flatMap(m =>
-  m.actions.map(action => ({
-    code: `${m.key}.${action}`,
-    name: `${m.label} — ${ACTION_LABELS[action] ?? action}`,
-    module: m.key,
-    description: PERMISSION_DESCRIPTIONS[`${m.key}.${action}`] ?? `${ACTION_LABELS[action] ?? action} on ${m.label}`,
-  })),
-);
+/**
+ * Where the CLIENTS workspace flow names an action differently (docs/WORKSPACE_FLOWS.md). The code
+ * stays `project.generate_pid` in both flows, so no grant ever has to move: in CLIENTS it no longer
+ * mints a number (CIDs are issued automatically) — it changes one.
+ */
+export const CLIENTS_ACTION_LABELS: Record<string, string> = {
+  generate_pid: 'Change CID',
+};
+
+/** The catalog as a flow names it — what seed.ts writes into the permission table. */
+export function permissionsFor(flow: 'PROJECTS' | 'CLIENTS'): PermissionDef[] {
+  const labels = flow === 'CLIENTS' ? { ...ACTION_LABELS, ...CLIENTS_ACTION_LABELS } : ACTION_LABELS;
+  return MODULES.flatMap(m =>
+    m.actions.map(action => ({
+      code: `${m.key}.${action}`,
+      name: `${m.label} — ${labels[action] ?? action}`,
+      module: m.key,
+      description: PERMISSION_DESCRIPTIONS[`${m.key}.${action}`] ?? `${labels[action] ?? action} on ${m.label}`,
+    })),
+  );
+}
+
+export const PERMISSIONS: PermissionDef[] = permissionsFor('PROJECTS');
 
 export const ALL_PERMISSION_CODES: string[] = PERMISSIONS.map(p => p.code);
 

@@ -1,25 +1,26 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo, KeyboardEvent } from 'react';
+import { byFlow } from '@/lib/workspace-flow';
+import { ClientsProjectsClient } from './ProjectsClient.clients';
+import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import {
-  Plus, LayoutGrid, List, Filter, Search, ScrollText, ChevronDown, FolderTree, Building2,
-} from 'lucide-react';
+import { Plus, LayoutGrid, List, Filter, Search, KeyRound, Copy, Check, Inbox, ScrollText } from 'lucide-react';
 import clsx from 'clsx';
-import { ProjectCard, ProjectListRow } from '@/components/projects/ProjectCard';
-import { NewClientModal } from '@/components/projects/NewClientModal';
-import { ManageClientGroupsModal, useClientGroups } from '@/components/projects/ClientGroups';
-import { PHASE_META, type Phase, type MockProject } from '@/lib/mock-data';
+import { ProjectCard } from '@/components/projects/ProjectCard';
+import { NewProjectModal } from '@/components/projects/NewProjectModal';
+import { PidRequestsModal } from '@/components/projects/PidRequestsModal';
+import { PHASE_META, PRIORITY_META, projectTypeLabel, pidLabel, type Phase, type MockProject } from '@/lib/mock-data';
 import { useTechnologyDomains, domainLabelOf } from '@/components/projects/TechnologyDomainPicker';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useToast } from '@/components/ui/Toast';
 import { api, type ApiProject } from '@/lib/api';
 
 type ViewMode = 'grid' | 'list';
 
 const PHASES: { value: Phase | 'ALL'; label: string }[] = [
-  { value: 'ALL',       label: 'All' },
+  { value: 'ALL',       label: 'All Projects' },
   { value: 'ACTIVE',    label: 'Active' },
   { value: 'ON_HOLD',   label: 'On Hold' },
   { value: 'COMPLETED', label: 'Completed' },
@@ -39,22 +40,12 @@ const AVATAR_COLORS = [
   'bg-slate-600', 'bg-green-500', 'bg-amber-500', 'bg-blue-500',
 ];
 
-/** "No group" is a real section, keyed so it can be collapsed and filtered like the others. */
-const UNGROUPED = '__ungrouped__';
-const COLLAPSE_KEY = 'pdash.clientGroupsCollapsed';
-
 function toDisplay(p: ApiProject): MockProject {
   const members = (p.members ?? []).map((m, i) => ({
+    // Null-safe: a member with no lastName (or empty name) previously crashed on [0].
     initials: (`${m.user.firstName?.[0] ?? ''}${m.user.lastName?.[0] ?? ''}`.toUpperCase() || '?'),
     color: AVATAR_COLORS[i % AVATAR_COLORS.length],
   }));
-  const groups = p.taskLists ?? [];
-  const active = groups.filter(g => g.status !== 'COMPLETED');
-  // A default "General" on a client that has real groups is scaffolding, not work — it is left
-  // out of the card's PREVIEW, but still counted, because the client's own page lists it and two
-  // screens disagreeing about how many groups a client has is worse than one extra chip.
-  const meaningful = active.filter(g => !(g.isDefault && g.name === 'General' && active.length > 1));
-  const deadlines = active.map(g => g.dueDate).filter((d): d is string => !!d).sort();
   return {
     id: p.id,
     code: p.code,
@@ -72,20 +63,12 @@ function toDisplay(p: ApiProject): MockProject {
     members,
     statusColor: PHASE_COLOR[p.projectPhase] ?? '#9aa0a6',
     createdAt: p.createdAt ?? '',
-    clientGroupId: p.clientGroupId ?? null,
-    clientGroupName: p.clientGroup?.name ?? null,
-    taskGroupCount: groups.length,
-    activeTaskGroups: meaningful.map(g => ({ id: g.id, name: g.name, groupType: g.groupType ?? null, dueDate: g.dueDate ?? null })),
-    // What the client's own page counts, so the two never disagree.
-    activeTaskGroupCount: active.length,
-    taskGroupDomains: groups.map(g => g.technologyDomain).filter((d): d is string => !!d),
-    openTaskCount: p.openTaskCount ?? 0,
-    overdueTaskCount: p.overdueTaskCount ?? 0,
-    nextDeadline: deadlines[0] ?? null,
   };
 }
 
-function StatPill({ label, value, color, dot }: { label: string; value: number; color: string; dot?: string }) {
+function StatPill({
+  label, value, color, dot,
+}: { label: string; value: number; color: string; dot?: string }) {
   return (
     <div className="flex items-center gap-2">
       {dot && <span className={clsx('w-2 h-2 rounded-full', dot)} />}
@@ -95,48 +78,56 @@ function StatPill({ label, value, color, dot }: { label: string; value: number; 
   );
 }
 
-/**
- * CLIENTS-FLOW: the Clients page — what the Projects page became.
- *
- * Clients are listed under their CLIENT GROUPS, in the order the groups were arranged, with the
- * ungrouped ones last. Each group can be folded away; the fold is remembered per browser. Every
- * filter works across groups at once, and a group with nothing matching simply drops out rather
- * than showing an empty shelf in the middle of a search.
- */
-export function ProjectsClient() {
+function ProjectsProjectsClient() {
   const { org, currentUser, loading: orgLoading } = useOrg();
   const { can } = usePermissions();
+  const { toast } = useToast();
   const qc = useQueryClient();
-  const router = useRouter();
 
   const [view, setView] = useState<ViewMode>('grid');
   const [phase, setPhase] = useState<Phase | 'ALL'>('ALL');
-  const [showNew, setShowNew] = useState<{ groupId: string } | null>(null);
-  const [showGroups, setShowGroups] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [showPidRequests, setShowPidRequests] = useState(false);
+  const [pidCopied, setPidCopied] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const router = useRouter();
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState('NAME');
+  // A PID now holds several projects, so the order matters: newest first puts the round somebody
+  // is actually asking about at the top instead of burying it under the client's history.
+  const [sort, setSort] = useState('NEWEST');
   const [domain, setDomain] = useState('');
-  const [groupFilter, setGroupFilter] = useState('');
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  // The fold survives a reload — somebody who parks "Archived work" out of the way wants it to stay there.
-  useEffect(() => {
-    try { const raw = localStorage.getItem(COLLAPSE_KEY); if (raw) setCollapsed(JSON.parse(raw)); } catch { /* unavailable */ }
-  }, []);
-  function toggleSection(key: string) {
-    setCollapsed(c => {
-      const next = { ...c, [key]: !c[key] };
-      try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next)); } catch { /* unavailable */ }
-      return next;
-    });
+  const canGeneratePid = can('project.generate_pid');
+  // Authorities see their pending PID-request queue count.
+  const { data: pidRequests = [] } = useQuery({
+    queryKey: ['pid-requests'],
+    queryFn: () => api.projects.pidRequests(),
+    enabled: canGeneratePid,
+    staleTime: 30_000,
+  });
+
+  async function handleGeneratePid() {
+    setGenerating(true);
+    try {
+      const res = await api.projects.generatePid();
+      let copied = true;
+      try { await navigator.clipboard.writeText(res.pid); } catch { copied = false; }
+      setPidCopied(res.pid);
+      setTimeout(() => setPidCopied(''), 3000);
+      toast(copied ? `PID ${res.pid} copied to clipboard.` : `PID ${res.pid} generated.`, 'success');
+    } catch (e) {
+      // Was a silent failure — the button just re-enabled with no signal.
+      toast(e instanceof Error ? e.message : 'Could not generate a PID.', 'error');
+    } finally {
+      setGenerating(false);
+    }
   }
 
-  const mayArrangeGroups = can('project.approve');
-
   const { data: domains = [] } = useTechnologyDomains();
-  const { data: clientGroups = [] } = useClientGroups();
 
   const { data: rawProjects = [], isLoading: projectsLoading, isError } = useQuery({
+    // Sorting and domain filtering happen server-side, so the key carries them: two different
+    // orders are two different results, and sharing a cache entry would show the wrong one.
     queryKey: ['projects', org?.id, sort, domain],
     queryFn: () => api.projects.list(org!.id, undefined, { sort, technologyDomain: domain || undefined }),
     enabled: !!org,
@@ -145,176 +136,184 @@ export function ProjectsClient() {
   });
 
   const isLoading = orgLoading || (!!org && projectsLoading);
-  const clients = useMemo(() => rawProjects.map(toDisplay), [rawProjects]);
-  const liveGroupIds = useMemo(() => new Set(clientGroups.map(g => g.id)), [clientGroups]);
-  const sectionOf = (c: MockProject) => (c.clientGroupId && liveGroupIds.has(c.clientGroupId) ? c.clientGroupId : UNGROUPED);
 
-  const filtered = clients.filter(c => {
-    if (phase !== 'ALL' && c.projectPhase !== phase) return false;
-    if (groupFilter && sectionOf(c) !== groupFilter) return false;
+  const projects = rawProjects.map(toDisplay);
+
+  const filtered = projects.filter(p => {
+    // Closed projects live in their own section — keep them out of every other view
+    // (including "All Projects"); they only appear under the Closed filter.
+    if (phase !== 'ALL' && p.projectPhase !== phase) return false;
+    // Typing a domain name finds its projects too — "medical" should work like a filter click.
     if (search) {
-      const hay = [
-        c.title, c.code ?? '', c.clientGroupName ?? '',
-        ...(c.activeTaskGroups ?? []).map(g => g.name),
-        domainLabelOf(c.technologyDomain, domains) ?? '',
-        ...(c.taskGroupDomains ?? []).map(d => domainLabelOf(d, domains) ?? ''),
-      ].join(' ').toLowerCase();
+      const hay = `${p.title} ${p.code ?? ''} ${domainLabelOf(p.technologyDomain, domains) ?? ''}`.toLowerCase();
       if (!hay.includes(search.toLowerCase())) return false;
     }
     return true;
   });
 
-  // Sections in the order the groups were arranged; "No group" last. With no filter on, empty
-  // groups still show, so a group just made is somewhere to put a client rather than invisible.
-  const filtering = !!(search || domain || phase !== 'ALL' || groupFilter);
-  const sections = useMemo(() => {
-    const by = new Map<string, MockProject[]>();
-    for (const c of filtered) {
-      const k = sectionOf(c);
-      (by.get(k) ?? by.set(k, []).get(k)!).push(c);
-    }
-    const ordered = [...clientGroups].sort((a, b) => a.sequence - b.sequence || a.name.localeCompare(b.name));
-    const out: { key: string; name: string; clients: MockProject[] }[] = [];
-    for (const g of ordered) {
-      const list = by.get(g.id) ?? [];
-      if (list.length || (!filtering && !groupFilter)) out.push({ key: g.id, name: g.name, clients: list });
-    }
-    const loose = by.get(UNGROUPED) ?? [];
-    if (loose.length) out.push({ key: UNGROUPED, name: clientGroups.length ? 'No group' : 'All clients', clients: loose });
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, clientGroups, filtering, groupFilter]);
-
   const stats = {
-    total: clients.length,
-    active: clients.filter(p => p.projectPhase === 'ACTIVE').length,
-    completed: clients.filter(p => p.projectPhase === 'COMPLETED').length,
-    onHold: clients.filter(p => p.projectPhase === 'ON_HOLD').length,
-    taskGroups: clients.reduce((n, c) => n + (c.activeTaskGroupCount ?? c.activeTaskGroups?.length ?? 0), 0),
+    total: projects.length,
+    active: projects.filter(p => p.projectPhase === 'ACTIVE').length,
+    completed: projects.filter(p => p.projectPhase === 'COMPLETED').length,
+    onHold: projects.filter(p => p.projectPhase === 'ON_HOLD').length,
   };
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ['projects', org?.id] });
-    qc.invalidateQueries({ queryKey: ['client-groups'] });
   }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {/* Top bar */}
       <header className="flex items-center justify-between flex-wrap gap-3 px-4 sm:px-6 py-4 bg-white border-b border-gray-200 shrink-0">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Clients</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {stats.total} client{stats.total === 1 ? '' : 's'}
-            {clientGroups.length > 0 && <> · {clientGroups.length} group{clientGroups.length === 1 ? '' : 's'}</>}
-            {' '}· {stats.taskGroups} open task group{stats.taskGroups === 1 ? '' : 's'}
-          </p>
+          <h1 className="text-xl font-semibold text-gray-900">Projects</h1>
+          <p className="text-sm text-gray-500 mt-0.5">{stats.total} projects · {stats.active} active</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
           <div className="flex items-center bg-gray-100 rounded-lg p-1">
-            <button onClick={() => setView('grid')} title="Cards"
-              className={clsx('p-1.5 rounded-md transition-colors', view === 'grid' ? 'bg-white shadow text-brand-600' : 'text-gray-500 hover:text-gray-700')}>
+            <button
+              onClick={() => setView('grid')}
+              className={clsx('p-1.5 rounded-md transition-colors', view === 'grid' ? 'bg-white shadow text-brand-600' : 'text-gray-500 hover:text-gray-700')}
+            >
               <LayoutGrid size={15} />
             </button>
-            <button onClick={() => setView('list')} title="List"
-              className={clsx('p-1.5 rounded-md transition-colors', view === 'list' ? 'bg-white shadow text-brand-600' : 'text-gray-500 hover:text-gray-700')}>
+            <button
+              onClick={() => setView('list')}
+              className={clsx('p-1.5 rounded-md transition-colors', view === 'list' ? 'bg-white shadow text-brand-600' : 'text-gray-500 hover:text-gray-700')}
+            >
               <List size={15} />
             </button>
           </div>
-          {mayArrangeGroups && (
-            <button onClick={() => setShowGroups(true)} title="Add, rename, order or archive client groups"
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-              <FolderTree size={15} />
-              <span className="hidden sm:inline">Client groups</span>
-            </button>
+          {canGeneratePid && (
+            <>
+              <button
+                onClick={() => setShowPidRequests(true)}
+                title="Pending PID requests"
+                className="relative flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <Inbox size={15} />
+                <span className="hidden sm:inline">PID Requests</span>
+                {pidRequests.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center text-[10px] font-bold text-white bg-red-500 rounded-full">
+                    {pidRequests.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={handleGeneratePid}
+                disabled={generating}
+                title="Generate a Project ID and copy it"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors disabled:opacity-50"
+              >
+                {pidCopied ? <Check size={15} /> : <KeyRound size={15} />}
+                <span className="hidden sm:inline font-mono">{pidCopied || 'Generate PID'}</span>
+                {pidCopied && <Copy size={13} className="text-brand-400" />}
+              </button>
+            </>
           )}
           {can('user.manage_access') && (
-            <button onClick={() => router.push('/cid-ledger')} title="Open the CID Ledger"
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+            <button
+              onClick={() => router.push('/pid-ledger')}
+              title="Open the PID Ledger — working, discontinued & history"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
               <ScrollText size={15} />
-              <span className="hidden sm:inline">CID Ledger</span>
+              <span className="hidden sm:inline">PID Ledger</span>
             </button>
           )}
           {can('project.create') && (
-            <button onClick={() => setShowNew({ groupId: groupFilter && groupFilter !== UNGROUPED ? groupFilter : '' })}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors">
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors"
+            >
               <Plus size={15} />
-              New client
+              New Project
             </button>
           )}
         </div>
       </header>
 
+      {/* Stats bar */}
       <div className="flex items-center gap-4 sm:gap-6 px-4 sm:px-6 py-3 bg-white border-b border-gray-100 shrink-0 overflow-x-auto">
-        <StatPill label="Clients"   value={stats.total}     color="text-gray-700" />
+        <StatPill label="Total"     value={stats.total}     color="text-gray-700" />
         <StatPill label="Active"    value={stats.active}    color="text-brand-500"  dot="bg-brand-500" />
         <StatPill label="Completed" value={stats.completed} color="text-green-600"  dot="bg-green-500" />
         <StatPill label="On Hold"   value={stats.onHold}    color="text-orange-600" dot="bg-orange-400" />
       </div>
 
-      {/* No `overflow-x-auto` here: it forces overflow-y too and clips the search dropdown. */}
+      {/* Filters + search row. NOTE: no `overflow-x-auto` here — it silently forces overflow-y
+          to `auto` too, which clipped the search autocomplete dropdown. Wrap instead. */}
       <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6 py-3 bg-gray-50 border-b border-gray-200 shrink-0">
-        <ClientSearch value={search} onChange={setSearch} suggestions={clients} />
+        <ProjectSearch value={search} onChange={setSearch} suggestions={projects} />
 
-        {clientGroups.length > 0 && (
-          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)} title="Show one client group"
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500">
-            <option value="">All groups</option>
-            {clientGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-            <option value={UNGROUPED}>No group</option>
-          </select>
-        )}
-
-        <select value={domain} onChange={e => setDomain(e.target.value)} title="Clients with work in this technology domain"
-          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500">
+        {/* Domain filter — "show me our source-code work", the question the domain exists for. */}
+        <select
+          value={domain} onChange={e => setDomain(e.target.value)}
+          title="Filter by technology domain"
+          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500"
+        >
           <option value="">All domains</option>
           {domains.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
         </select>
 
-        <select value={sort} onChange={e => setSort(e.target.value)} title="Order clients within each group"
-          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500">
-          <option value="NAME">Name (A–Z)</option>
+        {/* Order. Newest first by default now that one PID can hold many projects. */}
+        <select
+          value={sort} onChange={e => setSort(e.target.value)}
+          title="Sort projects"
+          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-700 focus:outline-none focus:border-brand-500"
+        >
           <option value="NEWEST">Newest first</option>
           <option value="OLDEST">Oldest first</option>
-          <option value="CID">CID</option>
+          <option value="DEADLINE">Deadline (soonest)</option>
+          <option value="NAME">Name (A–Z)</option>
+          <option value="PID">PID (latest round first)</option>
           <option value="PROGRESS">Progress (highest)</option>
         </select>
 
         <div className="flex flex-wrap items-center gap-1">
           {PHASES.map(({ value: v, label }) => (
-            <button key={v} onClick={() => setPhase(v)}
-              className={clsx('px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors',
-                phase === v ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-200')}>
+            <button
+              key={v}
+              onClick={() => setPhase(v)}
+              className={clsx(
+                'px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors',
+                phase === v ? 'bg-brand-600 text-white' : 'text-gray-600 hover:bg-gray-200',
+              )}
+            >
               {label}
             </button>
           ))}
         </div>
       </div>
 
+      {/* Projects grid/list */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         {isLoading && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="bg-white rounded-xl border border-gray-200 h-56 animate-pulse" />
+              <div key={i} className="bg-white rounded-xl border border-gray-200 h-52 animate-pulse" />
             ))}
           </div>
         )}
         {isError && (
           <div className="flex flex-col items-center justify-center h-64 text-center">
-            <p className="text-gray-600 font-medium">Couldn&apos;t load your clients</p>
+            <p className="text-gray-600 font-medium">Couldn&apos;t load your projects</p>
             <p className="text-sm text-gray-500 mt-1">Something went wrong. Please refresh and try again.</p>
           </div>
         )}
-        {!isLoading && !isError && sections.length === 0 && (
-          clients.length === 0 ? (
+        {!isLoading && !isError && filtered.length === 0 && (
+          projects.length === 0 ? (
+            // True first-run (an empty workspace) — not a filter mismatch. Offer the create CTA.
             <div className="flex flex-col items-center justify-center h-64 text-center">
               <div className="w-16 h-16 bg-brand-50 rounded-2xl flex items-center justify-center mb-4">
-                <Building2 size={24} className="text-brand-500" />
+                <Plus size={24} className="text-brand-500" />
               </div>
-              <p className="text-gray-700 font-medium">No clients yet</p>
-              <p className="text-sm text-gray-500 mt-1 max-w-sm">A client holds its task groups, its team and its CID. Create the first one to get started.</p>
+              <p className="text-gray-700 font-medium">No projects yet</p>
+              <p className="text-sm text-gray-500 mt-1 max-w-sm">Projects group your patent-analysis work — create your first to get started.</p>
               {can('project.create') && (
-                <button onClick={() => setShowNew({ groupId: '' })} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700">
-                  <Plus size={15} /> New client
+                <button onClick={() => setShowModal(true)} className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700">
+                  <Plus size={15} /> New Project
                 </button>
               )}
             </div>
@@ -323,72 +322,44 @@ export function ProjectsClient() {
               <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
                 <Filter size={24} className="text-gray-400" />
               </div>
-              <p className="text-gray-600 font-medium">No clients match</p>
-              <p className="text-sm text-gray-500 mt-1">Try a different group, status or search.</p>
+              <p className="text-gray-600 font-medium">No projects match your filter</p>
+              <p className="text-sm text-gray-500 mt-1">Try a different phase or search term.</p>
             </div>
           )
         )}
-
-        {!isLoading && !isError && sections.length > 0 && (
-          <div className="space-y-6">
-            {sections.map(sec => {
-              const folded = !!collapsed[sec.key];
-              const isGroup = sec.key !== UNGROUPED;
-              return (
-                <section key={sec.key} aria-label={sec.name}>
-                  <div className="flex items-center gap-2 mb-3">
-                    <button onClick={() => toggleSection(sec.key)} className="flex items-center gap-2 group" aria-expanded={!folded}>
-                      <ChevronDown size={16} className={clsx('text-gray-400 transition-transform group-hover:text-gray-600', folded && '-rotate-90')} />
-                      {isGroup ? <FolderTree size={15} className="text-brand-500" /> : <Building2 size={15} className="text-gray-400" />}
-                      <h2 className="text-sm font-semibold text-gray-800">{sec.name}</h2>
-                    </button>
-                    <span className="text-xs font-medium text-gray-500 bg-white border border-gray-200 rounded-full px-2 py-0.5">{sec.clients.length}</span>
-                    <div className="flex-1 h-px bg-gray-200 ml-1" />
-                    {isGroup && can('project.create') && (
-                      <button onClick={() => setShowNew({ groupId: sec.key })}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 px-2 py-1 rounded-lg hover:bg-brand-50">
-                        <Plus size={12} /> Add client here
-                      </button>
-                    )}
-                  </div>
-                  {!folded && (
-                    sec.clients.length === 0 ? (
-                      <p className="text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl px-4 py-5 text-center">No clients in this group yet.</p>
-                    ) : view === 'grid' ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {sec.clients.map(p => <ProjectCard key={p.id} project={p} />)}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        {sec.clients.map(p => <ProjectListRow key={p.id} project={p} />)}
-                      </div>
-                    )
-                  )}
-                </section>
-              );
-            })}
-          </div>
+        {!isLoading && !isError && filtered.length > 0 && (
+          view === 'grid' ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filtered.map(p => <ProjectCard key={p.id} project={p} />)}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {filtered.map(p => <ProjectRow key={p.id} project={p} />)}
+            </div>
+          )
         )}
       </div>
 
-      {showNew && (
-        <NewClientModal
-          onClose={() => setShowNew(null)}
-          defaultClientGroupId={showNew.groupId}
-          onSuccess={created => {
-            invalidate();
-            // Straight into the new client: the next thing anybody does is look at its work.
-            if (created?.id) router.push(`/projects/${created.id}`);
-          }}
+      {showModal && (
+        <NewProjectModal
+          onClose={() => setShowModal(false)}
+          onSuccess={invalidate}
           createdBy={currentUser?.email ?? 'system'}
         />
       )}
-      {showGroups && <ManageClientGroupsModal onClose={() => setShowGroups(false)} />}
+
+      {showPidRequests && (
+        <PidRequestsModal
+          onClose={() => setShowPidRequests(false)}
+          onAssigned={invalidate}
+        />
+      )}
+
     </div>
   );
 }
 
-function ClientSearch({
+function ProjectSearch({
   value, onChange, suggestions,
 }: { value: string; onChange: (v: string) => void; suggestions: MockProject[] }) {
   const router = useRouter();
@@ -397,7 +368,7 @@ function ClientSearch({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const matches = value.trim()
-    ? suggestions.filter(p => `${p.title} ${p.code ?? ''} ${p.clientGroupName ?? ''}`.toLowerCase().includes(value.toLowerCase())).slice(0, 6)
+    ? suggestions.filter(p => `${p.title} ${p.code ?? ''}`.toLowerCase().includes(value.toLowerCase())).slice(0, 6)
     : [];
 
   useEffect(() => {
@@ -419,7 +390,7 @@ function ClientSearch({
   }
 
   return (
-    <div ref={containerRef} className="relative w-60 shrink-0">
+    <div ref={containerRef} className="relative w-56 shrink-0">
       <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
       <input
         type="text"
@@ -427,7 +398,7 @@ function ClientSearch({
         onChange={e => { onChange(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKey}
-        placeholder="Search clients, CIDs, task groups…"
+        placeholder="Search projects..."
         className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500/20"
       />
       {open && matches.length > 0 && (
@@ -439,12 +410,15 @@ function ClientSearch({
                 key={p.id}
                 onMouseDown={() => { router.push(`/projects/${p.id}`); setOpen(false); }}
                 onMouseEnter={() => setActiveIdx(i)}
-                className={clsx('w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors', i === activeIdx ? 'bg-brand-50' : 'hover:bg-gray-50')}
+                className={clsx(
+                  'w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors',
+                  i === activeIdx ? 'bg-brand-50' : 'hover:bg-gray-50',
+                )}
               >
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: PHASE_COLOR[p.projectPhase] }} />
+                <span className={clsx('w-2 h-2 rounded-full shrink-0', phase.bg.replace('bg-', 'bg-'))} style={{ backgroundColor: PHASE_COLOR[p.projectPhase] }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.title}</p>
-                  <p className="text-xs text-gray-400 truncate">{phase.label}{p.clientGroupName ? ` · ${p.clientGroupName}` : ''}{p.code ? ` · ${p.code}` : ''}</p>
+                  <p className="text-xs text-gray-400">{phase.label}</p>
                 </div>
               </button>
             );
@@ -454,3 +428,45 @@ function ClientSearch({
     </div>
   );
 }
+
+function ProjectRow({ project }: { project: MockProject }) {
+  const phase = PHASE_META[project.projectPhase];
+  const priority = PRIORITY_META[project.priority];
+  return (
+    <a href={`/projects/${project.id}`} className="flex items-center gap-4 bg-white rounded-xl border border-gray-200 hover:border-brand-500 px-5 py-4 transition-all group">
+      <div className="w-2 h-8 rounded-full shrink-0" style={{ backgroundColor: project.statusColor }} />
+      {/* Same order as the card: NAME → PID → PHASE → TYPE. The row never showed the PID at all,
+          so the list view couldn't be used to look one up. */}
+      <div className="flex-1 min-w-0">
+        <p className="font-semibold text-gray-900 truncate group-hover:text-brand-600 transition-colors">{project.title}</p>
+        <div className="flex items-center gap-2 flex-wrap mt-1">
+          {project.code
+            ? <span className="text-xs font-mono font-bold text-brand-700">{pidLabel(project.code, project.roundSeq)}</span>
+            : <span className="text-xs font-mono font-bold text-amber-500">PID pending</span>}
+          <span className={clsx('text-[11px] font-semibold px-2 py-0.5 rounded-full', phase.bg, phase.text)}>{phase.label}</span>
+          {project.projectType && (
+            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+              {projectTypeLabel(project.projectType)}
+            </span>
+          )}
+          <span className={clsx('text-[11px] font-semibold', priority.color)}>{priority.label}</span>
+        </div>
+      </div>
+      <div className="shrink-0 text-right">
+        <p className="text-sm font-semibold text-gray-700">{project.completionPercentage}%</p>
+        <p className="text-xs text-gray-400">{project.taskCount} tasks</p>
+      </div>
+      <div className="flex items-center -space-x-1.5 shrink-0">
+        {project.members.slice(0, 3).map((m, i) => (
+          <div key={i} className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white border-2 border-white', m.color)}>
+            {m.initials}
+          </div>
+        ))}
+      </div>
+    </a>
+  );
+}
+
+// ── Workspace flow (docs/WORKSPACE_FLOWS.md) ────────────────────────────────────────────────────
+// The PROJECTS implementation above is production's (bb5728b); CLIENTS is ProjectsClient.clients.tsx.
+export const ProjectsClient = byFlow(ProjectsProjectsClient, ClientsProjectsClient);

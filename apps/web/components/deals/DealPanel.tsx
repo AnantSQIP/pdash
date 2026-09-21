@@ -1,6 +1,6 @@
 'use client';
 
-import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
+import { usePatentsAndClientCodes } from '@/lib/features';
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -32,6 +32,8 @@ export function DealPanel({ dealId, stages, onClose, onChanged, onDeleted }: {
   onChanged: () => void;
   onDeleted: () => void;
 }) {
+  // Patents and client codes are a PROJECTS-flow feature (lib/features.ts).
+  const PATENTS_AND_CLIENT_CODES = usePatentsAndClientCodes();
   const { can } = usePermissions();
   const qc = useQueryClient();
   const [err, setErr] = useState('');
@@ -227,6 +229,8 @@ function CloseDealForm({ kind, company, pending, onCancel, onSubmit }: {
   onCancel: () => void;
   onSubmit: (data: { lostReason?: string; clientId?: string; newClientCode?: string }) => void;
 }) {
+  // Patents and client codes are a PROJECTS-flow feature (lib/features.ts).
+  const PATENTS_AND_CLIENT_CODES = usePatentsAndClientCodes();
   const { can } = usePermissions();
   const [reason, setReason] = useState('');
   const [mode, setMode] = useState<'none' | 'existing' | 'new'>('none');

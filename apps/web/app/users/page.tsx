@@ -6,6 +6,7 @@ import { UserPlus, Search, Loader } from 'lucide-react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type UserSummary, type ApiProject, type DepartmentSummary } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { usePresence, presenceMeta } from '@/lib/presence-context';
 import { Can } from '@/lib/permissions-context';
 import { Avatar } from '@/components/Avatar';
@@ -33,6 +34,7 @@ function WorkChip({ userId }: { userId: string }) {
 
 export default function UsersPage() {
   const { org, loading: orgLoading } = useOrg();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const { presenceOf } = usePresence();
   const [tab, setTab] = useState<Tab>('All Members');
   const [search, setSearch] = useState('');
@@ -172,7 +174,7 @@ export default function UsersPage() {
                     <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Role</th>
                     <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Department</th>
                     <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Status</th>
-                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">Clients</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{clients ? 'Clients' : 'Projects'}</th>
                     <th className="px-3 py-2.5" />
                   </tr>
                 </thead>

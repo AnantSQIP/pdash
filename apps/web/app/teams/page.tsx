@@ -7,6 +7,7 @@ import clsx from 'clsx';
 import { Users2, Plus, Loader, Archive, ArchiveRestore, ShieldAlert, X } from 'lucide-react';
 import { api, type TeamSpace } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { useOrg, byName } from '@/lib/org-context';
 import { AvatarStack } from '@/components/ui/AvatarStack';
 import { useToast } from '@/components/ui/Toast';
@@ -17,12 +18,13 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wr
  * Team Spaces — where HR, BD and operations work lives.
  *
  * Deliberately a separate destination from Projects. A project is a client matter: it carries a
- * CID, a client, billability and a client deadline, and it feeds the ledgers and delivery
+ * PID, a client, billability and a client deadline, and it feeds the ledgers and delivery
  * reporting. None of that is true of a hiring round or a conference push, and making that work
  * pretend to be a project is what this module exists to stop.
  */
 export default function TeamsPage() {
   const { can, loading } = usePermissions();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const qc = useQueryClient();
   const { toast } = useToast();
   const [creating, setCreating] = useState(false);
@@ -95,7 +97,7 @@ export default function TeamsPage() {
             <p className="mt-3 text-sm font-medium text-gray-700">No team spaces yet</p>
             <p className="text-sm text-gray-400 mt-1 max-w-sm mx-auto">
               {can('team.manage')
-                ? 'Create one for HR, business development or operations — work that should not have to pretend to be client work.'
+                ? `Create one for HR, business development or operations — work that should not have to pretend to be ${clients ? 'client work' : 'a client project'}.`
                 : 'You will see a space here once you are added to one.'}
             </p>
           </div>

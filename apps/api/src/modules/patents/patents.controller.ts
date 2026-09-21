@@ -9,6 +9,7 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { RequirePasscode } from '../../common/decorators/require-passcode.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { getActorId } from '../../common/context/request-context';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 
 /**
  * Phase 2 — the confidential patent portal + the handle-only picker for Phase 1.
@@ -16,8 +17,12 @@ import { getActorId } from '../../common/context/request-context';
  * Security layers: RBAC (`patent.manage` for the real numbers, `patent.view` for handles),
  * the step-up passcode on every mutation, and query-level exclusion in the service so a real
  * number can never reach a `patent.view`-only caller. Org is ALWAYS session-derived.
+ *
+ * PROJECTS flow only: the CLIENTS flow has no patents or client codes (common/features.ts), and
+ * every route here answers 404 to it.
  */
 @Controller()
+@RequireFlow('PROJECTS')
 export class PatentsController {
   constructor(
     private readonly patents: PatentsService,

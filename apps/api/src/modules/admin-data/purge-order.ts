@@ -23,10 +23,12 @@
  *
  *   · AuditLog — the whole point. `AuditLog.entityId` is a plain String with no foreign key
  *     precisely so the record of a destruction outlives the thing destroyed.
- *   · PidReservation — the CID registry is the authority on which numbers have ever existed; a
- *     purged client's CID must never be reused, so its row is marked PURGED, not removed.
- *   · CidEvent — the CID ledger. No foreign key, deliberately: the purged client stays visible
- *     there through its PURGED event.
+ *   · PidReservation — the number registry (the PID ledger in PROJECTS, the CID registry in
+ *     CLIENTS) is the authority on which numbers have ever existed; a purged project's number must
+ *     never be reused, so its row is retired (DISCONTINUED in PROJECTS, PURGED in CLIENTS), not
+ *     removed.
+ *   · CidEvent — the CID ledger (CLIENTS). No foreign key, deliberately: the purged client stays
+ *     visible there through its PURGED event.
  *   · TaskStandard — holds no row per task, only a learned average. The task's contribution is
  *     withdrawn by name before the purge runs (see PurgeService).
  */
@@ -89,6 +91,7 @@ export const PROJECT_PURGE_ORDER = [
   'projectDepartment',
   'projectTeam',
   'projectPatent',
+  'pidRequest',
   'approvalAction',
   'approval',
   'commentAttachment',

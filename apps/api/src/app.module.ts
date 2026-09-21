@@ -53,9 +53,9 @@ import { CompanyModule } from './modules/company/company.module';
 import { AppraisalsModule } from './modules/appraisals/appraisals.module';
 import { SequenceModule } from './common/sequence/sequence.module';
 import { CidModule } from './common/cid/cid.service';
-// CLIENTS-FLOW: commented out — the patent portal, patent IDs, client codes and the client ledger
-// (all in this one module) are switched off. See common/features.ts.
-// import { PatentsModule } from './modules/patents/patents.module';
+// The patent portal, patent IDs, client codes and the client ledger — PROJECTS flow only; every
+// route in the module carries @RequireFlow('PROJECTS'). See common/features.ts.
+import { PatentsModule } from './modules/patents/patents.module';
 import { TeamsModule } from './modules/teams/teams.module';
 import { DealsModule } from './modules/deals/deals.module';
 import { OptionalHolidaysModule } from './modules/optional-holidays/optional-holidays.module';
@@ -127,7 +127,7 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     SequenceModule,
     WorkspaceFlowModule, // which flow each organisation runs — PROJECTS or CLIENTS
     CidModule, // the CID registry + ledger — every client write that touches a CID goes through it
-    // PatentsModule, // CLIENTS-FLOW: commented out
+    PatentsModule, // PROJECTS flow only (@RequireFlow('PROJECTS') on its controllers)
     TeamsModule,
     DealsModule,
     OptionalHolidaysModule,

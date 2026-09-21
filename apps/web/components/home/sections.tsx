@@ -12,16 +12,17 @@ import {
 import {
   api, type ApiTask, type ApiProject, type DashboardStats, type UserPerformance,
   type OrgPerformance, type OrgAttendanceSummary, type LeaveRequestItem,
-  type Holiday, type RoleSummary, type UserSummary, type TeamCapacity,
+  type Holiday, type RoleSummary, type UserSummary, type TeamCapacity, type PidRequestItem,
   type RegularizationRequest, type CompOffRequest, type Expense } from '@/lib/api';
 import { formatDate, fmtHours, fmtNum, fmtPct, plural, longDateIST, hourIST, todayUtc, isPastDue, relativePast } from '@/lib/date';
 import { nextUpFirst } from '@/lib/tasks';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { useToast } from '@/components/ui/Toast';
 import { Avatar } from '@/components/Avatar';
 import { progressColor } from '@/lib/progress';
-import { cidLabel } from '@/lib/mock-data';
+import { pidLabel } from '@/lib/mock-data';
 import {
   Card, CardHeader, CountBadge, StatTile, MetricRow, EmptyHint, ErrorState, SkeletonRows,
   PersonRow, ConfirmButton, BADGE, phaseChip, priorityDotClass,
@@ -47,14 +48,17 @@ const ROLE_PERSONA: Record<string, { label: string; sub: string }> = {
   HR:                          { label: 'People Operations',         sub: 'Attendance, leave & people' },
   'Senior Consultant':         { label: 'Senior Consultant',         sub: 'Delivery & org performance' },
   Consultant:                  { label: 'Consultant',                sub: 'Your matters & delivery' },
-  'Senior Research Associate': { label: 'Senior Research Associate', sub: 'Your research & clients' },
+  'Senior Research Associate': { label: 'Senior Research Associate', sub: 'Your research & PID requests' },
   Employee:                    { label: 'Team Member',               sub: 'Your tasks & performance' },
 };
 
 export function PersonaBanner() {
   const { currentUser } = useOrg();
   const { primaryRole } = usePermissions();
-  const persona = (primaryRole && ROLE_PERSONA[primaryRole]) || { label: primaryRole ?? 'Team Member', sub: 'Your workspace' };
+  const clients = useIsClientsFlow();
+  const known = (primaryRole && ROLE_PERSONA[primaryRole]) || { label: primaryRole ?? 'Team Member', sub: 'Your workspace' };
+  // A Senior Research Associate raises PID requests in PROJECTS; the CLIENTS flow has none.
+  const persona = clients && primaryRole === 'Senior Research Associate' ? { ...known, sub: 'Your research & clients' } : known;
   const h = hourIST();
   const greeting = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
   return (
@@ -101,9 +105,10 @@ export function WorkspaceErrorBanner() {
   );
 }
 
-// ── Org client stats row (project.view) ─────────────────────────────────────
+// ── Org project stats row (project.view) ────────────────────────────────────
 export function OrgStatsRow() {
   const { org } = useOrg();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { can } = usePermissions();
   const allowed = can('project.view');
   const { data: stats, isLoading, isError } = useQuery<DashboardStats>({
@@ -114,8 +119,8 @@ export function OrgStatsRow() {
   if (!allowed) return null;
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 px-4 sm:px-6 pt-4 sm:pt-6">
-      <StatTile label="Total clients"   value={fmtNum(stats?.totalProjects)} Icon={FolderKanban} loading={isLoading} error={isError} />
-      <StatTile label="Active clients"  value={fmtNum(stats?.activeProjects)} Icon={Activity} loading={isLoading} error={isError} />
+      <StatTile label={clients ? 'Total clients' : 'Total projects'}  value={fmtNum(stats?.totalProjects)} Icon={FolderKanban} loading={isLoading} error={isError} />
+      <StatTile label={clients ? 'Active clients' : 'Active projects'} value={fmtNum(stats?.activeProjects)} Icon={Activity} loading={isLoading} error={isError} />
       <StatTile label="Avg completion"  value={fmtPct(stats?.avgCompletion)}  Icon={TrendingUp} loading={isLoading} error={isError} />
       <StatTile label="Total tasks"     value={fmtNum(stats?.totalTasks)}     Icon={CheckSquare} loading={isLoading} error={isError} />
     </div>
@@ -185,6 +190,7 @@ function filterTasks(tasks: ApiTask[], tab: TaskTabKey): ApiTask[] {
 
 export function MyTasksCard() {
   const { currentUser } = useOrg();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { can } = usePermissions();
   const allowed = can('task.view');
   const [tab, setTab] = useState<TaskTabKey>('All');
@@ -226,8 +232,8 @@ export function MyTasksCard() {
           const overdue = task.currentStatus?.type !== 'CLOSED' && isPastDue(task.dueDate);
           const done = task.currentStatus?.type === 'CLOSED';
           const project = (task as any).projectTasks?.[0]?.project;
-          // CLIENTS-FLOW: the task group inside the client, when it has not been deleted.
-          const tl = task.projectTasks?.[0]?.taskList;
+          // CLIENTS flow: the task group inside the client, when it has not been deleted.
+          const tl = clients ? task.projectTasks?.[0]?.taskList : null;
           const group = tl && !tl.deletedAt ? tl.name : null;
           return (
             <div key={task.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
@@ -236,10 +242,16 @@ export function MyTasksCard() {
                 : <span className={clsx('w-2 h-2 rounded-full shrink-0', priorityDotClass(task.priority))} title={`${task.priority} priority`} />}
               <span className={clsx('text-sm flex-1 truncate', done ? 'text-gray-400 line-through' : 'text-gray-800')}>{task.title}</span>
               {project && (
-                <Link href={`/projects/${project.id}`} title={group ? `${project.title} · ${group}` : project.title}
-                  className="hidden sm:block text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full shrink-0 hover:bg-gray-200 truncate max-w-[160px]">
-                  {project.title}{group && <span className="text-gray-400"> · {group}</span>}
+                clients ? (
+                  <Link href={`/projects/${project.id}`} title={group ? `${project.title} · ${group}` : project.title}
+                    className="hidden sm:block text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full shrink-0 hover:bg-gray-200 truncate max-w-[160px]">
+                    {project.title}{group && <span className="text-gray-400"> · {group}</span>}
+                  </Link>
+                ) : (
+                <Link href={`/projects/${project.id}`} className="hidden sm:block text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full shrink-0 hover:bg-gray-200 truncate max-w-[120px]">
+                  {project.title}
                 </Link>
+                )
               )}
               {task.dueDate && (
                 <span className={clsx('text-xs shrink-0', overdue ? 'text-red-500 font-medium' : 'text-gray-500')}>
@@ -265,9 +277,10 @@ export function MyTasksCard() {
   );
 }
 
-// ── Clients (project.view) ──────────────────────────────────────────────────
+// ── Projects (project.view) ─────────────────────────────────────────────────
 export function MyProjectsCard() {
   const { org } = useOrg();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { can } = usePermissions();
   const allowed = can('project.view');
   const { data: projects = [], isLoading, isError, refetch } = useQuery<ApiProject[]>({
@@ -280,13 +293,13 @@ export function MyProjectsCard() {
   const top = projects.slice(0, 5);
   return (
     <Card>
-      <CardHeader title="Clients" icon={FolderKanban} href="/projects" linkLabel="View all" />
+      <CardHeader title={clients ? 'Clients' : 'Projects'} icon={FolderKanban} href="/projects" linkLabel="View all" />
       {isError ? (
         <ErrorState onRetry={() => refetch()} />
       ) : loading ? (
         <SkeletonRows />
       ) : top.length === 0 ? (
-        <EmptyHint>No clients yet.</EmptyHint>
+        <EmptyHint>{clients ? 'No clients yet.' : 'No projects yet.'}</EmptyHint>
       ) : (
         top.map(project => {
           const phase = phaseChip(project.projectPhase);
@@ -295,9 +308,9 @@ export function MyProjectsCard() {
           return (
             /* The name is the row, and it was the only thing being squeezed: every trailing item
                is shrink-0, so in a third-of-the-page card the title rendered as "Pat…" / "Trad…",
-               which tells you nothing and makes two different clients look identical.
-               The ID badge went because it read "pending" on every row here back then —
-               furniture carrying no information, at the cost of the one thing that identifies the row.
+               which tells you nothing and makes two different patent projects look identical.
+               The PID badge went because it read "PID pending" on every row here — furniture
+               carrying no information, at the cost of the one thing that identifies the row.
                overflow-hidden is the backstop: the fixed items must never push the percentage
                out past the card's edge. */
             <div key={project.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3 overflow-hidden">
@@ -318,10 +331,11 @@ export function MyProjectsCard() {
   );
 }
 
-// ── Client status summary (project.view, side) ──────────────────────────────
+// ── Project status summary (project.view, side) ─────────────────────────────
 const PHASE_ORDER = ['ACTIVE', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED', 'ARCHIVED'];
 export function ProjectStatusCard() {
   const { org } = useOrg();
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { can } = usePermissions();
   const allowed = can('project.view');
   const { data: projects = [], isLoading, isError, refetch } = useQuery<ApiProject[]>({
@@ -331,7 +345,7 @@ export function ProjectStatusCard() {
   });
   if (!allowed) return null;
   const loading = isLoading || !org;
-  // Count EVERY phase present so the rows reconcile with the "Total clients" tile.
+  // Count EVERY phase present so the rows reconcile with the "Total projects" tile.
   const counts = new Map<string, number>();
   for (const p of projects) counts.set(p.projectPhase, (counts.get(p.projectPhase) ?? 0) + 1);
   const phases = [
@@ -340,13 +354,13 @@ export function ProjectStatusCard() {
   ];
   return (
     <Card>
-      <CardHeader title="Client Status" icon={Activity} href="/projects" linkLabel="View all" />
+      <CardHeader title={clients ? 'Client Status' : 'Project Status'} icon={Activity} href="/projects" linkLabel="View all" />
       {isError ? (
         <ErrorState onRetry={() => refetch()} />
       ) : loading ? (
         <SkeletonRows n={4} />
       ) : projects.length === 0 ? (
-        <EmptyHint>No clients yet.</EmptyHint>
+        <EmptyHint>{clients ? 'No clients yet.' : 'No projects yet.'}</EmptyHint>
       ) : (
         <div className="divide-y divide-gray-100">
           {phases.map(phase => {
@@ -366,6 +380,7 @@ export function ProjectStatusCard() {
 
 // ── Quick stats (task.view, side) ───────────────────────────────────────────
 export function QuickStatsCard() {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { org } = useOrg();
   const { can } = usePermissions();
   const allowed = can('task.view');
@@ -381,7 +396,7 @@ export function QuickStatsCard() {
       <MetricRow loading={isLoading} error={isError} onRetry={() => refetch()} items={[
         { label: 'Tasks due today', value: fmtNum(stats?.tasksDueToday), badge: BADGE.warn },
         { label: 'Overdue',         value: fmtNum(stats?.overdueCount),  badge: BADGE.danger },
-        { label: 'Active clients',  value: fmtNum(stats?.activeProjects), badge: BADGE.good },
+        { label: clients ? 'Active clients' : 'Active projects', value: fmtNum(stats?.activeProjects), badge: BADGE.good },
         { label: 'Hours this week', value: fmtHours(stats?.hoursLoggedThisWeek), badge: BADGE.info },
       ]} />
     </Card>
@@ -425,6 +440,7 @@ export function MyExpensesCard() {
 // analytics.view.organization, which a Manager holds and the performance routes do not accept —
 // so the card would render for them and then fail its own request.
 export function OrgPerformanceCard() {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { org } = useOrg();
   const { can } = usePermissions();
   const allowed = can('performance.view.organization');
@@ -445,7 +461,7 @@ export function OrgPerformanceCard() {
         { label: 'Tasks completed', value: fmtNum(t?.tasksCompleted) },
         { label: 'Hours logged',    value: fmtHours(t?.hoursLogged) },
         { label: 'On-time rate',    value: t?.avgOnTimeRate == null ? 'n/a' : fmtPct(t.avgOnTimeRate) },
-        { label: 'Active clients',  value: fmtNum(t?.activeProjects) },
+        { label: clients ? 'Active clients' : 'Active projects', value: fmtNum(t?.activeProjects) },
       ]} />
       {leaders.length > 0 && (
         <div className="px-5 py-3 border-t border-gray-100">
@@ -555,6 +571,7 @@ export function LeaveApprovalsCard() {
 // (HR / Admin / Super Admin). Leave has its own card above; this covers the two that were only
 // reachable via the Attendance → Team tab, so admins see them on the homepage too.
 export function PendingRequestsCard() {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { currentUser } = useOrg();
   const { can } = usePermissions();
   const { toast } = useToast();
@@ -633,7 +650,7 @@ export function PendingRequestsCard() {
           })}
           {coRows.slice(0, 4).map(c => {
             const nm = c.user ? `${c.user.firstName} ${c.user.lastName ?? ''}`.trim() : 'A team member';
-            return <Row key={c.id} id={c.id} kind="co" name={nm} user={c.user} primary={`worked ${formatDate(c.workDate)}`} secondary={`${c.projectRef ? `CID ${c.projectRef} · ` : ''}${c.reason}`} />;
+            return <Row key={c.id} id={c.id} kind="co" name={nm} user={c.user} primary={`worked ${formatDate(c.workDate)}`} secondary={`${c.projectRef ? `${clients ? 'CID' : 'PID'} ${c.projectRef} · ` : ''}${c.reason}`} />;
           })}
         </>
       )}
@@ -719,6 +736,65 @@ export function AdminShortcutsCard() {
   );
 }
 
+// ── Incoming PID requests awaiting me (project.generate_pid) ─────────────────
+// Replaces the old (dead) project-approval card: project approval was removed, but
+// juniors still RAISE PID requests that an authority mints & assigns here.
+export function PidRequestsCard() {
+  const { org } = useOrg();
+  const { can } = usePermissions();
+  const { toast } = useToast();
+  // PROJECTS flow only: the CLIENTS flow issues every CID on create, so nothing is ever requested.
+  const clients = useIsClientsFlow();
+  const allowed = can('project.generate_pid') && !clients;
+  const qc = useQueryClient();
+  const { data: pending = [], isLoading, isError, refetch } = useQuery<PidRequestItem[]>({
+    queryKey: homeKeys.pidRequests(org?.id),
+    queryFn: () => api.projects.pidRequests(),
+    enabled: allowed && !!org?.id, staleTime: 30_000, placeholderData: keepPreviousData,
+  });
+  const fulfill = useMutation({
+    mutationFn: async (id: string) => { const { pid } = await api.projects.generatePid(); return api.projects.fulfillPidRequest(id, pid); },
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: homeKeys.pidRequests(org?.id) });
+      qc.invalidateQueries({ queryKey: ['projects'] });
+      toast(`PID ${res.pid} assigned.`, 'success');
+    },
+    onError: e => toast(errMsg(e), 'error'),
+  });
+  if (!allowed) return null;
+  const pendingId = fulfill.isPending ? fulfill.variables : null;
+  return (
+    <Card>
+      <CardHeader title="PID Requests" icon={Hash} badge={<CountBadge n={pending.length} />} href="/projects" linkLabel="All projects" />
+      {isError ? (
+        <ErrorState onRetry={() => refetch()} />
+      ) : isLoading ? (
+        <SkeletonRows n={3} />
+      ) : pending.length === 0 ? (
+        <EmptyHint>No PID requests awaiting you.</EmptyHint>
+      ) : (
+        pending.slice(0, 5).map(p => {
+          const busy = p.id === pendingId;
+          return (
+            <div key={p.id} className="px-5 py-3 border-b border-gray-100 last:border-0 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <Link href={`/projects/${p.projectId}`} className="text-sm font-medium text-gray-800 hover:text-brand-600 truncate block">{p.projectTitle}</Link>
+                <p className="text-xs text-gray-500 truncate">
+                  requested {relativePast(p.createdAt)}{p.note ? ` · ${p.note}` : ''}
+                </p>
+              </div>
+              <button disabled={busy} onClick={() => fulfill.mutate(p.id)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 shrink-0" title="Generate and assign a PID">
+                <Hash size={13} /> {busy ? 'Assigning…' : 'Assign PID'}
+              </button>
+            </div>
+          );
+        })
+      )}
+    </Card>
+  );
+}
+
 // ── Team availability snapshot (capacity.view) ──────────────────────────────
 export function TeamAvailabilityCard() {
   const { org } = useOrg();
@@ -761,10 +837,11 @@ export function TeamAvailabilityCard() {
 
 // ── Quick access (links filtered by permission) ─────────────────────────────
 export function QuickAccessCard() {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client (docs/WORKSPACE_FLOWS.md)
   const { can } = usePermissions();
   const LINKS: { href: string; label: string; Icon: typeof CheckSquare; color: string; perm?: string | string[] }[] = [
     { href: '/tasks',      label: 'My Tasks',   Icon: CheckSquare,   color: 'text-brand-600',  perm: 'task.view' },
-    { href: '/projects',   label: 'Clients',    Icon: FolderKanban,  color: 'text-green-600',  perm: 'project.view' },
+    { href: '/projects',   label: clients ? 'Clients' : 'Projects', Icon: FolderKanban, color: 'text-green-600', perm: 'project.view' },
     { href: '/calendar',   label: 'Calendar',   Icon: CalendarDays,  color: 'text-orange-600', perm: 'calendar.view' },
     { href: '/timesheets', label: 'Timesheets', Icon: Timer,         color: 'text-brand-600',  perm: ['timesheet.view', 'timesheet.create'] },
     { href: '/reports',    label: 'Reports',    Icon: FileText,      color: 'text-amber-600',  perm: ['report.view', 'report.export'] },

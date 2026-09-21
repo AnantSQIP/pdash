@@ -32,7 +32,8 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
+  // PROJECTS flow's word; the CLIENTS flow says "Change CID" (CLIENTS_ACTION_LABELS below).
+  generate_pid: 'Generate PID',
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -102,10 +103,10 @@ export function moduleOf(code: string): string { return code.split('.')[0]; }
 export function actionOf(code: string): string { return code.split('.').slice(1).join('.'); }
 
 /** "Attendance — View Org-wide", the label a person reads in the row header. */
-export function labelForCode(code: string): string {
+export function labelForCode(code: string, flow: 'PROJECTS' | 'CLIENTS' = 'PROJECTS'): string {
   const mod = MODULES.find(m => m.key === moduleOf(code));
   const action = actionOf(code);
-  const actionLabel = ACTION_LABELS[action] ?? action;
+  const actionLabel = actionLabelFor(action, flow);
   return mod ? `${mod.label} — ${actionLabel}` : code;
 }
 
@@ -122,8 +123,8 @@ export const CODE_NOTES: Record<string, string> = {
   // "request a project" — the project starts PENDING and the nominated manager approves it.
   // Removing it stops that role starting projects at all (the server enforces it on POST /projects).
   'project.create': 'Lets the role START a project. A role that also has Projects — Approve creates it outright; a role without it can only REQUEST one, which a manager must approve. It also covers adding a later round to an existing project, so taking it away stops both.',
-  'project.approve': 'Approves a client someone else requested, and may be named a client\'s manager. Not the same as changing a CID — that is Change CID.',
-  'project.generate_pid': 'Changes a client\'s CID (SQ_26_27_nnn) — reassign, split or merge, with the org passcode. CIDs themselves are issued automatically when a client is created. Kept narrow deliberately: running a client is not the same authority as renumbering it.',
+  'project.approve': 'Approves a project someone else requested. Not the same as minting a PID — that is Generate PID.',
+  'project.generate_pid': 'Mints the Project ID (SQ_26_27_nnn). Kept narrow deliberately: running a project is not the same authority as issuing its number.',
   'project.delete.permanent': 'Removes the row itself, not the “deleted” flag every other Delete sets. There is no undo and nothing left to restore.',
   'task.delete.permanent': 'Removes the row itself, not the “deleted” flag every other Delete sets. There is no undo and nothing left to restore.',
   'attendance.view.organization': 'Sees everyone’s attendance, not just their own. This plus Manage is what HR holds today.',
@@ -135,6 +136,30 @@ export const CODE_NOTES: Record<string, string> = {
   'capacity.view': 'Team Capacity: who is busy, who is free, and what everyone is on — across every client. Also the capacity tab on a client, the availability card on Home and the workload on a profile. Senior Consultant and above by default.',
   'capacity.manage': 'Create, edit, assign and delete tasks from Team Capacity — for anyone in the organisation, on any client, adding them to the client if they are not on it yet. Senior Consultant and above by default.',
 };
+
+// ── the CLIENTS workspace flow's words (docs/WORKSPACE_FLOWS.md) ──────────────
+// The codes are the same in both flows — no grant moves when a firm converts — but in CLIENTS a
+// project is a client and `project.generate_pid` no longer mints a number: it changes one.
+
+/** Mirrors CLIENTS_ACTION_LABELS in the catalog. */
+export const CLIENTS_ACTION_LABELS: Record<string, string> = {
+  generate_pid: 'Change CID',
+};
+
+export const CLIENTS_CODE_NOTES: Record<string, string> = {
+  'project.approve': 'Approves a client someone else requested, and may be named a client\'s manager. Not the same as changing a CID — that is Change CID.',
+  'project.generate_pid': 'Changes a client\'s CID (SQ_26_27_nnn) — reassign, split or merge, with the org passcode. CIDs themselves are issued automatically when a client is created. Kept narrow deliberately: running a client is not the same authority as renumbering it.',
+};
+
+type Flow = 'PROJECTS' | 'CLIENTS';
+/** An action's label in the given workspace flow (PROJECTS when omitted — production's words). */
+export function actionLabelFor(action: string, flow: Flow = 'PROJECTS'): string {
+  return (flow === 'CLIENTS' ? CLIENTS_ACTION_LABELS[action] : undefined) ?? ACTION_LABELS[action] ?? action;
+}
+/** A code's note in the given workspace flow. */
+export function codeNoteFor(code: string, flow: Flow = 'PROJECTS'): string | undefined {
+  return (flow === 'CLIENTS' ? CLIENTS_CODE_NOTES[code] : undefined) ?? CODE_NOTES[code];
+}
 
 // ── grouping ─────────────────────────────────────────────────────────────────
 
@@ -176,6 +201,7 @@ export const UNCATALOGUED_KEY = '_uncatalogued';
 export function groupByModule(
   permissions: { id: string; code: string }[],
   modules: ModuleDef[] = MODULES,
+  flow: 'PROJECTS' | 'CLIENTS' = 'PROJECTS',
 ): GroupedMatrix {
   const idByCode = new Map(permissions.map(p => [p.code, p.id]));
   const catalogued = new Set<string>();
@@ -193,8 +219,8 @@ export function groupByModule(
         code,
         id,
         action,
-        label: ACTION_LABELS[action] ?? action,
-        note: CODE_NOTES[code],
+        label: actionLabelFor(action, flow),
+        note: codeNoteFor(code, flow),
       };
     }),
   }));
@@ -214,7 +240,7 @@ export function groupByModule(
         id: idByCode.get(code) ?? null,
         action: actionOf(code),
         label: code,
-        note: CODE_NOTES[code],
+        note: codeNoteFor(code, flow),
       })),
     });
   }

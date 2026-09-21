@@ -1,6 +1,7 @@
 'use client';
 
-import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
+import { byFlow } from '@/lib/workspace-flow';
+import ClientsReportsPage from './ReportsPage.clients';
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,7 +11,7 @@ import { api, type DashboardStats, type ReportProject } from '@/lib/api';
 import { formatDate, formatDateIST, formatDateTimeIST } from '@/lib/date';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
-import { projectTypeLabel, cidLabel } from '@/lib/mock-data';
+import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { ExportMenu } from '@/components/ExportMenu';
 import { projectsExport, fullReportCsv, singleProjectCsv } from './export';
 import { PeriodFilter, buildPeriods, inPeriod, type Period } from '@/components/reports/PeriodFilter';
@@ -83,13 +84,12 @@ function ProgressEditor({ project, onUpdated }: { project: ReportProject; onUpda
   );
 }
 
-// Task seats. The PM seat leads one task; the person who runs the whole client is its client manager.
-const ROLE_LABEL: Record<string, string> = { PM: 'Manager', REVIEWER: 'Reviewer', ANALYST: 'Analyst' };
+const ROLE_LABEL: Record<string, string> = { PM: 'Project Manager', REVIEWER: 'Reviewer', ANALYST: 'Analyst' };
 
 /**
- * A client row in the reports table. Expanding it SPOTLIGHTS the matter: the row and its detail
+ * A project row in the reports table. Expanding it SPOTLIGHTS the matter: the row and its detail
  * are ringed and lifted, and everything else on the table dims — so on a long list there is never
- * any doubt which client you have open.
+ * any doubt which project you have open.
  */
 function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canExport }: {
   project: ReportProject; onUpdated: () => void; expanded: boolean; dimmed: boolean; onToggle: () => void;
@@ -113,7 +113,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
             {expanded ? <ChevronDown size={14} className="text-brand-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-400 shrink-0" />}
             <div className="min-w-0">
               <span className={clsx('block text-[11px] font-mono font-bold', expanded ? 'text-brand-800' : 'text-brand-700')}>
-                {cidLabel(project.pid, project.roundSeq)}
+                {pidLabel(project.pid, project.roundSeq)}
               </span>
               <span className={clsx('text-sm', expanded ? 'font-semibold text-gray-900' : 'font-medium text-gray-900')}>{project.title}</span>
             </div>
@@ -140,7 +140,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
             <div className="rounded-xl border-2 border-brand-200 bg-white p-4">
               <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-mono font-bold text-brand-700">{cidLabel(project.pid, project.roundSeq)}</span>
+                  <span className="text-sm font-mono font-bold text-brand-700">{pidLabel(project.pid, project.roundSeq)}</span>
                   <Link href={`/projects/${project.id}`} onClick={e => e.stopPropagation()}
                     className="text-sm font-semibold text-gray-900 hover:text-brand-600 hover:underline inline-flex items-center gap-1">
                     {project.title} <ExternalLink size={12} className="text-gray-300" />
@@ -149,10 +149,10 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
                 {canExport && (
                   <button
                     onClick={e => { e.stopPropagation(); singleProjectCsv(project); }}
-                    title="Download everything about this client as CSV"
+                    title="Download everything about this project as CSV"
                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 shrink-0"
                   >
-                    <Download size={13} /> Download this client
+                    <Download size={13} /> Download this project
                   </button>
                 )}
               </div>
@@ -160,8 +160,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
               {/* Everything known about the matter. */}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-5 gap-y-2 text-xs mb-4">
                 <div><span className="text-gray-400">Type</span><p className="text-gray-800">{project.type ? projectTypeLabel(project.type) : '—'}</p></div>
-                {/* CLIENTS-FLOW: commented out — the old client code is switched off; the project IS the client now. */}
-                {PATENTS_AND_CLIENT_CODES && <div><span className="text-gray-400">Client code</span><p className="text-gray-800">{project.client ?? '—'}</p></div>}
+                <div><span className="text-gray-400">Client</span><p className="text-gray-800">{project.client ?? '—'}</p></div>
                 <div><span className="text-gray-400">Status</span><p className="text-gray-800">{project.status ?? project.phase}</p></div>
                 <div><span className="text-gray-400">Start</span><p className="text-gray-800">{project.startDate ? formatDate(project.startDate) : '—'}</p></div>
                 <div><span className="text-gray-400">Deadline</span><p className="text-gray-800">{project.dueDate ? formatDate(project.dueDate) : '—'}</p></div>
@@ -178,8 +177,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
                 <div><span className="text-gray-400">Created</span><p className="text-gray-800">{project.createdAt ? formatDate(project.createdAt) : '—'}</p></div>
               </div>
 
-              {/* CLIENTS-FLOW: commented out — patent IDs are switched off. */}
-              {PATENTS_AND_CLIENT_CODES && project.patents.length > 0 && (
+              {project.patents.length > 0 && (
                 <div className="mb-3">
                   <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">Patents</span>
                   <div className="flex flex-wrap gap-1.5 mt-1">
@@ -205,7 +203,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
 
               <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Tasks &amp; staffing</p>
               {project.tasks.length === 0 ? (
-                <p className="text-xs text-gray-400">No tasks on this client.</p>
+                <p className="text-xs text-gray-400">No tasks on this project.</p>
               ) : (
                 <div className="space-y-2">
                   {project.tasks.map(t => (
@@ -242,7 +240,7 @@ function ProjectReportRow({ project, onUpdated, expanded, dimmed, onToggle, canE
   );
 }
 
-export default function ReportsPage() {
+function ProjectsReportsPage() {
   const { org } = useOrg();
   // `report.export` existed in the catalogue, was granted to every role, and gated nothing at all
   // — a permission implying a control that did not exist. It gates the download controls now.
@@ -257,8 +255,8 @@ export default function ReportsPage() {
   const qc = useQueryClient();
   const [sortField, setSortField] = useState<'title' | 'progress' | 'phase' | 'priority'>('progress');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [openId, setOpenId] = useState<string | null>(null); // expanded client detail (spotlit)
-  const [search, setSearch] = useState('');                   // by CID or client name
+  const [openId, setOpenId] = useState<string | null>(null); // expanded project detail (spotlit)
+  const [search, setSearch] = useState('');                   // by PID or project name
   const [period, setPeriod] = useState<Period>(() => buildPeriods()[0]);   // All time
 
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
@@ -296,7 +294,7 @@ export default function ReportsPage() {
     search.trim() ? `Filtered by “${search.trim()}”` : null,
   ].filter(Boolean).join(' · ');
 
-  // Search matches the CID or the name — the two things anyone actually has to hand.
+  // Search matches the PID or the name — the two things anyone actually has to hand.
   const q = search.trim().toLowerCase();
   const filtered = q
     ? inWindow.filter(p => `${p.pid ?? ''} ${p.title} ${p.client ?? ''}`.toLowerCase().includes(q))
@@ -325,7 +323,7 @@ export default function ReportsPage() {
     <div className="min-h-full">
       <PageHeader
         title="Reports"
-        subtitle="Client analytics and progress across the portfolio."
+        subtitle="Project analytics and progress across the portfolio."
         sticky={false}
         actions={
           <>
@@ -341,8 +339,8 @@ export default function ReportsPage() {
           {[
             // One neutral well for all four. Four different hues here said nothing about the
             // four numbers — it just used up the colour budget before the data got any.
-            { label: 'Total Clients',    value: stats?.totalProjects   ?? 0,       Icon: FolderOpen, iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
-            { label: 'Active Clients',   value: stats?.activeProjects  ?? 0,       Icon: TrendingUp, iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
+            { label: 'Total Projects',   value: stats?.totalProjects   ?? 0,       Icon: FolderOpen, iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
+            { label: 'Active Projects',  value: stats?.activeProjects  ?? 0,       Icon: TrendingUp, iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
             { label: 'Avg Completion',   value: `${stats?.avgCompletion ?? 0}%`,   Icon: BarChart2,  iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
             { label: 'Total Tasks',      value: stats?.totalTasks      ?? 0,       Icon: CheckSquare,iconBg: 'bg-gray-50',   iconColor: 'text-gray-400' },
           ].map(({ label, value, Icon, iconBg, iconColor }) => (
@@ -365,7 +363,7 @@ export default function ReportsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {/* Status distribution chart */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Clients by Phase</h3>
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Projects by Phase</h3>
             {loading ? (
               <div className="space-y-3">
                 {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
@@ -383,14 +381,14 @@ export default function ReportsPage() {
                     </div>
                   </div>
                 ))}
-                {statusDist.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No client data yet.</p>}
+                {statusDist.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No project data yet.</p>}
               </div>
             )}
           </div>
 
           {/* Priority breakdown */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h3 className="text-sm font-semibold text-gray-900 mb-4">Clients by Priority</h3>
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Projects by Priority</h3>
             {loading ? (
               <div className="space-y-3">
                 {[...Array(4)].map((_, i) => <div key={i} className="h-8 bg-gray-100 animate-pulse rounded" />)}
@@ -404,7 +402,7 @@ export default function ReportsPage() {
                     <div key={pr}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-xs font-medium" style={{ color: PRIORITY_COLORS[pr] }}>{pr.charAt(0) + pr.slice(1).toLowerCase()}</span>
-                        <span className="text-xs text-gray-500">{group.length} clients · avg {avg}%</span>
+                        <span className="text-xs text-gray-500">{group.length} projects · avg {avg}%</span>
                       </div>
                       <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
                         <div className="h-full rounded-full" style={{ width: `${avg}%`, backgroundColor: PRIORITY_COLORS[pr] }} />
@@ -457,12 +455,12 @@ export default function ReportsPage() {
           <PeriodFilter value={period} onChange={setPeriod} matched={inWindow.length} total={projects.length} />
         </div>
 
-        {/* Clients table */}
+        {/* Projects table */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="flex items-center justify-between gap-3 flex-wrap px-5 py-4 border-b border-gray-100">
             <div className="flex items-center gap-3 min-w-0">
               <h3 className="text-sm font-semibold text-gray-900 shrink-0">
-                {period.key === 'all' ? 'All Clients' : period.label}
+                {period.key === 'all' ? 'All Projects' : period.label}
               </h3>
               {/* Look one up by the number the client quotes, or by name. */}
               <div className="relative">
@@ -470,7 +468,7 @@ export default function ReportsPage() {
                 <input
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  placeholder="Search CID or client…"
+                  placeholder="Search PID, project or client…"
                   className="w-56 sm:w-72 pl-8 pr-7 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-brand-400"
                 />
                 {search && (
@@ -486,7 +484,7 @@ export default function ReportsPage() {
                 <button
                   onClick={() => fullReportCsv(sorted)}
                   disabled={loading || sorted.length === 0}
-                  title="Full CSV — every client plus every task and who is on it"
+                  title="Full CSV — every project plus every task and who is on it"
                   className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
                 >
                   <Download size={14} /> Full CSV
@@ -507,7 +505,7 @@ export default function ReportsPage() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   {[
-                    ['title', 'Client'],
+                    ['title', 'Project'],
                     ['type', 'Type'],
                     ['phase', 'Phase'],
                     ['priority', 'Priority'],
@@ -529,7 +527,7 @@ export default function ReportsPage() {
               <tbody className="divide-y divide-gray-100">
                 {sorted.length === 0 && (
                   <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
-                    {q ? `No client matches “${search.trim()}”.` : 'No clients found.'}
+                    {q ? `No project matches “${search.trim()}”.` : 'No projects found.'}
                   </td></tr>
                 )}
                 {sorted.map(project => (
@@ -539,7 +537,7 @@ export default function ReportsPage() {
                     canExport={canExport}
                     onUpdated={invalidate}
                     expanded={openId === project.id}
-                    // Everything else dims while one client is open — that's the spotlight.
+                    // Everything else dims while one project is open — that's the spotlight.
                     dimmed={openId !== null && openId !== project.id}
                     onToggle={() => setOpenId(openId === project.id ? null : project.id)}
                   />
@@ -553,3 +551,7 @@ export default function ReportsPage() {
     </div>
   );
 }
+
+// ── Workspace flow (docs/WORKSPACE_FLOWS.md) ────────────────────────────────────────────────────
+// The PROJECTS implementation above is production's (bb5728b); CLIENTS is ReportsPage.clients.tsx.
+export default byFlow(ProjectsReportsPage, ClientsReportsPage);

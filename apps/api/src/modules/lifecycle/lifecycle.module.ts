@@ -1,4 +1,5 @@
-import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
+import { patentsAndClientCodes } from '../../common/features';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 import {
   BadRequestException, Body, Controller, ForbiddenException, Get, Injectable, Module,
   NotFoundException, Param, Post, Query,
@@ -81,6 +82,7 @@ export class LifecycleService {
     private readonly actor: ActorContextService,
     private readonly events: EventService,
     private readonly notifications: NotificationsService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   private actorId(): string {
@@ -342,14 +344,16 @@ export class LifecycleService {
         }),
       ]);
 
+    // CLIENTS flow: client records (client codes) do not exist there and their screens (the client
+    // ledger) are off, so nothing in the product could clear that blocker — it is still reported,
+    // not blocking. The words follow the flow's unit of work.
+    const flow = await this.flows.flowOf(organizationId);
+    const clientCodes = patentsAndClientCodes(flow);
     const items = [
       { key: 'projectsManaged', label: 'Projects they manage', count: managedProjects.length, blocking: true },
       { key: 'openTasks', label: 'Open tasks assigned to them', count: openTasks.length, blocking: true },
-      // CLIENTS-FLOW: commented out as a BLOCKER — the client records it counts belong to the
-      // switched-off client-code system, whose screens (the client ledger) are switched off too,
-      // so nothing in the product could clear it. It is still reported.
-      { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: PATENTS_AND_CLIENT_CODES },
-      { key: 'unsubmittedTime', label: 'Time logged with no client attached', count: unsubmitted.length, blocking: false },
+      { key: 'clientsOwned', label: 'Clients where they are the account manager', count: ownedClients.length, blocking: clientCodes },
+      { key: 'unsubmittedTime', label: flow === 'CLIENTS' ? 'Time logged with no client attached' : 'Time logged with no PID attached', count: unsubmitted.length, blocking: false },
       { key: 'pendingLeave', label: 'Leave requests still pending', count: pendingLeave.length, blocking: false },
       { key: 'projectsMember', label: 'Other projects they are on', count: memberProjects.length, blocking: false },
     ];

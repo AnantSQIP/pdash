@@ -22,6 +22,7 @@ import clsx from 'clsx';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useOrg } from '@/lib/org-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { useAuth } from '@/lib/auth-context';
 import { Can, usePermissions } from '@/lib/permissions-context';
 import { api, type UserSummary, type Tag } from '@/lib/api';
@@ -510,7 +511,7 @@ const NOTIF_CATS = [
   { id: 'mentions',   label: 'Mentions',            desc: 'When someone @mentions you in a discussion' },
   { id: 'discussions', label: 'Discussions',        desc: 'Being added to a discussion channel' },
   { id: 'tasks',      label: 'Tasks',               desc: 'Task assignments and updates' },
-  { id: 'projects',   label: 'Clients',             desc: 'CID changes, task groups, lifecycle' },
+  { id: 'projects',   label: 'Projects',            desc: 'Approvals, billable decisions, lifecycle' },
   { id: 'attendance', label: 'Attendance & Leave',  desc: 'Leave, comp-off and regularisation' },
   { id: 'expenses',   label: 'Expenses',            desc: 'Expense approvals and reimbursements' },
   { id: 'other',      label: 'Everything else',     desc: 'Any other notification' },
@@ -519,6 +520,7 @@ const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${
 const fromHHMM = (s: string) => { const [h, m] = s.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
 
 function NotificationsTab() {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const qc = useQueryClient();
   const { data: prefs } = useQuery({ queryKey: ['notif-prefs'], queryFn: () => api.notifications.preferences(), staleTime: 30_000 });
   const [types, setTypes] = useState<Record<string, boolean>>({});
@@ -562,8 +564,8 @@ function NotificationsTab() {
           {NOTIF_CATS.map(c => (
             <div key={c.id} className="flex items-center justify-between py-3">
               <div>
-                <p className="text-sm font-medium text-gray-800">{c.label}</p>
-                <p className="text-xs text-gray-400">{c.desc}</p>
+                <p className="text-sm font-medium text-gray-800">{clients && c.id === 'projects' ? 'Clients' : c.label}</p>
+                <p className="text-xs text-gray-400">{clients && c.id === 'projects' ? 'CID changes, task groups, lifecycle' : c.desc}</p>
               </div>
               <Toggle on={types[c.id] !== false} onToggle={() => setTypes(t => ({ ...t, [c.id]: t[c.id] === false }))} />
             </div>

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { api, type DeletedProjectRow, type DeletedTaskRow } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions-context';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 import { Modal } from '@/components/ui/Modal';
 import { toastError, toastSuccess } from '@/components/ui/Toast';
 import { formatDateTimeIST } from '@/lib/date';
@@ -31,6 +32,7 @@ import { formatDateTimeIST } from '@/lib/date';
  * enforced on the server, because a dialog protects nobody who can call the API directly.
  */
 export default function AdminDataPage() {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client, its number a CID
   const { can, isSuperAdmin, loading } = usePermissions();
   const qc = useQueryClient();
   const [tab, setTab] = useState<'projects' | 'tasks'>('projects');
@@ -97,7 +99,7 @@ export default function AdminDataPage() {
         </p>
         <div className="flex items-center gap-2 mt-4 flex-wrap">
           {([
-            ['projects', FolderKanban, 'Clients', projects.length],
+            ['projects', FolderKanban, clients ? 'Clients' : 'Projects', projects.length],
             ['tasks', ListTodo, 'Tasks', tasks.length],
           ] as const).map(([key, Icon, label, count]) => (
             <button
@@ -197,13 +199,14 @@ function ProjectTable({ rows, onRestore, onPurge, busy }: {
   onPurge: (r: DeletedProjectRow) => void;
   busy: boolean;
 }) {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client, its number a CID
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
       <table className="w-full text-left text-sm min-w-[760px]">
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-            <th className="px-5 py-2.5">Client</th>
-            <th className="px-3 py-2.5">CID</th>
+            <th className="px-5 py-2.5">{clients ? 'Client' : 'Project'}</th>
+            <th className="px-3 py-2.5">{clients ? 'CID' : 'PID'}</th>
             <th className="px-3 py-2.5">Deleted</th>
             <th className="px-3 py-2.5">Would destroy</th>
             <th className="px-5 py-2.5 text-right">Actions</th>
@@ -224,7 +227,7 @@ function ProjectTable({ rows, onRestore, onPurge, busy }: {
               <td className="px-5 py-3"><Actions onRestore={() => onRestore(p)} onPurge={() => onPurge(p)} busy={busy} /></td>
             </tr>
           ))}
-          {rows.length === 0 && <Empty what="clients" />}
+          {rows.length === 0 && <Empty what={clients ? 'clients' : 'projects'} />}
         </tbody>
       </table>
     </div>
@@ -237,13 +240,14 @@ function TaskTable({ rows, onRestore, onPurge, busy }: {
   onPurge: (r: DeletedTaskRow) => void;
   busy: boolean;
 }) {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client, its number a CID
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
       <table className="w-full text-left text-sm min-w-[760px]">
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
             <th className="px-5 py-2.5">Task</th>
-            <th className="px-3 py-2.5">Client</th>
+            <th className="px-3 py-2.5">{clients ? 'Client' : 'Project'}</th>
             <th className="px-3 py-2.5">Deleted</th>
             <th className="px-3 py-2.5">Would destroy</th>
             <th className="px-5 py-2.5 text-right">Actions</th>
@@ -290,6 +294,7 @@ function PurgeDialog({ target, onClose, onDone }: {
   onClose: () => void;
   onDone: () => void;
 }) {
+  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client, its number a CID
   const [typed, setTyped] = useState('');
   const title = target.row.title;
   const matches = typed.trim() === title.trim();
@@ -302,7 +307,7 @@ function PurgeDialog({ target, onClose, onDone }: {
     onSuccess: (res) => {
       const rows = Object.values(res.deleted ?? {}).reduce((n, v) => n + v, 0);
       toastSuccess(`"${res.title}" destroyed — ${rows} row${rows === 1 ? '' : 's'} removed.`, {
-        description: res.tasksKept ? `${res.tasksKept} shared task(s) kept — they belong to another live client.` : undefined,
+        description: res.tasksKept ? `${res.tasksKept} shared task(s) kept — they belong to another live ${clients ? 'client' : 'project'}.` : undefined,
       });
       onDone();
     },

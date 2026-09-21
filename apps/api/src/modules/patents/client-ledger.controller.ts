@@ -5,6 +5,7 @@ import { UpdateClientDto, UpdateLedgerOverrideDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { getActorId } from '../../common/context/request-context';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 
 /**
  * The client ledger — a separate screen from the patent portal, on purpose.
@@ -13,8 +14,11 @@ import { getActorId } from '../../common/context/request-context';
  * Super-Admin-only fact in this system: knowing that "MLK" is a particular company, and how much
  * work we have done for them, is exactly what the portal's confidentiality protects. No real
  * patent numbers appear here at any point, so nothing needs the step-up passcode.
+ *
+ * PROJECTS flow only (client codes do not exist in CLIENTS): 404 there.
  */
 @Controller('client-ledger')
+@RequireFlow('PROJECTS')
 export class ClientLedgerController {
   constructor(
     private readonly ledger: ClientLedgerService,

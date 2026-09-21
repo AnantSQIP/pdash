@@ -1,5 +1,7 @@
 'use client';
 
+import { byFlow } from '@/lib/workspace-flow';
+import { ClientsOrgKpiView } from './OrgKpiView.clients';
 /**
  * The firm's performance — the same two KPIs, at the scale of an organisation.
  *
@@ -21,7 +23,7 @@ import {
   type KpiRange,
 } from '@/lib/api';
 import { Avatar } from '@/components/Avatar';
-import { cidLabel } from '@/lib/mock-data';
+import { pidLabel } from '@/lib/mock-data';
 import { ChartCard, DonutCard, DataGrid, type GridColumn } from './charts';
 import { KpiHero, Breaches, Stat, ExcludedNote, KpiGlossary, KPI_HELP, kpiDonuts, overrunColor } from './KpiCards';
 import { UserKpiPanel } from './UserKpiPanel';
@@ -40,10 +42,10 @@ function uniq(values: (string | undefined)[]): string[] {
   return [...new Set(values.filter((v): v is string => !!v))].sort();
 }
 function projectLabel(p: { code: string | null; roundSeq: number | null; name: string }): string {
-  return p.code ? `${cidLabel(p.code, p.roundSeq)} · ${p.name}` : p.name;
+  return p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.name}` : p.name;
 }
 
-export function OrgKpiView({ period }: { period: PeriodWindow }) {
+function ProjectsOrgKpiView({ period }: { period: PeriodWindow }) {
   const range: KpiRange = apiRange(period);
   const [selectedUser, setSelectedUser] = useState('');
   const [depts, setDepts] = useState<string[]>([]);
@@ -61,7 +63,7 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
     queryFn: () => api.performance.orgKpis(range),
     staleTime: 30_000,
   });
-  // Clients and their managers load alongside rather than inside the disclosure: opening a
+  // Projects and their managers load alongside rather than inside the disclosure: opening a
   // folded panel and then waiting for it reads as the panel being broken.
   const { data: projectData } = useQuery<ProjectKpis>({
     queryKey: ['perf-project-kpis', range.from, range.to],
@@ -114,7 +116,7 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
     },
     // Requirement 5, as a column: somebody over on ten matters and somebody over on one are two
     // different conversations, and the table has to say which before anyone opens a row.
-    { key: 'projectsBreached', header: 'Clients affected', align: 'right', sortable: true, accessor: r => r.projectsBreached },
+    { key: 'projectsBreached', header: 'Projects affected', align: 'right', sortable: true, accessor: r => r.projectsBreached },
     {
       key: 'deadlineBreaches', header: 'Past deadline', sortable: true, accessor: r => r.deadlineBreaches.times,
       render: r => <Breaches count={r.deadlineBreaches} thing="task" className="text-xs" />,
@@ -128,7 +130,7 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
   ];
 
   const projectCols: GridColumn<ProjectKpiRow>[] = [
-    { key: 'name', header: 'Client', sortable: true, accessor: r => r.name, render: r => <span className="text-gray-800">{projectLabel(r)}</span>, exportValue: r => projectLabel(r) },
+    { key: 'name', header: 'Project', sortable: true, accessor: r => r.name, render: r => <span className="text-gray-800">{projectLabel(r)}</span>, exportValue: r => projectLabel(r) },
     {
       key: 'deadlineShifts', header: 'Deadline shifted', sortable: true, accessor: r => r.deadlineShifts.times,
       render: r => (r.deadlineShifts.times === 0
@@ -156,7 +158,7 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
 
   const managerCols: GridColumn<ManagerKpiRow>[] = [
     {
-      key: 'name', header: 'Client manager', sortable: true, accessor: r => r.name,
+      key: 'name', header: 'Project manager', sortable: true, accessor: r => r.name,
       render: r => (
         <div className="flex items-center gap-2">
           <Avatar user={{ firstName: r.name.split(' ')[0], lastName: r.name.split(' ')[1], id: r.userId }} size={24} />
@@ -164,7 +166,7 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
         </div>
       ),
     },
-    { key: 'projects', header: 'Clients', align: 'right', sortable: true, accessor: r => r.projects },
+    { key: 'projects', header: 'Projects', align: 'right', sortable: true, accessor: r => r.projects },
     {
       key: 'overrun', header: 'Aggregate overshoot', align: 'right', sortable: true, accessor: r => r.overrun ?? 0,
       render: r => <span className="font-semibold tabular-nums" style={{ color: overrunColor(r.overrun) }}>{ratioText(r.overrun)}</span>,
@@ -177,8 +179,8 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
     },
     {
       key: 'deadlineShifts', header: 'Deadlines shifted', sortable: true, accessor: r => r.deadlineShifts.times,
-      render: r => <Breaches count={r.deadlineShifts} thing="client" className="text-xs" />,
-      exportValue: r => `${r.deadlineShifts.times} times / ${r.deadlineShifts.things} clients`,
+      render: r => <Breaches count={r.deadlineShifts} thing="project" className="text-xs" />,
+      exportValue: r => `${r.deadlineShifts.times} times / ${r.deadlineShifts.things} projects`,
     },
     { key: 'onTimeRate', header: 'On time', align: 'right', sortable: true, accessor: r => r.onTimeRate ?? -1, render: r => pctText(r.onTimeRate) },
     { key: 'spentHours', header: 'Spent / allocated', align: 'right', sortable: true, accessor: r => r.spentHours, render: r => `${r.spentHours}h / ${r.allocatedHours}h`, exportValue: r => `${r.spentHours}h of ${r.allocatedHours}h` },
@@ -188,7 +190,7 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
     filename: 'organisation-performance',
     title: 'Organisation Performance',
     subtitle: `${period.label} · ${describeWindow(period)} · ${filtered.length} members`,
-    columns: ['Member', 'Role', 'Department', 'Finished', 'Time vs allocated', 'Over hours (times/tasks)', 'Clients affected', 'Past deadline (times/tasks)', 'On time', 'Streak'],
+    columns: ['Member', 'Role', 'Department', 'Finished', 'Time vs allocated', 'Over hours (times/tasks)', 'Projects affected', 'Past deadline (times/tasks)', 'On time', 'Streak'],
     rows: filtered.map(r => [
       r.name, r.designation ?? '', r.department ?? '',
       r.tasksCompleted, ratioText(r.overrun),
@@ -286,31 +288,31 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
         emptyLabel="No members match the filters"
       />
 
-      {/* Layer 3 — the client view and whose performance it is. Requirements 18–20. */}
+      {/* Layer 3 — the project view and whose performance it is. Requirements 18–20. */}
       <details className="group" open={shiftedProjects.length > 0}>
         <summary className="cursor-pointer select-none text-sm font-medium text-gray-600 hover:text-gray-800 py-2">
-          Clients and client managers
-          <span className="font-normal text-gray-400"> · {projects.length} {projects.length === 1 ? 'client' : 'clients'}, {shiftedProjects.length} with a recorded deadline shift</span>
+          Projects and project managers
+          <span className="font-normal text-gray-400"> · {projects.length} {projects.length === 1 ? 'project' : 'projects'}, {shiftedProjects.length} with a recorded deadline shift</span>
         </summary>
         <div className="mt-2 space-y-4">
           <DataGrid
-            title="Client managers — aggregate overshoot against aggregate delivery"
+            title="Project managers — aggregate overshoot against aggregate delivery"
             columns={managerCols}
             rows={managers}
             searchKeys={['name']}
             searchPlaceholder="Search managers…"
-            exportName="client-manager-performance"
+            exportName="project-manager-performance"
             initialSort={{ key: 'overrun', dir: 'desc' }}
-            emptyLabel="No client has a manager on it in this period"
+            emptyLabel="No project has a manager on it in this period"
             rightSlot={<span title={KPI_HELP.pmPerformance} className="text-[11px] text-gray-400 cursor-help">what this measures</span>}
           />
           <DataGrid
-            title="Clients"
+            title="Projects"
             columns={projectCols}
             rows={projects}
             searchKeys={['name', 'code']}
-            searchPlaceholder="Search clients…"
-            exportName="client-performance"
+            searchPlaceholder="Search projects…"
+            exportName="project-performance"
             initialSort={{ key: 'overrun', dir: 'desc' }}
             emptyLabel="Nothing was finished and no deadline moved in this period"
             rightSlot={<span title={KPI_HELP.deadlineShifts} className="text-[11px] text-gray-400 cursor-help">about deadline shifts</span>}
@@ -339,3 +341,6 @@ export function OrgKpiView({ period }: { period: PeriodWindow }) {
   );
 }
 
+// ── Workspace flow (docs/WORKSPACE_FLOWS.md) ────────────────────────────────────────────────────
+// The PROJECTS implementation above is production's (bb5728b); CLIENTS is OrgKpiView.clients.tsx.
+export const OrgKpiView = byFlow(ProjectsOrgKpiView, ClientsOrgKpiView);

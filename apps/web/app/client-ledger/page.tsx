@@ -1,9 +1,10 @@
-// CLIENTS-FLOW: commented out — the client ledger is keyed on client codes, which are switched off (lib/features.ts).
-// The page is untouched in ./ClientLedgerPage.tsx. To restore it, delete the redirect below and
-// uncomment this line:
-// export { default } from './ClientLedgerPage';
-import { redirect } from 'next/navigation';
+'use client';
 
-export default function SwitchedOff() {
-  redirect('/projects');
-}
+import { byFlow } from '@/lib/workspace-flow';
+import { redirectTo } from '@/components/layout/FlowRedirect';
+import ClientLedgerPage from './ClientLedgerPage';
+
+// The client ledger exists in the PROJECTS flow only — patents and client codes are a PROJECTS-flow feature
+// (lib/features.ts). The page itself is production's, unchanged, in ./ClientLedgerPage.tsx. A CLIENTS firm
+// is sent to its clients.
+export default byFlow(ClientLedgerPage, redirectTo('/projects'));

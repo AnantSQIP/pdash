@@ -7,7 +7,7 @@
 // appraisal parameters, integrations, dashboards, automation rules, notification prefs).
 //
 // DELETES: every piece of operational / activity content — projects, tasks, subtasks, task work
-// sessions + coverage, patents, clients + ledger overrides, the CID registry + CID ledger,
+// sessions + coverage, patents, clients + ledger overrides, PID requests, the PID/CID registry + CID ledger,
 // timesheets (and backdate requests), attendance, leave/comp-off/expense/WFH requests, deadline
 // changes, notifications, discussions, calendar events + personal blocks, approvals, comments,
 // issues, announcements, policies, appraisals + scores, rewards, feedback, BD deals,
@@ -136,8 +136,10 @@ async function main() {
     ['projectTask', () => prisma.projectTask.deleteMany()],
     ['task', () => prisma.task.deleteMany()],
     ['taskList', () => prisma.taskList.deleteMany()],
-    // project / client / patent / CID
-    // The CID registry and its ledger go WITH the clients they describe. Leaving the registry behind
+    // project / client / patent / PID (PROJECTS) / CID (CLIENTS)
+    ['pidRequest', () => prisma.pidRequest.deleteMany()],
+    // The number registry (PIDs minted but not yet spent, in PROJECTS; the CID registry, in CLIENTS)
+    // and the CID ledger go WITH the projects/clients they describe. Leaving the registry behind
     // would start the clean workspace's first client at the demo era's next number, and a ledger
     // describing clients that no longer exist is not a history of this workspace.
     ['pidReservation', () => prisma.pidReservation.deleteMany()],

@@ -14,6 +14,7 @@ import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { WEEKDAYS_SHORT, monthLeadPad, todayIST } from '@/lib/date';
 import { toastError } from '@/components/ui/Toast';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 /**
  * The Leaves home, laid out the way the team already knows it from TeamNest: two status cards
@@ -515,6 +516,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
   plan: boolean; leaveTypes: LeaveType[]; balances: LeaveBalance[];
   onClose: () => void; onDone: () => void;
 }) {
+  const clients = useIsClientsFlow(); // a comp-off names a PID (PROJECTS) or a CID (CLIENTS)
   const [f, setF] = useState({
     leaveType: '', choice: 'FULL' as LeaveChoice, startDate: '', endDate: '',
     halfPeriod: 'FIRST' as 'FIRST' | 'SECOND',
@@ -668,7 +670,7 @@ function ApplyLeaveModal({ plan, leaveTypes, balances, onClose, onDone }: {
           {isClaim && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className={label}>CID <span className="text-red-500">*</span></label>
+                <label className={label}>{clients ? 'CID' : 'Project ID (PID)'} <span className="text-red-500">*</span></label>
                 <input value={f.projectRef} onChange={e => setF(v => ({ ...v, projectRef: e.target.value }))}
                   placeholder="e.g. SQ_26_27_001" className={input} />
               </div>

@@ -9,3 +9,8 @@ must pass unchanged. That is the proof the PROJECTS flow still behaves as it did
 
 Edit them only where the database fixture forces it (a person's role changed in the roster), never
 to accommodate a behaviour change: a PROJECTS behaviour change is a bug.
+
+One suite here is NOT production's: `pid-flow.e2e.mjs`, written with the workspace flows. It walks
+the PROJECTS flow's PID end to end (generate with its 5-minute hold, request and fulfil, a second
+round, the patent portal, production's task lists and restore/purge) and checks that none of the
+CLIENTS flow's routes or fields exist in a PROJECTS organisation.

@@ -1,5 +1,7 @@
 'use client';
 
+import { byFlow } from '@/lib/workspace-flow';
+import ClientsDigestPage from './DigestPage.clients';
 import { useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,7 +15,7 @@ import { api, type DigestDetail, type DigestProject, type DigestTask, type Diges
 import { usePermissions } from '@/lib/permissions-context';
 import { useToast } from '@/components/ui/Toast';
 import { formatDate, formatDateIST, formatDateTimeIST, todayIST, shiftDay } from '@/lib/date';
-import { projectTypeLabel, cidLabel } from '@/lib/mock-data';
+import { projectTypeLabel, pidLabel } from '@/lib/mock-data';
 import { digestCsv } from './export';
 
 const shift = shiftDay;
@@ -51,7 +53,7 @@ function Stat({ Icon, label, value, tint, active, onClick, sub }: {
   );
 }
 
-/** A client, expanded to everything known about it, with links out to the real thing. */
+/** A project, expanded to everything known about it, with links out to the real thing. */
 function ProjectCardRow({ p }: { p: DigestProject }) {
   return (
     <div className="px-4 py-3 hover:bg-gray-50/60">
@@ -61,7 +63,7 @@ function ProjectCardRow({ p }: { p: DigestProject }) {
             {p.title} <ExternalLink size={12} className="text-gray-300" />
           </Link>
           <div className="flex items-center gap-1.5 flex-wrap mt-1">
-            <span className="text-[11px] font-mono font-bold text-brand-700">{cidLabel(p.pid, p.roundSeq)}</span>
+            <span className="text-[11px] font-mono font-bold text-brand-700">{pidLabel(p.pid, p.roundSeq)}</span>
             {p.type && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">{projectTypeLabel(p.type)}</span>}
             <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{p.phase}</span>
             <span className={clsx('text-[11px] px-1.5 py-0.5 rounded-full border', PRIORITY_TINT[p.priority] ?? PRIORITY_TINT.LOW)}>{p.priority}</span>
@@ -111,7 +113,7 @@ function ProjectCardRow({ p }: { p: DigestProject }) {
   );
 }
 
-/** A task with its client, its owners and their individual hours + dates. */
+/** A task with its project, its owners and their individual hours + dates. */
 function TaskCardRow({ t, showOverdue }: { t: DigestTask; showOverdue?: boolean }) {
   return (
     <div className="px-4 py-2.5 hover:bg-gray-50/60">
@@ -121,11 +123,11 @@ function TaskCardRow({ t, showOverdue }: { t: DigestTask; showOverdue?: boolean 
           <div className="flex items-center gap-1.5 flex-wrap mt-1 text-[11px]">
             {t.project ? (
               <Link href={`/projects/${t.project.id}`} className="inline-flex items-center gap-1 text-brand-700 hover:underline">
-                <span className="font-mono font-bold">{cidLabel(t.project.pid, t.project.roundSeq)}</span>
+                <span className="font-mono font-bold">{pidLabel(t.project.pid, t.project.roundSeq)}</span>
                 <span className="text-gray-600">{t.project.title}</span>
                 <ExternalLink size={10} className="text-gray-300" />
               </Link>
-            ) : <span className="text-gray-400">No client</span>}
+            ) : <span className="text-gray-400">No project</span>}
             {t.project?.type && <span className="px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">{projectTypeLabel(t.project.type)}</span>}
             <span className={clsx('px-1.5 py-0.5 rounded-full border', PRIORITY_TINT[t.priority] ?? PRIORITY_TINT.LOW)}>{t.priority}</span>
             {t.status && <span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600">{t.status}</span>}
@@ -181,9 +183,9 @@ function PersonHoursRow({ p }: { p: DigestPersonHours }) {
               <div className="min-w-0">
                 {e.project ? (
                   <Link href={`/projects/${e.project.id}`} className="text-brand-700 hover:underline">
-                    <span className="font-mono font-bold">{cidLabel(e.project.pid, e.project.roundSeq)}</span> <span className="text-gray-600">{e.project.title}</span>
+                    <span className="font-mono font-bold">{pidLabel(e.project.pid, e.project.roundSeq)}</span> <span className="text-gray-600">{e.project.title}</span>
                   </Link>
-                ) : <span className="text-gray-400">No client</span>}
+                ) : <span className="text-gray-400">No project</span>}
                 {e.task && <span className="text-gray-500"> · {e.task.title}</span>}
                 {e.notes && <p className="text-gray-400 mt-0.5">{e.notes}</p>}
               </div>
@@ -212,7 +214,7 @@ function Section({ title, count, empty, children }: {
   );
 }
 
-export default function DigestPage() {
+function ProjectsDigestPage() {
   const { isSuperAdmin, loading } = usePermissions();
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -302,9 +304,9 @@ export default function DigestPage() {
           <>
             {/* Every tile toggles the section behind it — no number here is a dead end. */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <Stat Icon={FolderPlus} label="Clients created" value={d.projectsCreated.length} tint="bg-brand-50 text-brand-600"
+              <Stat Icon={FolderPlus} label="Projects created" value={d.projectsCreated.length} tint="bg-brand-50 text-brand-600"
                 active={openSection === 'created'} onClick={() => toggle('created')} />
-              <Stat Icon={CheckCircle2} label="Clients completed" value={d.projectsCompleted.length} tint="bg-green-50 text-green-600"
+              <Stat Icon={CheckCircle2} label="Projects completed" value={d.projectsCompleted.length} tint="bg-green-50 text-green-600"
                 active={openSection === 'completed'} onClick={() => toggle('completed')} />
               <Stat Icon={ListChecks} label="Tasks completed" value={d.tasksCompleted.length} tint="bg-indigo-50 text-indigo-600"
                 active={openSection === 'tasks'} onClick={() => toggle('tasks')} />
@@ -317,18 +319,18 @@ export default function DigestPage() {
               <Stat Icon={Timer} label="Hours logged" value={d.totals.hoursLogged} tint="bg-cyan-50 text-cyan-700"
                 active={openSection === 'hours'} onClick={() => toggle('hours')}
                 sub={`${d.totals.billableHours}h billable · ${d.totals.peopleWhoLogged} people`} />
-              <Stat Icon={Activity} label="Active clients" value={d.totals.activeProjects} tint="bg-amber-50 text-amber-600" />
+              <Stat Icon={Activity} label="Active projects" value={d.totals.activeProjects} tint="bg-amber-50 text-amber-600" />
             </div>
 
             <UpcomingPanel days={d.upcoming} total={d.upcomingTotal} />
 
             {openSection === 'created' && (
-              <Section title="Clients created" count={d.projectsCreated.length} empty="No clients were created.">
+              <Section title="Projects created" count={d.projectsCreated.length} empty="No projects were created.">
                 {d.projectsCreated.map(p => <ProjectCardRow key={p.id} p={p} />)}
               </Section>
             )}
             {openSection === 'completed' && (
-              <Section title="Clients completed" count={d.projectsCompleted.length} empty="No clients were completed.">
+              <Section title="Projects completed" count={d.projectsCompleted.length} empty="No projects were completed.">
                 {d.projectsCompleted.map(p => <ProjectCardRow key={p.id} p={p} />)}
               </Section>
             )}
@@ -353,7 +355,7 @@ export default function DigestPage() {
               </Section>
             )}
 
-            {/* Completed clients always get their delivery record on show — it is the thing an
+            {/* Completed projects always get their delivery record on show — it is the thing an
                 admin looks up after the fact. */}
             {d.projectsCompleted.length > 0 && openSection !== 'completed' && (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -376,7 +378,7 @@ export default function DigestPage() {
 // ── Coming up — next 5 working days ───────────────────────────────────────────
 // The old version stacked full detail cards under a thin grey strip, five days deep, which read
 // as one undifferentiated wall. This gives each day its own card with a date rail, and each item
-// one tidy line that still carries the whole story: what it is, which client and CID, priority,
+// one tidy line that still carries the whole story: what it is, which project and PID, priority,
 // deadline, hours and who is on it — every one of them a working link.
 
 const UP_PRIORITY_DOT: Record<string, string> = {
@@ -437,7 +439,7 @@ function UpcomingPanel({ days, total }: { days: DigestDetail['upcoming']; total:
                       )}
                       <span className="text-xs font-medium text-gray-500">
                         {count === 0 ? 'Clear'
-                          : [day.projects.length && `${day.projects.length} client${day.projects.length === 1 ? '' : 's'}`,
+                          : [day.projects.length && `${day.projects.length} project${day.projects.length === 1 ? '' : 's'}`,
                              day.tasks.length && `${day.tasks.length} task${day.tasks.length === 1 ? '' : 's'}`]
                             .filter(Boolean).join(' · ')}
                       </span>
@@ -461,10 +463,10 @@ function UpcomingPanel({ days, total }: { days: DigestDetail['upcoming']; total:
   );
 }
 
-/** Small shared bits so a client row and a task row line up with each other. */
+/** Small shared bits so a project row and a task row line up with each other. */
 function PidChip({ pid, roundSeq }: { pid: string | null; roundSeq?: number }) {
   if (!pid) return null;
-  return <span className="text-[11px] font-mono font-bold text-brand-700 shrink-0">{cidLabel(pid, roundSeq)}</span>;
+  return <span className="text-[11px] font-mono font-bold text-brand-700 shrink-0">{pidLabel(pid, roundSeq)}</span>;
 }
 function PersonChip({ id, name, note }: { id: string; name: string; note?: string }) {
   return (
@@ -480,7 +482,7 @@ function UpcomingProject({ p }: { p: DigestProject }) {
   return (
     <li className="px-3 sm:px-4 py-2.5 hover:bg-gray-50/60 transition-colors">
       <div className="flex items-start gap-2.5">
-        <span className="w-6 h-6 rounded-md bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5" title="Deadline for the whole client">
+        <span className="w-6 h-6 rounded-md bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5" title="Project deadline">
           <FolderKanban size={13} />
         </span>
         <div className="min-w-0 flex-1">
@@ -530,7 +532,7 @@ function UpcomingTask({ t }: { t: DigestTask }) {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2 flex-wrap">
-            {/* A task has no page of its own — everywhere in the app it opens its client. */}
+            {/* A task has no page of its own — everywhere in the app it opens its project. */}
             {t.project ? (
               <Link href={`/projects/${t.project.id}`} className="text-sm font-medium text-gray-900 hover:text-brand-600 hover:underline">
                 {t.title}
@@ -546,7 +548,7 @@ function UpcomingTask({ t }: { t: DigestTask }) {
                 <span>{t.project.title}</span>
                 <ExternalLink size={9} className="text-gray-300" />
               </Link>
-            ) : <span className="text-gray-400">No client</span>}
+            ) : <span className="text-gray-400">No project</span>}
             {t.project?.type && <span className="text-indigo-600">{projectTypeLabel(t.project.type)}</span>}
             {t.status && <span>{t.status}</span>}
             {(t.estimatedHours != null || t.actualHours != null) && (
@@ -568,3 +570,7 @@ function UpcomingTask({ t }: { t: DigestTask }) {
     </li>
   );
 }
+
+// ── Workspace flow (docs/WORKSPACE_FLOWS.md) ────────────────────────────────────────────────────
+// The PROJECTS implementation above is production's (bb5728b); CLIENTS is DigestPage.clients.tsx.
+export default byFlow(ProjectsDigestPage, ClientsDigestPage);

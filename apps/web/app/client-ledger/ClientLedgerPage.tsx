@@ -180,7 +180,7 @@ export default function ClientLedgerPage() {
                         <AlertTriangle size={13} /> Unattributed
                       </span>
                       <span className="block text-[11px] text-amber-700/80 mt-0.5">
-                        {orphan.awaitingPid > 0 && `${formatHours(orphan.awaitingPid)} awaiting a client`}
+                        {orphan.awaitingPid > 0 && `${formatHours(orphan.awaitingPid)} awaiting a PID`}
                         {orphan.awaitingPid > 0 && orphan.onClientlessProjects > 0 && ' · '}
                         {orphan.onClientlessProjects > 0
                           && `${formatHours(orphan.onClientlessProjects)} on ${orphan.projectCount} project${orphan.projectCount === 1 ? '' : 's'} with no client`}
@@ -200,7 +200,7 @@ export default function ClientLedgerPage() {
         </div>
 
         <p className="text-[11px] text-gray-400">
-          Hours reach a client through their projects. Time logged before a client is assigned, or on a project
+          Hours reach a client through their projects. Time logged before a PID is assigned, or on a project
           with no client, is counted on the Unattributed line rather than left out.
         </p>
       </div>

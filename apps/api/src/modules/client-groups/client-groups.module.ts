@@ -6,6 +6,7 @@ import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'cla
 import { Transform } from 'class-transformer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 import { ProjectAccessService } from '../../common/access/project-access.module';
 import { PermissionService } from '../permissions/permission.service';
 import { EventService } from '../audit-events/event.service';
@@ -222,7 +223,9 @@ export class ClientGroupsService {
   }
 }
 
+/** CLIENTS flow only — PROJECTS has no client groups; every route answers 404 there. */
 @Controller('client-groups')
+@RequireFlow('CLIENTS')
 class ClientGroupsController {
   constructor(private readonly service: ClientGroupsService) {}
 
