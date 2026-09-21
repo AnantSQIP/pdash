@@ -6,9 +6,11 @@
  * The owner, Sep 2026: CRUD on tasks from Team Capacity, assigning anyone any time, for people at
  * or above Senior Consultant — and the module visible only to them. So this pins both halves:
  *
- *   · the wall — Consultant, Senior Research Associate, Employee, HR and Business Development are
+ *   · the wall — Consultant, Senior Research Associate, Employee and Business Development are
  *     refused the board and every /capacity/tasks route, while /capacity/my-plan (the My Tasks day
  *     sheet) keeps working for all of them; /me/effective-permissions says the same thing.
+ *     HR is the exception the owner made on 19 Sep 2026: HR may READ the board — who is loaded and
+ *     who is free is a people question — but may not create, edit or delete a thing on it.
  *   · the power — a Senior Consultant creates a task with its people in ONE call for somebody who
  *     is not on the client (who is added to it), edits it, moves it between groups, reassigns it and
  *     deletes it; a refused seat leaves NOTHING behind; a task due after its group is refused in words.
@@ -55,7 +57,7 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
     who[key] = r.data?.user?.id;
     if (!who[key]) { console.log(`cannot log in as ${email}: ${brief(r)}`); process.exit(2); }
   }
-  const below = [['Senior Research Associate', sra], ['Consultant', con], ['Employee', emp], ['HR', hr], ['Business Development', bd]];
+  const below = [['Senior Research Associate', sra], ['Consultant', con], ['Employee', emp], ['Business Development', bd]];
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
   step('who holds the board: /me/effective-permissions');
@@ -68,6 +70,9 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
     const c = await codesOf(s);
     ok(`${label} holds neither`, !c.has('capacity.view') && !c.has('capacity.manage'), [...c].filter(x => x.startsWith('capacity')).join(','));
   }
+  const hrCodes = await codesOf(hr);
+  ok('HR reads the board but manages nothing on it',
+    hrCodes.has('capacity.view') && !hrCodes.has('capacity.manage'), [...hrCodes].filter(x => x.startsWith('capacity')).join(','));
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
   step('fixture: a client with two task groups');
@@ -117,6 +122,18 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   }
   ok('the Senior Consultant sees the board', (await sc('/capacity/team?days=7')).status === 200);
   ok('…and my-plan works for them too', (await sc(`/capacity/my-plan?date=${dayKey(0)}`)).status === 200);
+
+  // HR reads the board — the owner's amendment — but the wall on CHANGING it still holds for them.
+  ok('HR sees the board', (await hr('/capacity/team?days=7')).status === 200);
+  ok('…and one client\'s view of it', (await hr(`/capacity/project/${client.id}?days=7`)).status === 200);
+  const hrWrites = [];
+  for (const [method, path, body] of [
+    ['POST', '/capacity/tasks', { projectId: client.id, title: `HR nope ${RUN}`, seats: [] }],
+    ['PATCH', '/capacity/tasks/whatever', { title: 'x' }],
+    ['PUT', '/capacity/tasks/whatever/seats', { seats: [] }],
+    ['DELETE', '/capacity/tasks/whatever'],
+  ]) hrWrites.push((await hr(path, { method, body })).status);
+  ok('…but cannot create, edit, reassign or delete anything on it', hrWrites.every(x => x === 403), hrWrites.join(','));
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
   step('the editor’s choices');
