@@ -3,9 +3,11 @@
  *
  *   BASE=http://127.0.0.1:4047 PASSCODE=<org passcode> node tools/workspace-flow.e2e.mjs
  *
- * A SCRATCH DATABASE ONLY. This converts the organisation twice: it closes running clocks, cancels
- * PID requests, retires reserved numbers, issues CIDs and moves everybody's Team Capacity grants.
- * Never point it at a database somebody is using.
+ * A SCRATCH DATABASE OF ITS OWN. This converts the organisation twice: it closes running clocks,
+ * cancels PID requests, retires reserved numbers, issues CIDs and moves everybody's Team Capacity
+ * grants. Never point it at a database somebody is using, and — unlike its neighbours in tools/ —
+ * never at the CLIENTS stack the other suites run against: it leaves the organisation in the
+ * PROJECTS flow with the timer on, which is not what they expect to find.
  *
  * The conversion is the one thing in the whole flows design that cannot be checked by reading the
  * code, because what it does depends on what is in the database. So this suite puts the things the
