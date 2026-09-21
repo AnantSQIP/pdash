@@ -4,19 +4,25 @@ import { useState, useRef, useEffect, useMemo, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import {
-  Plus, LayoutGrid, List, Filter, Search, ScrollText, ChevronDown, FolderTree, Building2,
+  Plus, LayoutGrid, List, Filter, Search, ScrollText, ChevronDown, FolderTree, Building2, Layers,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { ProjectCard, ProjectListRow } from '@/components/projects/ProjectCard';
 import { NewClientModal } from '@/components/projects/NewClientModal';
 import { ManageClientGroupsModal, useClientGroups } from '@/components/projects/ClientGroups';
+import { TaskGroupBrowser } from '@/components/projects/TaskGroupBrowser';
 import { PHASE_META, type Phase, type MockProject } from '@/lib/mock-data';
 import { useTechnologyDomains, domainLabelOf } from '@/components/projects/TechnologyDomainPicker';
 import { useOrg } from '@/lib/org-context';
 import { usePermissions } from '@/lib/permissions-context';
 import { api, type ApiProject } from '@/lib/api';
 
-type ViewMode = 'grid' | 'list';
+/**
+ * Cards and rows both list CLIENTS. `groups` lists the WORK instead — every task group across
+ * every client the reader may see — because "where is the FTO on the wafer bonding" is a
+ * question about a piece of work by somebody who does not know whose matter it is.
+ */
+type ViewMode = 'grid' | 'list' | 'groups';
 
 const PHASES: { value: Phase | 'ALL'; label: string }[] = [
   { value: 'ALL',       label: 'All' },
@@ -219,6 +225,12 @@ export function ProjectsClient() {
               className={clsx('p-1.5 rounded-md transition-colors', view === 'list' ? 'bg-white shadow text-brand-600' : 'text-gray-500 hover:text-gray-700')}>
               <List size={15} />
             </button>
+            <button onClick={() => setView('groups')} title="Task groups across every client"
+              className={clsx('flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors',
+                view === 'groups' ? 'bg-white shadow text-brand-600' : 'text-gray-500 hover:text-gray-700')}>
+              <Layers size={15} />
+              <span className="hidden sm:inline">Task groups</span>
+            </button>
           </div>
           {mayArrangeGroups && (
             <button onClick={() => setShowGroups(true)} title="Add, rename, order or archive client groups"
@@ -244,6 +256,11 @@ export function ProjectsClient() {
         </div>
       </header>
 
+      {/* The task-group view brings its own filter bar and list: the questions a PIECE OF WORK
+          can answer are not the ones a client can, and two toolbars fighting over one search
+          box would have made both of them lie. */}
+      {view === 'groups' ? <TaskGroupBrowser /> : (
+      <>
       <div className="flex items-center gap-4 sm:gap-6 px-4 sm:px-6 py-3 bg-white border-b border-gray-100 shrink-0 overflow-x-auto">
         <StatPill label="Clients"   value={stats.total}     color="text-gray-700" />
         <StatPill label="Active"    value={stats.active}    color="text-brand-500"  dot="bg-brand-500" />
@@ -370,6 +387,9 @@ export function ProjectsClient() {
           </div>
         )}
       </div>
+
+      </>
+      )}
 
       {showNew && (
         <NewClientModal
