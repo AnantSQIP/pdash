@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import { DealStage, OPEN_STAGES } from '../../common/deal-stages';
 
 /**
@@ -100,7 +101,9 @@ export function assessDeal(input: DealHealthInput, now = new Date()): DealFlag[]
     // Won, but nobody created the client record. The deal is finished and the handover is not:
     // minting a client needs the confidential-client permission, so BD cannot do it themselves
     // and the request is easily forgotten by whoever can.
-    if (input.stage === 'WON' && !input.clientId) {
+    // CLIENTS-FLOW: commented out while client codes are switched off — a won deal no longer
+    // creates a client record, so this would nag about a step that no longer exists.
+    if (PATENTS_AND_CLIENT_CODES && input.stage === 'WON' && !input.clientId) {
       flags.push({
         kind: 'AWAITING_CLIENT',
         severity: 'warn',

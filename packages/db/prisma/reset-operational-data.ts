@@ -7,12 +7,12 @@
 // appraisal parameters, integrations, dashboards, automation rules, notification prefs).
 //
 // DELETES: every piece of operational / activity content — projects, tasks, subtasks, task work
-// sessions + coverage, patents, clients + ledger overrides, PID requests + reservations,
+// sessions + coverage, patents, clients + ledger overrides, the CID registry + CID ledger,
 // timesheets (and backdate requests), attendance, leave/comp-off/expense/WFH requests, deadline
 // changes, notifications, discussions, calendar events + personal blocks, approvals, comments,
 // issues, announcements, policies, appraisals + scores, rewards, feedback, BD deals,
 // analytics/audit/activity, documents — and CLEARS every user's profile (the collected PII) and
-// the PID / patent serial counters.
+// the CID / patent serial counters.
 //
 // EVERY model in schema.prisma is classified as one or the other, and tools/reset-coverage.spec.ts
 // fails the build if a new model is neither. That test is the reason this script does not go
@@ -136,17 +136,21 @@ async function main() {
     ['projectTask', () => prisma.projectTask.deleteMany()],
     ['task', () => prisma.task.deleteMany()],
     ['taskList', () => prisma.taskList.deleteMany()],
-    // project / client / patent / PID
-    ['pidRequest', () => prisma.pidRequest.deleteMany()],
-    // PIDs minted but not yet spent. Leaving these behind would make the new workspace's first
-    // project collide with a reservation from the demo era.
+    // project / client / patent / CID
+    // The CID registry and its ledger go WITH the clients they describe. Leaving the registry behind
+    // would start the clean workspace's first client at the demo era's next number, and a ledger
+    // describing clients that no longer exist is not a history of this workspace.
     ['pidReservation', () => prisma.pidReservation.deleteMany()],
+    ['cidEvent', () => prisma.cidEvent.deleteMany()],
     ['projectPatent', () => prisma.projectPatent.deleteMany()],
     ['projectDocument', () => prisma.projectDocument.deleteMany()],
     ['projectMember', () => prisma.projectMember.deleteMany()],
     ['projectDepartment', () => prisma.projectDepartment.deleteMany()],
     ['projectTeam', () => prisma.projectTeam.deleteMany()],
     ['project', () => prisma.project.deleteMany()],
+    // CLIENTS-FLOW: the shelves clients were filed on. After the clients themselves, so no row is
+    // left pointing at a group mid-clear (the FK would null it anyway, but order says intent).
+    ['clientGroup', () => prisma.clientGroup.deleteMany()],
     // Demo patents (packages/db/prisma/seed-patents-demo.ts writes these, with their demo clients)
     // go with everything else: the patent register starts empty.
     ['patent', () => prisma.patent.deleteMany()],

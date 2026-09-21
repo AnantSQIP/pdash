@@ -5,7 +5,8 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   Plus, MessageCircle, RefreshCw, Flag, CheckCircle, Trash2, FolderKanban, Clock, Download, Activity as ActivityIcon,
-  Play, Pause, RotateCcw, Hash,
+  Play, Pause, RotateCcw, Hash, Layers, Pencil, ArrowRightLeft, FolderInput, FolderPlus, Archive,
+  BadgeIndianRupee,
 } from 'lucide-react';
 import { api, type ActivityItem } from '@/lib/api';
 import { fullName } from '@/lib/avatar';
@@ -22,14 +23,29 @@ const ACTION_META: Record<string, { verb: string; cat: string; icon: React.React
   'task.paused':          { verb: 'paused work on',        cat: 'Tasks',    icon: <Pause className="w-3.5 h-3.5" />,       color: 'bg-gray-100 text-gray-500' },
   'task.finished':        { verb: 'finished task',         cat: 'Tasks',    icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
   'task.reopened':        { verb: 'reopened task',         cat: 'Tasks',    icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
+  'task.billable_changed': { verb: 'changed billing on',   cat: 'Tasks',    icon: <BadgeIndianRupee className="w-3.5 h-3.5" />, color: 'bg-emerald-100 text-emerald-700' },
+  'task.moved':           { verb: 'moved task',            cat: 'Tasks',    icon: <ArrowRightLeft className="w-3.5 h-3.5" />, color: 'bg-blue-100 text-blue-600' },
+  // CLIENTS-FLOW: the task groups inside a client.
+  'taskgroup.created':    { verb: 'created the task group',   cat: 'Task groups', icon: <Layers className="w-3.5 h-3.5" />,      color: 'bg-brand-100 text-brand-600' },
+  'taskgroup.updated':    { verb: 'updated the task group',   cat: 'Task groups', icon: <Pencil className="w-3.5 h-3.5" />,      color: 'bg-blue-100 text-blue-600' },
+  'taskgroup.completed':  { verb: 'completed the task group', cat: 'Task groups', icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'taskgroup.reopened':   { verb: 'reopened the task group',  cat: 'Task groups', icon: <RotateCcw className="w-3.5 h-3.5" />,   color: 'bg-amber-100 text-amber-600' },
+  'taskgroup.deleted':    { verb: 'deleted the task group',   cat: 'Task groups', icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'taskgroup.billable_changed': { verb: 'changed billing on the task group', cat: 'Task groups', icon: <BadgeIndianRupee className="w-3.5 h-3.5" />, color: 'bg-emerald-100 text-emerald-700' },
   'comment.created':      { verb: 'commented',             cat: 'Comments', icon: <MessageCircle className="w-3.5 h-3.5" />, color: 'bg-purple-100 text-purple-600' },
   'issue.created':        { verb: 'reported issue',        cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },
   'issue.updated':        { verb: 'updated issue',         cat: 'Issues',   icon: <Flag className="w-3.5 h-3.5" />,        color: 'bg-orange-100 text-orange-600' },
   'issue.resolved':       { verb: 'resolved issue',        cat: 'Issues',   icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
-  'project.created':      { verb: 'created the project',   cat: 'Projects', icon: <FolderKanban className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
-  'project.approved':     { verb: 'approved the project',  cat: 'Projects', icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
-  'project.pid_moved':    { verb: 'changed the Project ID of', cat: 'Projects', icon: <Hash className="w-3.5 h-3.5" />, color: 'bg-amber-100 text-amber-600' },
-  'project.rejected':     { verb: 'rejected the project',  cat: 'Projects', icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'project.created':      { verb: 'created the client',    cat: 'Clients',  icon: <FolderKanban className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
+  'project.approved':     { verb: 'approved the client',   cat: 'Clients',  icon: <CheckCircle className="w-3.5 h-3.5" />, color: 'bg-green-100 text-green-600' },
+  'project.cid_moved':    { verb: 'changed the CID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
+  // Written before CIDs were renamed CIDs; the same fact.
+  'project.pid_moved':    { verb: 'changed the CID of',    cat: 'Clients',  icon: <Hash className="w-3.5 h-3.5" />,        color: 'bg-amber-100 text-amber-600' },
+  'project.rejected':     { verb: 'rejected the client',   cat: 'Clients',  icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
+  'project.client_group_changed': { verb: 'changed the client group', cat: 'Clients', icon: <FolderInput className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
+  'clientgroup.created':  { verb: 'created the client group',  cat: 'Clients', icon: <FolderPlus className="w-3.5 h-3.5" />, color: 'bg-brand-100 text-brand-600' },
+  'clientgroup.updated':  { verb: 'updated the client group',  cat: 'Clients', icon: <Pencil className="w-3.5 h-3.5" />,     color: 'bg-blue-100 text-blue-600' },
+  'clientgroup.archived': { verb: 'archived the client group', cat: 'Clients', icon: <Archive className="w-3.5 h-3.5" />,    color: 'bg-gray-100 text-gray-500' },
   'timesheet.logged':     { verb: 'logged time',           cat: 'Tasks',    icon: <Clock className="w-3.5 h-3.5" />,       color: 'bg-teal-100 text-teal-600' },
   'document.uploaded':    { verb: 'uploaded a file',       cat: 'Files',    icon: <Download className="w-3.5 h-3.5" />,    color: 'bg-sky-100 text-sky-600' },
   'document.deleted':     { verb: 'deleted a file',        cat: 'Files',    icon: <Trash2 className="w-3.5 h-3.5" />,      color: 'bg-red-100 text-red-600' },
@@ -38,7 +54,7 @@ function metaFor(action: string) {
   return ACTION_META[action] ?? { verb: action, cat: 'Other', icon: <ActivityIcon className="w-3.5 h-3.5" />, color: 'bg-gray-100 text-gray-500' };
 }
 
-const FILTERS = ['All', 'Tasks', 'Comments', 'Issues', 'Projects'] as const;
+const FILTERS = ['All', 'Tasks', 'Task groups', 'Comments', 'Issues', 'Clients'] as const;
 type FilterLabel = (typeof FILTERS)[number];
 
 function formatTime(d: Date) {
@@ -56,6 +72,22 @@ function detailOf(a: ActivityItem): string | null {
   const m = a.metadata ?? {};
   if (a.action === 'comment.created' && m.snippet) return `“${m.snippet}”`;
   if (a.action === 'task.status_changed' && m.title) return `${m.title}`;
+  if (a.action === 'task.moved' && m.title) {
+    return `“${m.title}”${m.from ? ` from “${m.from}”` : ''}${m.to ? ` to “${m.to}”` : ''}`;
+  }
+  if (a.action === 'project.client_group_changed') return m.clientGroup ? `to “${m.clientGroup}”` : 'to none';
+  if (a.action.startsWith('taskgroup.') && m.name) {
+    const n = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
+    if (a.action === 'taskgroup.updated' && m.previousName) return `“${m.previousName}” → “${m.name}”`;
+    let out = `“${m.name}”`;
+    if (a.action === 'taskgroup.created' && typeof m.taskCount === 'number' && m.taskCount > 0) out += ` with ${n(m.taskCount, 'task')}`;
+    if (a.action === 'taskgroup.deleted' && typeof m.movedTasks === 'number' && m.movedTasks > 0) {
+      out += ` — ${n(m.movedTasks, 'task')} moved${m.movedTo ? ` to “${m.movedTo}”` : ''}`;
+    }
+    if (a.action === 'taskgroup.reopened' && m.because) out += ` — ${m.because}`;
+    return out;
+  }
+  if (a.action.startsWith('clientgroup.') && m.name) return `“${m.name}”`;
   if (m.title) return `“${m.title}”`;
   return null;
 }
@@ -168,7 +200,7 @@ export default function ActivityTab({ projectId }: { projectId: string }) {
             <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-3">
               <ActivityIcon className="w-5 h-5 text-gray-400" />
             </div>
-            <p className="text-sm text-gray-500">{filter === 'All' ? 'No activity yet — actions will appear here.' : `No ${filter.toLowerCase()} activity.`}</p>
+            <p className="text-sm text-gray-500">{filter === 'All' ? 'No activity yet — actions will appear here.' : `No ${filter === 'Task groups' ? 'task group' : filter.toLowerCase()} activity.`}</p>
           </div>
         )}
       </div>

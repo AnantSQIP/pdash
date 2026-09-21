@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import { TaskTimeService } from './task-time.service';
-import { CreateSubtaskDto, CreateTaskDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, SetProgressDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
+import { CreateSubtaskDto, CreateTaskDto, MoveTaskGroupDto, SetAssigneesDto, SetStaffingDto, SetStatusDto, SetProgressDto, UpdateSubtaskDto, UpdateTaskDto } from './dto';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
 @Controller('tasks')
@@ -31,17 +31,8 @@ export class TasksController {
   // Declared ABOVE @Get(':id'): Nest matches routes in declaration order, so putting these
   // after it would make "standards" and "timer" be read as task ids.
 
-  /** Every clock this person has running. Several at once is allowed. Drives the My Tasks header. */
-  @Get('timer/running') @RequirePermission('task.view')
-  runningTimers() {
-    return this.time.running();
-  }
-
-  /** Today: what the clock recorded per task, what is filed, and what the day still owes. */
-  @Get('timer/today') @RequirePermission('task.view')
-  today() {
-    return this.time.todayBoard();
-  }
+  // CLIENTS FLOW: the stopwatch routes (timer/running, timer/today, :id/start, :id/pause) were
+  // removed with the timer itself. Time is logged, not clocked: Finish, Reopen and Log time.
 
   /** Every learned standard and the number of completions behind it. */
   @Get('standards') @RequirePermission('task.view')
@@ -49,20 +40,9 @@ export class TasksController {
     return this.time.standards();
   }
 
-  @Post(':id/start') @RequirePermission('task.view')
-  startTimer(@Param('id') id: string) {
-    return this.time.start(id);
-  }
-
-  /** Pause the clock. Resuming is Start again — there is no third state to get wrong. */
-  @Post(':id/pause') @RequirePermission('task.view')
-  pauseTimer(@Param('id') id: string) {
-    return this.time.pause(id);
-  }
-
   /**
-   * Finish the task. One click: no hours to enter, no dialog. The clock stops, what it recorded
-   * teaches the estimate, and today's share of it is filed to the timesheet.
+   * Finish the task. One click: no dialog. The hours this person has LOGGED against it teach the
+   * estimate; nothing is filed automatically — time is always logged by the person.
    */
   @Post(':id/finish') @RequirePermission('task.view')
   finish(@Param('id') id: string, @Body() body: { closedStatusId?: string }) {
@@ -115,6 +95,12 @@ export class TasksController {
   @Put(':id/assignees') @RequirePermission('task.assign')
   setAssignees(@Param('id') id: string, @Body() dto: SetAssigneesDto) {
     return this.tasks.setAssignees(id, dto);
+  }
+
+  /** CLIENTS-FLOW: move a task into another task group of the same client. */
+  @Put(':id/task-group') @RequirePermission('task.update')
+  moveToGroup(@Param('id') id: string, @Body() dto: MoveTaskGroupDto) {
+    return this.tasks.moveToGroup(id, dto.projectId, dto.taskListId);
   }
 
   /** Role-based staffing (PM/Reviewer/Analyst + per-person hours). */

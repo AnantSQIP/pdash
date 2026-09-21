@@ -5,16 +5,16 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { ChevronDown, Pencil, Check, X, Loader, CalendarRange, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
-import { api, type PidRound } from '@/lib/api';
+import { api, type CidRound } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 import { formatDate } from '@/lib/date';
 import { projectTypeLabel } from '@/lib/mock-data';
 import { PHASE_META } from '@/lib/mock-data';
 
 /**
- * One project under a PID, drawn as a collapsible card.
+ * One project under a CID, drawn as a collapsible card.
  *
- * A PID that a returning client keeps coming back to holds several of these, so each card has to
+ * A CID that a returning client keeps coming back to holds several of these, so each card has to
  * say — without being opened — which piece of work it is and when it ran. Hence the label on the
  * left and the start–end dates on the right of the top bar, both editable in place: renaming a
  * round shouldn't mean a trip to the edit-project screen.
@@ -23,7 +23,7 @@ import { PHASE_META } from '@/lib/mock-data';
  * stay where they were, on the project itself.
  */
 export function RoundCard({ round, index, total, defaultOpen, canEdit, children }: {
-  round: PidRound;
+  round: CidRound;
   index: number;
   total: number;
   defaultOpen?: boolean;

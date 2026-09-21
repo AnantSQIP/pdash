@@ -82,7 +82,7 @@ export class TimesheetsController {
     return this.timesheets.update(id, dto);
   }
 
-  // Assign a PID (task) to a buffer entry logged without one. Self-scoped in the service.
+  // Assign a CID (task) to a buffer entry logged without one. Self-scoped in the service.
   @Post(':id/assign') @RequirePermission('timesheet.create')
   assign(@Param('id') id: string, @Body() dto: AssignTimesheetDto) {
     return this.timesheets.assign(id, dto.taskId);

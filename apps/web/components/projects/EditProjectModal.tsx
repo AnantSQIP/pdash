@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { X, Loader, Lock } from 'lucide-react';
 import clsx from 'clsx';
 import { api, type ApiProject } from '@/lib/api';
+import { ClientGroupPicker } from './ClientGroups';
 import { useToast } from '@/components/ui/Toast';
 import { toUtcDay } from '@/lib/date';
 import { PHASE_META, PRIORITY_META, type Phase, type Priority } from '@/lib/mock-data';
@@ -31,12 +32,18 @@ export function EditProjectModal({ project, onClose, onSaved }: {
   const [startDate, setStartDate] = useState(day(project.startDate));
   const [dueDate, setDueDate] = useState(day(project.dueDate));
   const [clientDueDate, setClientDueDate] = useState(day(project.clientDueDate));
+  // CLIENTS-FLOW: the client group this client is filed under.
+  const [clientGroupId, setClientGroupId] = useState(project.clientGroupId ?? '');
   const [saving, setSaving] = useState(false);
 
   // The server OMITS clientDueDate entirely unless this actor may see it, so the key's
   // presence is the exact permission signal — and it correctly includes a project manager
   // who does not hold the org-wide permission.
   const mayEditClientDue = 'clientDueDate' in project;
+  // CLIENTS-FLOW (deadlines): a client is a relationship, not a delivery — dates now live on each
+  // task group. A client that already carries dates (made before the change) keeps them editable,
+  // so they can be corrected or cleared; a client without any is not offered a date to invent.
+  const hasLegacyDates = !!(project.startDate || project.dueDate || project.clientDueDate);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -50,17 +57,22 @@ export function EditProjectModal({ project, onClose, onSaved }: {
         description: description.trim() || undefined,
         priority,
         projectPhase,
-        startDate: startDate || null,
-        dueDate: dueDate || null,
-        ...(mayEditClientDue ? { clientDueDate: clientDueDate || null } : {}),
+        ...(hasLegacyDates ? {
+          startDate: startDate || null,
+          dueDate: dueDate || null,
+          ...(mayEditClientDue ? { clientDueDate: clientDueDate || null } : {}),
+        } : {}),
+        // Sent only when it changed, so an edit made by someone who cannot see the groups list
+        // never un-files the client by accident.
+        ...((clientGroupId || null) !== (project.clientGroupId ?? null) ? { clientGroupId: clientGroupId || null } : {}),
       });
       onSaved(updated);
-      toast('Project updated', 'success');
+      toast('Client updated', 'success');
       onClose();
     } catch (err) {
       // The server owns the rules (who may set a client date; internal must not fall after
       // it), so just surface its reason.
-      toast(err instanceof Error ? err.message : 'Could not save the project', 'error');
+      toast(err instanceof Error ? err.message : 'Could not save the client', 'error');
     } finally {
       setSaving(false);
     }
@@ -76,14 +88,19 @@ export function EditProjectModal({ project, onClose, onSaved }: {
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-900">Edit project</h3>
+          <h3 className="font-semibold text-gray-900">Edit client</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
         <form onSubmit={save} className="p-5 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Title</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Client name</label>
             <input value={title} onChange={e => setTitle(e.target.value)} required className={input} />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Client group</label>
+            <ClientGroupPicker value={clientGroupId} onChange={setClientGroupId} />
           </div>
 
           <div>
@@ -117,6 +134,18 @@ export function EditProjectModal({ project, onClose, onSaved }: {
             </div>
           </div>
 
+          {!hasLegacyDates && (
+            <p className="text-xs text-gray-500 rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+              Dates belong to each task group now — its start, the team&apos;s deadline and the date promised
+              to the client. Set them on the task group.
+            </p>
+          )}
+
+          {hasLegacyDates && (<>
+          <p className="text-xs text-gray-500 rounded-lg bg-amber-50/60 border border-amber-100 px-3 py-2">
+            This client has dates from before task groups carried their own. They still show where they
+            used to; new work is dated on its task group. Clear them here once they&apos;re no longer needed.
+          </p>
           {/* No cross-field min/max on the pickers — coupling them silently traps selection
               ("can only pick an earlier date"). Ordering (start ≤ deadline ≤ client) is validated
               on save with a clear message instead. */}
@@ -155,6 +184,7 @@ export function EditProjectModal({ project, onClose, onSaved }: {
               </p>
             </div>
           )}
+          </>)}
 
           <div className="flex justify-end gap-2 pt-1">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 rounded-lg hover:bg-gray-100">

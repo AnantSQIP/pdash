@@ -9,17 +9,18 @@ import { useOrg } from '@/lib/org-context';
 import { LogTimeStandaloneModal } from '@/components/timesheets/LogTimeStandaloneModal';
 import { TimesheetCalendar } from '@/components/timesheets/TimesheetCalendar';
 import { TimesheetBackfill } from '@/components/timesheets/TimesheetBackfill';
-import { AssignPidModal } from '@/components/timesheets/AssignPidModal';
+import { AssignClientModal } from '@/components/timesheets/AssignClientModal';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
-import { todayIST, shiftDay } from '@/lib/date';
+import { todayIST } from '@/lib/date';
+import { monthStartDay, weekStartDay } from '@/lib/timesheet-window';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
 
-/** "Other" = miscellaneous non-project time — never a buffer to assign a PID to. */
+/** "Other" = miscellaneous non-client time — never a buffer to assign a client to. */
 const isOther = (e: Timesheet) => e.category === 'OTHER';
-/** A client call: booked to a PID but to no task, so it is not a buffer awaiting one either. */
+/** A client call: booked to a client but to no task, so it is not a buffer awaiting one either. */
 const isCall = (e: Timesheet) => e.category === 'CLIENT_CALL';
-/** A buffer entry (logged without a PID) — no task/issue/project, and not "Other". */
+/** A buffer entry (logged "assign later") — no task/issue/client, and not "Other". */
 const isUnassigned = (e: Timesheet) => !e.taskId && !e.issueId && !e.projectId && !isOther(e) && !isCall(e);
 const bufferDaysLeft = (e: Timesheet): number | null =>
   e.createdAt ? Math.ceil((new Date(e.createdAt).getTime() + 7 * 86_400_000 - Date.now()) / 86_400_000) : null;
@@ -32,9 +33,11 @@ function fmtHours(h: number): string {
 const dayOf = (e: Timesheet) => String(e.date).slice(0, 10);
 const prettyDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
-function Tile({ label, value, tint, Icon }: { label: string; value: string; tint: string; Icon: LucideIcon }) {
+function Tile({ label, value, tint, Icon, hint }: { label: string; value: string; tint: string; Icon: LucideIcon; hint?: string }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-start gap-3">
+    // `hint` names the period the number covers. "This week" is a judgement about a span of days,
+    // and a tile that will not say which days it counted is a number you cannot check.
+    <div title={hint} className="bg-white rounded-xl border border-gray-200 p-4 flex items-start gap-3">
       <div className={clsx('w-9 h-9 rounded-lg flex items-center justify-center shrink-0', tint)}>
         <Icon size={18} />
       </div>
@@ -55,7 +58,7 @@ export default function TimesheetsPage() {
   const [selectedDate, setSelectedDate] = useState(todayIST());
   const [showBackfill, setShowBackfill] = useState(false);
 
-  // MY own entries across every project (the API scopes ?userId to self).
+  // MY own entries across every client (the API scopes ?userId to self).
   const { data: entries = [], isLoading, isError } = useQuery<Timesheet[]>({
     queryKey: ['timesheets-mine', currentUser?.id],
     queryFn: () => api.timesheets.forUser(currentUser!.id),
@@ -75,12 +78,15 @@ export default function TimesheetsPage() {
   }
 
   const todayKey = todayIST();
-  const weekAgo = shiftDay(todayKey, -6);
-  const monthStart = `${todayKey.slice(0, 7)}-01`;
+  // Both tiles now measure a CALENDAR period. "This week" was a rolling seven days ending today,
+  // which on a Wednesday counted Thursday and Friday of the week before — 47h30m shown against a
+  // Monday-to-Wednesday reality of 33.5h, next to a "This month" that meant the real month.
+  const weekStart = weekStartDay(todayKey);
+  const monthStart = monthStartDay(todayKey);
 
   const totalHours = entries.reduce((s, e) => s + e.hoursLogged, 0);
   const billableHours = entries.filter(e => e.billable).reduce((s, e) => s + e.hoursLogged, 0);
-  const weekHours = entries.filter(e => dayOf(e) >= weekAgo).reduce((s, e) => s + e.hoursLogged, 0);
+  const weekHours = entries.filter(e => dayOf(e) >= weekStart).reduce((s, e) => s + e.hoursLogged, 0);
   const monthHours = entries.filter(e => dayOf(e) >= monthStart).reduce((s, e) => s + e.hoursLogged, 0);
 
   // Entries logged on the selected calendar day (the integrated "logs", replacing the old table).
@@ -107,8 +113,8 @@ export default function TimesheetsPage() {
       <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5">
         {/* Summary */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <Tile label="This week"      value={fmtHours(weekHours)}     tint="bg-brand-50 text-brand-600"   Icon={Clock} />
-          <Tile label="This month"     value={fmtHours(monthHours)}    tint="bg-indigo-50 text-indigo-600" Icon={CalendarDays} />
+          <Tile label="This week"      value={fmtHours(weekHours)}     tint="bg-brand-50 text-brand-600"   Icon={Clock}        hint={`The calendar week from ${prettyDate(weekStart)}`} />
+          <Tile label="This month"     value={fmtHours(monthHours)}    tint="bg-indigo-50 text-indigo-600" Icon={CalendarDays} hint={`From ${prettyDate(monthStart)}`} />
           <Tile label="Billable (all)" value={fmtHours(billableHours)} tint="bg-green-50 text-green-600"   Icon={DollarSign} />
           <Tile label="Total logged"   value={fmtHours(totalHours)}    tint="bg-amber-50 text-amber-600"   Icon={Timer} />
         </div>
@@ -143,7 +149,7 @@ export default function TimesheetsPage() {
             <div className="divide-y divide-gray-100">
               {dayEntries.map(entry => (
                 <div key={entry.id} className="flex items-start gap-3 px-4 sm:px-5 py-3 hover:bg-gray-50">
-                  {/* PID / kind */}
+                  {/* CID / kind */}
                   <div className="w-28 shrink-0">
                     {entry.project?.code ? (
                       <>
@@ -157,7 +163,7 @@ export default function TimesheetsPage() {
                       <div className="flex flex-col gap-1">
                         <button onClick={() => setAssigning(entry)}
                           className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-brand-700 border border-brand-200 bg-brand-50 rounded-md hover:bg-brand-100 w-max">
-                          <KeyRound size={11} /> Assign PID
+                          <KeyRound size={11} /> Assign to client
                         </button>
                         {(() => { const d = bufferDaysLeft(entry); return d === null ? null : (
                           <span className={clsx('text-[10px] font-medium', d < 0 ? 'text-red-500' : d <= 2 ? 'text-amber-600' : 'text-gray-400')}>{d < 0 ? 'overdue' : `${d}d left`}</span>
@@ -169,7 +175,7 @@ export default function TimesheetsPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 flex items-center gap-2 flex-wrap">
                       {entry.task?.title ?? entry.issue?.title
-                        ?? (isOther(entry) ? (entry.title ?? 'Non-project time')
+                        ?? (isOther(entry) ? (entry.title ?? 'Non-client time')
                           : isCall(entry) ? (entry.title ?? 'Client call')
                             : 'Unassigned time')}
                       {entry.issue && <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">technical issue</span>}
@@ -205,7 +211,7 @@ export default function TimesheetsPage() {
       </div>
 
       {showLog && <LogTimeStandaloneModal defaultDate={selectedDate <= todayKey ? selectedDate : todayKey} onClose={() => setShowLog(false)} onSuccess={invalidate} />}
-      {assigning && <AssignPidModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
+      {assigning && <AssignClientModal entryId={assigning.id} onClose={() => setAssigning(null)} onDone={invalidate} />}
     </div>
   );
 }

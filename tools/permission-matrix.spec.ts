@@ -200,6 +200,27 @@ check('Admin is everything else bar deleting a role',
 check('Super Admin is stored as the implicit-all sentinel, not as a list',
   ROLE_PRESETS['Super Admin'], '*');
 
+// ── Team Capacity: managed by Senior Consultant and above; HR may look ─────
+// Owner, Sep 2026: "the Team Capacity module is only visible to [people whose role is above or
+// equal to Senior Consultant]", and those same people get task CRUD from it (capacity.manage).
+// Amended 19 Sep 2026, same owner: HR may SEE the board — who is loaded and who is free is a
+// people question too — but not manage it. Everyone else below the ladder still sees nothing.
+const holds = (role: string, c: string) => {
+  const p = ROLE_PRESETS[role];
+  return p === '*' || (p as string[]).includes(c);
+};
+const LADDER = ['Super Admin', 'Admin', 'Manager', 'Senior Consultant'];
+const BELOW = ['Consultant', 'Senior Research Associate', 'Business Development', 'Employee'];
+check('capacity.manage is a real, grantable code', ALL_PERMISSION_CODES.includes('capacity.manage'), true);
+check('it reads as what it hands out', CODE_NOTES['capacity.manage']?.includes('Create, edit, assign and delete'), true);
+check('the ladder sees the board', LADDER.map(r => holds(r, 'capacity.view')), [true, true, true, true]);
+check('…and manages tasks from it', LADDER.map(r => holds(r, 'capacity.manage')), [true, true, true, true]);
+check('nobody below Senior Consultant sees the board', BELOW.map(r => holds(r, 'capacity.view')), [false, false, false, false]);
+check('…or manages tasks from it', BELOW.map(r => holds(r, 'capacity.manage')), [false, false, false, false]);
+check('HR sees the board', holds('HR', 'capacity.view'), true);
+check('…but never manages tasks from it', holds('HR', 'capacity.manage'), false);
+check('every preset is accounted for by the three lists', Object.keys(ROLE_PRESETS).sort(), [...LADDER, ...BELOW, 'HR'].sort());
+
 // ── report ──────────────────────────────────────────────────────────────────
 if (failures.length) {
   console.error(`\n✗ ${failures.length} failed, ${passed} passed\n`);

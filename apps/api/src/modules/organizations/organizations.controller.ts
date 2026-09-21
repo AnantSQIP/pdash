@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Patch } from '@nestjs/common';
 import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -53,6 +53,7 @@ export class OrganizationsController {
   @RequirePermission('user.manage_access')
   @RequirePasscode()
   async setTimeMode(@Param('id') id: string, @Body() dto: SetTimeModeDto) {
+    await this.assertOwnOrg(id);
     const result = await this.timeMode.switchMode(id, dto.mode, this.actor.requireActorId(), dto.note);
     return { ...result, organizationId: id };
   }
@@ -60,8 +61,19 @@ export class OrganizationsController {
   /** Every switch this firm has made — how a report over an older window is read. */
   @Get(':id/time-mode/history')
   @RequirePermission('user.manage_access')
-  history(@Param('id') id: string) {
+  async history(@Param('id') id: string) {
+    await this.assertOwnOrg(id);
     return this.timeMode.history(id);
+  }
+
+  /**
+   * The organisation in the URL must be the caller's own. The id is a path parameter a caller
+   * types; the tenant is who they are. Without this, switching "some-other-org-id" answered 200
+   * with a no-op — harmless today, and exactly the shape of the leaks this codebase has had twice.
+   */
+  private async assertOwnOrg(id: string) {
+    const own = await this.actor.requireOrgId();
+    if (id !== own) throw new ForbiddenException('That is not your organisation.');
   }
 
   /**

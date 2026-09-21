@@ -1,5 +1,6 @@
 'use client';
 
+import { PATENTS_AND_CLIENT_CODES } from '@/lib/features';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -145,7 +146,8 @@ export default function PipelinePage() {
                       {formatMoney(stageValue, currency)}
                       {!s.terminal && <span className="ml-1">· {Math.round(s.probability * 100)}% odds</span>}
                     </p>
-                    {s.value === 'WON' && inStage.some(d => !d.client) && (
+                    {/* CLIENTS-FLOW: commented out — a won deal no longer creates a client-code record. */}
+                    {PATENTS_AND_CLIENT_CODES && s.value === 'WON' && inStage.some(d => !d.client) && (
                       <p className="text-[11px] font-medium text-amber-700 mt-1">
                         {inStage.filter(d => !d.client).length} awaiting a client record
                       </p>
@@ -170,14 +172,15 @@ export default function PipelinePage() {
                           </span>
                           <span className="text-[11px] text-gray-400 truncate">{d.owner.firstName}</span>
                         </div>
-                        {d.client && (
+                        {/* CLIENTS-FLOW: commented out — client codes are switched off. */}
+                        {PATENTS_AND_CLIENT_CODES && d.client && (
                           <span className="mt-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-50 text-purple-700">
                             {d.client.code}
                           </span>
                         )}
                         {/* Already a client of ours — a warmer proposition than a cold name, and
                             something only this system can know, because it holds the delivery history. */}
-                        {!d.client && d.existingClient && (
+                        {PATENTS_AND_CLIENT_CODES && !d.client && d.existingClient && (
                           <span className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
                             <Repeat size={9} /> Existing client · {d.existingClient.code}
                           </span>

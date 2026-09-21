@@ -35,7 +35,7 @@ const EXPIRY = [
 ];
 
 function StatusPicker() {
-  const { mine, setStatus, clearStatus } = usePresence();
+  const { mine, setStatus, clearStatus, idleMode, canWatchDevice, watchDevice } = usePresence();
   const [msg, setMsg] = useState(mine?.statusMessage ?? '');
   const [expiry, setExpiry] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -78,6 +78,17 @@ function StatusPicker() {
         </select>
         {mine?.status && <button onClick={reset} disabled={busy} className="text-[11px] font-medium text-gray-500 hover:text-brand-600 px-2 py-1.5 disabled:opacity-50">Reset</button>}
       </div>
+      {/* How "Away" is decided for this person, and the one switch that makes it see the whole PC. */}
+      <p className="mt-2.5 text-[11px] leading-snug text-gray-500">
+        {idleMode === 'device'
+          ? 'You turn yellow after 5 minutes without using your PC.'
+          : 'You turn yellow after 5 minutes without using the dashboard.'}
+        {canWatchDevice && (
+          <button onClick={() => { void watchDevice(); }} className="ml-1 font-medium text-brand-600 hover:underline">
+            Count my whole PC
+          </button>
+        )}
+      </p>
     </div>
   );
 }

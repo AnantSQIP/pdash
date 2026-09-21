@@ -1,3 +1,4 @@
+import { PATENTS_AND_CLIENT_CODES } from '../../common/features';
 import {
   BadRequestException, Body, Controller, Get, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit, Patch, Post, Query,
 } from '@nestjs/common';
@@ -276,7 +277,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
       return {
         id: p.id, pid: p.code ?? null, roundSeq: p.roundSeq, title: p.title, type: p.projectType ?? null,
         phase: p.projectPhase, priority: p.priority,
-        client: p.client?.name ?? p.client?.code ?? null,
+        // CLIENTS-FLOW: commented out — client codes are switched off.
+        client: PATENTS_AND_CLIENT_CODES ? (p.client?.name ?? p.client?.code ?? null) : null,
         startDate: p.startDate, dueDate: p.dueDate, clientDueDate: p.clientDueDate,
         clientDeliveryDate: p.clientDeliveryDate ?? null,
         workingHours: p.workingHours ?? null, actualHours: p.actualHours ?? null,
@@ -360,8 +362,8 @@ export class DailyDigestService implements OnModuleInit, OnModuleDestroy {
     const lines = [
       `Daily report — ${r.date}`,
       ``,
-      `• Projects created: ${r.projectsCreated.length}${r.projectsCreated.length ? ' — ' + r.projectsCreated.map(p => `${p.code ?? 'PID-pending'} ${p.title}`).slice(0, 6).join('; ') : ''}`,
-      `• Projects completed: ${r.projectsCompleted.length}${r.projectsCompleted.length ? ' — ' + r.projectsCompleted.map(p => `${p.code ?? ''} ${p.title}`).slice(0, 6).join('; ') : ''}`,
+      `• Clients created: ${r.projectsCreated.length}${r.projectsCreated.length ? ' — ' + r.projectsCreated.map(p => `${p.code ?? '—'} ${p.title}`).slice(0, 6).join('; ') : ''}`,
+      `• Clients completed: ${r.projectsCompleted.length}${r.projectsCompleted.length ? ' — ' + r.projectsCompleted.map(p => `${p.code ?? ''} ${p.title}`).slice(0, 6).join('; ') : ''}`,
       `• Tasks completed today: ${r.tasksCompleted}`,
       `• Deadlines met today: ${r.deadlinesMetToday}`,
       `• Overdue tasks: ${r.overdueCount}${r.overdueCount ? ' — ' + r.overdueSample.map(t => t.title).slice(0, 5).join('; ') + (r.overdueCount > 5 ? ` (+${r.overdueCount - 5} more)` : '') : ''}`,

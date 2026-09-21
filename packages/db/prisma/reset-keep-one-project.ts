@@ -1,6 +1,6 @@
 // Reset the workspace to ONE project — delete every OTHER project and the data created for it
-// (tasks, subtasks, timesheets, issues, comments, project members/lists/PID requests) plus the
-// activity/audit/analytics log entries that reference those deleted items — and reset the PID
+// (tasks, subtasks, timesheets, issues, comments, project members/lists) plus the
+// activity/audit/analytics log entries that reference those deleted items — and reset the CID
 // serial. Everything else is left completely untouched.
 //
 // KEEPS (untouched): every user + login + PROFILE (no PII cleared, gate NOT re-armed), all RBAC
@@ -8,9 +8,9 @@
 //   expense/discuss/calendar/patent/client data, AND the one kept project with ALL of its data.
 //
 // DELETES: all OTHER projects and their tasks/subtasks/timesheets/issues/comments/members/task-
-//   lists/PID-requests/patent-links/documents/approvals, the log rows that reference those
-//   deleted entities, and every PID reservation not attached to the kept project. Resets the
-//   legacy PID sequence counter.
+//   lists/patent-links/documents/approvals, the log rows that reference those
+//   deleted entities, and every CID registry row and ledger event not belonging to the kept client. Resets the
+//   legacy CID sequence counter.
 //
 // The project to KEEP is matched by a case-insensitive substring of its title (KEEP_TITLE,
 // default "Yahoo-EOUs"). EXACTLY ONE non-deleted project must match, or the script aborts.
@@ -130,7 +130,6 @@ async function main() {
   await del('projectTask', () => prisma.projectTask.deleteMany({ where: { projectId: { in: delProjectIds } } }));
   await del('task', () => prisma.task.deleteMany({ where: { id: { in: delTaskIds } } }));
   await del('taskList', () => prisma.taskList.deleteMany({ where: { projectId: { in: delProjectIds } } }));
-  await del('pidRequest', () => prisma.pidRequest.deleteMany({ where: { projectId: { in: delProjectIds } } }));
   await del('projectPatent', () => prisma.projectPatent.deleteMany({ where: { projectId: { in: delProjectIds } } }));
   await del('projectDocument', () => prisma.projectDocument.deleteMany({ where: { projectId: { in: delProjectIds } } }));
   await del('projectDepartment', () => prisma.projectDepartment.deleteMany({ where: { projectId: { in: delProjectIds } } }));
@@ -143,14 +142,15 @@ async function main() {
     await del('auditLog', () => prisma.auditLog.deleteMany({ where: { entityId: { in: deletedEntityIds } } }));
     await del('analyticsEvent', () => prisma.analyticsEvent.deleteMany({ where: { entityId: { in: deletedEntityIds } } }));
   }
-  // PID reset: drop every reservation not attached to the kept project, and clear the legacy
-  // sequence counter so the allocator re-derives from what remains.
-  await del('pidReservation', () => prisma.pidReservation.deleteMany({ where: { NOT: { projectId: keep.id } } }));
+  // CID reset: drop every registry row and ledger event not belonging to the kept client's CID, and
+  // clear the legacy sequence counter so the allocator re-derives from what remains.
+  await del('pidReservation', () => prisma.pidReservation.deleteMany({ where: { NOT: { pid: keep.code ?? '' } } }));
+  await del('cidEvent', () => prisma.cidEvent.deleteMany({ where: { NOT: { cid: keep.code ?? '' } } }));
   try { await del('sequenceCounter', () => prisma.sequenceCounter.deleteMany()); } catch { /* table may not exist */ }
 
   const projLeft = await prisma.project.count({ where: { deletedAt: null } });
   console.log(`\nDone. ${projLeft} active project(s) remain; ${kept} users kept (profiles intact).`);
-  console.log(`Kept project "${keep.title}" has code ${keep.code ?? '— none'}. Next generated PID will follow from that.\n`);
+  console.log(`Kept client "${keep.title}" has CID ${keep.code ?? '— none'}. The next client's CID will follow from that.\n`);
 }
 
 main()

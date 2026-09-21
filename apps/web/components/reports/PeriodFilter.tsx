@@ -119,7 +119,7 @@ export function PeriodFilter({
 
       {value.key !== 'all' && (
         <span className="text-[11px] text-gray-500 ml-1">
-          {matched} of {total} {total === 1 ? 'project' : 'projects'} were live in this period
+          {matched} of {total} {total === 1 ? 'client' : 'clients'} were live in this period
         </span>
       )}
 

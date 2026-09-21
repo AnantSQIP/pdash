@@ -4,11 +4,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plus, Check, Search, X as XIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { useQuery } from '@tanstack/react-query';
-import { api, type WorkflowStatus } from '@/lib/api';
+import { api, type TaskGroup, type WorkflowStatus } from '@/lib/api';
 import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 import { OPEN_TYPE } from '@/lib/tasks';
+import { formatDate } from '@/lib/date';
+import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from '@/components/capacity/AssignmentImpact';
 
 interface AddTaskModalProps {
   projectId: string;
@@ -41,6 +43,34 @@ export function AddTaskModal({
   const [estimatedHours, setEstimatedHours] = useState('');
   const [assigneeIds, setAssigneeIds] = useState<string[]>(initialAssigneeIds ?? []);
   const [memberQuery, setMemberQuery] = useState('');
+  // CLIENTS-FLOW: which task group the task goes into. Starts on the one the caller named; the
+  // picker only appears when the client has more than one group that is still taking work.
+  const [groupId, setGroupId] = useState(taskListId);
+  const { data: groups = [] } = useQuery<TaskGroup[]>({
+    queryKey: ['task-groups', projectId],
+    queryFn: () => api.taskLists.list(projectId),
+    staleTime: 30_000,
+  });
+  const openGroups = groups.filter(g => g.status !== 'COMPLETED');
+  // If the caller's pick turns out to be a completed group, start on one that takes work instead
+  // of letting the save fail.
+  useEffect(() => {
+    if (!groups.length) return;
+    const current = groups.find(g => g.id === groupId);
+    if (current && current.status !== 'COMPLETED') return;
+    const fallback = openGroups.find(g => g.isDefault) ?? openGroups[0];
+    if (fallback) setGroupId(fallback.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups]);
+  // CLIENTS-FLOW (deadlines): a task inside a group is due no later than the group. Until somebody
+  // picks a date, the task takes the group's deadline — the server does the same when none is sent.
+  const groupDue = (() => {
+    const g = groups.find(x => x.id === groupId);
+    return g?.dueDate ? String(g.dueDate).slice(0, 10) : '';
+  })();
+  const [dueTouched, setDueTouched] = useState(!!initialDueDate);
+  useEffect(() => { if (!dueTouched) setDueDate(groupDue); }, [groupDue, dueTouched]);
+  const dueAfterGroup = !!groupDue && !!dueDate && dueDate > groupDue;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -90,6 +120,7 @@ export function AddTaskModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (dueAfterGroup) { setError(`The deadline cannot be after the task group’s (${formatDate(groupDue)}).`); return; }
     setLoading(true);
     setError('');
     try {
@@ -110,7 +141,7 @@ export function AddTaskModal({
         dueDate: dueDate || undefined,
         estimatedHours: estimatedHours ? parseFloat(estimatedHours) : undefined,
         projectId,
-        taskListId,
+        taskListId: groupId || taskListId,
         createdBy: currentUser?.id ?? 'system', // server derives the real creator from the cookie actor
         currentWorkflowStatusId,
         assigneeIds: assigneeIds.length ? assigneeIds : undefined,
@@ -132,6 +163,23 @@ export function AddTaskModal({
     }
   }
 
+  // The hours being handed out, against every client these people are already on. The estimate is
+  // the task's total, so with more than one person on it each carries an even share — which is
+  // exactly what the board does with a task whose people have no hours of their own.
+  const proposed = useMemo(() => {
+    const est = parseFloat(estimatedHours);
+    const each = Number.isFinite(est) && est > 0 && assigneeIds.length ? est / assigneeIds.length : 0;
+    return assigneeIds.map(userId => ({
+      userId,
+      hours: assignRole && initialAssigneeIds?.length === 1 && assignHours ? parseFloat(assignHours) || 0 : each,
+      startDate: startDate || null,
+      dueDate: (assignDue || dueDate) || null,
+      hoursPerDay: null,
+    }));
+  }, [assigneeIds, estimatedHours, startDate, dueDate, assignRole, assignHours, assignDue, initialAssigneeIds]);
+  const impact = useAssignmentPreview(proposed, { projectId });
+  const gate = useOverrideGate(impact.over, impact.seats.map(s => `${s.userId}:${s.overHours}`).join('|'));
+
   return (
     <Modal
       title="New Task"
@@ -147,7 +195,8 @@ export function AddTaskModal({
             >
               Cancel
             </button>
-            <button type="submit" form="add-task-form" disabled={loading || !title.trim()}
+            <button type="submit" form="add-task-form" disabled={loading || !title.trim() || !gate.allowed}
+              title={gate.allowed ? undefined : 'This puts somebody past their working day — tick the box above to do it anyway.'}
               className="flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading
@@ -159,13 +208,22 @@ export function AddTaskModal({
       }
     >
         <form id="add-task-form" onSubmit={handleSubmit} className="space-y-5">
+          {openGroups.length > 1 && (
+            <div>
+              <label htmlFor="add-task-group" className="block text-sm font-medium text-gray-700 mb-1.5">Task group</label>
+              <select id="add-task-group" value={groupId} onChange={e => setGroupId(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 bg-white">
+                {openGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Title <span className="text-red-500">*</span>
             </label>
             <input
               type="text" required autoFocus value={title} onChange={e => setTitle(e.target.value)}
-              placeholder="e.g. Implement login page"
+              placeholder="e.g. Search claim 7 variants"
               className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
             />
           </div>
@@ -212,18 +270,31 @@ export function AddTaskModal({
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Estimated Hours</label>
               <input type="number" min="0" step="0.5" value={estimatedHours} onChange={e => setEstimatedHours(e.target.value)}
+                // The deadline and the people come AFTER this box, so Enter here created the task
+                // with neither — the same mistake as the member search below, one field earlier.
+                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
                 placeholder="e.g. 4"
                 className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition"
               />
             </div>
           </div>
 
-          {/* A task has a single deadline. Client-facing dates live on the project only. */}
+          {/* A task has a single deadline — the team's. The date promised to the client lives on its
+              task group, and the task's must fall inside the group's. */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Deadline</label>
-            <DateField type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-brand-500 transition"
+            <DateField type="date" value={dueDate} max={groupDue || undefined}
+              onChange={e => { setDueDate(e.target.value); setDueTouched(true); }}
+              className={clsx('w-full px-3.5 py-2.5 text-sm border rounded-lg focus:outline-none focus:border-brand-500 transition',
+                dueAfterGroup ? 'border-red-300' : 'border-gray-300')}
             />
+            {groupDue && (
+              <p className={clsx('text-[11px] mt-1', dueAfterGroup ? 'text-red-600' : 'text-gray-400')}>
+                {dueAfterGroup
+                  ? `After the task group’s deadline (${formatDate(groupDue)}) — pick that date or earlier.`
+                  : `The task group is due ${formatDate(groupDue)}; the task can be due then or earlier.`}
+              </p>
+            )}
           </div>
 
 
@@ -283,6 +354,19 @@ export function AddTaskModal({
               })}
             </div>
           </div>
+
+          {/* Free here is not free everywhere: what else these people are on, and whether the
+              hours actually fit. */}
+          {(impact.isLoading || impact.seats.length > 0) && (
+            <div>
+              <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-medium text-gray-700">Do they have the hours?</p>
+                <ImpactLegend />
+              </div>
+              <AssignmentImpact state={impact} compact />
+              {gate.node}
+            </div>
+          )}
 
         </form>
     </Modal>

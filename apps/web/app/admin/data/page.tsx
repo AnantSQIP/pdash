@@ -97,7 +97,7 @@ export default function AdminDataPage() {
         </p>
         <div className="flex items-center gap-2 mt-4 flex-wrap">
           {([
-            ['projects', FolderKanban, 'Projects', projects.length],
+            ['projects', FolderKanban, 'Clients', projects.length],
             ['tasks', ListTodo, 'Tasks', tasks.length],
           ] as const).map(([key, Icon, label, count]) => (
             <button
@@ -202,8 +202,8 @@ function ProjectTable({ rows, onRestore, onPurge, busy }: {
       <table className="w-full text-left text-sm min-w-[760px]">
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-            <th className="px-5 py-2.5">Project</th>
-            <th className="px-3 py-2.5">PID</th>
+            <th className="px-5 py-2.5">Client</th>
+            <th className="px-3 py-2.5">CID</th>
             <th className="px-3 py-2.5">Deleted</th>
             <th className="px-3 py-2.5">Would destroy</th>
             <th className="px-5 py-2.5 text-right">Actions</th>
@@ -224,7 +224,7 @@ function ProjectTable({ rows, onRestore, onPurge, busy }: {
               <td className="px-5 py-3"><Actions onRestore={() => onRestore(p)} onPurge={() => onPurge(p)} busy={busy} /></td>
             </tr>
           ))}
-          {rows.length === 0 && <Empty what="projects" />}
+          {rows.length === 0 && <Empty what="clients" />}
         </tbody>
       </table>
     </div>
@@ -243,7 +243,7 @@ function TaskTable({ rows, onRestore, onPurge, busy }: {
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
             <th className="px-5 py-2.5">Task</th>
-            <th className="px-3 py-2.5">Project</th>
+            <th className="px-3 py-2.5">Client</th>
             <th className="px-3 py-2.5">Deleted</th>
             <th className="px-3 py-2.5">Would destroy</th>
             <th className="px-5 py-2.5 text-right">Actions</th>
@@ -302,7 +302,7 @@ function PurgeDialog({ target, onClose, onDone }: {
     onSuccess: (res) => {
       const rows = Object.values(res.deleted ?? {}).reduce((n, v) => n + v, 0);
       toastSuccess(`"${res.title}" destroyed — ${rows} row${rows === 1 ? '' : 's'} removed.`, {
-        description: res.tasksKept ? `${res.tasksKept} shared task(s) kept — they belong to another live project.` : undefined,
+        description: res.tasksKept ? `${res.tasksKept} shared task(s) kept — they belong to another live client.` : undefined,
       });
       onDone();
     },

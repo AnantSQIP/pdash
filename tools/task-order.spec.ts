@@ -15,7 +15,7 @@
  */
 process.env.TZ = 'Asia/Kolkata';
 
-import { byPriorityThenDeadline, orderedByDeadline, nextUpFirst } from '../apps/web/lib/tasks';
+import { byGroupOrder, byPriorityThenDeadline, orderedByDeadline, nextUpFirst } from '../apps/web/lib/tasks';
 import type { ApiTask } from '../apps/web/lib/api';
 
 let passed = 0;
@@ -125,6 +125,41 @@ check('a mixed list reads exactly as the rule describes',
     task('kickoff deck',      'MEDIUM',   '2026-09-18', true),
   ]),
   ['office action', 'filing check', 'prior-art sweep', 'draft claims', 'client call notes', 'archive old files', 'kickoff deck']);
+
+// ── CLIENTS-FLOW: a task group's own order ───────────────────────────────────
+// A type's standard tasks are created in the order the work runs. Alike in priority and date,
+// they must read Proposal → … → QC, not alphabetically ("1st Level Screening" first).
+const inGroup = (title: string, list: string, sequence: number, project = 'p') =>
+  ({ ...task(title, 'MEDIUM', '2026-09-28'), projectTasks: [{ projectId: project, taskListId: list, sequence }] } as unknown as ApiTask);
+const groupOrder = (ts: ApiTask[], project = 'p') => [...ts].sort(byGroupOrder(project)).map(t => t.title);
+
+check('tasks alike in priority and date keep their task group\'s order',
+  groupOrder([inGroup('QC', 'g', 10), inGroup('1st Level Screening', 'g', 5), inGroup('Proposal', 'g', 0)]),
+  ['Proposal', '1st Level Screening', 'QC']);
+check('priority still outranks the group order',
+  groupOrder([inGroup('Proposal', 'g', 0), { ...inGroup('QC', 'g', 10), priority: 'HIGH' } as ApiTask]),
+  ['QC', 'Proposal']);
+check('a nearer deadline still outranks it',
+  groupOrder([inGroup('Proposal', 'g', 0), { ...inGroup('QC', 'g', 10), dueDate: '2026-09-20' } as ApiTask]),
+  ['QC', 'Proposal']);
+check('the sequence of the CLIENT being drawn is used, not whichever link came first',
+  groupOrder([
+    { ...inGroup('second', 'g', 9), projectTasks: [{ projectId: 'other', taskListId: 'x', sequence: 0 }, { projectId: 'p', taskListId: 'g', sequence: 9 }] } as unknown as ApiTask,
+    { ...inGroup('first', 'g', 1), projectTasks: [{ projectId: 'other', taskListId: 'x', sequence: 5 }, { projectId: 'p', taskListId: 'g', sequence: 1 }] } as unknown as ApiTask,
+  ]),
+  ['first', 'second']);
+
+// The general order must stay a TOTAL order: mixing a per-group sequence into it made it
+// intransitive (X<Z<Y by title, yet X>Y by sequence), and Array.sort on an inconsistent
+// comparator may return anything — the same list could come out differently on two renders.
+const X = inGroup('B', 'G', 2), Y = inGroup('C', 'G', 1), Z = inGroup('Ba', 'H', 0);
+const sign = (n: number) => (n > 0 ? 1 : n < 0 ? -1 : 0);
+check('the general order is transitive across groups (X<Z, Z<Y ⇒ X<Y)',
+  [sign(byPriorityThenDeadline(X, Z)), sign(byPriorityThenDeadline(Z, Y)), sign(byPriorityThenDeadline(X, Y))],
+  [-1, -1, -1]);
+const permutations = [[X, Y, Z], [X, Z, Y], [Y, X, Z], [Y, Z, X], [Z, X, Y], [Z, Y, X]]
+  .map(p => [...p].sort(byPriorityThenDeadline).map(t => t.title).join(','));
+check('…so every input order sorts to the same list', [...new Set(permutations)], ['B,Ba,C']);
 
 console.log(`\n${failures.length ? '✗' : '✓'} ${passed} passed, ${failures.length} failed\n`);
 failures.forEach(f => console.error('  ✗ ' + f + '\n'));

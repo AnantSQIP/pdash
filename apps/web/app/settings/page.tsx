@@ -31,7 +31,6 @@ import { ProfilePhotoCard } from '@/components/ProfilePhotoCard';
 import { ProfileCard } from '@/components/people/ProfileCard';
 import { toastError } from '@/components/ui/Toast';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
-import { TimeModeCard } from '@/components/settings/TimeModeCard';
 
 // Only tabs backed by real functionality are shown. Notifications / Workflows /
 // Integrations / Billing were unbacked mock UIs and are hidden until a real backend exists.
@@ -289,7 +288,6 @@ function GeneralTab() {
       <ProfilePhotoCard />
       <ChangePasswordCard />
       <ChangePasscodeCard />
-      {org && <TimeModeCard org={org} />}
       {/* Organization card */}
       <div className="bg-white rounded-xl border p-4 sm:p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-900">Organization</h2>
@@ -512,7 +510,7 @@ const NOTIF_CATS = [
   { id: 'mentions',   label: 'Mentions',            desc: 'When someone @mentions you in a discussion' },
   { id: 'discussions', label: 'Discussions',        desc: 'Being added to a discussion channel' },
   { id: 'tasks',      label: 'Tasks',               desc: 'Task assignments and updates' },
-  { id: 'projects',   label: 'Projects',            desc: 'Approvals, billable decisions, lifecycle' },
+  { id: 'projects',   label: 'Clients',             desc: 'CID changes, task groups, lifecycle' },
   { id: 'attendance', label: 'Attendance & Leave',  desc: 'Leave, comp-off and regularisation' },
   { id: 'expenses',   label: 'Expenses',            desc: 'Expense approvals and reimbursements' },
   { id: 'other',      label: 'Everything else',     desc: 'Any other notification' },

@@ -18,6 +18,8 @@ import { HealthModule } from './modules/health/health.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { TaskListsModule } from './modules/tasklists/tasklists.module';
+// CLIENTS-FLOW: groups of clients.
+import { ClientGroupsModule } from './modules/client-groups/client-groups.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { StatusesModule } from './modules/statuses/statuses.module';
 import { WorkflowsModule } from './modules/workflows/workflows.module';
@@ -48,7 +50,10 @@ import { TagsModule } from './modules/tags/tags.module';
 import { CompanyModule } from './modules/company/company.module';
 import { AppraisalsModule } from './modules/appraisals/appraisals.module';
 import { SequenceModule } from './common/sequence/sequence.module';
-import { PatentsModule } from './modules/patents/patents.module';
+import { CidModule } from './common/cid/cid.service';
+// CLIENTS-FLOW: commented out — the patent portal, patent IDs, client codes and the client ledger
+// (all in this one module) are switched off. See common/features.ts.
+// import { PatentsModule } from './modules/patents/patents.module';
 import { TeamsModule } from './modules/teams/teams.module';
 import { DealsModule } from './modules/deals/deals.module';
 import { OptionalHolidaysModule } from './modules/optional-holidays/optional-holidays.module';
@@ -79,6 +84,7 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     // Core project management
     ProjectsModule,
     TaskListsModule,
+    ClientGroupsModule,
     TasksModule,
     // Workflow engine
     WorkflowsModule,
@@ -117,7 +123,8 @@ import { AdminDataModule } from './modules/admin-data/admin-data.module';
     LifecycleModule,
     // Atomic serial allocator (PIDs + patent handles) and the confidential patent portal.
     SequenceModule,
-    PatentsModule,
+    CidModule, // the CID registry + ledger — every client write that touches a CID goes through it
+    // PatentsModule, // CLIENTS-FLOW: commented out
     TeamsModule,
     DealsModule,
     OptionalHolidaysModule,

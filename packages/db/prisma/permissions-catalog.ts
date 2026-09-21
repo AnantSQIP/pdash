@@ -16,7 +16,7 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Generate PID',
+  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -49,7 +49,11 @@ export const MODULES: ModuleDef[] = [
   { key: 'analytics',   label: 'Analytics',    actions: ['view.own', 'view.organization'] },
   { key: 'performance', label: 'Performance',  actions: ['view.own', 'view.organization'] },
   // Team availability / workload board — who is busy, who is free, who is overloaded.
-  { key: 'capacity',    label: 'Team Capacity', actions: ['view'] },
+  //   capacity.view   → see the board (and the capacity bits on Home, a profile, a client's tab).
+  //   capacity.manage → create, edit, assign and delete tasks straight from the board, for anyone
+  //                     in the organisation. Owner, Sep 2026: both belong to Senior Consultant and
+  //                     above (Super Admin, Admin, Manager, Senior Consultant) and to nobody else.
+  { key: 'capacity',    label: 'Team Capacity', actions: ['view', 'manage'] },
   // The client-facing deadline is restricted: only these holders (plus a project's own
   // manager, for that project) ever receive it from the API.
   { key: 'deadline',    label: 'Client Deadlines', actions: ['view.client'] },
@@ -102,12 +106,21 @@ export interface PermissionDef {
   description: string;
 }
 
+/**
+ * Descriptions that say more than "<Action> on <Module>". Only where the generic sentence would
+ * mislead — "Manage on Team Capacity" does not tell an admin that the box hands out task CRUD for
+ * anyone in the organisation. The migration that introduced a code writes the same words.
+ */
+export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
+  'capacity.manage': 'Create, edit, assign and delete tasks from Team Capacity',
+};
+
 export const PERMISSIONS: PermissionDef[] = MODULES.flatMap(m =>
   m.actions.map(action => ({
     code: `${m.key}.${action}`,
     name: `${m.label} — ${ACTION_LABELS[action] ?? action}`,
     module: m.key,
-    description: `${ACTION_LABELS[action] ?? action} on ${m.label}`,
+    description: PERMISSION_DESCRIPTIONS[`${m.key}.${action}`] ?? `${ACTION_LABELS[action] ?? action} on ${m.label}`,
   })),
 );
 
@@ -124,9 +137,9 @@ const VIEW_BASICS = [
   code('tasklist', 'view'), code('timesheet', 'view'),
   code('issue', 'view'), code('comment', 'view'), code('document', 'view'),
   code('calendar', 'view'),
-  // Matrix 2026-08-12: the capacity board is open to the whole organisation — knowing who is
-  // free this week is not privileged information, and hiding it just meant people asked around.
-  code('capacity', 'view'),
+  // capacity.view is NOT a basic any more. The matrix of 2026-08-12 opened the board to everyone;
+  // the owner closed it again in Sep 2026 — Team Capacity is visible only to Senior Consultant and
+  // above, who also get capacity.manage (task CRUD from the board). See DELIVERY_LEAD_CAPACITY.
   // Seeing the Team Spaces module is a basic: which space you can actually OPEN is decided by
   // membership, exactly as it is for projects, so this reveals nothing on its own.
   code('team', 'view'),
@@ -135,6 +148,13 @@ const VIEW_BASICS = [
   // Everyone can record their own business expenses and see them.
   code('expense', 'view.own'), code('expense', 'submit'),
 ];
+
+/**
+ * Team Capacity, for the delivery ladder at or above Senior Consultant (Super Admin holds every code
+ * implicitly; Admin's preset is every code, so it gets both through ADMIN_CODES). HR is people-ops,
+ * not delivery, and is deliberately NOT on this ladder — it lost the board with this change.
+ */
+const DELIVERY_LEAD_CAPACITY = [code('capacity', 'view'), code('capacity', 'manage')];
 
 // Manager: full operational control over delivery work + org analytics, no system admin.
 const MANAGER_CODES = [
@@ -157,9 +177,9 @@ const MANAGER_CODES = [
   code('analytics', 'view.own'), code('analytics', 'view.organization'),
   // Matrix 2026-07-28: Manager keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
-  // Delivery oversight: the client-facing dates. (capacity.view already arrives via
-  // VIEW_BASICS — the matrix opened the capacity board to everyone on 2026-08-12.)
+  // Delivery oversight: the client-facing dates, and the capacity board with task CRUD on it.
   code('deadline', 'view.client'),
+  ...DELIVERY_LEAD_CAPACITY,
   // Managers see team attendance but do NOT review regularisations — those route to
   // HR + Yash only (see AttendanceService.regularizationApproverIds).
   code('attendance', 'view.organization'),
@@ -238,9 +258,9 @@ const SENIOR_CONSULTANT_CODES = [
   code('analytics', 'view.own'),
   // Matrix 2026-07-28: keeps own-performance but no longer sees org-wide performance.
   code('performance', 'view.own'),
-  // Delivery oversight: the client-facing dates. (capacity.view already arrives via
-  // VIEW_BASICS — the matrix opened the capacity board to everyone on 2026-08-12.)
+  // Delivery oversight: the client-facing dates, and the capacity board with task CRUD on it.
   code('deadline', 'view.client'),
+  ...DELIVERY_LEAD_CAPACITY,
   code('leave', 'request'), code('leave', 'view.organization'),
   // Matrix 2026-07-28: recognition-giving (reward.give) stays with Manager/HR/Admin — removed here.
   code('user', 'view'), code('department', 'view'),
@@ -281,7 +301,11 @@ const HR_CODES = [
   code('comment', 'view'), code('comment', 'create'),
   // Matrix 2026-08-11: may remove a file they attached.
   code('document', 'view'), code('document', 'create'), code('document', 'delete'),
-  code('calendar', 'view'), code('channel', 'view'), code('capacity', 'view'),
+  // Team Capacity: the board is the delivery ladder's to MANAGE (capacity.manage, Senior Consultant
+  // and up), but HR may SEE it — the owner's call, 19 Sep 2026: who is loaded and who is free is a
+  // people question too. View only; it stays a tick in Admin → Access Control either way.
+  code('capacity', 'view'),
+  code('calendar', 'view'), code('channel', 'view'),
   // matrix: HR manages their own calendar + logs/deletes their own time.
   code('calendar', 'create'), code('calendar', 'update'), code('calendar', 'delete'),
   code('timesheet', 'view'), code('timesheet', 'create'), code('timesheet', 'update'), code('timesheet', 'delete'),

@@ -19,6 +19,7 @@ import { formatDate, toUtcDay, isPastDue, formatDateTimeIST } from '@/lib/date';
 import { AttachButton, AttachmentList, PendingAttachmentChips, useAttachmentUploads } from '@/components/files/Attachments';
 import { TaskStaffing } from './TaskStaffing';
 import { invalidateTaskCaches } from '@/lib/task-cache';
+import { BillableToggle } from '@/components/tasks/BillableToggle';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
 
 // 'staffing' replaces the old 'assignees' tab. 'subtasks' | 'comments' | 'activity' remain in the
@@ -749,6 +750,24 @@ function TaskDetailPanelInner({
                 </div>
               </div>
 
+              {/* Billable is decided per task, by anybody on its client or staffed on it. The time
+                  already logged on the task follows the switch. Team-space work never bills. */}
+              {task.projectTasks?.length ? (
+                <div>
+                  <div className="mb-1 text-gray-400">
+                    <span className="text-xs uppercase tracking-wide">Billing</span>
+                    <p className="text-[10px] leading-tight text-gray-300">time logged on it follows this</p>
+                  </div>
+                  <BillableToggle
+                    key={`${task.id}:${task.billable !== false}`}
+                    taskId={task.id}
+                    billable={task.billable !== false}
+                    disabled={readOnly}
+                    onChanged={b => emitUpdated(task.id, { ...task, billable: b })}
+                  />
+                </div>
+              ) : null}
+
               {isPastDue(task.dueDate) && !closed && (
                 <p className="text-xs text-red-600">Past its deadline — move the date forward to re-arm the overdue alert.</p>
               )}
@@ -847,7 +866,7 @@ function TaskDetailPanelInner({
               </div>
             ) : (
               <p className="text-xs text-gray-400 italic">
-                {readOnly ? 'This project is completed or closed — assignees can’t be changed.' : 'You don’t have permission to change assignees.'}
+                {readOnly ? 'This client is completed or closed — assignees can’t be changed.' : 'You don’t have permission to change assignees.'}
               </p>
             )}
           </div>
@@ -1049,7 +1068,7 @@ function TaskDetailPanelInner({
         <button
           onClick={toggleComplete}
           disabled={readOnly}
-          title={readOnly ? 'This project is completed or closed — reopen it to make changes' : closed ? 'Click to reopen' : 'Mark this task complete'}
+          title={readOnly ? 'This client is completed or closed — reopen it to make changes' : closed ? 'Click to reopen' : 'Mark this task complete'}
           className={clsx(
             'inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
             closed

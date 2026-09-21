@@ -156,6 +156,21 @@ export function startOfWorkWeek(day: string, weekStartsOn: Weekday, workWeekDays
   return offsetIntoWeek(day, weekStartsOn) >= workWeekDays ? shiftDay(start, 7) : start;
 }
 
+/**
+ * Which window the capacity board opens on: the work week ahead.
+ *
+ * Monday to Thursday that is this week. On Friday it is next week — the allocation meeting is on
+ * a Friday afternoon and is about the week to come. On Saturday and Sunday this week's working days
+ * are behind us, so "this work week" already rolls forward to the coming Monday (startOfWorkWeek);
+ * answering "next work week" there, as the board used to, skipped a week and opened on the week
+ * AFTER the one about to start.
+ */
+export function defaultWindowMode(today: string, weekStartsOn: Weekday = 1, workWeekDays = DEFAULT_WORK_WEEK_DAYS): 'work-week' | 'next-work-week' {
+  const off = offsetIntoWeek(today, weekStartsOn);
+  // The last working day of the week is the planning day; after it, "this week" is already next.
+  return off === workWeekDays - 1 ? 'next-work-week' : 'work-week';
+}
+
 function windowOf(start: string, days: number): ResolvedWindow {
   return { start, end: shiftDay(start, days - 1), days };
 }

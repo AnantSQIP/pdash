@@ -42,7 +42,7 @@ import {
 // "can a Manager see everyone's attendance" lives under a module called Attendance.
 const SHORTCUTS: { label: string; module: string; search: string }[] = [
   { label: 'Attendance', module: 'attendance', search: '' },
-  { label: 'Project creation', module: 'project', search: 'create' },
+  { label: 'Client creation', module: 'project', search: 'create' },
   { label: 'Performance', module: 'performance', search: '' },
   { label: 'Permanent deletion', module: '', search: 'delete.permanent' },
 ];

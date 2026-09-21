@@ -482,8 +482,8 @@ function RegularizeModal({ date, nonWorking, onClose, onSuccess }: { date: strin
                 This is {nonWorking} — a non-working day. Worked anyway? Claim <b>comp-off</b> — HR, your manager and Yash will review it. On approval you get a compensatory day off to use later.
               </p>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Project ID (PID) <span className="text-red-500">*</span></label>
-                <input value={pid} onChange={e => setPid(e.target.value)} placeholder="e.g. PID-1042" className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500" />
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">CID <span className="text-red-500">*</span></label>
+                <input value={pid} onChange={e => setPid(e.target.value)} placeholder="e.g. SQ_26_27_004" className="w-full px-3.5 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-indigo-500" />
               </div>
             </>
           ) : (
@@ -682,8 +682,8 @@ function CompOffCard() {
               <DateField type="date" value={form.workDate} max={today} onChange={e => setForm(f => ({ ...f, workDate: e.target.value }))} className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Project ID (PID) <span className="text-red-500">*</span></label>
-              <input value={form.projectRef} onChange={e => setForm(f => ({ ...f, projectRef: e.target.value }))} placeholder="e.g. PID-1042" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">CID <span className="text-red-500">*</span></label>
+              <input value={form.projectRef} onChange={e => setForm(f => ({ ...f, projectRef: e.target.value }))} placeholder="e.g. SQ_26_27_004" className="w-full text-sm border border-gray-200 rounded-lg px-2.5 py-2" />
             </div>
             <div>
               <label className="block text-[11px] font-medium text-gray-500 mb-1">What did you work on?</label>
@@ -713,7 +713,7 @@ function CompOffCard() {
         {claims.map(c => (
           <li key={c.id} className="px-5 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-800">Worked {format(new Date(c.workDate), 'EEE, MMM d')}{c.projectRef ? <span className="text-gray-400 font-normal"> · PID {c.projectRef}</span> : null}</p>
+              <p className="text-sm font-medium text-gray-800">Worked {format(new Date(c.workDate), 'EEE, MMM d')}{c.projectRef ? <span className="text-gray-400 font-normal"> · CID {c.projectRef}</span> : null}</p>
               <p className="text-xs text-gray-400 truncate">{c.reason}{c.reviewNote ? ` · Note: ${c.reviewNote}` : ''}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -1044,7 +1044,7 @@ function TeamTab({ orgSummary, pending, pendingReg, onReviewed, onRegReviewed }:
                   <Avatar user={c.user} size={32} />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-800 truncate">
-                      {c.user?.firstName} {c.user?.lastName} · worked {format(new Date(c.workDate), 'EEE, MMM d')}{c.projectRef ? ` · PID ${c.projectRef}` : ''}
+                      {c.user?.firstName} {c.user?.lastName} · worked {format(new Date(c.workDate), 'EEE, MMM d')}{c.projectRef ? ` · CID ${c.projectRef}` : ''}
                     </p>
                     <p className="text-xs text-gray-400 truncate">{c.reason}</p>
                   </div>

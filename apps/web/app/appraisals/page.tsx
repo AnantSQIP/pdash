@@ -16,6 +16,7 @@ import { useToast } from '@/components/ui/Toast';
 import { fullName } from '@/lib/avatar';
 import { Avatar } from '@/components/Avatar';
 import { confirmDialog } from '@/components/ui/ConfirmDialog';
+import { cycleDateProblem } from '@/lib/appraisal-dates';
 
 function fmtDate(iso?: string | null) { return iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'; }
 
@@ -335,8 +336,12 @@ function CycleModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   const [cycleType, setCycleType] = useState('HALF_YEARLY');
   const [fyLabel, setFyLabel] = useState('');
   const [busy, setBusy] = useState(false);
+  // A cycle whose period runs backwards, or whose deadline lands before the period even begins,
+  // used to save and then sit in the list with a live Launch button — one click from opening a
+  // self-assessment for every active employee against dates that describe nothing.
+  const dateProblem = cycleDateProblem({ periodStart, periodEnd, dueDate });
   async function submit() {
-    if (!name.trim()) return; setBusy(true);
+    if (!name.trim() || dateProblem) return; setBusy(true);
     try { await api.appraisals.createCycle({ name: name.trim(), periodStart: periodStart || undefined, periodEnd: periodEnd || undefined, dueDate: dueDate || undefined, cycleType, fyLabel: fyLabel.trim() || undefined }); toast('Cycle created'); onDone(); onClose(); }
     catch (e) { toast(e instanceof Error ? e.message : 'Failed', 'error'); } finally { setBusy(false); }
   }
@@ -347,11 +352,16 @@ function CycleModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100"><h2 className="text-base font-semibold text-gray-900">New appraisal cycle</h2><button onClick={onClose} className="p-2 rounded-lg text-gray-400 hover:bg-gray-100"><X size={18} /></button></div>
         <div className="px-6 py-4 space-y-3">
           <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. H1 2026 Review" maxLength={120} className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500" />
+          {/* `min` keeps the picker from OFFERING an impossible date; cycleDateProblem still
+              judges what comes back, because a date field can be typed into as well as picked. */}
           <div className="flex gap-3">
             <label className="flex-1 text-xs text-gray-500">Period start<input type="date" value={periodStart} onChange={e => setStart(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
-            <label className="flex-1 text-xs text-gray-500">Period end<input type="date" value={periodEnd} onChange={e => setEnd(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
+            <label className="flex-1 text-xs text-gray-500">Period end<input type="date" value={periodEnd} min={periodStart || undefined} onChange={e => setEnd(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
           </div>
-          <label className="block text-xs text-gray-500">Due date<input type="date" value={dueDate} onChange={e => setDue(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
+          {/* The due date may land INSIDE the period — HR wants the paperwork in before a
+              half-year formally closes — so the floor is the period's START, not its end. */}
+          <label className="block text-xs text-gray-500">Due date<input type="date" value={dueDate} min={periodStart || undefined} onChange={e => setDue(e.target.value)} className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-2 py-1.5" /></label>
+          {dateProblem && <p className="text-[11px] text-red-600">{dateProblem}</p>}
           <div className="flex gap-3">
             <label className="flex-1 text-xs text-gray-500">
               Kind
@@ -372,7 +382,7 @@ function CycleModal({ onClose, onDone }: { onClose: () => void; onDone: () => vo
         </div>
         <div className="flex items-center justify-end gap-3 px-6 py-3 border-t border-gray-100">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
-          <button onClick={submit} disabled={!name.trim() || busy} className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">{busy ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Create</button>
+          <button onClick={submit} disabled={!name.trim() || !!dateProblem || busy} title={dateProblem ?? undefined} className="inline-flex items-center gap-2 px-5 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">{busy ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Create</button>
         </div>
       </div>
     </div>

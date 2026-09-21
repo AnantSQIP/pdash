@@ -1,5 +1,5 @@
-// Single source of truth for the Indian financial year (Apr–Mar) and the PID / patent-handle
-// formats. Centralised so a formatting drift can never mint a parallel/duplicate sequence.
+// Single source of truth for the Indian financial year (Apr–Mar) and the CID (Client ID, formerly
+// "PID") / patent-handle formats. Centralised so a formatting drift can never mint a parallel/duplicate sequence.
 //
 // SquarkIP is an Indian firm, so the financial year is defined in IST regardless of where the
 // server runs (a UTC box must NOT bucket a 00:30-IST-Apr-1 project into the previous year).
@@ -16,9 +16,10 @@ export function financialYear(instant: Date, timeZone: string = IST): { startYea
   return { startYear, label }; // e.g. Apr-2026 → { 2026, "26_27" }
 }
 
-/** PID display form, e.g. SQ_26_27_001 (serial zero-padded to 3, grows past 999 naturally). */
-export function formatPid(orgCode: string, fyLabel: string, serial: number): string {
-  return `${orgCode}_${fyLabel}_${String(serial).padStart(3, '0')}`;
+/** CID display form, e.g. SQ_26_27_001 (serial zero-padded to 3, grows past 999 naturally).
+ *  `prefix` must already be sanitised — see cidPrefix() in common/cid/cid.ts. */
+export function formatCid(prefix: string, fyLabel: string, serial: number): string {
+  return `${prefix}_${fyLabel}_${String(serial).padStart(3, '0')}`;
 }
 
 /** Patent handle, e.g. Pat_MLK_001 (code + serial, zero-padded to 3, grows past 999 naturally). */
@@ -27,5 +28,7 @@ export function formatPatentHandle(clientCode: string, serial: number): string {
 }
 
 // Canonical scope keys for the atomic allocator — the ONLY place these strings are built.
-export const pidScope = (organizationId: string, fyLabel: string) => `pid:${organizationId}:${fyLabel}`;
+// `legacyPidScope` is no longer allocated from (CIDs come from the registry under a lock), but an
+// existing counter row is still honoured as a floor so nothing it once issued can come back.
+export const legacyPidScope = (organizationId: string, fyLabel: string) => `pid:${organizationId}:${fyLabel}`;
 export const patentScope = (clientId: string) => `pat:${clientId}`;

@@ -104,6 +104,8 @@ export function nextUpFirst(a: ApiTask, b: ApiTask): number {
  *   3. SAME PRIORITY → the nearest deadline is the higher priority
  *   4. a task with no deadline sorts after every dated one — no date is not "due today"
  *   5. title, so the order is total and never shuffles between renders
+ *
+ * For one task group's own list, use byGroupOrder(projectId) below instead.
  */
 export function byPriorityThenDeadline(a: ApiTask, b: ApiTask): number {
   const closed = (t: ApiTask) => (isTaskClosed(t) ? 1 : 0);
@@ -116,6 +118,35 @@ export function byPriorityThenDeadline(a: ApiTask, b: ApiTask): number {
   if (due(a) !== due(b)) return due(a) - due(b);
 
   return (a.title ?? '').localeCompare(b.title ?? '');
+}
+
+/**
+ * The order INSIDE one task group: the rules above, but two tasks alike in priority and date keep
+ * the group's own sequence — a type's standard tasks are laid out as the work runs (Proposal …
+ * Report, QC), and reading them alphabetically ("1st Level Screening" first) describes nothing.
+ *
+ * It is a separate comparator because the sequence only means something WITHIN one group. Mixing
+ * it into the general order made that order intransitive — X before Y by sequence, Y before Z by
+ * title, Z before X by title — and a comparator that contradicts itself makes Array.sort's result
+ * undefined, so the same list could come out differently on different renders.
+ *
+ * `projectId` picks the right link: a task can sit in several clients, and projectTasks[0] is not
+ * necessarily the one being drawn.
+ */
+export function byGroupOrder(projectId: string) {
+  const seq = (t: ApiTask) => t.projectTasks?.find(pt => pt.projectId === projectId)?.sequence;
+  return (a: ApiTask, b: ApiTask): number => {
+    const base = byPriorityThenDeadline(a, b);
+    const sa = seq(a), sb = seq(b);
+    // Only when the general rules call them equal on everything but the title.
+    if (sa !== undefined && sb !== undefined && sa !== sb) {
+      const closed = (t: ApiTask) => (isTaskClosed(t) ? 1 : 0);
+      const rank = (t: ApiTask) => PRIORITY_RANK[t.priority ?? 'MEDIUM'] ?? 2;
+      const due = (t: ApiTask) => (t.dueDate ? new Date(t.dueDate).getTime() : Number.POSITIVE_INFINITY);
+      if (closed(a) === closed(b) && rank(a) === rank(b) && due(a) === due(b)) return sa - sb;
+    }
+    return base;
+  };
 }
 
 /**

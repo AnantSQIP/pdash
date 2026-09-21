@@ -5,13 +5,21 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { NotificationsService } from '../notifications/notifications.module';
+import { PermissionService } from '../permissions/permission.service';
 import { OptionalHolidaysService } from '../optional-holidays/optional-holidays.service';
 import { OptionalHolidaysModule } from '../optional-holidays/optional-holidays.module';
 import { startOfUtcDay, startOfIstDay } from '../../common/dates';
+import { TasksModule } from '../tasks/tasks.module';
+import { CapacityTasksController, CapacityTaskOptionsService } from './capacity-tasks';
+import { ProjectsModule } from '../projects/projects.module';
+import { CapacityClientSetupController, CapacityClientSetupService } from './capacity-client-setup';
 import {
   compareScheduled, placeForward, hoursInWindow, daysOutsideWindow, inCoverageWindow,
   type ScheduledSeat, type Placement,
 } from './placement';
+import {
+  AvailabilityService, canName, type ClientShare, type ProposedSeat, type SeatPreview,
+} from './availability';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -36,6 +44,8 @@ const LIGHT_THRESHOLD = 0.75;
 const MIN_DAYS = 5;
 const MAX_DAYS = 60;
 const DEFAULT_DAYS = 14;
+/** How far back a day sheet still offers work that was FINISHED — it may still be owed hours. */
+const FINISHED_LOOKBACK_DAYS = 14;
 
 /**
  * Coerce the `days` query parameter to a sane horizon. `parseInt('abc')` is NaN, and an
@@ -93,6 +103,18 @@ export interface CapacityDay {
   utilization: number;
   /** Free hours left on this day (0 on non-working days). */
   free: number;
+  /**
+   * The same `load`, split by AvailabilityService into the client being looked at and everything
+   * else. Present on every board read, absent on the raw projection: a screen that is not about
+   * one client has no focus, and then every committed hour is "other".
+   *
+   * This is what stops a day looking emptier than it is. A person with eight hours on Acme has an
+   * `otherHours` of 8 when Bellco's tab is open, so the day is drawn full there too.
+   */
+  focusHours?: number;
+  otherHours?: number;
+  /** Of `otherHours`, the part whose client this viewer may not be told the name of. */
+  restrictedHours?: number;
   note?: string;
   /**
    * Which open tasks put how many hours on this day — the aggregate `load`, itemised.
@@ -100,6 +122,90 @@ export interface CapacityDay {
    * Largest first.
    */
   tasks?: { taskId: string; hours: number }[];
+}
+
+/**
+ * The part of a window that is still ahead — today and the days after it.
+ *
+ * Every figure a row reports ABOUT A PERSON — hours free, available now, the day they next come
+ * free — is an answer to "what can I still give them?", and only the days that have not happened
+ * yet can answer it. That used to be the whole window, because the window always began today.
+ * Since it can be anchored in the past, elapsed days sat in the totals carrying no load at all —
+ * placement never puts work behind `planFrom` — so each one read as eight free hours. On a
+ * Wednesday, the board opened on its default Monday-start work week and reported all 26 people
+ * available, a person 11.6h overloaded among them with 32 free hours to spare.
+ *
+ * The days themselves are still returned and still drawn: what happened is worth looking at. It
+ * is only the arithmetic about availability that stops counting it.
+ *
+ * Both are plain ISO day keys, so the comparison is a string comparison — total and cheap.
+ */
+export function daysStillAhead(days: CapacityDay[], planFromKey: string): CapacityDay[] {
+  return days.filter(d => d.date >= planFromKey);
+}
+
+/** Everything a row says about how busy somebody is, all of it measured over the days ahead. */
+export interface CapacityTotals {
+  capacityHours: number;
+  committedHours: number;
+  freeHours: number;
+  /** Hours committed BEYOND capacity, which `freeHours` (floored at 0 per day) cannot show. */
+  overCommittedHours: number;
+  /** Percent of the remaining capacity already spoken for; 0 when there is no capacity left. */
+  utilization: number;
+  /** Free on the next workable day — today on a weekday, Monday if the board is open on Sunday. */
+  availableNow: boolean;
+  /** The first day with real room, and how many workable days the run lasts. */
+  nextFreeDate: string | null;
+  freeRunDays: number;
+}
+
+/**
+ * Add up a person's window, counting only the days still to come.
+ *
+ * Pulled out of the board so the arithmetic can be tested against the days that make it subtle: a
+ * window anchored before today, a window entirely in the past, a half day, a weekend. All of it
+ * answers "what can this person still take on?", which is why nothing before `planFromKey`
+ * counts — see daysStillAhead.
+ */
+export function summariseAhead(days: CapacityDay[], planFromKey: string): CapacityTotals {
+  const ahead = daysStillAhead(days, planFromKey);
+  const workDays = ahead.filter(d => d.capacity > 0);
+  // Summed, not counted × 8: a half day contributes four hours, and counting days would put
+  // the other four back into the totals the day rows had already given up.
+  const capacityHours = workDays.reduce((s, d) => s + d.capacity, 0);
+  const committedHours = workDays.reduce((s, d) => s + d.load, 0);
+  const freeHours = workDays.reduce((s, d) => s + d.free, 0);
+  // Hours committed BEYOND capacity on overloaded days. freeHours floors per-day free at
+  // 0, so committed+free stops reconciling with capacity exactly when someone is
+  // overloaded — this surfaces that overload instead of letting the window-average
+  // utilization dilute (and hide) it.
+  const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - d.capacity), 0);
+
+  // "When is this person free?" — the first workable day with real room, and how many consecutive
+  // free days follow (a 2-day gap is a genuine assignment window). A weekend or a holiday inside
+  // the run does not break it; a busy day does.
+  const firstFreeIdx = ahead.findIndex(d => d.capacity > 0 && d.utilization <= FREE_THRESHOLD);
+  let freeRunDays = 0;
+  if (firstFreeIdx >= 0) {
+    for (let i = firstFreeIdx; i < ahead.length; i++) {
+      const d = ahead[i];
+      if (d.capacity === 0) continue;
+      if (d.utilization > FREE_THRESHOLD) break;
+      freeRunDays++;
+    }
+  }
+  const firstWorkIdx = ahead.findIndex(d => d.capacity > 0);
+  return {
+    capacityHours: r1(capacityHours),
+    committedHours: r1(committedHours),
+    freeHours: r1(freeHours),
+    overCommittedHours: r1(overCommittedHours),
+    utilization: capacityHours > 0 ? Math.round((committedHours / capacityHours) * 100) : 0,
+    availableNow: firstWorkIdx >= 0 && ahead[firstWorkIdx].utilization <= FREE_THRESHOLD,
+    nextFreeDate: firstFreeIdx >= 0 ? ahead[firstFreeIdx].date : null,
+    freeRunDays,
+  };
 }
 
 export interface CapacityRow {
@@ -114,9 +220,16 @@ export interface CapacityRow {
   /** Open tasks driving the load — what they're actually busy with. */
   openTasks: {
     id: string; title: string; projectId?: string; project?: string;
-    /** The project's PID and which round it is — two rounds of one PID share a code. */
+    /**
+     * CLIENTS-FLOW: the task group this work belongs to inside its client (the project row). Null
+     * for team-space work and for a task whose group was deleted.
+     */
+    taskGroupId?: string | null; taskGroup?: string | null;
+    /** The group's own (team) deadline — "extend the whole task group" starts from it. */
+    taskGroupDueDate?: string | null;
+    /** The project's CID and which round it is — two rounds of one CID share a code. */
     projectPid?: string | null; projectRound?: number;
-    /** Internal team-space work rather than a client matter — no PID, never billable. */
+    /** Internal team-space work rather than a client matter — no CID, never billable. */
     isTeamWork?: boolean;
     /** The project's own priority and INTERNAL deadline — the board shades urgency from these. */
     projectPriority?: string;
@@ -170,7 +283,18 @@ export interface CapacityRow {
     /** Who took it. Without a name, "part of this is covered" is a fact nobody can act on. */
     coveredByUserId?: string;
     remainingHours: number; overdue: boolean;
+    /**
+     * This viewer may not be told which client this is, so it is not named — only counted. Set by
+     * AvailabilityService.redact(); see availability.ts for why the hours stay while the name goes.
+     */
+    restricted?: boolean;
   }[];
+  /** Hours in the window on the client being looked at, and on everything else (AvailabilityService). */
+  focusHours?: number;
+  otherHours?: number;
+  restrictedHours?: number;
+  /** Where the window's committed hours actually went, largest first; restricted ones rolled up. */
+  byClient?: ClientShare[];
   /** Free capacity (hours) across the whole window. */
   freeHours: number;
   /** Committed hours across the window. */
@@ -200,6 +324,7 @@ export class CapacityService {
     private readonly actor: ActorContextService,
     private readonly notifications: NotificationsService,
     private readonly optionalHolidays: OptionalHolidaysService,
+    private readonly permissions: PermissionService,
   ) {}
 
   /** Availability of one project's active members (drives the per-project capacity view). */
@@ -316,11 +441,16 @@ export class CapacityService {
           // hours drive their capacity — NOT an even split of the task total.
           assignees: { select: { userId: true, estimatedHours: true, dueDate: true, startDate: true, hoursPerDay: true } },
           projectTasks: {
-            // A PID can hold several projects, so the title alone no longer identifies the work —
+            // A CID can hold several projects, so the title alone no longer identifies the work —
             // the code + round do.
             // priority + dueDate (the INTERNAL deadline) so the board can shade by urgency.
             // clientDueDate is deliberately not selected: it is redacted per permission elsewhere.
-            select: { project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } } },
+            // CLIENTS-FLOW: and the task group inside the client, so the board can say which piece
+            // of the client's work somebody is on, not only which client.
+            select: {
+              taskList: { select: { id: true, name: true, deletedAt: true, dueDate: true } },
+              project: { select: { id: true, code: true, roundSeq: true, title: true, deletedAt: true, priority: true, dueDate: true } },
+            },
             take: 1,
           },
           // Team-space work already counted toward load — this query is by ASSIGNEE, not by
@@ -444,6 +574,8 @@ export class CapacityService {
 
     for (const task of tasks) {
       const project = task.projectTasks[0]?.project;
+      const group = task.projectTasks[0]?.taskList;
+      const liveGroup = group && !group.deletedAt ? group : null;
       const team = task.teamTasks[0]?.team;
       if (project?.deletedAt) continue; // archived project — not real work any more
       if (team?.deletedAt) continue;    // deleted team space — likewise
@@ -501,9 +633,12 @@ export class CapacityService {
           id: task.id,
           title: task.title,
           projectId: project?.id ?? team?.id,
-          // Team work has no PID and no round — it is labelled by the space it belongs to, and
+          // Team work has no CID and no round — it is labelled by the space it belongs to, and
           // flagged so the UI can tell a client matter from an internal one.
           project: project?.title ?? team?.name,
+          taskGroupId: project ? liveGroup?.id ?? null : null,
+          taskGroup: project ? liveGroup?.name ?? null : null,
+          taskGroupDueDate: project && liveGroup?.dueDate ? dayKey(liveGroup.dueDate) : null,
           projectPid: project?.code ?? null,
           projectRound: project?.roundSeq,
           isTeamWork: !project && !!team,
@@ -807,35 +942,11 @@ export class CapacityService {
         };
       });
 
-      const workDays = days.filter(d => d.capacity > 0);
-      // Summed, not counted × 8: a half day contributes four hours, and counting days would put
-      // the other four back into the totals the day rows had already given up.
-      const capacityHours = workDays.reduce((s, d) => s + d.capacity, 0);
-      const committedHours = workDays.reduce((s, d) => s + d.load, 0);
-      const freeHours = workDays.reduce((s, d) => s + d.free, 0);
-      // Hours committed BEYOND capacity on overloaded days. freeHours floors per-day free at
-      // 0, so committed+free stops reconciling with capacity exactly when someone is
-      // overloaded — this surfaces that overload instead of letting the window-average
-      // utilization dilute (and hide) it.
-      const overCommittedHours = workDays.reduce((s, d) => s + Math.max(0, d.load - d.capacity), 0);
-
-      // "When is this person free?" — the first workable day with real room, and how
-      // many consecutive free days follow (a 2-day gap is a genuine assignment window).
-      const firstFreeIdx = days.findIndex(d => d.capacity > 0 && d.utilization <= FREE_THRESHOLD);
-      let freeRunDays = 0;
-      if (firstFreeIdx >= 0) {
-        for (let i = firstFreeIdx; i < days.length; i++) {
-          const d = days[i];
-          if (d.capacity === 0) continue;                 // weekend/holiday/leave doesn't break the run
-          if (d.utilization > FREE_THRESHOLD) break;
-          freeRunDays++;
-        }
-      }
+      // Measured from `planFrom` — the same boundary work is placed from, and for any window
+      // starting today or later it is the whole window, so the ordinary board is unchanged.
+      // See summariseAhead for what counting the elapsed days did to a Monday-start week.
+      const totals = summariseAhead(days, dayKey(planFrom));
       const openTasks = [...(openByUser.get(u.id)?.values() ?? [])].sort((a, b) => (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999'));
-      // "Available now" = free on the next WORKABLE day (today on a weekday; Monday if
-      // the board is opened on a weekend) — otherwise the answer is uselessly "nobody".
-      const firstWorkIdx = days.findIndex(d => d.capacity > 0);
-      const availableNow = firstWorkIdx >= 0 && days[firstWorkIdx].utilization <= FREE_THRESHOLD;
 
       return {
         userId: u.id,
@@ -846,14 +957,7 @@ export class CapacityService {
         profilePhoto: u.profilePhoto,
         days,
         openTasks,
-        freeHours: r1(freeHours),
-        committedHours: r1(committedHours),
-        overCommittedHours: r1(overCommittedHours),
-        capacityHours: r1(capacityHours),
-        utilization: capacityHours > 0 ? Math.round((committedHours / capacityHours) * 100) : 0,
-        nextFreeDate: firstFreeIdx >= 0 ? days[firstFreeIdx].date : null,
-        freeRunDays,
-        availableNow,
+        ...totals,
         overdueCount: openTasks.filter(t => t.overdue).length,
       };
     });
@@ -1015,6 +1119,7 @@ export class CapacityService {
         title: t.title,
         projectId: t.projectId ?? null,
         project: t.project ?? null,
+        taskGroup: t.taskGroup ?? null,
         projectPid: t.projectPid ?? null,
         projectRound: t.projectRound,
         priority: t.priority,
@@ -1027,9 +1132,81 @@ export class CapacityService {
         // The board only lists OPEN work, so anything here is open by construction. Carried
         // explicitly so the sheet does not have to infer it.
         closed: false,
+        billable: undefined as boolean | undefined,
+        finishedOn: null as string | null,
         when,
       };
     });
+
+    // Work FINISHED recently still needs its hours. Finish closes a task the moment it is done and
+    // the hours are usually logged afterwards — that evening, or the next morning — so a task
+    // that vanished from the sheet on Finish could only be logged by hunting for it elsewhere.
+    // Offered at the end, marked as finished, never planned.
+    const listed = new Set(rows.map(r => r.taskId));
+    const finished = await this.prisma.task.findMany({
+      where: {
+        deletedAt: null,
+        assignees: { some: { userId } },
+        currentStatus: { type: 'CLOSED' },
+        completedAt: { gte: addDays(day, -FINISHED_LOOKBACK_DAYS) },
+        ...(listed.size ? { id: { notIn: [...listed] } } : {}),
+      },
+      select: {
+        id: true, title: true, priority: true, dueDate: true, estimatedHours: true, completedAt: true, billable: true,
+        assignees: { where: { userId }, select: { estimatedHours: true } },
+        projectTasks: {
+          take: 1,
+          select: {
+            taskList: { select: { name: true, deletedAt: true } },
+            project: { select: { id: true, title: true, code: true, roundSeq: true, deletedAt: true, projectPhase: true } },
+          },
+        },
+        teamTasks: { take: 1, select: { team: { select: { id: true, name: true, deletedAt: true } } } },
+      },
+      orderBy: { completedAt: 'desc' },
+      take: 50,
+    });
+    for (const t of finished) {
+      const project = t.projectTasks[0]?.project;
+      const team = t.teamTasks[0]?.team;
+      // A deleted or completed client refuses time anyway; offering it would only produce a
+      // refusal after the person has typed the hours.
+      if (project && (project.deletedAt || project.projectPhase === 'COMPLETED' || project.projectPhase === 'CLOSED')) continue;
+      if (team?.deletedAt) continue;
+      const group = t.projectTasks[0]?.taskList;
+      const seatHours = t.assignees.reduce((s, a) => s + (a.estimatedHours ?? 0), 0);
+      rows.push({
+        taskId: t.id,
+        title: t.title,
+        projectId: project?.id ?? team?.id ?? null,
+        project: project?.title ?? team?.name ?? null,
+        taskGroup: project && group && !group.deletedAt ? group.name : null,
+        projectPid: project?.code ?? null,
+        projectRound: project?.roundSeq,
+        priority: t.priority,
+        dueDate: t.dueDate ? dayKey(t.dueDate) : null,
+        overdue: false,
+        estimatedHours: r1(seatHours || (t.estimatedHours ?? 0)),
+        remainingHours: 0,
+        loggedToday: r1(loggedByTask.get(t.id) ?? 0),
+        plannedHours: 0,
+        closed: true,
+        billable: t.billable,
+        // The IST calendar day it was finished on — the day people mean.
+        finishedOn: t.completedAt ? dayKey(startOfIstDay(t.completedAt)) : null,
+        when: 'OTHER' as const,
+      });
+    }
+
+    // Whether each open task's time is billable — the task decides (Task.billable), and the sheet
+    // says so on the line so nobody is surprised when the entry comes out non-billable.
+    const openIds = rows.filter(r => r.billable === undefined).map(r => r.taskId);
+    if (openIds.length) {
+      const flags = new Map((await this.prisma.task.findMany({
+        where: { id: { in: openIds } }, select: { id: true, billable: true },
+      })).map(t => [t.id, t.billable]));
+      for (const r of rows) if (r.billable === undefined) r.billable = flags.get(r.taskId) ?? true;
+    }
 
     // Planned first, then tomorrow's, then the rest — the order somebody fills a day in.
     const rank = { TODAY: 0, TOMORROW: 1, OTHER: 2 } as const;
@@ -1247,7 +1424,10 @@ export class CapacityService {
         assignees: { select: { userId: true, dueDate: true } },
         projectTasks: {
           where: { project: { deletedAt: null, priority: { in: CapacityService.RISK_PRIORITIES } } },
-          select: { project: { select: { id: true, title: true, priority: true } } },
+          select: {
+            project: { select: { id: true, title: true, priority: true } },
+            taskList: { select: { id: true, name: true, dueDate: true, deletedAt: true } },
+          },
           take: 1,
         },
       },
@@ -1255,6 +1435,8 @@ export class CapacityService {
     const today = startOfIstDay(new Date()); // "today" = the IST calendar day (org timezone)
     return tasks.map(t => {
       const project = t.projectTasks[0]?.project;
+      const group = t.projectTasks[0]?.taskList;
+      const liveGroup = group && !group.deletedAt ? group : null;
       const estimate = t.estimatedHours ?? DEFAULT_TASK_HOURS;
       const remaining = Math.max(0, estimate * (1 - (t.completionPercentage ?? 0) / 100));
       // Each person's deadline on the task: their own seat's date when one was set, else the task's.
@@ -1265,6 +1447,8 @@ export class CapacityService {
         dueDate: t.dueDate,
         dueByUser,
         projectId: project?.id, project: project?.title, projectPriority: project?.priority,
+        taskGroupId: liveGroup?.id ?? null, taskGroup: liveGroup?.name ?? null,
+        taskGroupDueDate: liveGroup?.dueDate ? dayKey(liveGroup.dueDate) : null,
         remainingHours: r1(remaining),
         overdue: !!t.dueDate && startOfUtcDay(t.dueDate) < today,
         userIds: t.assignees.map(a => a.userId),
@@ -1272,24 +1456,53 @@ export class CapacityService {
     });
   }
 
-  /** Users who can act on a coverage risk: capacity.view holders + the affected projects' managers. */
-  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<string[]> {
-    const [viewers, managers] = await Promise.all([
+  /**
+   * Who can act on a coverage risk, and WHERE each of them can act on it.
+   *
+   *   board   — everyone who can open Team Capacity (effective capacity.view: role, group, direct
+   *             grant or ALLOW override, less any DENY; Super Admins implicitly). Since Sep 2026
+   *             that is Senior Consultant and above, and only they are sent to the board.
+   *   clients — the affected clients' own managers who CANNOT open the board, each pointed at the
+   *             client instead. Sending them to /capacity would land them on "Access restricted".
+   *
+   * It used to read role grants alone, so a DENY override or a group grant was invisible to it,
+   * and every recipient was told to go to the board whether or not they could open it.
+   */
+  private async coverageReviewers(organizationId: string, projectIds: string[]): Promise<{
+    board: string[]; clients: { userId: string; projectId: string }[];
+  }> {
+    const holdsBoard = { permission: { code: 'capacity.view' } };
+    const [candidates, managers] = await Promise.all([
       this.prisma.user.findMany({
         where: {
           organizationId, deletedAt: null, status: 'ACTIVE',
-          userRoles: { some: { role: { rolePermissions: { some: { permission: { code: 'capacity.view' } } } } } },
+          OR: [
+            { userRoles: { some: { role: { name: 'Super Admin' } } } },
+            { userRoles: { some: { role: { rolePermissions: { some: holdsBoard } } } } },
+            { permissionGroupMembers: { some: { group: { permissionGroupPermissions: { some: holdsBoard } } } } },
+            { userPermissions: { some: holdsBoard } },
+            { permissionOverrides: { some: { ...holdsBoard, effect: 'ALLOW' } } },
+          ],
         },
         select: { id: true },
       }),
       projectIds.length
         ? this.prisma.projectMember.findMany({
             where: { projectId: { in: projectIds }, projectRole: 'MANAGER', isActive: true },
-            select: { userId: true },
+            select: { userId: true, projectId: true },
           })
-        : Promise.resolve([]),
+        : Promise.resolve([] as { userId: string; projectId: string }[]),
     ]);
-    return [...new Set([...viewers.map(v => v.id), ...managers.map(m => m.userId)])];
+    // The narrowing above is a cheap superset; the resolver has the last word (a DENY wins).
+    const board: string[] = [];
+    for (const c of candidates) if (await this.permissions.check(c.id, 'capacity.view')) board.push(c.id);
+    const onBoard = new Set(board);
+    const clients: { userId: string; projectId: string }[] = [];
+    for (const m of managers) {
+      if (onBoard.has(m.userId) || clients.some(x => x.userId === m.userId)) continue;
+      clients.push({ userId: m.userId, projectId: m.projectId });
+    }
+    return { board, clients };
   }
 
   private emptyCoverage(today: Date, to: Date) {
@@ -1387,13 +1600,28 @@ export class CapacityService {
       });
     if (!tasks.length) return;
     const projectIds = [...new Set(tasks.map(t => t.projectId).filter((x): x is string => !!x))];
-    const reviewers = (await this.coverageReviewers(organizationId, projectIds)).filter(id => id !== userId);
-    if (!reviewers.length) return;
-    await this.notifications.notify(reviewers, {
-      type: 'coverage.at_risk',
-      title: 'Coverage at risk',
-      message: `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out — reassign or extend on the Capacity board.`,
-    });
+    const { board, clients } = await this.coverageReviewers(organizationId, projectIds);
+    const what = `${name} is on ${leave.leaveType} leave with ${tasks.length} critical task${tasks.length === 1 ? '' : 's'} due while they're out`;
+    const toBoard = board.filter(id => id !== userId);
+    if (toBoard.length) {
+      await this.notifications.notify(toBoard, {
+        type: 'coverage.at_risk',
+        title: 'Coverage at risk',
+        message: `${what} — reassign or extend on the Team Capacity board.`,
+        link: '/capacity',
+      });
+    }
+    // A client's own manager who cannot open the board is told the same thing, and sent to the
+    // client — where their tasks are — rather than to a page that would refuse them.
+    for (const { userId: managerId, projectId } of clients) {
+      if (managerId === userId) continue;
+      await this.notifications.notify([managerId], {
+        type: 'coverage.at_risk',
+        title: 'Coverage at risk',
+        message: `${what} — reassign or extend the work on the client.`,
+        link: `/projects/${projectId}`,
+      });
+    }
   }
 }
 
@@ -1402,6 +1630,7 @@ class CapacityController {
   constructor(
     private readonly capacity: CapacityService,
     private readonly actor: ActorContextService,
+    private readonly availability: AvailabilityService,
   ) {}
 
   /**
@@ -1411,14 +1640,70 @@ class CapacityController {
    * `from` (YYYY-MM-DD) is the first day of the window; leave it off and the window starts today,
    * exactly as it always did. It is optional precisely so nothing that calls this endpoint with a
    * length alone has to change.
+   *
+   * Every read of this board goes through AvailabilityService on the way out: that is where the
+   * names of matters this viewer may not open are removed, and where each day's hours are split
+   * into the client in focus and everything else — computed once, for every screen. The whole-org
+   * board has no client in focus, so all of it is "other", which is what lets a hover card say
+   * where a day's hours actually went. Focusing on one client is /capacity/project/:id.
    */
   @Get('team')
   @RequirePermission('capacity.view')
   async team(@Query('days') days?: string, @Query('from') from?: string) {
     const organizationId = await this.actor.requireOrgId();
-    return this.capacity.team(organizationId, parseHorizon(days), undefined, {
+    const board = await this.capacity.team(organizationId, parseHorizon(days), undefined, {
       from: parseWindowStart(from, startOfIstDay(new Date())),
     });
+    return this.availability.forBoard(board, this.actor.requireActorId(), organizationId, null);
+  }
+
+  /**
+   * What a proposed assignment would do to the people in it — the answer every dialog that hands
+   * out work asks before it lets the work be handed out.
+   *
+   * It is a READ that happens to be a POST: a seat is a small object per person and there may be
+   * several, which is more than a query string should carry. It changes nothing.
+   *
+   * It warns; it does not refuse. A deadline sometimes genuinely costs somebody a ten-hour day,
+   * and the server is not the right place to decide that it must not. What it refuses to do is
+   * stay quiet: the verdict, the real free hours and the days that would go over all come back,
+   * and the dialogs make overriding them a deliberate act.
+   */
+  @Post('availability/preview')
+  @RequirePermission('capacity.view')
+  async previewAssignment(@Body() dto: PreviewAssignmentDto): Promise<{ from: string; to: string; seats: SeatPreview[] }> {
+    const seats = (dto?.seats ?? []).filter(s => s && typeof s.userId === 'string' && s.userId.trim());
+    if (!seats.length) throw new BadRequestException('Say who the work is for.');
+    if (seats.length > 50) throw new BadRequestException('That is more people than one assignment can be about.');
+    const organizationId = await this.actor.requireOrgId();
+    const today = startOfIstDay(new Date());
+    // The window has to reach the furthest deadline being assigned, or the days past its end
+    // would silently drop out of the arithmetic and the assignment would look like it fits.
+    const furthest = seats
+      .map(s => (s.dueDate ?? '').slice(0, 10))
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .sort()
+      .pop();
+    const reach = furthest
+      ? Math.ceil((new Date(`${furthest}T00:00:00.000Z`).getTime() - today.getTime()) / 86_400_000) + 2
+      : DEFAULT_DAYS;
+    // …and never a SHORT one. Placement puts whatever outlasts the window onto its last day —
+    // that is how the board makes an impossible plan visible rather than dropping the hours — so
+    // a window cut to the deadline piles the person's own later work onto the very day being
+    // assigned and reports an overload they do not have. Asking for the board's ordinary fortnight
+    // as a floor keeps the days being assigned well inside the window, where the load is real.
+    const span = Math.max(DEFAULT_DAYS, reach);
+    const board = await this.capacity.team(
+      organizationId,
+      parseHorizon(String(span), DEFAULT_DAYS),
+      [...new Set(seats.map(s => s.userId))],
+    );
+    const previews = await this.availability.preview(board, this.actor.requireActorId(), organizationId, seats, {
+      planFrom: dayKey(today),
+      focusProjectId: dto.projectId?.trim() || null,
+      excludeTaskId: dto.excludeTaskId?.trim() || null,
+    });
+    return { from: board.from, to: board.to, seats: previews };
   }
 
   /** Retrospective: actual attendance over the past `days` (ending today). */
@@ -1439,7 +1724,21 @@ class CapacityController {
   @RequirePermission('capacity.view')
   async coverageRisks(@Query('days') days?: string) {
     const organizationId = await this.actor.requireOrgId();
-    return this.capacity.coverageRisks(organizationId, parseHorizon(days));
+    const out = await this.capacity.coverageRisks(organizationId, parseHorizon(days));
+    // The suggestions already carry whole-org free hours — they come off the same board. The
+    // risks name the matters at risk, and this panel is open to everyone with capacity.view
+    // (HR included), so a matter this viewer may not open is counted and not named.
+    const vis = await this.availability.visibility(this.actor.requireActorId(), organizationId);
+    if (!vis.all) {
+      type RiskTask = { title: string; projectId?: string; project?: string; taskGroup?: string | null; restricted?: boolean };
+      for (const risk of (out.risks ?? []) as { tasks: RiskTask[] }[]) {
+        for (const t of risk.tasks ?? []) {
+          if (canName(vis, t.projectId)) continue;
+          t.restricted = true; t.title = 'Other work'; t.project = 'Other work'; t.projectId = undefined; t.taskGroup = null;
+        }
+      }
+    }
+    return out;
   }
 
   /**
@@ -1482,12 +1781,24 @@ class CapacityController {
   /** Availability of one project's members — the capacity view opened from a project. */
   @Get('project/:projectId')
   @RequirePermission('capacity.view')
-  forProject(@Param('projectId') projectId: string, @Query('days') days?: string, @Query('from') from?: string) {
+  async forProject(@Param('projectId') projectId: string, @Query('days') days?: string, @Query('from') from?: string) {
     if (!projectId?.trim()) throw new BadRequestException('projectId is required');
-    return this.capacity.forProject(projectId, parseHorizon(days), {
+    const board = await this.capacity.forProject(projectId, parseHorizon(days), {
       from: parseWindowStart(from, startOfIstDay(new Date())),
     });
+    // The focus IS this client: every day comes back split into its share and everybody else's,
+    // so the tab can draw the rest of the week as load instead of fading it into the background.
+    return this.availability.forBoard(board, this.actor.requireActorId(), await this.actor.requireOrgId(), projectId);
   }
+}
+
+/** A proposed assignment, as an assignment dialog has it before it is saved. */
+export interface PreviewAssignmentDto {
+  seats: ProposedSeat[];
+  /** The client the work belongs to, so its own hours are not counted as "other". */
+  projectId?: string | null;
+  /** The task being restaffed — its current hours come out before the new ones go in. */
+  excludeTaskId?: string | null;
 }
 
 export interface CreateCoverageDto {
@@ -1504,9 +1815,16 @@ export interface CreateCoverageDto {
 @Module({
   // OptionalHolidaysModule supplies the per-person approved-optional-holiday days, which the
   // board treats exactly like approved leave: off for that person, nobody else.
-  imports: [OptionalHolidaysModule],
-  controllers: [CapacityController],
-  providers: [CapacityService],
-  exports: [CapacityService],
+  // TasksModule: the board's task CRUD (capacity-tasks.ts) goes through TasksService's own rules.
+  // ProjectsModule: a whole new piece of client work (capacity-client-setup.ts) is created through
+  // ProjectsService's own create, inside the transaction it opens. Projects imports nothing, so
+  // this cannot cycle.
+  imports: [OptionalHolidaysModule, TasksModule, ProjectsModule],
+  controllers: [CapacityController, CapacityTasksController, CapacityClientSetupController],
+  // AvailabilityService is the one place a person's free hours are split, redacted and reported;
+  // exported so anything else that has to answer "how free is this person?" asks it rather than
+  // deriving a second answer of its own.
+  providers: [CapacityService, CapacityTaskOptionsService, AvailabilityService, CapacityClientSetupService],
+  exports: [CapacityService, AvailabilityService],
 })
 export class CapacityModule {}

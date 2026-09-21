@@ -228,3 +228,13 @@ export class UpdateSubtaskDto {
   @IsDateString()
   dueDate?: string;
 }
+
+
+/** CLIENTS-FLOW: move a task to another task group of the same client. */
+export class MoveTaskGroupDto {
+  @IsString() @MaxLength(40)
+  projectId!: string;
+
+  @IsString() @MaxLength(40)
+  taskListId!: string;
+}

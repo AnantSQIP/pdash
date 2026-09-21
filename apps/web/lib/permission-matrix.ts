@@ -32,7 +32,7 @@ export const ACTION_LABELS: Record<string, string> = {
   update: 'Edit / Update',
   delete: 'Delete',
   approve: 'Approve',
-  generate_pid: 'Generate PID',
+  generate_pid: 'Change CID', // code kept from when it minted PIDs; CIDs are now issued automatically
   assign: 'Assign',
   export: 'Export',
   manage: 'Manage',
@@ -63,7 +63,7 @@ export const MODULES: ModuleDef[] = [
   { key: 'report',      label: 'Reports',      actions: ['view', 'export'] },
   { key: 'analytics',   label: 'Analytics',    actions: ['view.own', 'view.organization'] },
   { key: 'performance', label: 'Performance',  actions: ['view.own', 'view.organization'] },
-  { key: 'capacity',    label: 'Team Capacity', actions: ['view'] },
+  { key: 'capacity',    label: 'Team Capacity', actions: ['view', 'manage'] },
   { key: 'deadline',    label: 'Client Deadlines', actions: ['view.client'] },
   { key: 'attendance',  label: 'Attendance',   actions: ['view.own', 'view.organization', 'manage', 'regularize'] },
   { key: 'leave',       label: 'Leave',        actions: ['view.own', 'view.organization', 'request', 'approve'] },
@@ -122,8 +122,8 @@ export const CODE_NOTES: Record<string, string> = {
   // "request a project" — the project starts PENDING and the nominated manager approves it.
   // Removing it stops that role starting projects at all (the server enforces it on POST /projects).
   'project.create': 'Lets the role START a project. A role that also has Projects — Approve creates it outright; a role without it can only REQUEST one, which a manager must approve. It also covers adding a later round to an existing project, so taking it away stops both.',
-  'project.approve': 'Approves a project someone else requested. Not the same as minting a PID — that is Generate PID.',
-  'project.generate_pid': 'Mints the Project ID (SQ_26_27_nnn). Kept narrow deliberately: running a project is not the same authority as issuing its number.',
+  'project.approve': 'Approves a client someone else requested, and may be named a client\'s manager. Not the same as changing a CID — that is Change CID.',
+  'project.generate_pid': 'Changes a client\'s CID (SQ_26_27_nnn) — reassign, split or merge, with the org passcode. CIDs themselves are issued automatically when a client is created. Kept narrow deliberately: running a client is not the same authority as renumbering it.',
   'project.delete.permanent': 'Removes the row itself, not the “deleted” flag every other Delete sets. There is no undo and nothing left to restore.',
   'task.delete.permanent': 'Removes the row itself, not the “deleted” flag every other Delete sets. There is no undo and nothing left to restore.',
   'attendance.view.organization': 'Sees everyone’s attendance, not just their own. This plus Manage is what HR holds today.',
@@ -132,6 +132,8 @@ export const CODE_NOTES: Record<string, string> = {
   'analytics.view.organization': 'Org-wide analytics and reporting. A SEPARATE permission from Performance — View Org-wide: granting one does not grant the other.',
   'patent.manage': 'The confidential portal: real patent numbers and client identities.',
   'profile.view.personal': 'Home addresses, dates of birth and emergency contacts. The server strips these keys for everyone else.',
+  'capacity.view': 'Team Capacity: who is busy, who is free, and what everyone is on — across every client. Also the capacity tab on a client, the availability card on Home and the workload on a profile. Senior Consultant and above by default.',
+  'capacity.manage': 'Create, edit, assign and delete tasks from Team Capacity — for anyone in the organisation, on any client, adding them to the client if they are not on it yet. Senior Consultant and above by default.',
 };
 
 // ── grouping ─────────────────────────────────────────────────────────────────

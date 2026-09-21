@@ -1,5 +1,6 @@
 'use client';
 
+import { NonBillableChip } from '@/components/tasks/BillableToggle';
 import { useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
@@ -25,11 +26,11 @@ const byName = (a: { firstName?: string | null; lastName?: string | null }, b: {
   fullName(a as never).toLowerCase().localeCompare(fullName(b as never).toLowerCase());
 
 // The Task List and Overview bodies, shared by the single-project page and by each card on a
-// multi-project PID page. They were local to the page until a PID could hold several projects;
+// multi-project CID page. They were local to the page until a CID could hold several projects;
 // keeping one copy is what stops the two paths drifting apart.
 
 export function TaskListView({
-  tasks, loading, statuses, canAddTask, onTaskClick, onAddTask, onStatusChange,
+  tasks, loading, statuses, canAddTask, onTaskClick, onAddTask, onStatusChange, rowActions, showHours, emptyText,
 }: {
   tasks: ApiTask[];
   loading: boolean;
@@ -38,6 +39,11 @@ export function TaskListView({
   onTaskClick: (task: ApiTask) => void;
   onAddTask: () => void;
   onStatusChange: (taskId: string, statusId: string) => void;
+  /** CLIENTS-FLOW: per-row controls (assign, move) drawn at the row's end. */
+  rowActions?: (task: ApiTask) => React.ReactNode;
+  /** CLIENTS-FLOW: planned and logged hours per task — what the capacity board is built from. */
+  showHours?: boolean;
+  emptyText?: string;
 }) {
   if (loading) {
     return (
@@ -66,16 +72,22 @@ export function TaskListView({
         <span className="w-32 hidden sm:block">Status</span>
         <span className="w-20 hidden lg:block">Priority</span>
         <span className="w-20 hidden sm:block">Team members</span>
+        {showHours && <span className="w-24 hidden md:block text-right">Hours</span>}
         <span className="w-24 hidden lg:block text-right">Due Date</span>
+        {rowActions && <span className="w-16 shrink-0" />}
       </div>
 
       {tasks.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-sm text-gray-400">
           <CheckSquare size={32} className="mb-3 text-gray-200" />
-          <p>No tasks yet</p>
-          <button onClick={onAddTask} className="mt-2 text-brand-600 hover:underline text-xs font-medium">
-            Add the first task
-          </button>
+          <p>{emptyText ?? 'No tasks yet'}</p>
+          {/* Offered only to someone who may add one — the button used to show for everybody
+              and fail for most of them. */}
+          {canAddTask && (
+            <button onClick={onAddTask} className="mt-2 text-brand-600 hover:underline text-xs font-medium">
+              Add the first task
+            </button>
+          )}
         </div>
       )}
 
@@ -98,6 +110,7 @@ export function TaskListView({
             <span className={clsx('flex-1 text-sm min-w-0 truncate', closed ? 'line-through text-gray-400' : 'text-gray-800')}>
               {task.title}
             </span>
+            {task.billable === false && <NonBillableChip className="shrink-0" />}
 
             {/* Status control */}
             <div className="hidden sm:block w-32 shrink-0" onClick={e => e.stopPropagation()}>
@@ -136,6 +149,12 @@ export function TaskListView({
                 it is also the explanation for the order, so it says so. Marking every row would
                 teach people to stop reading it; marking the row where the rule actually bit is
                 what makes the order legible. See lib/tasks.ts. */}
+            {showHours && (
+              <span className="hidden md:block w-24 shrink-0 text-right text-xs text-gray-600" title="Planned hours · hours logged">
+                <TaskHours task={task} />
+              </span>
+            )}
+
             <span
               className={clsx('hidden lg:block w-24 shrink-0 text-right text-xs',
                 orderedByDeadline(task, tasks[i - 1]) ? 'text-gray-600 font-medium' : 'text-gray-500')}
@@ -145,17 +164,39 @@ export function TaskListView({
             >
               {formatDate(task.dueDate)}
             </span>
+
+            {rowActions && (
+              <div className="w-16 shrink-0 flex items-center justify-end gap-0.5" onClick={e => e.stopPropagation()}>
+                {rowActions(task)}
+              </div>
+            )}
           </div>
         );
       })}
 
-      <div
-        onClick={onAddTask}
-        className="flex items-center gap-3 px-5 py-3 text-sm text-gray-400 hover:bg-gray-50 cursor-pointer transition-colors border-t border-dashed border-gray-200"
-      >
-        <Plus size={14} /> Add a task...
-      </div>
+      {canAddTask && tasks.length > 0 && (
+        <div
+          onClick={onAddTask}
+          className="flex items-center gap-3 px-5 py-3 text-sm text-gray-400 hover:bg-gray-50 cursor-pointer transition-colors border-t border-dashed border-gray-200"
+        >
+          <Plus size={14} /> Add a task...
+        </div>
+      )}
     </div>
+  );
+}
+
+/** Planned and logged hours for one task: "4h · 1.5h logged", or a dash when nothing is planned. */
+function TaskHours({ task }: { task: ApiTask }) {
+  const planned = task.estimatedHours ?? 0;
+  const logged = task.actualHours ?? 0;
+  if (!planned && !logged) return <span className="text-gray-300">—</span>;
+  const over = planned > 0 && logged > planned;
+  return (
+    <span className="tabular-nums">
+      {planned ? `${Math.round(planned * 10) / 10}h` : '—'}
+      {logged > 0 && <span className={clsx('ml-1', over ? 'text-red-600 font-medium' : 'text-gray-400')}>· {Math.round(logged * 10) / 10}h</span>}
+    </span>
   );
 }
 

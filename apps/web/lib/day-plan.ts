@@ -40,6 +40,11 @@ export interface DayPlanRow {
   remainingHours: number;
   /** The task is already in a closed status. */
   closed: boolean;
+  /**
+   * The day a closed task was finished (YYYY-MM-DD). Hours logged for that day or any day before
+   * it are the ordinary case — Finish first, log the hours afterwards — so they are not flagged.
+   */
+  finishedOn?: string | null;
   /** Which bucket the sheet listed it under. */
   when: 'TODAY' | 'TOMORROW' | 'OTHER';
 }
@@ -68,11 +73,13 @@ const OVERRUN_TOLERANCE = 0.25;
  * likely-to-be-a-mistake comes first. "This is not what you were meant to be doing today" is the
  * question actually worth asking; "that is a long day" is small talk next to it.
  */
-export function warningsFor(row: DayPlanRow, hours: number): LineWarning[] {
+export function warningsFor(row: DayPlanRow, hours: number, sheetDate?: string): LineWarning[] {
   const out: LineWarning[] = [];
   if (!(hours > 0)) return out; // an untouched line is not a line
 
-  if (row.closed) {
+  // Work finished on or after the day being filled in was still being done that day.
+  const finishedLater = !!(row.closed && row.finishedOn && sheetDate && row.finishedOn >= sheetDate);
+  if (row.closed && !finishedLater) {
     out.push({
       code: 'ALREADY_FINISHED',
       message: 'This task is already finished — log here only if you really did more work on it.',
@@ -114,10 +121,11 @@ export function warningsFor(row: DayPlanRow, hours: number): LineWarning[] {
 export function warningsForSheet(
   rows: DayPlanRow[],
   hoursByTask: Record<string, number>,
+  sheetDate?: string,
 ): Record<string, LineWarning[]> {
   const out: Record<string, LineWarning[]> = {};
   for (const row of rows) {
-    const w = warningsFor(row, hoursByTask[row.taskId] ?? 0);
+    const w = warningsFor(row, hoursByTask[row.taskId] ?? 0, sheetDate);
     if (w.length) out[row.taskId] = w;
   }
   return out;
