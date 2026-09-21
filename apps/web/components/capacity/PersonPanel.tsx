@@ -452,6 +452,23 @@ export function PersonPanel({
             {row.nextFreeDate && !row.availableNow && <>{' · '}free from {formatDate(row.nextFreeDate)}</>}
             {row.availableNow && <>{' · '}<span className="text-emerald-700">free now</span></>}
           </p>
+          {/* Where those planned hours actually went. Opened from one client, the answer is
+              usually "mostly somewhere else" — and that is the number that decides whether this
+              person can take another task. */}
+          {(row.byClient?.length ?? 0) > 1 && (
+            <p className="mt-1 text-[11px] leading-snug text-gray-500">
+              Across:{' '}
+              {row.byClient!.slice(0, 5).map((c, i) => (
+                <span key={`${c.projectId ?? 'other'}-${i}`}>
+                  {i > 0 && ', '}
+                  <span className={clsx('tabular-nums', c.restricted && 'italic text-gray-400')}>
+                    {c.restricted ? 'Other work' : c.code ? `${cidLabel(c.code, c.round)} · ${c.label}` : c.label} {c.hours}h
+                  </span>
+                </span>
+              ))}
+              {row.byClient!.length > 5 && <span> …and {row.byClient!.length - 5} more</span>}
+            </p>
+          )}
           {overDays.length > 0 && (
             <ul className="mt-2 space-y-1" aria-label="Days planned beyond capacity">
               {overDays.map(d => (
