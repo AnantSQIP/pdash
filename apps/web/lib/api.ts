@@ -1431,6 +1431,13 @@ export type DayState =
 export type CapacityDay = {
   date: string; state: DayState; load: number; capacity: number;
   utilization: number; free: number; note?: string;
+  /**
+   * The day's `load`, split by the API's availability service into the client being looked at and
+   * everything else. This is what keeps a day from looking emptier than it is inside one client's
+   * view: work on other matters arrives as `otherHours` and is drawn as load, never hidden.
+   * `restrictedHours` is the part of it whose client this viewer may not be told the name of.
+   */
+  focusHours?: number; otherHours?: number; restrictedHours?: number;
   /** The day's load itemised by task (working days only), largest first. Join taskId → openTasks. */
   tasks?: { taskId: string; hours: number }[];
   /** Set on a CLIENT-SIDE week roll-up cell (the board's "by week" view): the Monday it starts. */
@@ -1469,6 +1476,18 @@ export type CapacityOpenTask = {
    *  already passed the estimate (absent on a payload from an older API). */
   estimatedHours?: number; loggedHours?: number; overEstimate?: boolean;
   remainingHours: number; overdue: boolean;
+  /** This viewer may not be told which client this is — the hours count, the name does not show. */
+  restricted?: boolean;
+};
+/** Where a window's committed hours went. `projectId: null` is the restricted work, rolled up. */
+export type ClientShare = {
+  projectId: string | null;
+  label: string;
+  code: string | null;
+  round?: number;
+  hours: number;
+  restricted: boolean;
+  isTeamWork: boolean;
 };
 export type CapacityRow = {
   userId: string; name: string; designation?: string; department?: string; office?: string; profilePhoto?: string | null;
@@ -1476,7 +1495,36 @@ export type CapacityRow = {
   openTasks: CapacityOpenTask[];
   freeHours: number; committedHours: number; overCommittedHours: number; capacityHours: number; utilization: number;
   nextFreeDate: string | null; freeRunDays: number; availableNow: boolean; overdueCount: number;
+  /** Hours in the window on the client being looked at, and on everything else. */
+  focusHours?: number; otherHours?: number; restrictedHours?: number;
+  byClient?: ClientShare[];
 };
+
+// What a proposed assignment would do — the one answer every dialog that hands out work asks for.
+export type ProposedSeat = {
+  userId: string;
+  hours?: number | null;
+  startDate?: string | null;
+  dueDate?: string | null;
+  hoursPerDay?: number | null;
+};
+export type AssignmentVerdict = 'FITS' | 'TIGHT' | 'OVER' | 'NO_ROOM';
+export type SeatPreview = {
+  userId: string; name: string;
+  from: string; to: string;
+  requestedHours: number;
+  capacityHours: number; committedHours: number; freeHours: number;
+  otherHours: number; restrictedHours: number;
+  otherClients: ClientShare[];
+  /** Hours THIS assignment pushes beyond capacity — the increase, not a pre-existing overload. */
+  overHours: number; overDays: string[];
+  /** Hours they were already over on those days before it. Said in the message, never blamed. */
+  alreadyOverHours: number;
+  days: { date: string; capacity: number; committed: number; add: number; over: number }[];
+  verdict: AssignmentVerdict;
+  message: string;
+};
+export type AssignmentPreview = { from: string; to: string; seats: SeatPreview[] };
 export type TeamCapacity = { from: string; to: string; capacityPerDay: number; rows: CapacityRow[]; generatedAt?: string };
 
 // Retrospective (past-window) view — actual attendance, not projected load.
@@ -2692,6 +2740,15 @@ export const api = {
      */
     team: (days = 14, from?: string) =>
       req<TeamCapacity>(`/capacity/team?days=${days}${from ? `&from=${from}` : ''}`),
+    /**
+     * What a proposed assignment would do to the people in it: their REAL free hours over the
+     * days being assigned, across every client, and the days it would push over.
+     *
+     * The single source for every dialog that hands out work. A POST because a seat is an object
+     * and there may be several; it reads and changes nothing.
+     */
+    previewAssignment: (body: { seats: ProposedSeat[]; projectId?: string | null; excludeTaskId?: string | null }) =>
+      req<AssignmentPreview>('/capacity/availability/preview', { method: 'POST', body: JSON.stringify(body) }),
     /** Availability of one project's members — the capacity view opened from a project. */
     forProject: (projectId: string, days = 14, from?: string) =>
       req<TeamCapacity & { project: { id: string; title: string } }>(

@@ -31,6 +31,7 @@ import { DateField } from '@/components/ui/DateField';
 import { formatDate } from '@/lib/date';
 import { cidLabel } from '@/lib/mock-data';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
+import { AssignmentImpact, ImpactLegend, useAssignmentPreview, useOverrideGate } from './AssignmentImpact';
 
 // ── what opens the editor ───────────────────────────────────────────────────────────────────
 
@@ -277,6 +278,41 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
     return p ? `${p.firstName} ${p.lastName}`.trim() : 'someone';
   };
 
+  // The whole point of opening this editor from a day that looked free: say whether it IS free.
+  // A seat with no dates of its own inherits the task's, because that is what the server does
+  // with it — otherwise the check would be about a different fortnight from the one being saved.
+  const proposed = useMemo(() => {
+    const merged = new Map<string, { userId: string; hours: number; startDate: string | null; dueDate: string | null; hoursPerDay: number | null }>();
+    for (const r of seats) {
+      if (!r.userId) continue;
+      const h = Number(r.hours);
+      const cap = Number(r.perDay);
+      const prev = merged.get(r.userId);
+      merged.set(r.userId, {
+        userId: r.userId,
+        hours: (prev?.hours ?? 0) + (r.hours.trim() !== '' && Number.isFinite(h) ? h : 0),
+        startDate: [prev?.startDate, r.start || start || null].filter(Boolean).sort()[0] ?? null,
+        dueDate: [prev?.dueDate, r.due || due || null].filter(Boolean).sort().pop() ?? null,
+        hoursPerDay: r.perDay.trim() !== '' && Number.isFinite(cap) ? (prev?.hoursPerDay ?? 0) + cap : prev?.hoursPerDay ?? null,
+      });
+    }
+    // Nobody carries hours yet: the task's own estimate is what the board will split between them,
+    // so check THAT rather than reporting that nothing is being asked of anyone.
+    const list = [...merged.values()];
+    const named = list.length;
+    if (named > 0 && list.every(s => s.hours === 0)) {
+      const est = Number(seatHours > 0 ? seatHours : estimate);
+      if (Number.isFinite(est) && est > 0) for (const s of list) s.hours = est / named;
+    }
+    return list;
+  }, [seats, start, due, estimate, seatHours]);
+  const impact = useAssignmentPreview(proposed, {
+    projectId: projectId || null,
+    excludeTaskId: target.mode === 'edit' ? target.taskId : null,
+    enabled: !clientGone && loaded,
+  });
+  const gate = useOverrideGate(impact.over, impact.seats.map(s => `${s.userId}:${s.overHours}`).join('|'));
+
   function setSeat(key: string, patch: Partial<SeatRow>) {
     setSeats(rows => rows.map(r => (r.key === key ? { ...r, ...patch } : r)));
   }
@@ -356,7 +392,8 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onClose} className="px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Cancel</button>
-            <button type="button" onClick={save} disabled={saving || loading || !!failed || clientGone}
+            <button type="button" onClick={save} disabled={saving || loading || !!failed || clientGone || !gate.allowed}
+              title={gate.allowed ? undefined : 'This puts somebody past their working day — tick the box in the panel to do it anyway.'}
               className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
               {saving && <Loader size={14} className="animate-spin" />}
               {isEdit ? 'Save' : 'Create task'}
@@ -488,6 +525,18 @@ function TaskEditor({ target, onClose, onSaved, onDelete }: {
               may run past the task’s — it moves nobody else’s.
             </p>
           </div>
+
+          {/* Free on this client is not free. Every other matter they are on is in here too. */}
+          {(impact.isLoading || impact.seats.length > 0) && (
+            <div>
+              <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-medium text-gray-800">Do they have the hours?</p>
+                <ImpactLegend />
+              </div>
+              <AssignmentImpact state={impact} compact />
+              {gate.node}
+            </div>
+          )}
 
           {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert">{error}</p>}
         </div>

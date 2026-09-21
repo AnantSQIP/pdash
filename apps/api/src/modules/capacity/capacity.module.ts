@@ -15,6 +15,9 @@ import {
   compareScheduled, placeForward, hoursInWindow, daysOutsideWindow, inCoverageWindow,
   type ScheduledSeat, type Placement,
 } from './placement';
+import {
+  AvailabilityService, canName, type ClientShare, type ProposedSeat, type SeatPreview,
+} from './availability';
 
 // ── date helpers (UTC day boundaries, consistent with attendance/performance) ──
 function dayKey(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -98,6 +101,18 @@ export interface CapacityDay {
   utilization: number;
   /** Free hours left on this day (0 on non-working days). */
   free: number;
+  /**
+   * The same `load`, split by AvailabilityService into the client being looked at and everything
+   * else. Present on every board read, absent on the raw projection: a screen that is not about
+   * one client has no focus, and then every committed hour is "other".
+   *
+   * This is what stops a day looking emptier than it is. A person with eight hours on Acme has an
+   * `otherHours` of 8 when Bellco's tab is open, so the day is drawn full there too.
+   */
+  focusHours?: number;
+  otherHours?: number;
+  /** Of `otherHours`, the part whose client this viewer may not be told the name of. */
+  restrictedHours?: number;
   note?: string;
   /**
    * Which open tasks put how many hours on this day — the aggregate `load`, itemised.
@@ -266,7 +281,18 @@ export interface CapacityRow {
     /** Who took it. Without a name, "part of this is covered" is a fact nobody can act on. */
     coveredByUserId?: string;
     remainingHours: number; overdue: boolean;
+    /**
+     * This viewer may not be told which client this is, so it is not named — only counted. Set by
+     * AvailabilityService.redact(); see availability.ts for why the hours stay while the name goes.
+     */
+    restricted?: boolean;
   }[];
+  /** Hours in the window on the client being looked at, and on everything else (AvailabilityService). */
+  focusHours?: number;
+  otherHours?: number;
+  restrictedHours?: number;
+  /** Where the window's committed hours actually went, largest first; restricted ones rolled up. */
+  byClient?: ClientShare[];
   /** Free capacity (hours) across the whole window. */
   freeHours: number;
   /** Committed hours across the window. */
@@ -1602,6 +1628,7 @@ class CapacityController {
   constructor(
     private readonly capacity: CapacityService,
     private readonly actor: ActorContextService,
+    private readonly availability: AvailabilityService,
   ) {}
 
   /**
@@ -1611,14 +1638,70 @@ class CapacityController {
    * `from` (YYYY-MM-DD) is the first day of the window; leave it off and the window starts today,
    * exactly as it always did. It is optional precisely so nothing that calls this endpoint with a
    * length alone has to change.
+   *
+   * Every read of this board goes through AvailabilityService on the way out: that is where the
+   * names of matters this viewer may not open are removed, and where each day's hours are split
+   * into the client in focus and everything else — computed once, for every screen. The whole-org
+   * board has no client in focus, so all of it is "other", which is what lets a hover card say
+   * where a day's hours actually went. Focusing on one client is /capacity/project/:id.
    */
   @Get('team')
   @RequirePermission('capacity.view')
   async team(@Query('days') days?: string, @Query('from') from?: string) {
     const organizationId = await this.actor.requireOrgId();
-    return this.capacity.team(organizationId, parseHorizon(days), undefined, {
+    const board = await this.capacity.team(organizationId, parseHorizon(days), undefined, {
       from: parseWindowStart(from, startOfIstDay(new Date())),
     });
+    return this.availability.forBoard(board, this.actor.requireActorId(), organizationId, null);
+  }
+
+  /**
+   * What a proposed assignment would do to the people in it — the answer every dialog that hands
+   * out work asks before it lets the work be handed out.
+   *
+   * It is a READ that happens to be a POST: a seat is a small object per person and there may be
+   * several, which is more than a query string should carry. It changes nothing.
+   *
+   * It warns; it does not refuse. A deadline sometimes genuinely costs somebody a ten-hour day,
+   * and the server is not the right place to decide that it must not. What it refuses to do is
+   * stay quiet: the verdict, the real free hours and the days that would go over all come back,
+   * and the dialogs make overriding them a deliberate act.
+   */
+  @Post('availability/preview')
+  @RequirePermission('capacity.view')
+  async previewAssignment(@Body() dto: PreviewAssignmentDto): Promise<{ from: string; to: string; seats: SeatPreview[] }> {
+    const seats = (dto?.seats ?? []).filter(s => s && typeof s.userId === 'string' && s.userId.trim());
+    if (!seats.length) throw new BadRequestException('Say who the work is for.');
+    if (seats.length > 50) throw new BadRequestException('That is more people than one assignment can be about.');
+    const organizationId = await this.actor.requireOrgId();
+    const today = startOfIstDay(new Date());
+    // The window has to reach the furthest deadline being assigned, or the days past its end
+    // would silently drop out of the arithmetic and the assignment would look like it fits.
+    const furthest = seats
+      .map(s => (s.dueDate ?? '').slice(0, 10))
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .sort()
+      .pop();
+    const reach = furthest
+      ? Math.ceil((new Date(`${furthest}T00:00:00.000Z`).getTime() - today.getTime()) / 86_400_000) + 2
+      : DEFAULT_DAYS;
+    // …and never a SHORT one. Placement puts whatever outlasts the window onto its last day —
+    // that is how the board makes an impossible plan visible rather than dropping the hours — so
+    // a window cut to the deadline piles the person's own later work onto the very day being
+    // assigned and reports an overload they do not have. Asking for the board's ordinary fortnight
+    // as a floor keeps the days being assigned well inside the window, where the load is real.
+    const span = Math.max(DEFAULT_DAYS, reach);
+    const board = await this.capacity.team(
+      organizationId,
+      parseHorizon(String(span), DEFAULT_DAYS),
+      [...new Set(seats.map(s => s.userId))],
+    );
+    const previews = await this.availability.preview(board, this.actor.requireActorId(), organizationId, seats, {
+      planFrom: dayKey(today),
+      focusProjectId: dto.projectId?.trim() || null,
+      excludeTaskId: dto.excludeTaskId?.trim() || null,
+    });
+    return { from: board.from, to: board.to, seats: previews };
   }
 
   /** Retrospective: actual attendance over the past `days` (ending today). */
@@ -1639,7 +1722,21 @@ class CapacityController {
   @RequirePermission('capacity.view')
   async coverageRisks(@Query('days') days?: string) {
     const organizationId = await this.actor.requireOrgId();
-    return this.capacity.coverageRisks(organizationId, parseHorizon(days));
+    const out = await this.capacity.coverageRisks(organizationId, parseHorizon(days));
+    // The suggestions already carry whole-org free hours — they come off the same board. The
+    // risks name the matters at risk, and this panel is open to everyone with capacity.view
+    // (HR included), so a matter this viewer may not open is counted and not named.
+    const vis = await this.availability.visibility(this.actor.requireActorId(), organizationId);
+    if (!vis.all) {
+      type RiskTask = { title: string; projectId?: string; project?: string; taskGroup?: string | null; restricted?: boolean };
+      for (const risk of (out.risks ?? []) as { tasks: RiskTask[] }[]) {
+        for (const t of risk.tasks ?? []) {
+          if (canName(vis, t.projectId)) continue;
+          t.restricted = true; t.title = 'Other work'; t.project = 'Other work'; t.projectId = undefined; t.taskGroup = null;
+        }
+      }
+    }
+    return out;
   }
 
   /**
@@ -1682,12 +1779,24 @@ class CapacityController {
   /** Availability of one project's members — the capacity view opened from a project. */
   @Get('project/:projectId')
   @RequirePermission('capacity.view')
-  forProject(@Param('projectId') projectId: string, @Query('days') days?: string, @Query('from') from?: string) {
+  async forProject(@Param('projectId') projectId: string, @Query('days') days?: string, @Query('from') from?: string) {
     if (!projectId?.trim()) throw new BadRequestException('projectId is required');
-    return this.capacity.forProject(projectId, parseHorizon(days), {
+    const board = await this.capacity.forProject(projectId, parseHorizon(days), {
       from: parseWindowStart(from, startOfIstDay(new Date())),
     });
+    // The focus IS this client: every day comes back split into its share and everybody else's,
+    // so the tab can draw the rest of the week as load instead of fading it into the background.
+    return this.availability.forBoard(board, this.actor.requireActorId(), await this.actor.requireOrgId(), projectId);
   }
+}
+
+/** A proposed assignment, as an assignment dialog has it before it is saved. */
+export interface PreviewAssignmentDto {
+  seats: ProposedSeat[];
+  /** The client the work belongs to, so its own hours are not counted as "other". */
+  projectId?: string | null;
+  /** The task being restaffed — its current hours come out before the new ones go in. */
+  excludeTaskId?: string | null;
 }
 
 export interface CreateCoverageDto {
@@ -1707,7 +1816,10 @@ export interface CreateCoverageDto {
   // TasksModule: the board's task CRUD (capacity-tasks.ts) goes through TasksService's own rules.
   imports: [OptionalHolidaysModule, TasksModule],
   controllers: [CapacityController, CapacityTasksController],
-  providers: [CapacityService, CapacityTaskOptionsService],
-  exports: [CapacityService],
+  // AvailabilityService is the one place a person's free hours are split, redacted and reported;
+  // exported so anything else that has to answer "how free is this person?" asks it rather than
+  // deriving a second answer of its own.
+  providers: [CapacityService, CapacityTaskOptionsService, AvailabilityService],
+  exports: [CapacityService, AvailabilityService],
 })
 export class CapacityModule {}
