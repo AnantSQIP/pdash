@@ -6,6 +6,7 @@ import { useOrg } from '@/lib/org-context';
 import { DateField } from '@/components/ui/DateField';
 import { Modal } from '@/components/ui/Modal';
 import { todayIST } from '@/lib/date';
+import { useIsClientsFlow } from '@/lib/workspace-flow';
 
 interface LogTimeModalProps {
   projectId: string;
@@ -19,6 +20,9 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? '');
   const [date, setDate] = useState(todayIST());
   const [hours, setHours] = useState('');
+  // PROJECTS: each person decides whether their own time is billable. CLIENTS: the task decides.
+  const clients = useIsClientsFlow();
+  const [billable, setBillable] = useState(true);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -39,6 +43,7 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
         taskId,
         date,
         hoursLogged: parsed,
+        ...(clients ? {} : { billable }),
         notes: notes.trim() || undefined,
       });
       onSuccess();
@@ -118,22 +123,43 @@ export function LogTimeModal({ projectId: _projectId, tasks, onClose, onSuccess 
             />
           </div>
 
-          {/* Billable follows the task: it is set on the task itself, by anybody on this client
-              or staffed on it, and every entry on the task carries it. */}
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-sm font-medium text-gray-700">Billable</span>
-              <p className="text-xs text-gray-400">Set on the task — change it on the task if it is wrong</p>
+          {clients ? (
+            // CLIENTS: billable follows the task — it is set on the task itself, by anybody on
+            // this client or staffed on it, and every entry on the task carries it.
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-gray-700">Billable</span>
+                <p className="text-xs text-gray-400">Set on the task — change it on the task if it is wrong</p>
+              </div>
+              {(() => {
+                const b = tasks.find(t => t.id === taskId)?.billable !== false;
+                return (
+                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${b ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                    {b ? 'Billable' : 'Non-billable'}
+                  </span>
+                );
+              })()}
             </div>
-            {(() => {
-              const b = tasks.find(t => t.id === taskId)?.billable !== false;
-              return (
-                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${b ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                  {b ? 'Billable' : 'Non-billable'}
-                </span>
-              );
-            })()}
-          </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-medium text-gray-700">Billable</span>
+                <p className="text-xs text-gray-400">You decide whether this time is billable</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={billable}
+                aria-label="Billable"
+                onClick={() => setBillable(prev => !prev)}
+                className={`relative h-5 w-10 shrink-0 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 ${billable ? 'bg-brand-600' : 'bg-gray-300'}`}
+              >
+                <span
+                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${billable ? 'left-[22px]' : 'left-0.5'}`}
+                />
+              </button>
+            </div>
+          )}
 
         </form>
     </Modal>

@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Global, Injectable, Module } f
 import { PrismaService } from '../../prisma/prisma.service';
 import { EventService } from '../audit-events/event.service';
 import { SESSION_CAP_MINUTES } from '../../common/work-time';
+import { WorkspaceFlowService } from '../workspace-flow/workspace-flow.service';
 
 export type TimeTrackingMode = 'TIMER' | 'MANUAL';
 export const TIME_TRACKING_MODES: TimeTrackingMode[] = ['TIMER', 'MANUAL'];
@@ -52,19 +53,23 @@ export class TimeModeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly events: EventService,
+    private readonly flows: WorkspaceFlowService,
   ) {}
 
   /**
-   * CLIENTS FLOW: time is recorded ONE way — Finish / Reopen on the task and a Log time sheet for
-   * the day. The stopwatch was retired (owner's decision, Sep 2026), so every guard that asks
-   * "which flow is this?" gets the same answer without a database read. The organisation column
-   * is kept, and migrated to MANUAL, only so the switch history keeps reading correctly.
+   * How the organisation records time.
+   *
+   * PROJECTS: what the organisation row says — TIMER or MANUAL, switched by an admin.
+   * CLIENTS: always MANUAL. The clients flow retired the stopwatch (owner's decision, Sep 2026):
+   * Finish / Reopen on the task and one Log time sheet for the day. Whatever the column says,
+   * every guard gets the same answer, so a CLIENTS firm cannot be switched back onto a clock.
    */
-  async modeOf(_organizationId: string): Promise<TimeTrackingMode> {
-    return 'MANUAL';
+  async modeOf(organizationId: string): Promise<TimeTrackingMode> {
+    if (await this.flows.isClients(organizationId)) return 'MANUAL';
+    return this.storedModeOf(organizationId);
   }
 
-  /** What the organisation row still says — only the one-off settlement of a legacy TIMER org reads it. */
+  /** What the organisation row says. */
   private async storedModeOf(organizationId: string): Promise<TimeTrackingMode> {
     const hit = this.cache.get(organizationId);
     if (hit && Date.now() - hit.at < TimeModeService.TTL_MS) return hit.mode;
@@ -72,7 +77,9 @@ export class TimeModeService {
       where: { id: organizationId },
       select: { timeTrackingMode: true },
     });
-    const mode: TimeTrackingMode = org?.timeTrackingMode === 'TIMER' ? 'TIMER' : 'MANUAL';
+    // An unknown value means somebody wrote to the column by hand. Falling back to TIMER keeps a
+    // working product rather than an org that cannot record time at all.
+    const mode: TimeTrackingMode = org?.timeTrackingMode === 'MANUAL' ? 'MANUAL' : 'TIMER';
     this.cache.set(organizationId, { mode, at: Date.now() });
     return mode;
   }
@@ -90,7 +97,9 @@ export class TimeModeService {
   async assertTimerFlow(organizationId: string): Promise<void> {
     if (await this.isTimer(organizationId)) return;
     throw new ForbiddenException(
-      'There is no timer any more. Finish the task when it is done, and log your hours from My Tasks with Log time.',
+      (await this.flows.isClients(organizationId))
+        ? 'There is no timer any more. Finish the task when it is done, and log your hours from My Tasks with Log time.'
+        : 'This organisation records time by filling in the day, not with a timer. Finish the task when it is done, and log your hours from My Tasks.',
     );
   }
 
@@ -99,6 +108,10 @@ export class TimeModeService {
    *
    * Returns what the change had to tidy up, because "we switched and everyone's timers vanished"
    * is a thing people notice and then ask about.
+   *
+   * CLIENTS: only MANUAL exists, so TIMER is refused. Moving a CLIENTS firm's row to MANUAL (the
+   * one-off settlement of a firm converted while its clocks ran) still closes them and records
+   * the switch, which is why `from` is read from the row and not from modeOf.
    */
   async switchMode(
     organizationId: string,
@@ -106,16 +119,17 @@ export class TimeModeService {
     changedBy: string,
     note?: string,
   ): Promise<{ from: TimeTrackingMode; to: TimeTrackingMode; timersClosed: number; minutesClosed: number; changed: boolean }> {
+    const clients = await this.flows.isClients(organizationId);
     if (!TIME_TRACKING_MODES.includes(toMode)) {
-      throw new BadRequestException('Time is recorded by logging it (MANUAL).');
+      throw new BadRequestException(clients
+        ? 'Time is recorded by logging it (MANUAL).'
+        : 'Time can be recorded either with a timer (TIMER) or by filling in the day (MANUAL).');
     }
-    if (toMode === 'TIMER') {
+    if (clients && toMode === 'TIMER') {
       throw new BadRequestException(
         'The timer has been retired. Tasks are finished or reopened, and hours are logged from My Tasks with Log time.',
       );
     }
-    // What the row says, not what modeOf answers: settling a legacy TIMER org still has to close
-    // its running clocks and record the switch.
     const from = await this.storedModeOf(organizationId);
     if (from === toMode) {
       // Not an error — an admin confirming the mode it is already in has got what they asked for.

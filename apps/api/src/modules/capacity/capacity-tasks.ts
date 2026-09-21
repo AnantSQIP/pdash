@@ -24,6 +24,7 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequireFlow } from '../../common/decorators/require-flow.decorator';
 import { ActorContextService } from '../../common/context/actor-context.service';
 import { TasksService, type SeatInput, type StaffingOpts } from '../tasks/tasks.service';
 import { TASK_ASSIGNEE_ROLES, TASK_PRIORITIES } from '../tasks/dto';
@@ -184,7 +185,9 @@ export class CapacityTaskOptionsService {
   }
 }
 
+/** CLIENTS flow only: the PROJECTS board assigns through the ordinary task routes (404 here). */
 @Controller('capacity/tasks')
+@RequireFlow('CLIENTS')
 export class CapacityTasksController {
   constructor(
     private readonly tasks: TasksService,

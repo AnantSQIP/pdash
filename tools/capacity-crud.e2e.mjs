@@ -7,8 +7,10 @@
  * or above Senior Consultant — and the module visible only to them. So this pins both halves:
  *
  *   · the wall — Consultant, Senior Research Associate, Employee, HR and Business Development are
- *     refused the board and every /capacity/tasks route, while /capacity/my-plan (the My Tasks day
- *     sheet) keeps working for all of them; /me/effective-permissions says the same thing.
+ *     refused every /capacity/tasks route, and all but HR the board itself, while /capacity/my-plan
+ *     (the My Tasks day sheet) keeps working for all of them; /me/effective-permissions says the
+ *     same thing. HR may VIEW the board (owner, Sep 2026: capacity.view without capacity.manage);
+ *     whether HR holds it is read from the database, so the suite runs before and after that grant.
  *   · the power — a Senior Consultant creates a task with its people in ONE call for somebody who
  *     is not on the client (who is added to it), edits it, moves it between groups, reassigns it and
  *     deletes it; a refused seat leaves NOTHING behind; a task due after its group is refused in words.
@@ -64,9 +66,13 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
     const c = await codesOf(s);
     ok(`${label} holds capacity.view and capacity.manage`, c.has('capacity.view') && c.has('capacity.manage'), [...c].filter(x => x.startsWith('capacity')).join(','));
   }
+  // HR views the board without managing it (owner, Sep 2026) — once the presets grant it.
+  const hrViews = (await codesOf(hr)).has('capacity.view');
+  const viewsBoard = s => s === hr && hrViews;
   for (const [label, s] of below) {
     const c = await codesOf(s);
-    ok(`${label} holds neither`, !c.has('capacity.view') && !c.has('capacity.manage'), [...c].filter(x => x.startsWith('capacity')).join(','));
+    if (viewsBoard(s)) ok(`${label} holds capacity.view but not capacity.manage`, c.has('capacity.view') && !c.has('capacity.manage'), [...c].filter(x => x.startsWith('capacity')).join(','));
+    else ok(`${label} holds neither`, !c.has('capacity.view') && !c.has('capacity.manage'), [...c].filter(x => x.startsWith('capacity')).join(','));
   }
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
@@ -96,11 +102,15 @@ const dayKey = (offset = 0) => { const d = new Date(Date.now() + 5.5 * 3600e3); 
   ok('nor is the SRA used for the atomicity case', !before.has(who.sra));
 
   // ───────────────────────────────────────────────────────────────────────────────────────────
-  step('the wall: below Senior Consultant, no board and no task CRUD');
+  step('the wall: below Senior Consultant, no board (HR: view only) and no task CRUD');
   for (const [label, s] of below) {
-    ok(`${label}: GET /capacity/team is refused`, (await s('/capacity/team?days=7')).status === 403);
-    ok(`${label}: GET /capacity/project/:id is refused`, (await s(`/capacity/project/${client.id}?days=7`)).status === 403);
-    ok(`${label}: GET /capacity/coverage-risks is refused`, (await s('/capacity/coverage-risks')).status === 403);
+    if (viewsBoard(s)) {
+      ok(`${label}: GET /capacity/team is allowed (view only)`, (await s('/capacity/team?days=7')).status === 200);
+    } else {
+      ok(`${label}: GET /capacity/team is refused`, (await s('/capacity/team?days=7')).status === 403);
+      ok(`${label}: GET /capacity/project/:id is refused`, (await s(`/capacity/project/${client.id}?days=7`)).status === 403);
+      ok(`${label}: GET /capacity/coverage-risks is refused`, (await s('/capacity/coverage-risks')).status === 403);
+    }
     const routes = [
       ['GET', '/capacity/tasks/options'],
       ['GET', '/capacity/tasks/whatever'],

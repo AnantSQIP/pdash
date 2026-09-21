@@ -33,7 +33,6 @@ const PRIORITY_TINT: Record<string, string> = {
 
 export default function UserDetailPage() {
   const params = useParams();
-  const clients = useIsClientsFlow(); // CLIENTS flow: a project is a client
   const router = useRouter();
   const id = String(params?.id ?? '');
 
@@ -45,6 +44,7 @@ export default function UserDetailPage() {
   // so somebody without capacity.view gets told that, not a blank "no work" that reads as fact.
   const { can, isSuperAdmin } = usePermissions();
   const canSeeLoad = can('capacity.view');
+  const clientsFlow = useIsClientsFlow(); // CLIENTS flow: a project is a client
   // Access administration lives on its own screen. This page is about the work; linking across
   // stops the two feeling like unrelated halves to whoever can see both.
   const canManageAccess = isSuperAdmin || can('user.manage_access');
@@ -123,7 +123,7 @@ export default function UserDetailPage() {
                     <thead>
                       <tr className="text-left text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100 bg-gray-50/60">
                         <th className="px-5 py-2.5 font-semibold">Task</th>
-                        <th className="px-3 py-2.5 font-semibold">{clients ? 'Client' : 'Project'}</th>
+                        <th className="px-3 py-2.5 font-semibold">{clientsFlow ? 'Client' : 'Project'}</th>
                         <th className="px-3 py-2.5 font-semibold">Priority</th>
                         <th className="px-3 py-2.5 font-semibold">Deadline</th>
                         <th className="px-5 py-2.5 font-semibold text-right">Remaining</th>
@@ -161,13 +161,16 @@ export default function UserDetailPage() {
               )}
             </div>
           </>
-        ) : canSeeLoad ? (
+        ) : canSeeLoad || !clientsFlow ? (
+          // PROJECTS: everyone holds capacity.view, and a rare DENY still says why it is empty.
           <div className="bg-white rounded-xl border border-gray-200 px-5 py-10 text-center">
-            <p className="text-sm text-gray-400">No capacity information for this person.</p>
-            <p className="text-xs text-gray-400 mt-1">They may be inactive, or have no assigned work in the next fortnight.</p>
+            <p className="text-sm text-gray-400">
+              {canSeeLoad ? 'No capacity information for this person.' : 'You do not have access to workload information.'}
+            </p>
+            {canSeeLoad && <p className="text-xs text-gray-400 mt-1">They may be inactive, or have no assigned work in the next fortnight.</p>}
           </div>
-        ) : null /* Workload is Team Capacity's, which is Senior Consultant and above: nothing to show,
-                    and no box saying so on every profile everybody else opens. */}
+        ) : null /* CLIENTS: workload is Team Capacity's, which is Senior Consultant and above: nothing
+                    to show, and no box saying so on every profile everybody else opens. */}
 
         {canSeeLoad && (
           <p className="text-[11px] text-gray-400">

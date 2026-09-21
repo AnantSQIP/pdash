@@ -1059,6 +1059,15 @@ export type ApiCommentPage = { items: ApiComment[]; total: number; hasMore: bool
 /** How many comments a thread loads at a time. Widening asks for one more window's worth. */
 export const COMMENT_PAGE_SIZE = 100;
 
+// ── Task timing (PROJECTS flow, TIMER mode) ─────────────────────────────────────
+/** One running clock. A person may hold several at once. */
+export type RunningTimer = {
+  id: string; taskId: string; startedAt: string;
+  task: { id: string; title: string };
+  /** Your finished sittings on this task before the clock now running — so Resume counts on. */
+  priorMinutes: number;
+};
+
 // ── A person's day ──────────────────────────────────────────────────────────────
 /** One task's share of a day: what the clock recorded, and how much of it is filed. */
 export type TrackedTask = {
@@ -1909,7 +1918,15 @@ export const api = {
     // An empty string for `logo` REMOVES it; omitting the key leaves it alone.
     update: (id: string, data: { name?: string; timezone?: string; brandColor?: string; logo?: string }) =>
       req<OrgSummary>(`/organizations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    /** When the firm's time flow changed (the timer was retired in Sep 2026). */
+    /**
+     * PROJECTS flow: switch how the firm records time. Leaving the stopwatch closes every clock
+     * still running, so the reply says how many were stopped and how much they were holding.
+     * (CLIENTS records time one way only — MANUAL — and refuses TIMER.)
+     */
+    setTimeMode: (id: string, mode: TimeTrackingMode, note?: string) =>
+      req<{ from: TimeTrackingMode; to: TimeTrackingMode; changed: boolean; timersClosed: number; minutesClosed: number }>(
+        `/organizations/${id}/time-mode`, { method: 'PATCH', body: JSON.stringify({ mode, note }) }),
+    /** Every switch the firm's time mode has made. */
     timeModeHistory: (id: string) =>
       req<TimeModeChange[]>(`/organizations/${id}/time-mode/history`),
   },
@@ -2464,10 +2481,29 @@ export const api = {
     deleteSubtask: (taskId: string, subtaskId: string) =>
       req<void>(`/tasks/${taskId}/subtasks/${subtaskId}`, { method: 'DELETE' }),
 
-    // ── Finish / Reopen (the timer was retired: time is logged, not clocked) ──────
+    // ── Timing (PROJECTS flow; the routes answer 404 in CLIENTS, where the timer was retired) ──
+    /** Every clock this person has running — several at once is allowed. */
+    runningTimers: () => req<RunningTimer[]>('/tasks/timer/running'),
+    /** Today: tracked per task, what is filed, and what the day still owes. */
+    today: () => req<DayStatus>('/tasks/timer/today'),
+    /** Start the clock. Several may run at once. */
+    startTimer: (id: string) =>
+      req<{ id: string; taskId: string; startedAt: string; resumed: boolean }>(`/tasks/${id}/start`, { method: 'POST' }),
+    /** Pause the clock. Resuming is Start again. */
+    pauseTimer: (id: string) =>
+      req<{
+        paused: boolean;
+        /** THIS sitting's minutes. */ minutes: number;
+        /** Everybody's minutes on the task. */ totalMinutes: number;
+        /** YOUR minutes on the task — the figure to quote back to the person. */ myMinutes: number;
+        todayMinutes: number;
+      }>(
+        `/tasks/${id}/pause`, { method: 'POST' }),
+    // ── Finish / Reopen (both flows) ───────────────────────────────────────────────
     /** What each standard task has actually taken, per role. */
     standards: () => req<TaskStandardGroup[]>('/tasks/standards'),
-    /** Finish the task: one click. Hours are logged separately, with Log time. */
+    /** Finish the task: one click. With the timer, the clock stops and today's tracked time is
+     *  filed; without it, hours are logged separately, with Log time. */
     finishTask: (id: string, closedStatusId?: string) =>
       req<ApiTask & { settle: FinishSettle }>(`/tasks/${id}/finish`, { method: 'POST', body: JSON.stringify({ closedStatusId }) }),
     /** Mark a task billable / non-billable; its existing time entries follow. */

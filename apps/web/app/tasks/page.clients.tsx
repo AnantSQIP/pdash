@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Plus, CheckSquare, Search, AlertTriangle, RotateCcw, Loader, Clock } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
@@ -12,16 +12,12 @@ import { AvatarStack } from '@/components/ui/AvatarStack';
 import { isTaskClosed, taskAssigneeUsers, progressOptions, OPEN_TYPE, CLOSED_TYPE, nextUpFirst } from '@/lib/tasks';
 import { invalidateTaskCaches } from '@/lib/task-cache';
 import { formatDate, isPastDue } from '@/lib/date';
-import { RunningTimersBar, TimerButton, FinishButton, LogTimeDialog, quarterHours } from '@/components/tasks/TaskWork';
+import { FinishButton } from '@/components/tasks/TaskWork.clients';
+import { NonBillableChip } from '@/components/tasks/BillableToggle';
 import { DaySheet } from '@/components/tasks/DaySheet';
 import { TaskStateMark } from '@/components/tasks/TaskStateMark';
-import { pidLabel } from '@/lib/mock-data';
-import type { RunningTimer, DayStatus } from '@/lib/api';
 import { CatchUpBanner } from '@/components/attendance/CatchUpBanner';
-import { TrackedTodayBar } from '@/components/tasks/TrackedTodayBar';
 import { invalidateTimesheetCaches } from '@/lib/timesheet-cache';
-import { byFlow } from '@/lib/workspace-flow';
-import ClientsTasksPage from './page.clients';
 
 const PRIORITY_META = {
   CRITICAL: { label: 'Critical', color: 'text-red-600',    bg: 'bg-red-50',    dot: 'bg-red-500'    },
@@ -47,6 +43,11 @@ function statusCategory(t: ApiTask): 'Open' | 'In Progress' | 'Closed' {
 const myDue = (t: ApiTask, uid?: string | null): string | null | undefined =>
   (uid && t.assignees?.find(a => a.userId === uid && a.dueDate)?.dueDate) || t.dueDate;
 const isOverdue = (t: ApiTask, uid?: string | null) => isPastDue(myDue(t, uid)) && !isTaskClosed(t);
+/** CLIENTS-FLOW: the task group the task sits in inside its client — none once it is deleted. */
+const taskGroupOf = (t: ApiTask): string | null => {
+  const tl = t.projectTasks?.[0]?.taskList;
+  return tl && !tl.deletedAt ? tl.name : null;
+};
 
 /**
  * Reopen a closed task.
@@ -54,7 +55,7 @@ const isOverdue = (t: ApiTask, uid?: string | null) => isPastDue(myDue(t, uid)) 
  * Goes through POST /tasks/:id/reopen rather than simply setting the status back to Open.
  * They are not the same thing: the status dropdown moves the task and nothing else, so the
  * reopening leaves no trace, while this records it on the task (reopenedCount) and clears the
- * completion so the work can be timed again. The review asked for reopening to be RECORDED —
+ * completion so further hours can be logged. The review asked for reopening to be RECORDED —
  * "if it is not recorded, the hours and everything derived from them understate the work".
  */
 function ReopenButton({ task, openStatusId }: { task: ApiTask; openStatusId?: string }) {
@@ -63,10 +64,9 @@ function ReopenButton({ task, openStatusId }: { task: ApiTask; openStatusId?: st
   const m = useMutation({
     mutationFn: () => api.tasks.reopenTask(task.id, openStatusId),
     onSuccess: r => {
-      toast(r.reopenedCount === 1 ? 'Reopened. Time it again and close when it is done.'
+      toast(r.reopenedCount === 1 ? 'Reopened. Log the extra time with Log time, and Finish it again when it is done.'
                                   : `Reopened — ${r.reopenedCount} times now.`, 'success');
       invalidateTaskCaches(qc);
-      qc.invalidateQueries({ queryKey: ['running-timer'] });
     },
     onError: e => toastError(e, 'Could not reopen the task.'),
   });
@@ -83,44 +83,19 @@ function ReopenButton({ task, openStatusId }: { task: ApiTask; openStatusId?: st
 }
 
 /**
- * My Tasks — the PROJECTS flow (production's page): the stopwatch when the firm's time mode is
- * TIMER (Start / Pause / Resume, per-row Log time, the tracked-today bar), one day sheet when it
- * is MANUAL. The CLIENTS flow's page (Finish, Reopen and one Log time) is ./page.clients.tsx.
+ * My Tasks — the CLIENTS flow: Finish and Reopen on every task, and one Log time (the day sheet).
+ * The timer was retired in this flow. Rendered by ./page.tsx when the organisation runs CLIENTS.
  */
-function ProjectsTasksPage() {
-  const { org, currentUser, loading: orgLoading } = useOrg();
-  // Which of the two flows this firm uses. Absent on a payload from an older API means the
-  // stopwatch, because that is what such an API was doing.
-  const timerFlow = org?.timeTrackingMode !== 'MANUAL';
+export default function ClientsTasksPage() {
+  const { currentUser, loading: orgLoading } = useOrg();
   const qc = useQueryClient();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [priorityFilter, setPriorityFilter] = useState<string>('All');
   const [search, setSearch] = useState('');
-  // A row's Log-time dialog; `hours` is pre-filled when it was opened from a stopped timer.
-  const [logging, setLogging] = useState<{ task: ApiTask; hours?: number } | null>(null);
+  // THE one Log time: the day sheet. There is no timer and no per-row logging — a person
+  // remembers their day as a whole, so they fill it in as a whole.
   const [daySheet, setDaySheet] = useState(false);
-
-  // Every clock this person has running — several at once is allowed. Polled gently: somebody
-  // may start a task on their phone, and a stale bar claiming nothing is running is worse than
-  // no bar at all.
-  const { data: running = [] } = useQuery<RunningTimer[]>({
-    queryKey: ['running-timer'],
-    queryFn: () => api.tasks.runningTimers(),
-    refetchInterval: 60_000,
-    refetchOnMount: 'always',
-  });
-
-  // What the clock recorded today and how much of it the timesheet has. Filing the day is a
-  // condition of punching out, so the arithmetic belongs here, where the work is, rather than
-  // being sprung on somebody at the door.
-  const { data: today } = useQuery<DayStatus>({
-    queryKey: ['timer-today'],
-    queryFn: () => api.tasks.today(),
-    refetchInterval: 60_000,
-    refetchOnMount: 'always',
-  });
-  const trackedByTask = useMemo(() => new Map((today?.tracked ?? []).map(t => [t.taskId, t])), [today]);
 
   const meKey = ['tasks-me', currentUser?.id];
 
@@ -167,10 +142,6 @@ function ProjectsTasksPage() {
   }
 
   function afterTimeLogged() { invalidateTimesheetCaches(qc); }
-  const openLogFromTimer = (taskId: string, minutes: number) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (task) setLogging({ task, hours: quarterHours(minutes) });
-  };
 
   async function changeStatus(task: ApiTask, statusId: string) {
     if (statusId === task.currentWorkflowStatusId) return;
@@ -213,33 +184,26 @@ function ProjectsTasksPage() {
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-4 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">My Tasks</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all projects</p>
+          <p className="text-sm text-gray-500 mt-0.5">Tasks assigned to you across all clients</p>
         </div>
         <div className="flex items-center gap-3">
-          {timerFlow && running.length > 0 && <div className="w-[min(24rem,60vw)]"><RunningTimersBar running={running} onPaused={openLogFromTimer} /></div>}
-          {/* The manual flow's ONE Log time. A person remembers their day as a whole, so they
-              fill it in as a whole — rather than visiting five task rows to say one thing. */}
-          {!timerFlow && (
-            <button
-              onClick={() => setDaySheet(true)}
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
-            >
-              <Clock size={14} /> Log time
-            </button>
-          )}
+          {/* The ONE Log time. A person remembers their day as a whole, so they fill it in as a
+              whole — rather than visiting five task rows to say one thing. */}
+          <button
+            onClick={() => setDaySheet(true)}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
+          >
+            <Clock size={14} /> Log time
+          </button>
           <Link
             href="/projects"
             className="inline-flex items-center gap-2 px-3 py-1.5 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700"
           >
             <Plus size={14} />
-            Add in Project
+            Add in Client
           </Link>
         </div>
       </div>
-
-      {/* Entirely about a stopwatch — what it has recorded and what of that is still unfiled.
-          In the manual flow there is no stopwatch, so there is nothing for it to say. */}
-      {timerFlow && today && <TrackedTodayBar day={today} onFiled={afterTimeLogged} />}
 
       {/* Filters */}
       <div className="bg-white border-b border-gray-100 px-4 sm:px-6 py-3 flex items-center gap-3 sm:gap-4 flex-wrap">
@@ -345,11 +309,7 @@ function ProjectsTasksPage() {
                 statuses={statuses}
                 onStatus={id => changeStatus(task, id)}
                 onProgress={p => changeProgress(task, p)}
-                onLogTime={() => setLogging({ task })}
-                timerFlow={timerFlow}
-                running={running}
-                hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0}
-                onPaused={openLogFromTimer}
+                openStatusId={statuses.find(x => x.type === OPEN_TYPE)?.id}
                 onFinished={afterTimeLogged}
               />
             ))}
@@ -365,6 +325,7 @@ function ProjectsTasksPage() {
               const ownDue = !!due && due !== task.dueDate;
               const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
               const project = task.projectTasks?.[0]?.project;
+              const group = taskGroupOf(task);
               return (
                 <tr key={task.id} className="group hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 w-8">
@@ -374,12 +335,16 @@ function ProjectsTasksPage() {
                     <span className={clsx('text-sm font-medium text-gray-900', closed && 'line-through text-gray-400')}>
                       {task.title}
                     </span>
+                    {task.billable === false && <NonBillableChip className="ml-2 align-middle" />}
                   </td>
                   <td className="px-4 py-3">
                     {project ? (
-                      <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline">
-                        {project.title}
-                      </Link>
+                      <span className="text-xs text-gray-500">
+                        <Link href={`/projects/${project.id}`} className="hover:text-brand-600 hover:underline">
+                          {project.title}
+                        </Link>
+                        {group && <span className="text-gray-400" title="Task group"> · {group}</span>}
+                      </span>
                     ) : <span className="text-xs text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3">
@@ -428,28 +393,10 @@ function ProjectsTasksPage() {
                       </select>
                     </div>
                   </td>
-                  {/* Everything a person does with a task, on the row they are already looking
-                      at. Closing it and recording the time used to be two errands in two
-                      modules; here they are one. */}
+                  {/* Two buttons and only two: Finish an open task, Reopen a closed one. Hours
+                      are logged for the whole day from the one Log time in the header. */}
                   <td className="sticky right-0 z-10 bg-white px-4 py-3 shadow-[-8px_0_8px_-8px_rgba(16,24,40,0.10)] group-hover:bg-gray-50">
                     <div className="flex items-center justify-end gap-1.5">
-                      {!closed && timerFlow && <TimerButton taskId={task.id} running={running} hasTracked={(trackedByTask.get(task.id)?.minutes ?? 0) > 0} onPaused={openLogFromTimer} />}
-                      {!closed && timerFlow && (() => {
-                        // The ledger refuses time on a completed or closed matter; say so here
-                        // rather than after a round trip.
-                        const phase = task.projectTasks?.[0]?.project?.projectPhase;
-                        const matterClosed = phase === 'COMPLETED' || phase === 'CLOSED';
-                        return (
-                          <button
-                            onClick={() => setLogging({ task })}
-                            disabled={matterClosed}
-                            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
-                            title={matterClosed ? 'This project is completed or closed — reopen it to log time' : 'Log time on this task without leaving the page'}
-                          >
-                            <Clock size={12} /> Log time
-                          </button>
-                        );
-                      })()}
                       {!closed && <FinishButton taskId={task.id} onDone={afterTimeLogged} />}
                       {closed && <ReopenButton task={task} openStatusId={statuses.find(x => x.type === OPEN_TYPE)?.id} />}
                     </div>
@@ -472,28 +419,13 @@ function ProjectsTasksPage() {
         />
       )}
 
-      {logging && (
-        <LogTimeDialog
-          key={`${logging.task.id}:${logging.hours ?? ''}`}
-          taskId={logging.task.id}
-          taskTitle={logging.task.title}
-          projectLabel={(() => {
-            const p = logging.task.projectTasks?.[0]?.project;
-            if (!p) return undefined;
-            return p.code ? `${pidLabel(p.code, p.roundSeq)} · ${p.title}` : p.title;
-          })()}
-          defaultHours={logging.hours}
-          onClose={() => setLogging(null)}
-          onDone={() => { setLogging(null); afterTimeLogged(); }}
-        />
-      )}
     </div>
   );
 }
 
 // Shared table chrome so the loading, populated and (implicitly) empty states line up.
 function TableShell({ children }: { children: React.ReactNode }) {
-  const headers = ['Task', 'Project', 'Priority', 'Status', 'Team members', 'Due', 'Progress', 'Work'];
+  const headers = ['Task', 'Client', 'Priority', 'Status', 'Team members', 'Due', 'Progress', 'Work'];
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <div className="overflow-x-auto">
@@ -524,7 +456,7 @@ function TableShell({ children }: { children: React.ReactNode }) {
 
 // One task as a card — the mobile layout. Every control the row has (complete, status,
 // progress) is here, but stacked so nothing is pushed off a narrow screen.
-function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, onLogTime, timerFlow, running, hasTracked, onPaused, onFinished }: {
+function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, openStatusId, onFinished }: {
   task: ApiTask;
   closed: boolean;
   overdue: boolean;
@@ -533,20 +465,13 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
   statuses: WorkflowStatus[];
   onStatus: (id: string) => void;
   onProgress: (p: number) => void;
-  /** The phone gets the same in-place timesheet as the table. */
-  onLogTime?: () => void;
-  /** Whether this firm uses the stopwatch. The phone must answer this the same way the table
-   *  does — a card that still offers Start and a per-task Log time in the manual flow is the
-   *  same bug twice, and the phone is exactly where nobody would notice it. */
-  timerFlow: boolean;
-  /** …and the same clock and Finish. A phone could previously do neither. */
-  running: RunningTimer[];
-  hasTracked?: boolean;
-  onPaused?: (taskId: string, minutes: number) => void;
+  /** Where Reopen puts the task back — the same OPEN status the table's Reopen uses. */
+  openStatusId?: string;
   onFinished?: () => void;
 }) {
   const pm = PRIORITY_META[task.priority as keyof typeof PRIORITY_META] ?? PRIORITY_META.LOW;
   const project = task.projectTasks?.[0]?.project;
+  const group = taskGroupOf(task);
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-3.5">
       <div className="flex items-start gap-3">
@@ -556,11 +481,15 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
         <div className="min-w-0 flex-1">
           <p className={clsx('text-sm font-medium leading-snug', closed ? 'line-through text-gray-400' : 'text-gray-900')}>
             {task.title}
+            {task.billable === false && <NonBillableChip className="ml-1.5 align-middle" />}
           </p>
           {project && (
-            <Link href={`/projects/${project.id}`} className="text-xs text-gray-500 hover:text-brand-600 hover:underline block mt-0.5 truncate">
-              {project.title}
-            </Link>
+            <p className="text-xs text-gray-500 mt-0.5 truncate">
+              <Link href={`/projects/${project.id}`} className="hover:text-brand-600 hover:underline">
+                {project.title}
+              </Link>
+              {group && <span className="text-gray-400"> · {group}</span>}
+            </p>
           )}
 
           <div className="flex flex-wrap items-center gap-2 mt-2.5">
@@ -586,19 +515,9 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
                   {formatDate(due)}{due !== task.dueDate && ' · yours'}{overdue && ' · overdue'}
                 </span>
               )}
-              {/* The phone gets the same in-place timesheet as the table — the whole point was
-                  not having to go to another screen, and a phone is where that hurts most. */}
-              {!closed && timerFlow && onLogTime && (
-                <button
-                  onClick={onLogTime}
-                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium text-gray-600 ring-1 ring-inset ring-gray-950/[0.08] hover:bg-gray-50"
-                  title="Log time on this task"
-                >
-                  <Clock size={11} /> Log time
-                </button>
-              )}
-              {!closed && timerFlow && <TimerButton taskId={task.id} running={running} hasTracked={hasTracked} onPaused={onPaused} />}
+              {/* The same two buttons as the table: Finish when open, Reopen when closed. */}
               {!closed && <FinishButton taskId={task.id} onDone={onFinished} />}
+              {closed && <ReopenButton task={task} openStatusId={openStatusId} />}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <div className="w-14 h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -620,5 +539,3 @@ function TaskCard({ task, closed, overdue, due, statuses, onStatus, onProgress, 
     </div>
   );
 }
-
-export default byFlow(ProjectsTasksPage, ClientsTasksPage);
